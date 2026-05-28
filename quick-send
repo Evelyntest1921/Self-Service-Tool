@@ -782,13 +782,18 @@ IF @authOk == "true" AND NOT Empty(@journeyEmailId) AND @createEmailOnly != "1" 
  SET @eventNameForJson = Replace(@eventName,'"','\"')
  SET @eventNameForJson = Replace(Replace(Replace(@eventNameForJson,Char(10),' '),Char(13),' '),Char(9),' ')
  SET @eventSchemaFields = '[{"name":"greeting","dataType":"Text","maxLength":"50","isNullable":true},{"name":"id","dataType":"Text","maxLength":"50","isNullable":false},{"name":"email","dataType":"EmailAddress","maxLength":"254","isNullable":false},{"name":"sfCampaignId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfCampaignMemberId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfQuickSendId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Account_Owner_Name","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Account_Owner_Email","dataType":"Text","maxLength":"50","isNullable":true},{"name":"firstName","dataType":"Text","maxLength":"50","isNullable":true},{"name":"lastName","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfUserId","dataType":"Text","maxLength":"50","isNullable":false},{"name":"journeyID","dataType":"Text","maxLength":"50","isNullable":false},{"name":"sfOrgId","dataType":"Text","maxLength":"50","isNullable":false},{"name":"smsValue","dataType":"Text","maxLength":"50","isNullable":true},{"name":"mobilePhone","dataType":"Text","maxLength":"50","isNullable":true},{"name":"EntryObjectId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"DateAdded","dataType":"Date","isNullable":true},{"name":"Role","dataType":"Text","maxLength":"50","isNullable":true},{"name":"OwnerId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Specialty","dataType":"Text","maxLength":"100","isNullable":true},{"name":"AccountName","dataType":"Text","maxLength":"255","isNullable":true},{"name":"State","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Designation","dataType":"Text","maxLength":"50","isNullable":true},{"name":"senderPhone","dataType":"Text","maxLength":"50","isNullable":true},{"name":"senderTitle","dataType":"Text","maxLength":"255","isNullable":true},{"name":"senderLicense","dataType":"Text","maxLength":"255","isNullable":true},{"name":"senderMobile","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Salutation","dataType":"Text","maxLength":"50","isNullable":true},{"name":"AppointmentLink","dataType":"Text","maxLength":"4000","isNullable":true},{"name":"VAWP","dataType":"Text","maxLength":"4000","isNullable":true},{"name":"EmailName","dataType":"Text","maxLength":"255","isNullable":true}]'
- SET @eventPayload = Concat('{"name":"',@eventNameForJson,'","description":"","type":"APIEvent","mode":"Production","eventDefinitionKey":"',@eventKey,'","isVisibleInPicker":false,"schema":{"sendableCustomObjectField":"id","SendableSubscriberField":"SubscriberKey","fields":',@eventSchemaFields,'}}')
+ SET @eventPayload = Concat('{"name":"',@eventNameForJson,'","description":"","type":"APIEvent","mode":"Production","eventDefinitionKey":"',@eventKey,'","isVisibleInPicker":false,"category":"Event","schema":{"sendableCustomObjectField":"id","sendableSubscriberField":"SubscriberKey","fields":',@eventSchemaFields,'}}')
  SET @eventUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/eventDefinitions")
  SET @eventStatus = HTTPPost2(@eventUrl,"application/json",@eventPayload,false,@eventResponse,@eventResponseHeader,"Authorization",Concat("Bearer ",@accessToken))
  IF @eventStatus == 200 OR @eventStatus == 201 THEN
    SET @eventIdPattern = '"id":"([^"]+)"'
    SET @eventDefId = RegExMatch(@eventResponse,@eventIdPattern,1)
    IF NOT Empty(@eventDefId) THEN
+     SET @eventKeyPattern = '"eventDefinitionKey":"([^"]+)"'
+     SET @eventKeyFromResponse = RegExMatch(@eventResponse,@eventKeyPattern,1)
+     IF NOT Empty(@eventKeyFromResponse) THEN
+       SET @eventKey = @eventKeyFromResponse
+     ENDIF
      SET @resultText = Concat(@resultText," Step 3 OK - API entry event created.")
      SET @journeyUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/interactions")
      SET @journeyKey = GUID()
@@ -836,13 +841,28 @@ function readDataExtensionId(evObj) {
   return String(evObj.dataExtensionId || evObj.dataExtensionID || "");
 }
 
-function resolveEventDataExtensionId(evId, sub, token, createResponse) {
-  var fromCreate = readDataExtensionId(parseEventDefJson(createResponse));
-  if (fromCreate) {
-    return fromCreate;
+function readEventDefinitionKey(evObj) {
+  if (!evObj) {
+    return "";
+  }
+  return String(evObj.eventDefinitionKey || "");
+}
+
+function resolveEventDefinition(evId, sub, token, createResponse) {
+  var createObj = parseEventDefJson(createResponse);
+  var dataExtensionId = readDataExtensionId(createObj);
+  var eventDefinitionKey = readEventDefinitionKey(createObj);
+  if (dataExtensionId && eventDefinitionKey) {
+    return {
+      dataExtensionId: dataExtensionId,
+      eventDefinitionKey: eventDefinitionKey
+    };
   }
   if (!evId || !sub || !token) {
-    return "";
+    return {
+      dataExtensionId: dataExtensionId,
+      eventDefinitionKey: eventDefinitionKey
+    };
   }
   var getUrl =
     "https://" +
@@ -857,9 +877,16 @@ function resolveEventDataExtensionId(evId, sub, token, createResponse) {
   getReq.method = "GET";
   var getResp = getReq.send();
   if (getResp.statusCode != 200 && getResp.statusCode != 201) {
-    return "";
+    return {
+      dataExtensionId: dataExtensionId,
+      eventDefinitionKey: eventDefinitionKey
+    };
   }
-  return readDataExtensionId(parseEventDefJson(getResp.content));
+  var getObj = parseEventDefJson(getResp.content);
+  return {
+    dataExtensionId: readDataExtensionId(getObj) || dataExtensionId,
+    eventDefinitionKey: readEventDefinitionKey(getObj) || eventDefinitionKey
+  };
 }
 
 if (
@@ -870,12 +897,21 @@ if (
   subdomain &&
   accessToken
 ) {
-  var eventDataExtensionId = resolveEventDataExtensionId(
+  var eventResolved = resolveEventDefinition(
     eventDefId,
     subdomain,
     accessToken,
     eventResponse
   );
+  var eventDataExtensionId = eventResolved.dataExtensionId || "";
+  if (eventResolved.eventDefinitionKey) {
+    eventKey = eventResolved.eventDefinitionKey;
+    Platform.Variable.SetValue("@eventKey", eventKey);
+    Platform.Variable.SetValue(
+      "@defaultEmailEscaped",
+      ("{{Event." + eventKey + '.\"email\"}}').replace(/"/g, '\\"')
+    );
+  }
   if (!eventDataExtensionId) {
     Platform.Variable.SetValue("@apiEventTriggerJson", "");
     Platform.Variable.SetValue("@eventDataExtensionId", "");
@@ -897,9 +933,15 @@ if (
       description: "",
       type: "APIEvent",
       outcomes: [],
-      arguments: {},
+      arguments: {
+        serializedObjectType: 11,
+        eventDefinitionId: eventDefId,
+        eventDefinitionKey: eventKey,
+        dataExtensionId: eventDataExtensionId
+      },
       configurationArguments: {},
       metaData: {
+        sourceInteractionId: "00000000-0000-0000-0000-000000000000",
         eventDefinitionId: eventDefId,
         eventDefinitionKey: eventKey,
         chainType: "None",
@@ -907,8 +949,7 @@ if (
         iconUrl: "/images/icon_journeyBuilder-event-api-blue.svg",
         title: "",
         entrySourceGroupConfigUrl:
-          "jb:///data/entry/api-event/entrysourcegroupconfig.json",
-        sourceInteractionId: "00000000-0000-0000-0000-000000000000"
+          "jb:///data/entry/api-event/entrysourcegroupconfig.json"
       }
     };
     Platform.Variable.SetValue("@eventDataExtensionId", eventDataExtensionId);
@@ -1164,8 +1205,7 @@ function buildCmUpdateActivitySbU(opts) {
       requestObjectId: "{{Context.RequestObjectId}}"
     },
     configurationArguments: {
-      applicationExtensionKey: "Salesforce_Activity_CampaignMember",
-      applicationExtensionId: "00000000-0000-0000-0000-000000000000"
+      applicationExtensionKey: "Salesforce_Activity_CampaignMember"
     },
     metaData: {
       isConfigured: true,
@@ -1215,7 +1255,7 @@ if (
      emailNameEscaped +
      '","outcomes":[{"next":"SALESCLOUDACTIVITY-2","metaData":{"invalid":false}}],"arguments":' +
      emailArgs +
-     ',"metaData":{"isConfigured":true,"sections":{}},"configurationArguments":{"applicationExtensionKey":"jb-email-activity","isModified":false,"isSimulation":false,"fuelAgentRequested":true,"googleAnalyticsCampaignName":"","useLLTS":false,"isReconcilable":false,"triggeredSend":{"autoAddSubscribers":true,"autoUpdateSubscribers":true,"bccEmail":"' +
+     ',"metaData":{"isConfigured":true,"sections":{}},"configurationArguments":{"isModified":true,"googleAnalyticsCampaignName":"","triggeredSend":{"autoAddSubscribers":true,"autoUpdateSubscribers":true,"bccEmail":"' +
      bccEsc +
      '","categoryId":58374,"ccEmail":"","created":{"name":"","date":""},"domainExclusions":[],"dynamicEmailSubject":"' +
      emailSubjectEscaped +
@@ -1231,7 +1271,7 @@ if (
      deliveryProfileIdEsc +
      '","senderProfileId":"' +
      senderProfileIdEsc +
-     '","isTrackingClicks":true,"publicationListId":1132}}}';
+     '","isTrackingClicks":true,"publicationListId":1132,"isReconcilable":null,"reconciliationExpiryHours":null}},"applicationExtensionKey":"jb-email-activity"}}';
    var cmObj = buildCmUpdateActivitySbU({
      eventKey: eventKey,
      campaignId: campaignId,
@@ -1347,8 +1387,7 @@ if (
        requestObjectId: "{{Context.RequestObjectId}}"
      },
      configurationArguments: {
-       applicationExtensionKey: "Salesforce_Activity_Task",
-       applicationExtensionId: "00000000-0000-0000-0000-000000000000"
+       applicationExtensionKey: "Salesforce_Activity_Task"
      },
      metaData: {
        isConfigured: true,
@@ -1388,6 +1427,28 @@ if (
      if (journeyId) {
        Platform.Variable.SetValue("@journeyId", journeyId);
        journeyResult = journeyResult + " Journey ID: " + journeyId + " (draft).";
+       var putPayload = '{"id":"' + journeyId + '",' + journeyPayload.substring(1);
+       var putReq = new Script.Util.HttpRequest(journeyUrl);
+       putReq.emptyContentHandling = 0;
+       putReq.continueOnError = true;
+       putReq.setHeader("Authorization", "Bearer " + accessToken);
+       putReq.method = "PUT";
+       putReq.contentType = "application/json";
+       putReq.postData = putPayload;
+       var putResp = putReq.send();
+       var putStatus = putResp.statusCode;
+       var putResponse = putResp.content ? String(putResp.content) : "";
+       if (putStatus == 200 || putStatus == 201) {
+         journeyResult = journeyResult + " Step 4b OK - Entry event saved on journey.";
+       } else {
+         journeyResult =
+           journeyResult +
+           " Step 4b FAILED: HTTP " +
+           putStatus +
+           " - " +
+           putResponse;
+         Platform.Variable.SetValue("@cleanupNeeded", "1");
+       }
      }
    } else {
      journeyResult = " Step 4 FAILED: HTTP " + journeyStatus + " - " + journeyResponse;
