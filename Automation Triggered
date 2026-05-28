@@ -1,0 +1,3456 @@
+%%[
+SET @createRequested = RequestParameter("create")
+SET @deleteAllRequested = IIF(RequestParameter("deleteAll") == "1","1","0")
+SET @deleteJourneyId = Trim(RequestParameter("deleteJourneyId"))
+SET @deleteEventDefId = Trim(RequestParameter("deleteEventDefId"))
+SET @deleteAutomationId = Trim(RequestParameter("deleteAutomationId"))
+SET @deleteQueryKey = Trim(RequestParameter("deleteQueryKey"))
+SET @deleteEmailId = Trim(RequestParameter("deleteEmailId"))
+SET @deleteEventName = Trim(RequestParameter("deleteEventName"))
+SET @campaignId = Trim(RequestParameter("campaignId"))
+SET @emailId = RequestParameter("emailId")
+SET @senderProfileId = Trim(RequestParameter("senderProfileId"))
+SET @sendClassificationId = Trim(RequestParameter("sendClassificationId"))
+SET @addTaskActivity = IIF(RequestParameter("addTaskActivity") == "1","1","0")
+SET @flow = "stack"
+SET @hubUrl = ""
+SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
+IF RowCount(@navRows) > 0 THEN
+ SET @hubUrl = Field(Row(@navRows,1),"ss_home")
+ENDIF
+SET @builderPageLabel = "Journey + Automation"
+SET @stackCampaignName = Trim(RequestParameter("stackCampaignName"))
+SET @sfUserId = Trim(RequestParameter("sfUserId"))
+SET @frequency = Lowercase(Trim(RequestParameter("frequency")))
+SET @timezoneId = Trim(RequestParameter("timezoneId"))
+SET @startDate = Trim(RequestParameter("startDate"))
+SET @startOffset = Trim(RequestParameter("startOffset"))
+SET @automationId = ""
+SET @deCustomerKey = ""
+SET @entryDeObjectId = ""
+SET @stackDeReady = "0"
+SET @assetKey = ""
+SET @queryKey = ""
+SET @automationKey = ""
+IF Empty(@timezoneId) THEN
+ SET @timezoneId = "1"
+ENDIF
+IF Empty(@frequency) THEN
+ SET @frequency = "hourly"
+ENDIF
+IF Empty(@startOffset) THEN
+ SET @startOffset = "-05:00"
+ENDIF
+SET @emailSubjectLine = Trim(RequestParameter("emailSubjectLine"))
+SET @journeyDescription = Trim(RequestParameter("journeyDescription"))
+SET @bccEmail = Trim(RequestParameter("bccEmail"))
+SET @showForm = "true"
+IF NOT Empty(@createRequested) OR @deleteAllRequested == "1" THEN
+ SET @showForm = "false"
+ENDIF
+SET @resultText = ""
+SET @journeyName = ""
+SET @eventName = ""
+SET @eventDefId = ""
+SET @journeyId = ""
+SET @templateConfigOk = "false"
+SET @templateCount = 0
+SET @defaultEmailId = ""
+SET @templateRows = LookupOrderedRows("bd_sst_email_templates",0,"email_id ASC","email_type","template")
+SET @templateCount = RowCount(@templateRows)
+IF @templateCount > 0 THEN
+ SET @templateConfigOk = "true"
+ SET @defaultEmailId = Trim(Field(Row(@templateRows,@templateCount),"email_id"))
+ENDIF
+SET @createEmailOnly = "0"
+IF Empty(@emailId) THEN
+ SET @emailId = @defaultEmailId
+ENDIF
+IF NOT Empty(@stackCampaignName) THEN
+ SET @journeyName = @stackCampaignName
+ SET @eventName = @stackCampaignName
+ SET @emailName = @stackCampaignName
+ SET @assetKey = Replace(@stackCampaignName,'"','')
+ SET @assetKey = Replace(@assetKey," | ","_")
+ SET @assetKey = Replace(@assetKey,"|","_")
+ SET @assetKey = Replace(@assetKey," ","_")
+ SET @assetKey = Replace(@assetKey,".","_")
+ SET @assetKey = Replace(@assetKey,"/","_")
+ SET @queryKey = @assetKey
+ SET @automationKey = @assetKey
+ENDIF
+SET @campaignName = @stackCampaignName
+SET @campaignLookup = RetrieveSalesforceObjects("Campaign","Id,Name","Id","=",@campaignId)
+IF RowCount(@campaignLookup) > 0 THEN
+ SET @campaignRow = Row(@campaignLookup,1)
+ SET @campaignName = Field(@campaignRow,"Name")
+ENDIF
+IF Empty(@campaignName) AND NOT Empty(@stackCampaignName) THEN
+ SET @campaignName = @stackCampaignName
+ENDIF
+IF Empty(@emailSubjectLine) THEN
+ SET @emailSubjectLine = "Campaign Event"
+ENDIF
+SET @authOk = "false"
+SET @step3bResult = ""
+IF @showForm != "true" THEN
+ IF @deleteAllRequested == "1" THEN
+   SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
+   SET @rowCount = RowCount(@authRow)
+   IF @rowCount > 0 THEN
+     SET @row = Row(@authRow,1)
+     SET @clientId = Field(@row,"clientId")
+     SET @clientSecret = Field(@row,"clientSecret")
+     SET @subdomain = Field(@row,"subdomain")
+     SET @sourceEmailId = @emailId
+     IF NOT Empty(@clientId) AND NOT Empty(@clientSecret) AND NOT Empty(@subdomain) THEN
+       SET @authUrl = Concat("https://",@subdomain,".auth.marketingcloudapis.com/v2/token")
+       SET @accountId = Trim(Field(@row,"accountId"))
+       SET @authPayload = Concat('{"grant_type":"client_credentials","client_id":"',@clientId,'","client_secret":"',@clientSecret,'"')
+       IF NOT Empty(@accountId) THEN
+         SET @authPayload = Concat(@authPayload,',"account_id":"',@accountId,'"')
+       ENDIF
+       SET @authPayload = Concat(@authPayload,'}')
+       SET @authStatus = HTTPPost2(@authUrl,"application/json",@authPayload,false,@authResponse,@authResponseHeader)
+       IF @authStatus == 200 THEN
+         SET @tokenPattern = '"access_token":"([^"]+)"'
+         SET @accessToken = RegExMatch(@authResponse,@tokenPattern,1)
+         IF NOT Empty(@accessToken) THEN
+           SET @resultText = Concat("Step 1 OK. Step 2 OK - Auth success.")
+           SET @authOk = "true"
+         ELSE
+           SET @resultText = "Step 2 FAILED: No access token."
+         ENDIF
+       ELSE
+         SET @resultText = Concat("Step 2 FAILED: Auth HTTP ",@authStatus," - ",@authResponse)
+       ENDIF
+     ELSE
+       SET @resultText = "Step 1 FAILED: Missing clientId, clientSecret, or subdomain in SFMC_AUTH."
+     ENDIF
+   ELSE
+     SET @resultText = "Step 1 FAILED: No SFMC_AUTH row for User=Admin."
+   ENDIF
+ ELSE
+   IF @templateConfigOk != "true" THEN
+     SET @resultText = "Step 0 FAILED: Missing email templates in bd_sst_email_templates (email_type=template)."
+   ELSE
+    IF Empty(@stackCampaignName) OR Empty(@campaignId) OR Length(@campaignId) < 15 THEN
+      SET @resultText = "Enter Campaign Name and a valid Salesforce Campaign ID (15+ characters)."
+    ELSE
+     SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
+     SET @rowCount = RowCount(@authRow)
+     IF @rowCount > 0 THEN
+       SET @row = Row(@authRow,1)
+       SET @clientId = Field(@row,"clientId")
+       SET @clientSecret = Field(@row,"clientSecret")
+       SET @subdomain = Field(@row,"subdomain")
+       SET @sourceEmailId = @emailId
+       IF NOT Empty(@clientId) AND NOT Empty(@clientSecret) AND NOT Empty(@subdomain) THEN
+         SET @authUrl = Concat("https://",@subdomain,".auth.marketingcloudapis.com/v2/token")
+         SET @accountId = Trim(Field(@row,"accountId"))
+         SET @authPayload = Concat('{"grant_type":"client_credentials","client_id":"',@clientId,'","client_secret":"',@clientSecret,'"')
+         IF NOT Empty(@accountId) THEN
+           SET @authPayload = Concat(@authPayload,',"account_id":"',@accountId,'"')
+         ENDIF
+         SET @authPayload = Concat(@authPayload,'}')
+         SET @authStatus = HTTPPost2(@authUrl,"application/json",@authPayload,false,@authResponse,@authResponseHeader)
+         IF @authStatus == 200 THEN
+           SET @tokenPattern = '"access_token":"([^"]+)"'
+           SET @accessToken = RegExMatch(@authResponse,@tokenPattern,1)
+           IF NOT Empty(@accessToken) THEN
+             SET @resultText = Concat("Step 1 OK. Step 2 OK - Auth success.")
+             SET @authOk = "true"
+           ELSE
+             SET @resultText = "Step 2 FAILED: No access token."
+           ENDIF
+         ELSE
+           SET @resultText = Concat("Step 2 FAILED: Auth HTTP ",@authStatus," - ",@authResponse)
+         ENDIF
+       ELSE
+         SET @resultText = "Step 1 FAILED: Missing clientId, clientSecret, or subdomain in SFMC_AUTH."
+       ENDIF
+     ELSE
+       SET @resultText = "Step 1 FAILED: No SFMC_AUTH row for User=Admin."
+     ENDIF
+    ENDIF
+   ENDIF
+ ENDIF
+ENDIF
+]%%
+<script runat="server">
+Platform.Load("core","1");
+var senderProfileIdReq = Platform.Variable.GetValue("@senderProfileId") || "";
+var senderProfileConfigOk = "false";
+var senderProfileOptionsHtml = "";
+var defaultSenderProfileId = "";
+
+function escSenderOpt(s) {
+  if (s === null || s === undefined) return "";
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;");
+}
+
+function senderProfileIdFromRow(row) {
+  if (!row) return "";
+  if (row.ObjectID) {
+    var oid = String(row.ObjectID).replace(/^\s+|\s+$/g, "");
+    if (oid) return oid;
+  }
+  if (row.CustomerKey) {
+    var ck = String(row.CustomerKey).replace(/^\s+|\s+$/g, "");
+    if (ck) return ck;
+  }
+  return "";
+}
+
+function senderProfileLabelFromRow(row) {
+  if (!row) return "";
+  var name = row.Name ? String(row.Name).replace(/^\s+|\s+$/g, "") : "";
+  var fromName = row.FromName ? String(row.FromName).replace(/^\s+|\s+$/g, "") : "";
+  var fromAddress = row.FromAddress ? String(row.FromAddress).replace(/^\s+|\s+$/g, "") : "";
+  if (name) return name;
+  if (fromName && fromAddress) return fromName + " <" + fromAddress + ">";
+  if (fromName) return fromName;
+  if (fromAddress) return fromAddress;
+  return senderProfileIdFromRow(row);
+}
+
+function normalizeWsResults(results) {
+  var out = [];
+  if (!results) return out;
+  if (typeof results.length === "number") {
+    var i;
+    for (i = 0; i < results.length; i++) out.push(results[i]);
+    return out;
+  }
+  if (results.CustomerKey || results.ObjectID || results.Name) out.push(results);
+  return out;
+}
+
+function retrieveAllSenderProfiles() {
+  var prox = new Script.Util.WSProxy();
+  var props = ["Name", "FromName", "FromAddress", "CustomerKey", "ObjectID"];
+  var filter = {
+    Property: "CustomerKey",
+    SimpleOperator: "like",
+    Value: "%"
+  };
+  var rows = [];
+  var resp = prox.retrieve("SenderProfile", props, filter);
+  while (resp) {
+    rows = rows.concat(normalizeWsResults(resp.Results));
+    if (resp.HasMoreResults) {
+      resp = prox.retrieveMore();
+    } else {
+      break;
+    }
+  }
+  return rows;
+}
+
+try {
+  var senderRows = retrieveAllSenderProfiles();
+  senderRows.sort(function (a, b) {
+    return senderProfileLabelFromRow(a).localeCompare(senderProfileLabelFromRow(b));
+  });
+  var si;
+  for (si = 0; si < senderRows.length; si++) {
+    var spId = senderProfileIdFromRow(senderRows[si]);
+    if (!spId) continue;
+    if (!defaultSenderProfileId) defaultSenderProfileId = spId;
+    senderProfileConfigOk = "true";
+  }
+  var selectedSenderProfileId = senderProfileIdReq || defaultSenderProfileId;
+  for (si = 0; si < senderRows.length; si++) {
+    var spIdOpt = senderProfileIdFromRow(senderRows[si]);
+    if (!spIdOpt) continue;
+    var spLabel = senderProfileLabelFromRow(senderRows[si]);
+    var selectedAttr = spIdOpt === selectedSenderProfileId ? " selected" : "";
+    senderProfileOptionsHtml +=
+      '<option value="' +
+      escSenderOpt(spIdOpt) +
+      '"' +
+      selectedAttr +
+      ">" +
+      escSenderOpt(spLabel) +
+      "</option>";
+  }
+  Platform.Variable.SetValue("@senderProfileId", selectedSenderProfileId);
+} catch (senderLoadErr) {
+  senderProfileConfigOk = "false";
+  senderProfileOptionsHtml = "";
+}
+
+Platform.Variable.SetValue("@senderProfileConfigOk", senderProfileConfigOk);
+Platform.Variable.SetValue("@senderProfileOptionsHtml", senderProfileOptionsHtml);
+
+var sendClassificationIdReq = Platform.Variable.GetValue("@sendClassificationId") || "";
+var sendClassificationConfigOk = "false";
+var sendClassificationOptionsHtml = "";
+var defaultSendClassificationId = "";
+
+function sendClassificationIdFromRow(row) {
+  if (!row) return "";
+  if (row.ObjectID) {
+    var scOid = String(row.ObjectID).replace(/^\s+|\s+$/g, "");
+    if (scOid) return scOid;
+  }
+  if (row.CustomerKey) {
+    var scCk = String(row.CustomerKey).replace(/^\s+|\s+$/g, "");
+    if (scCk) return scCk;
+  }
+  return "";
+}
+
+function sendClassificationLabelFromRow(row) {
+  if (!row) return "";
+  var scName = row.Name ? String(row.Name).replace(/^\s+|\s+$/g, "") : "";
+  var scType = row.SendClassificationType
+    ? String(row.SendClassificationType).replace(/^\s+|\s+$/g, "")
+    : "";
+  if (scName && scType) return scName + " (" + scType + ")";
+  if (scName) return scName;
+  if (row.CustomerKey) return String(row.CustomerKey).replace(/^\s+|\s+$/g, "");
+  return sendClassificationIdFromRow(row);
+}
+
+function retrieveAllSendClassifications() {
+  var prox = new Script.Util.WSProxy();
+  var props = ["Name", "CustomerKey", "ObjectID", "SendClassificationType"];
+  var rows = [];
+  var resp = prox.retrieve("SendClassification", props);
+  while (resp) {
+    rows = rows.concat(normalizeWsResults(resp.Results));
+    if (resp.HasMoreResults) {
+      resp = prox.retrieveMore();
+    } else {
+      break;
+    }
+  }
+  return rows;
+}
+
+try {
+  var scRows = retrieveAllSendClassifications();
+  scRows.sort(function (a, b) {
+    return sendClassificationLabelFromRow(a).localeCompare(sendClassificationLabelFromRow(b));
+  });
+  var sci;
+  for (sci = 0; sci < scRows.length; sci++) {
+    var scId = sendClassificationIdFromRow(scRows[sci]);
+    if (!scId) continue;
+    if (!defaultSendClassificationId) defaultSendClassificationId = scId;
+    sendClassificationConfigOk = "true";
+  }
+  var selectedSendClassificationId = sendClassificationIdReq || defaultSendClassificationId;
+  for (sci = 0; sci < scRows.length; sci++) {
+    var scIdOpt = sendClassificationIdFromRow(scRows[sci]);
+    if (!scIdOpt) continue;
+    var scLabel = sendClassificationLabelFromRow(scRows[sci]);
+    var scSelectedAttr = scIdOpt === selectedSendClassificationId ? " selected" : "";
+    sendClassificationOptionsHtml +=
+      '<option value="' +
+      escSenderOpt(scIdOpt) +
+      '"' +
+      scSelectedAttr +
+      ">" +
+      escSenderOpt(scLabel) +
+      "</option>";
+  }
+  Platform.Variable.SetValue("@sendClassificationId", selectedSendClassificationId);
+} catch (scLoadErr) {
+  sendClassificationConfigOk = "false";
+  sendClassificationOptionsHtml = "";
+}
+
+Platform.Variable.SetValue("@sendClassificationConfigOk", sendClassificationConfigOk);
+Platform.Variable.SetValue("@sendClassificationOptionsHtml", sendClassificationOptionsHtml);
+</script>
+<script runat="server">
+Platform.Load("core","1");
+var authOk = Variable.GetValue("authOk");
+var accessToken = Variable.GetValue("accessToken");
+var subdomain = Variable.GetValue("subdomain");
+var emailName = Variable.GetValue("emailName");
+var sourceEmailId = Variable.GetValue("sourceEmailId");
+var deleteAllRequested = Variable.GetValue("deleteAllRequested");
+var deleteJourneyId = Variable.GetValue("deleteJourneyId");
+var deleteEventDefId = Variable.GetValue("deleteEventDefId");
+var deleteAutomationId = Variable.GetValue("deleteAutomationId");
+var deleteQueryKey = Variable.GetValue("deleteQueryKey");
+var deleteEmailIdParam = Variable.GetValue("deleteEmailId");
+var deleteEventNameParam = Variable.GetValue("deleteEventName");
+var resultText = Variable.GetValue("resultText");
+var newEmailId = "";
+var journeyEmailId = "";
+var step3bResult = " Step 3b SKIP - Email not duplicated: Template fetch failed.";
+function cloneObject(obj) {
+ if (!obj || typeof obj !== "object") return null;
+ var json = Platform.Function.Stringify(obj);
+ return json ? Platform.Function.ParseJSON(json) : null;
+}
+function objectKeys(obj) {
+ var keys = [];
+ if (!obj || typeof obj !== "object") return keys;
+ for (var key in obj) {
+   if (obj.hasOwnProperty(key)) {
+     keys.push(key);
+   }
+ }
+ return keys;
+}
+function safeLength(value) {
+ if (value === null || value === undefined) return 0;
+ return String(value).length;
+}
+function truncateString(value, maxLength) {
+ var str = value ? String(value) : "";
+ if (str.length <= maxLength) return str;
+ return str.substring(0, maxLength) + "...[truncated]";
+}
+function summarizeTemplateRef(templateRef) {
+ if (!templateRef || typeof templateRef !== "object") return null;
+ return {
+   id: templateRef.id || "",
+   assetTypeId: (templateRef.assetType && templateRef.assetType.id) ? templateRef.assetType.id : "",
+   assetTypeName: (templateRef.assetType && templateRef.assetType.name) ? templateRef.assetType.name : "",
+   contentLength: safeLength(templateRef.content),
+   slotKeys: objectKeys(templateRef.slots)
+ };
+}
+function summarizeHtmlView(htmlView) {
+ if (!htmlView || typeof htmlView !== "object") return null;
+ return {
+   contentLength: safeLength(htmlView.content),
+   slotKeys: objectKeys(htmlView.slots),
+   template: summarizeTemplateRef(htmlView.template)
+ };
+}
+function summarizeEmailOptions(dataObj) {
+ if (!dataObj || !dataObj.email || !dataObj.email.options) return null;
+ return cloneObject(dataObj.email.options);
+}
+function fetchAssetById(assetId, subdomainValue, accessTokenValue) {
+ var result = {
+   ok: false,
+   statusCode: 0,
+   responseText: "",
+   asset: null
+ };
+ var parsedId = parseInt(assetId, 10);
+ if (isNaN(parsedId) || !subdomainValue || !accessTokenValue) {
+   return result;
+ }
+ try {
+   var assetUrl = "https://" + subdomainValue + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + parsedId;
+   var req = new Script.Util.HttpRequest(assetUrl);
+   req.emptyContentHandling = 0;
+   req.retries = 2;
+   req.continueOnError = true;
+   req.setHeader("Authorization", "Bearer " + accessTokenValue);
+   req.method = "GET";
+   req.contentType = "application/json";
+   var resp = req.send();
+   result.statusCode = resp.statusCode;
+   result.responseText = resp.content ? String(resp.content) : "";
+   if ((resp.statusCode == 200 || resp.statusCode == 201) && result.responseText) {
+     result.asset = Platform.Function.ParseJSON(result.responseText);
+     result.ok = true;
+   }
+ } catch (e) {
+   result.responseText = e.message || String(e);
+ }
+ return result;
+}
+function extractLegacyEmailId(assetObj) {
+ if (!assetObj || typeof assetObj !== "object") return "";
+ var candidates = [
+   assetObj.data && assetObj.data.email && assetObj.data.email.legacy && assetObj.data.email.legacy.legacyId,
+   assetObj.data && assetObj.data.email && assetObj.data.email.legacy && assetObj.data.email.legacy.id,
+   assetObj.data && assetObj.data.email && assetObj.data.email.legacyId,
+   assetObj.data && assetObj.data.legacy && assetObj.data.legacy.legacyId,
+   assetObj.legacyData && assetObj.legacyData.legacyId,
+   assetObj.legacy && assetObj.legacy.legacyId,
+   assetObj.legacyId
+ ];
+ for (var i = 0; i < candidates.length; i++) {
+   var candidate = candidates[i];
+   if (candidate !== null && candidate !== undefined && String(candidate) !== "") {
+     return String(candidate);
+   }
+ }
+ return "";
+}
+function buildTemplateReference(source, fallbackContent, fallbackSlots) {
+ if (!source || typeof source !== "object") return null;
+ var ref = {
+   assetType: { id: 4 }
+ };
+ var sourceId = parseInt(source.id, 10);
+ if (!isNaN(sourceId)) {
+   ref.id = sourceId;
+ }
+ if (source.assetType && source.assetType.id) {
+   ref.assetType.id = parseInt(source.assetType.id, 10);
+ }
+ if (source.assetType && source.assetType.name) {
+   ref.assetType.name = source.assetType.name;
+ }
+ ref.content = source.content || fallbackContent || "";
+ ref.slots = (source.slots && typeof source.slots === "object") ? cloneObject(source.slots) : cloneObject(fallbackSlots || {});
+ return ref;
+}
+function buildBasePayload(sourceAsset, targetName, targetAssetTypeId) {
+ var payload = {
+   name: targetName,
+   assetType: {
+     id: targetAssetTypeId
+   }
+ };
+ if (targetAssetTypeId === 207 || targetAssetTypeId === 208) {
+   payload.assetType.name = "htmlemail";
+ } else if (sourceAsset.assetType && sourceAsset.assetType.name) {
+   payload.assetType.name = sourceAsset.assetType.name;
+ }
+ if (sourceAsset.category && sourceAsset.category.id) {
+   payload.category = { id: sourceAsset.category.id };
+ }
+ if (sourceAsset.channels && typeof sourceAsset.channels === "object") {
+   payload.channels = cloneObject(sourceAsset.channels);
+ }
+ if (sourceAsset.views && typeof sourceAsset.views === "object") {
+   payload.views = cloneObject(sourceAsset.views);
+ }
+ if (sourceAsset.data && typeof sourceAsset.data === "object") {
+   payload.data = cloneObject(sourceAsset.data);
+ }
+ return payload;
+}
+function ensureEmailOptions(payload) {
+ if (!payload.data || typeof payload.data !== "object") {
+   payload.data = {};
+ }
+ if (!payload.data.email || typeof payload.data.email !== "object") {
+   payload.data.email = {};
+ }
+ if (!payload.data.email.options || typeof payload.data.email.options !== "object") {
+   payload.data.email.options = {};
+ }
+ if (!payload.data.email.options.characterEncoding) {
+   payload.data.email.options.characterEncoding = "utf-8";
+ }
+}
+function hasTextContent(value) {
+ return value !== null && value !== undefined && String(value).replace(/\s+/g, "").length > 0;
+}
+function applyTextSettings(payload, textContent) {
+ ensureEmailOptions(payload);
+ if (!payload.views || typeof payload.views !== "object") {
+   payload.views = {};
+ }
+ if (hasTextContent(textContent)) {
+   payload.views.text = { content: String(textContent) };
+ } else {
+   if (payload.views.text) {
+     delete payload.views.text;
+   }
+   if (payload.data && payload.data.email && payload.data.email.options && payload.data.email.options.generateFrom !== undefined) {
+     delete payload.data.email.options.generateFrom;
+   }
+ }
+}
+function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, sourceSlots) {
+ var templateSource = resolvedTemplateAsset || sourceTemplate;
+ var templateContent = (templateSource && templateSource.content) ? templateSource.content : "";
+ var templateSlots = (templateSource && templateSource.slots && typeof templateSource.slots === "object") ? cloneObject(templateSource.slots) : {};
+ var sourceHtmlContent = (sourceAsset && sourceAsset.views && sourceAsset.views.html && sourceAsset.views.html.content) ? sourceAsset.views.html.content : (sourceAsset.content || templateContent);
+ var emailSlots = (sourceSlots && typeof sourceSlots === "object") ? cloneObject(sourceSlots) : {};
+ var payload = {
+   name: targetName,
+   assetType: { id: 207, name: "htmlemail" },
+   channels: (sourceAsset.channels && typeof sourceAsset.channels === "object") ? cloneObject(sourceAsset.channels) : { email: true, web: false },
+   views: {
+     subjectline: { content: subjectlineContent || "Campaign Event" },
+     preheader: { content: preheaderContent || "" },
+     html: {
+       content: sourceHtmlContent,
+       slots: emailSlots,
+       template: {
+         id: parseInt(sourceTemplate.id, 10),
+         assetType: { id: 4, name: "template" },
+         content: templateContent,
+         slots: templateSlots
+       }
+     },
+     text: {}
+   },
+   data: {
+     email: {
+       options: {}
+     }
+   }
+ };
+ if (sourceAsset.category && sourceAsset.category.id) {
+   payload.category = { id: sourceAsset.category.id };
+ }
+ if (sourceAsset.data && sourceAsset.data.email && sourceAsset.data.email.options && typeof sourceAsset.data.email.options === "object") {
+   payload.data.email.options = cloneObject(sourceAsset.data.email.options);
+ }
+ applyTextSettings(payload, textContent);
+ return payload;
+}
+if (deleteAllRequested == "1" && authOk == "true" && accessToken && subdomain) {
+ var purgeLog = [];
+ function purgePart(msg) {
+   purgeLog.push(String(msg || ""));
+ }
+ function purgeHttpDel(token, sdom, url) {
+   var req = new Script.Util.HttpRequest(url);
+   req.emptyContentHandling = 0;
+   req.retries = 1;
+   req.continueOnError = true;
+   req.setHeader("Authorization", "Bearer " + token);
+   req.method = "DELETE";
+   var resp = req.send();
+   return resp.statusCode;
+ }
+ try {
+   if (deleteAutomationId) {
+     var autoDelUrl =
+       "https://" +
+       subdomain +
+       ".rest.marketingcloudapis.com/automation/v1/automations/" +
+       encodeURIComponent(String(deleteAutomationId));
+     var autoSt = purgeHttpDel(accessToken, subdomain, autoDelUrl);
+     if (autoSt == 200 || autoSt == 204) {
+       purgePart("[Automation] DELETE OK.");
+     } else {
+       purgePart("[Automation] DELETE HTTP " + autoSt + ".");
+     }
+   } else {
+     purgePart("[Automation] SKIP - no id.");
+   }
+   if (deleteQueryKey) {
+     try {
+       var proxQ = new Script.Util.WSProxy();
+       var qdRes = proxQ.retrieve(
+         "QueryDefinition",
+         ["ObjectID"],
+         {
+           Property: "CustomerKey",
+           SimpleOperator: "equals",
+           Value: String(deleteQueryKey)
+         }
+       );
+       if (qdRes && qdRes.Results && qdRes.Results.length > 0 && qdRes.Results[0].ObjectID) {
+         var qDel = proxQ.deleteItem("QueryDefinition", {
+           ObjectID: String(qdRes.Results[0].ObjectID)
+         });
+         if (qDel && qDel.Results && qDel.Results.length > 0 && qDel.Results[0].Status == "OK") {
+           purgePart("[Query] DELETE OK.");
+         } else {
+           purgePart("[Query] deleteItem did not report OK.");
+         }
+       } else {
+         purgePart("[Query] SKIP - not found for key " + deleteQueryKey + ".");
+       }
+     } catch (qEx) {
+       purgePart("[Query] FAILED: " + (qEx.message || String(qEx)));
+     }
+   } else {
+     purgePart("[Query] SKIP - no key.");
+   }
+   if (deleteJourneyId) {
+     var jDelUrl =
+       "https://" +
+       subdomain +
+       ".rest.marketingcloudapis.com/interaction/v1/interactions/" +
+       encodeURIComponent(String(deleteJourneyId));
+     var jSt = purgeHttpDel(accessToken, subdomain, jDelUrl);
+     if (jSt == 200 || jSt == 204) {
+       purgePart("[Journey] DELETE OK.");
+     } else {
+       purgePart("[Journey] DELETE HTTP " + jSt + ".");
+     }
+   } else {
+     purgePart("[Journey] SKIP - no id.");
+   }
+   if (deleteEventDefId) {
+     var dataExtensionId = null;
+     try {
+       var getEventUrl =
+         "https://" +
+         subdomain +
+         ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
+         deleteEventDefId;
+       var getReq = new Script.Util.HttpRequest(getEventUrl);
+       getReq.emptyContentHandling = 0;
+       getReq.continueOnError = true;
+       getReq.setHeader("Authorization", "Bearer " + accessToken);
+       getReq.method = "GET";
+       var getResp = getReq.send();
+       if ((getResp.statusCode == 200 || getResp.statusCode == 201) && getResp.content) {
+         var eventObj = Platform.Function.ParseJSON(String(getResp.content));
+         dataExtensionId = eventObj.dataExtensionId || eventObj.dataExtensionID || null;
+       }
+       var evSt = purgeHttpDel(accessToken, subdomain, getEventUrl);
+       if (evSt == 200 || evSt == 204) {
+         purgePart("[Entry event] DELETE OK.");
+       } else {
+         purgePart("[Entry event] DELETE HTTP " + evSt + ".");
+       }
+     } catch (evEx) {
+       purgePart("[Entry event] FAILED: " + (evEx.message || String(evEx)));
+     }
+     try {
+       var deObjId = dataExtensionId;
+       var evName = deleteEventNameParam || "";
+       if (!deObjId && evName) {
+         var proxDe = new Script.Util.WSProxy();
+         var deFilter = { Property: "Name", SimpleOperator: "equals", Value: String(evName) };
+         var rde = proxDe.retrieve("DataExtension", ["ObjectID"], deFilter);
+         if (rde && rde.Results && rde.Results.length > 0 && rde.Results[0].ObjectID) {
+           deObjId = rde.Results[0].ObjectID;
+         }
+       }
+       if (deObjId) {
+         var proxDeDel = new Script.Util.WSProxy();
+         var deResult = proxDeDel.deleteItem("DataExtension", { ObjectID: deObjId });
+         if (deResult && deResult.Results && deResult.Results.length > 0 && deResult.Results[0].Status == "OK") {
+           purgePart("[Data extension] DELETE OK.");
+         } else {
+           purgePart("[Data extension] deleteItem did not report OK.");
+         }
+       } else {
+         purgePart("[Data extension] SKIP - no ObjectID resolved.");
+       }
+     } catch (deEx) {
+       purgePart("[Data extension] FAILED: " + (deEx.message || String(deEx)));
+     }
+   } else {
+     purgePart("[Entry event] SKIP - no id.");
+   }
+   if (deleteEmailIdParam) {
+     var emailDelUrl =
+       "https://" +
+       subdomain +
+       ".rest.marketingcloudapis.com/asset/v1/content/assets/" +
+       deleteEmailIdParam;
+     var emSt = purgeHttpDel(accessToken, subdomain, emailDelUrl);
+     if (emSt == 200 || emSt == 204) {
+       purgePart("[Email] DELETE OK.");
+       Platform.Variable.SetValue("@deleteAllEmailOk", "true");
+     } else {
+       purgePart("[Email] DELETE HTTP " + emSt + ".");
+       Platform.Variable.SetValue("@deleteAllEmailOk", "false");
+     }
+   } else {
+     purgePart("[Email] SKIP - no id.");
+     Platform.Variable.SetValue("@deleteAllEmailOk", "false");
+   }
+ } catch (purgeEx) {
+   purgePart("DELETE ALL FAILED: " + (purgeEx.message || String(purgeEx)));
+   Platform.Variable.SetValue("@deleteAllEmailOk", "false");
+ }
+ step3bResult = " Delete all: " + purgeLog.join(" ");
+ Platform.Variable.SetValue("@deleteAllLog", purgeLog.join(" "));
+} else if (authOk == "true" && accessToken && subdomain && emailName && sourceEmailId) {
+ try {
+   var templateUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + sourceEmailId;
+   var getReq = new Script.Util.HttpRequest(templateUrl);
+   getReq.emptyContentHandling = 0;
+   getReq.retries = 2;
+   getReq.continueOnError = true;
+   getReq.setHeader("Authorization", "Bearer " + accessToken);
+   getReq.method = "GET";
+   getReq.contentType = "application/json";
+   var getResp = getReq.send();
+   var templateStatus = getResp.statusCode;
+   var templateResponse = getResp.content ? String(getResp.content) : "";
+   if (templateStatus == 200 && templateResponse) {
+     var template = Platform.Function.ParseJSON(templateResponse);
+     var sourceViews = template.views || {};
+     var htmlView = sourceViews.html || {};
+     var emailSubjectForAsset = Platform.Variable.GetValue("@emailSubjectLine") || "";
+     var subjectlineContent = emailSubjectForAsset || ((sourceViews.subjectline && sourceViews.subjectline.content) ? sourceViews.subjectline.content : "Campaign Event");
+     var preheaderContent = (sourceViews.preheader && sourceViews.preheader.content) ? sourceViews.preheader.content : "";
+     var textContent = (sourceViews.text && sourceViews.text.content) ? sourceViews.text.content : "";
+     var htmlContent = htmlView.content || template.content || "";
+     var htmlSlots = (htmlView.slots && typeof htmlView.slots === "object") ? htmlView.slots : ((template.slots && typeof template.slots === "object") ? template.slots : {});
+     var sourceTemplate = (htmlView.template && typeof htmlView.template === "object") ? htmlView.template : null;
+     var assetTypeId = (template.assetType && template.assetType.id) ? parseInt(template.assetType.id, 10) : 207;
+     var slotKeys = objectKeys(htmlSlots);
+     var payload = null;
+     var resolvedTemplateAsset = null;
+     var debugPrefix = " Source assetType: " + assetTypeId + ". Has template ref: " + (sourceTemplate ? "yes" : "no") + ". Slot keys: " + (slotKeys.length ? slotKeys.join(",") : "none") + ".";
+     var payloadDebug = "";
+     if (assetTypeId === 4) {
+       var templateRef = buildTemplateReference(template, template.content || htmlContent, template.slots || htmlSlots);
+       var templateSlots = (template.slots && typeof template.slots === "object") ? cloneObject(template.slots) : cloneObject(htmlSlots || {});
+       payload = {
+         name: emailName,
+         assetType: { name: "htmlemail", id: 207 },
+         channels: (template.channels && typeof template.channels === "object") ? cloneObject(template.channels) : { email: true, web: false },
+         views: {
+           subjectline: { content: subjectlineContent },
+           preheader: { content: preheaderContent },
+           html: {
+             template: templateRef,
+             content: template.content || htmlContent || "",
+             slots: templateSlots || {}
+           },
+           text: {}
+         }
+       };
+       applyTextSettings(payload, textContent);
+       if (template.category && template.category.id) {
+         payload.category = { id: template.category.id };
+       }
+     } else if (assetTypeId === 207) {
+       if (sourceTemplate) {
+         var fetchedTemplate = fetchAssetById(sourceTemplate.id, subdomain, accessToken);
+         if (fetchedTemplate.ok && fetchedTemplate.asset) {
+           resolvedTemplateAsset = fetchedTemplate.asset;
+           payload = buildCloned207Payload(template, emailName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, htmlSlots);
+         } else {
+           step3bResult = " Step 3b SKIP - Email not duplicated: Template asset fetch failed for template ID " + sourceTemplate.id + " with HTTP " + fetchedTemplate.statusCode + " - " + (fetchedTemplate.responseText || "No response body.") + debugPrefix;
+         }
+       } else {
+         step3bResult = " Step 3b SKIP - Email not duplicated: Source asset is template-based email but views.html.template is missing." + debugPrefix;
+       }
+     } else if (assetTypeId === 208) {
+       payload = buildBasePayload(template, emailName, 208);
+       if (!payload.channels) {
+         payload.channels = { email: true, web: false };
+       }
+       if (!payload.views || typeof payload.views !== "object") {
+         payload.views = {};
+       }
+       payload.views.subjectline = payload.views.subjectline || { content: subjectlineContent };
+       payload.views.preheader = payload.views.preheader || { content: preheaderContent };
+       payload.views.html = payload.views.html || { content: htmlContent };
+       applyTextSettings(payload, textContent);
+     } else {
+       step3bResult = " Step 3b SKIP - Email not duplicated: Unsupported source asset type " + assetTypeId + "." + debugPrefix;
+     }
+     if (payload && !step3bResult.match(/views\.html\.template is missing|Unsupported source asset type/)) {
+       var debugObj = {
+         source: {
+           assetTypeId: assetTypeId,
+           subjectlineLength: safeLength(subjectlineContent),
+           preheaderLength: safeLength(preheaderContent),
+           textLength: safeLength(textContent),
+           html: summarizeHtmlView(htmlView),
+           emailOptions: summarizeEmailOptions(template.data),
+           resolvedTemplate: resolvedTemplateAsset ? {
+             id: resolvedTemplateAsset.id || "",
+             contentLength: safeLength(resolvedTemplateAsset.content),
+             slotKeys: objectKeys(resolvedTemplateAsset.slots)
+           } : null
+         },
+         outgoing: {
+           assetType: payload.assetType || null,
+           category: payload.category || null,
+           channels: payload.channels || null,
+           subjectlineLength: (payload.views && payload.views.subjectline) ? safeLength(payload.views.subjectline.content) : 0,
+           preheaderLength: (payload.views && payload.views.preheader) ? safeLength(payload.views.preheader.content) : 0,
+           textLength: (payload.views && payload.views.text) ? safeLength(payload.views.text.content) : 0,
+           html: summarizeHtmlView(payload.views ? payload.views.html : null),
+           emailOptions: summarizeEmailOptions(payload.data)
+         }
+       };
+       payloadDebug = truncateString(Platform.Function.Stringify(debugObj), 2500);
+       var assetUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets";
+       var postReq = new Script.Util.HttpRequest(assetUrl);
+       postReq.emptyContentHandling = 0;
+       postReq.retries = 2;
+       postReq.continueOnError = true;
+       postReq.setHeader("Authorization", "Bearer " + accessToken);
+       postReq.method = "POST";
+       postReq.contentType = "application/json";
+       postReq.postData = Platform.Function.Stringify(payload);
+       var postResp = postReq.send();
+       var assetStatus = postResp.statusCode;
+       var assetResponse = postResp.content ? String(postResp.content) : "";
+       if ((assetStatus == 200 || assetStatus == 201) && assetResponse) {
+         var idMatch = assetResponse.match(/"id"\s*:\s*"?([^",}\s]+)"?/);
+         if (idMatch) {
+           newEmailId = String(idMatch[1]);
+           var createdAsset = null;
+           try {
+             createdAsset = Platform.Function.ParseJSON(assetResponse);
+           } catch (parseEx) {
+             createdAsset = null;
+           }
+           journeyEmailId = extractLegacyEmailId(createdAsset);
+           if (!journeyEmailId && newEmailId) {
+             var createdAssetFetch = fetchAssetById(newEmailId, subdomain, accessToken);
+             if (createdAssetFetch.ok && createdAssetFetch.asset) {
+               journeyEmailId = extractLegacyEmailId(createdAssetFetch.asset);
+             }
+           }
+           if (journeyEmailId) {
+             step3bResult = " Step 3b OK - Email duplicated.";
+           } else {
+             step3bResult = " Step 3b SKIP - Email duplicated but legacy email ID was not available for Journey Builder.";
+           }
+         } else {
+           step3bResult = " Step 3b SKIP - Email duplicated but new ID was not returned." + debugPrefix + " Response: " + assetResponse + " Debug: " + payloadDebug;
+         }
+       } else {
+         step3bResult = " Step 3b SKIP - Email not duplicated: HTTP " + assetStatus + " - " + (assetResponse || "No response body.") + debugPrefix + " Debug: " + payloadDebug;
+       }
+     }
+   } else {
+     step3bResult = " Step 3b SKIP - Email not duplicated: Template fetch HTTP " + templateStatus + " - " + (templateResponse || "No response body.");
+   }
+ } catch (e) {
+   step3bResult = " Step 3b SKIP - Email not duplicated: " + (e.message || String(e));
+ }
+}
+Platform.Variable.SetValue("@newEmailId", newEmailId);
+Platform.Variable.SetValue("@journeyEmailId", journeyEmailId);
+Platform.Variable.SetValue("@step3bResult", step3bResult);
+</script>
+%%[
+SET @resultText = Concat(@resultText,@step3bResult)
+IF NOT Empty(@newEmailId) THEN
+ SET @resultText = Concat(@resultText," Email ID: ",@newEmailId)
+ENDIF
+IF NOT Empty(@journeyEmailId) THEN
+ SET @resultText = Concat(@resultText," Journey Email ID: ",@journeyEmailId)
+ENDIF
+IF Empty(@cleanupNeeded) THEN
+ SET @cleanupNeeded = "0"
+ENDIF
+]%%
+<script runat="server">
+Platform.Load("core","1");
+
+function stackEventSchemaFields() {
+  return [
+    { name: "greeting", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "id", dataType: "Text", maxLength: "50", isNullable: false },
+    { name: "email", dataType: "EmailAddress", maxLength: "254", isNullable: false },
+    { name: "sfCampaignId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "sfCampaignMemberId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "sfQuickSendId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "Account_Owner_Name", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "Account_Owner_Email", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "firstName", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "lastName", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "sfUserId", dataType: "Text", maxLength: "50", isNullable: false },
+    { name: "journeyID", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "smsValue", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "mobilePhone", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "EntryObjectId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "DateAdded", dataType: "Date", isNullable: true },
+    { name: "Role", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "OwnerId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "Specialty", dataType: "Text", maxLength: "100", isNullable: true },
+    { name: "AccountName", dataType: "Text", maxLength: "255", isNullable: true },
+    { name: "State", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "Designation", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "senderPhone", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "senderTitle", dataType: "Text", maxLength: "255", isNullable: true },
+    { name: "senderLicense", dataType: "Text", maxLength: "255", isNullable: true },
+    { name: "senderMobile", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "Salutation", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "AppointmentLink", dataType: "Text", maxLength: "4000", isNullable: true },
+    { name: "VAWP", dataType: "Text", maxLength: "4000", isNullable: true },
+    { name: "EmailName", dataType: "Text", maxLength: "255", isNullable: true }
+  ];
+}
+
+function stackRetrieveDeByFilter(prox, filter) {
+  var resp = prox.retrieve("DataExtension", ["ObjectID", "CustomerKey", "Name"], filter);
+  if (resp && resp.Results && resp.Results.length > 0 && resp.Results[0].ObjectID) {
+    return {
+      objectId: String(resp.Results[0].ObjectID),
+      customerKey: String(resp.Results[0].CustomerKey || ""),
+      name: String(resp.Results[0].Name || "")
+    };
+  }
+  return null;
+}
+
+function stackResolveExistingDe(prox, customerKey, deName) {
+  var byKey = customerKey
+    ? stackRetrieveDeByFilter(prox, {
+        Property: "CustomerKey",
+        SimpleOperator: "equals",
+        Value: String(customerKey)
+      })
+    : null;
+  if (byKey) {
+    return byKey;
+  }
+  if (deName) {
+    return stackRetrieveDeByFilter(prox, {
+      Property: "Name",
+      SimpleOperator: "equals",
+      Value: String(deName)
+    });
+  }
+  return null;
+}
+
+function stackParseJsonSafe(text) {
+  try {
+    return Platform.Function.ParseJSON(String(text || ""));
+  } catch (e0) {
+    return null;
+  }
+}
+
+function stackEnsureEntryDe(prox, token, subdomain, customerKey, deName) {
+  var name = String(deName || customerKey || "Entry DE");
+  var existing = stackResolveExistingDe(prox, customerKey, name);
+  if (existing) {
+    return {
+      ok: true,
+      skipped: true,
+      objectId: existing.objectId,
+      customerKey: existing.customerKey || String(customerKey || ""),
+      name: existing.name || name
+    };
+  }
+
+  var tempEventKey =
+    "eventDef" + String(stackRandomGuid()).replace(/-/g, "").substring(0, 22);
+  var createUrl =
+    "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions";
+  var createPayload = {
+    name: name,
+    description: "",
+    type: "APIEvent",
+    mode: "Production",
+    eventDefinitionKey: tempEventKey,
+    isVisibleInPicker: false,
+    schema: {
+      sendableCustomObjectField: "id",
+      SendableSubscriberField: "SubscriberKey",
+      fields: stackEventSchemaFields()
+    }
+  };
+  var createResp = stackHttpJson(token, subdomain, "POST", createUrl, createPayload);
+  if (createResp.status != 200 && createResp.status != 201) {
+    return {
+      ok: false,
+      message:
+        "entry DE bootstrap HTTP " +
+        createResp.status +
+        " - " +
+        (createResp.body || "No response body.")
+    };
+  }
+
+  var createObj = stackParseJsonSafe(createResp.body);
+  var tempEventDefId =
+    createObj && createObj.id ? String(createObj.id) : "";
+  var dataExtensionId =
+    createObj && (createObj.dataExtensionId || createObj.dataExtensionID)
+      ? String(createObj.dataExtensionId || createObj.dataExtensionID)
+      : "";
+
+  if (!dataExtensionId && tempEventDefId) {
+    var getEvUrl = createUrl + "/" + encodeURIComponent(tempEventDefId);
+    var getEvResp = stackHttpJson(token, subdomain, "GET", getEvUrl, null);
+    if (getEvResp.status == 200) {
+      var getEvObj = stackParseJsonSafe(getEvResp.body);
+      if (getEvObj && (getEvObj.dataExtensionId || getEvObj.dataExtensionID)) {
+        dataExtensionId = String(getEvObj.dataExtensionId || getEvObj.dataExtensionID);
+      }
+    }
+  }
+
+  if (tempEventDefId) {
+    var deleteUrl = createUrl + "/" + encodeURIComponent(tempEventDefId);
+    stackHttpJson(token, subdomain, "DELETE", deleteUrl, null);
+  }
+
+  if (!dataExtensionId) {
+    return {
+      ok: false,
+      message: "entry DE bootstrap succeeded but dataExtensionId was not resolved."
+    };
+  }
+
+  var resolved = stackRetrieveDeByFilter(prox, {
+    Property: "ObjectID",
+    SimpleOperator: "equals",
+    Value: dataExtensionId
+  });
+  if (!resolved) {
+    resolved = stackResolveExistingDe(prox, customerKey, name);
+  }
+  if (!resolved) {
+    return {
+      ok: false,
+      message:
+        "entry DE bootstrap created dataExtensionId " +
+        dataExtensionId +
+        " but CustomerKey lookup failed."
+    };
+  }
+
+  return {
+    ok: true,
+    skipped: false,
+    objectId: dataExtensionId,
+    customerKey: resolved.customerKey || String(customerKey || ""),
+    name: resolved.name || name
+  };
+}
+
+function stackHttpJson(token, subdomain, method, url, bodyObj) {
+  var req = new Script.Util.HttpRequest(url);
+  req.emptyContentHandling = 0;
+  req.retries = 1;
+  req.continueOnError = true;
+  req.method = method;
+  req.contentType = "application/json";
+  req.setHeader("Authorization", "Bearer " + token);
+  if (bodyObj !== null && bodyObj !== undefined) {
+    req.postData = Platform.Function.Stringify(bodyObj);
+  }
+  var resp = req.send();
+  return {
+    status: resp.statusCode,
+    body: resp.content ? String(resp.content) : ""
+  };
+}
+
+function stackHttpPostJson(token, subdomain, url, bodyObj) {
+  return stackHttpJson(token, subdomain, "POST", url, bodyObj);
+}
+
+function stackRandomGuid() {
+  var tpl = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx";
+  return tpl.replace(/[xy]/g, function (c) {
+    var r = (Math.random() * 16) | 0;
+    var v = c == "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+var authOk = Variable.GetValue("authOk");
+var createEmailOnly = Variable.GetValue("createEmailOnly");
+var deleteAllRequested = Variable.GetValue("deleteAllRequested");
+var journeyEmailId = Variable.GetValue("journeyEmailId");
+var assetKey = Variable.GetValue("assetKey");
+var eventName = Variable.GetValue("eventName");
+var subdomain = Variable.GetValue("subdomain");
+var accessToken = Variable.GetValue("accessToken");
+var resultText = Variable.GetValue("resultText") || "";
+var eventKey = "";
+var eventDefId = "";
+var deAudienceTriggerJson = "";
+
+if (
+  authOk == "true" &&
+  createEmailOnly != "1" &&
+  deleteAllRequested != "1" &&
+  journeyEmailId &&
+  subdomain &&
+  accessToken
+) {
+  try {
+    var deCustomerKey = assetKey ? String(assetKey) : String(eventName || "");
+    var deName = eventName ? String(eventName) : deCustomerKey;
+    var proxDe = new Script.Util.WSProxy();
+    var deResult = stackEnsureEntryDe(proxDe, accessToken, subdomain, deCustomerKey, deName);
+    if (!deResult.ok) {
+      resultText = resultText + " Step 3 FAILED: " + deResult.message;
+    } else {
+      var deNote = deResult.skipped ? "existing" : "created";
+      resultText =
+        resultText +
+        " Step 3 OK - Entry DE ready (" +
+        deNote +
+        " CustomerKey=" +
+        deResult.customerKey +
+        ").";
+      Platform.Variable.SetValue("@deCustomerKey", deResult.customerKey);
+      Platform.Variable.SetValue("@entryDeObjectId", deResult.objectId);
+      Platform.Variable.SetValue("@stackDeReady", "1");
+      Platform.Variable.SetValue(
+        "@journeyUrl",
+        "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/interactions"
+      );
+      Platform.Variable.SetValue("@journeyKey", Platform.Function.GUID());
+    }
+  } catch (step3Ex) {
+    resultText =
+      resultText + " Step 3 FAILED: " + (step3Ex.message || String(step3Ex));
+  }
+}
+
+Platform.Variable.SetValue("@eventKey", eventKey);
+Platform.Variable.SetValue("@eventDefId", eventDefId);
+Platform.Variable.SetValue("@deAudienceTriggerJson", deAudienceTriggerJson);
+Platform.Variable.SetValue("@resultText", resultText);
+</script>
+<script runat="server">
+Platform.Load("core","1");
+
+function postVar(name) {
+  var v = "";
+  try {
+    v = Platform.Variable.GetValue("@" + name);
+  } catch (e0) {}
+  if (v === null || v === undefined || String(v) === "") {
+    try {
+      v = Variable.GetValue(name);
+    } catch (e1) {}
+  }
+  if (v === null || v === undefined) {
+    return "";
+  }
+  return String(v);
+}
+
+var postDeleteRequested = postVar("deleteAllRequested");
+var postJourneyId = postVar("journeyId");
+var postEventDefId = postVar("eventDefId");
+var postEventName = postVar("eventName");
+var postCampaignId = postVar("campaignId");
+var postSfUserId = postVar("sfUserId");
+var postAccessToken = postVar("accessToken");
+var postSubdomain = postVar("subdomain");
+var postQueryKey = postVar("queryKey");
+var postAutomationKey = postVar("automationKey");
+var postStackName = postVar("journeyName");
+var postFrequency = postVar("frequency");
+var postTimezoneId = postVar("timezoneId");
+var postStartDate = postVar("startDate");
+var postStartOffset = postVar("startOffset");
+var postAssetKey = postVar("assetKey");
+var postStackDeReady = postVar("stackDeReady");
+var postEntryDeObjectId = postVar("entryDeObjectId");
+var postDeCustomerKeyVal = postVar("deCustomerKey");
+var postResultText = postVar("resultText");
+var postSuffix = "";
+
+function postParseJson(s) {
+  try {
+    return Platform.Function.ParseJSON(String(s || ""));
+  } catch (e0) {
+    return null;
+  }
+}
+
+function postHttpJson(token, subdomain, method, url, bodyStr) {
+  var req = new Script.Util.HttpRequest(url);
+  req.emptyContentHandling = 0;
+  req.retries = 1;
+  req.continueOnError = true;
+  req.method = method;
+  req.contentType = "application/json";
+  req.setHeader("Authorization", "Bearer " + token);
+  if (bodyStr !== null && bodyStr !== undefined) {
+    req.postData = bodyStr;
+  }
+  var resp = req.send();
+  return {
+    status: resp.statusCode,
+    body: resp.content ? String(resp.content) : ""
+  };
+}
+
+function postRandomGuid() {
+  var tpl = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx";
+  return tpl.replace(/[xy]/g, function (c) {
+    var r = (Math.random() * 16) | 0;
+    var v = c == "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+function postResolveAutomationProgramId(prox, automationKey, restAutomationId) {
+  if (automationKey && prox) {
+    var lookup = prox.retrieve(
+      "Program",
+      ["ObjectID", "CustomerKey"],
+      {
+        Property: "CustomerKey",
+        SimpleOperator: "equals",
+        Value: String(automationKey)
+      }
+    );
+    if (lookup && lookup.Results && lookup.Results.length > 0 && lookup.Results[0].ObjectID) {
+      return String(lookup.Results[0].ObjectID);
+    }
+  }
+  return String(restAutomationId || "");
+}
+
+function postCreateDeAudienceEvent(token, subdomain, prox, opts) {
+  var url =
+    "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions";
+  var eventKey = opts.eventKey;
+  var automationId = postResolveAutomationProgramId(
+    prox,
+    opts.automationKey,
+    opts.automationId
+  );
+  var dataExtensionId = String(opts.dataExtensionId || "");
+  var payload = {
+    name: opts.name,
+    description: "",
+    type: "AutomationAudience",
+    mode: "Production",
+    eventDefinitionKey: eventKey,
+    dataExtensionId: dataExtensionId,
+    dataExtensionName: opts.dataExtensionName,
+    AutomationId: automationId,
+    isVisibleInPicker: false,
+    arguments: {
+      AutomationId: automationId,
+      DataExtensionId: dataExtensionId,
+      EventDefinitionKey: eventKey,
+      useHighWatermark: false
+    },
+    configurationArguments: {},
+    metaData: {
+      criteriaDescription: "",
+      scheduleState: "No Schedule"
+    }
+  };
+  var resp = postHttpJson(
+    token,
+    subdomain,
+    "POST",
+    url,
+    Platform.Function.Stringify(payload)
+  );
+  if (resp.status != 200 && resp.status != 201 && opts.automationId && automationId != String(opts.automationId)) {
+    payload.AutomationId = String(opts.automationId);
+    payload.arguments.AutomationId = String(opts.automationId);
+    resp = postHttpJson(
+      token,
+      subdomain,
+      "POST",
+      url,
+      Platform.Function.Stringify(payload)
+    );
+    if (resp.status == 200 || resp.status == 201) {
+      automationId = String(opts.automationId);
+    }
+  }
+  if (resp.status != 200 && resp.status != 201) {
+    return {
+      ok: false,
+      message:
+        "Step 5 FAILED - DE audience eventDefinitions HTTP " +
+        resp.status +
+        " - " +
+        (resp.body || "No response body.") +
+        " (AutomationId sent=" +
+        automationId +
+        ")."
+    };
+  }
+  var idMatch = resp.body.match(/"id"\s*:\s*"([^"]+)"/);
+  var eventDefId = idMatch ? idMatch[1] : "";
+  if (!eventDefId) {
+    return {
+      ok: false,
+      message:
+        "Step 5 FAILED - DE audience eventDefinitions HTTP " +
+        resp.status +
+        " id missing - " +
+        resp.body
+    };
+  }
+  var trigObj = {
+    key: "TRIGGER",
+    name: "TRIGGER",
+    description: "",
+    type: "AutomationAudience",
+    outcomes: [],
+    arguments: {},
+    configurationArguments: {},
+    metaData: {
+      sourceInteractionId: "00000000-0000-0000-0000-000000000000",
+      eventDefinitionId: eventDefId,
+      eventDefinitionKey: eventKey,
+      chainType: "None",
+      configurationRequired: false,
+      iconUrl: "/images/icon-data-extension.svg",
+      title: "Data Extension",
+      entrySourceGroupConfigUrl:
+        "jb:///data/entry/audience/entrysourcegroupconfig.json"
+    }
+  };
+  Platform.Variable.SetValue("@eventKey", eventKey);
+  Platform.Variable.SetValue("@eventDefId", eventDefId);
+  Platform.Variable.SetValue("@deAudienceTriggerJson", Platform.Function.Stringify(trigObj));
+  Platform.Variable.SetValue(
+    "@defaultEmailExpr",
+    "{{Event." + eventKey + '."email"}}'
+  );
+  Platform.Variable.SetValue(
+    "@defaultEmailEscaped",
+    ("{{Event." + eventKey + '."email"}}').replace(/"/g, '\\"')
+  );
+  return {
+    ok: true,
+    eventDefId: eventDefId,
+    eventKey: eventKey,
+    message:
+      "Step 5 OK - DE audience entry event created (AutomationId=" +
+      automationId +
+      ")."
+  };
+}
+
+function postEscapeSql(value) {
+  return String(value || "").replace(/'/g, "''");
+}
+
+function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId) {
+  var camp = postEscapeSql(campaignId);
+  var jid = postEscapeSql(journeyId || "");
+  var userJoin = "LEFT JOIN User_Salesforce u on cm.Account_Owner__c = u.id";
+  if (sfUserId) {
+    userJoin = userJoin + " AND u.id = '" + postEscapeSql(sfUserId) + "'";
+  }
+  return (
+    "SELECT\n" +
+    "  '' AS greeting,\n" +
+    "  cm.ContactId AS id,\n" +
+    "  cm.email,\n" +
+    "  cm.id AS sfCampaignMemberId,\n" +
+    "  cm.CampaignId AS sfCampaignId,\n" +
+    "  u.Name AS Account_Owner_Name,\n" +
+    "  u.Email AS Account_Owner_Email,\n" +
+    "  con.firstName,\n" +
+    "  con.lastName,\n" +
+    "  u.id AS sfUserId,\n" +
+    "  '" +
+    jid +
+    "' AS journeyID,\n" +
+    "  GETDATE() AS DateAdded,\n" +
+    "  con.Role__c AS Role,\n" +
+    "  cm.Account_Owner__c AS OwnerId,\n" +
+    "  con.AccountName__c AS AccountName,\n" +
+    "  con.MailingState AS State,\n" +
+    "  con.Specialty__c AS Specialty,\n" +
+    "  con.Designation__c AS Designation,\n" +
+    "  u.Phone AS senderPhone,\n" +
+    "  u.Title AS senderTitle,\n" +
+    "  u.Sales_License_Number__c AS senderLicense,\n" +
+    "  con.Salutation AS Salutation,\n" +
+    "  u.Appointment_Link__c AS AppointmentLink,\n" +
+    "  '' AS VAWP,\n" +
+    "  cm.Campaign_Name__c AS EmailName\n" +
+    "FROM CampaignMember_Salesforce_1 cm\n" +
+    "LEFT JOIN Contact_Salesforce con on cm.ContactId = con.id\n" +
+    userJoin + "\n" +
+    "INNER JOIN Campaign_Salesforce_1 c on c.id = '" +
+    camp +
+    "'"
+  );
+}
+
+function postStripTimezoneFromIso(s) {
+  var str = String(s || "");
+  var m = str.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/);
+  if (m) {
+    return m[1];
+  }
+  m = str.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})/);
+  if (m) {
+    return m[1] + ":00";
+  }
+  return str;
+}
+
+function postBuildScheduleWrite(recur, startLocal, endLocal, tzId) {
+  return {
+    scheduleTypeId: 2,
+    startDate: startLocal,
+    endDate: endLocal,
+    rangeTypeId: 0,
+    occurrences: 9999,
+    icalRecur: recur,
+    timezoneId: tzId,
+    statusId: 0
+  };
+}
+
+function postNormalizeStepsForWrite(steps) {
+  if (!steps || steps.length === 0) {
+    return null;
+  }
+  var out = [];
+  for (var si = 0; si < steps.length; si++) {
+    var st = steps[si];
+    var stepNum = st.stepNumber;
+    if (stepNum === undefined || stepNum === null) {
+      stepNum = si;
+    }
+    var activities = st.activities || [];
+    var acts = [];
+    for (var ai = 0; ai < activities.length; ai++) {
+      var a = activities[ai];
+      var act = {
+        name: a.name ? String(a.name) : "Activity",
+        description: a.description !== undefined && a.description !== null ? String(a.description) : "",
+        activityObjectId: String(a.activityObjectId || ""),
+        objectTypeId: a.objectTypeId,
+        displayOrder: a.displayOrder !== undefined ? a.displayOrder : ai,
+        serializedObject: a.serializedObject !== undefined && a.serializedObject !== null ? String(a.serializedObject) : ""
+      };
+      if (a.id) {
+        act.id = String(a.id);
+      }
+      acts.push(act);
+    }
+    out.push({
+      annotation: st.annotation !== undefined ? String(st.annotation) : "",
+      stepNumber: stepNum,
+      activities: acts
+    });
+  }
+  return out;
+}
+
+function postExtractIcalFromVerify(verifyObj) {
+  if (!verifyObj) {
+    return "";
+  }
+  var sch = null;
+  if (verifyObj.startSource && verifyObj.startSource.schedule) {
+    sch = verifyObj.startSource.schedule;
+  } else if (verifyObj.schedule && typeof verifyObj.schedule === "object") {
+    sch = verifyObj.schedule;
+  }
+  if (!sch) {
+    return "";
+  }
+  if (sch.iCalRecur) {
+    return String(sch.iCalRecur);
+  }
+  if (sch.icalRecur) {
+    return String(sch.icalRecur);
+  }
+  return "";
+}
+
+function postFindAutomationInList(token, subdomain, endpoint, name, key) {
+  var page = 1;
+  while (page <= 5) {
+    var url = endpoint + "?$page=" + page + "&$pagesize=100";
+    var r = postHttpJson(token, subdomain, "GET", url, null);
+    if (r.status != 200) {
+      return null;
+    }
+    var obj = postParseJson(r.body);
+    var items = obj && obj.items ? obj.items : [];
+    for (var i = 0; i < items.length; i++) {
+      if (key && items[i].key && String(items[i].key).toLowerCase() == String(key).toLowerCase()) {
+        return items[i];
+      }
+    }
+    for (var j = 0; j < items.length; j++) {
+      if (name && items[j].name && String(items[j].name) == String(name)) {
+        return items[j];
+      }
+    }
+    if (items.length < 100) {
+      break;
+    }
+    page++;
+  }
+  return null;
+}
+
+function postResolveEntryDe(prox, eventName, eventDefId, token, subdomain, assetKey) {
+  if (eventDefId && token && subdomain) {
+    var eventUrl =
+      "https://" +
+      subdomain +
+      ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
+      eventDefId;
+    var eventResp = postHttpJson(token, subdomain, "GET", eventUrl, null);
+    if (eventResp.status == 200) {
+      var eventObj = postParseJson(eventResp.body);
+      var deObjId = eventObj && (eventObj.dataExtensionId || eventObj.dataExtensionID);
+      var deKeyHint =
+        eventObj &&
+        (eventObj.dataExtensionKey ||
+          eventObj.dataExtensionCustomerKey ||
+          eventObj.criteria ||
+          "");
+      if (deKeyHint && typeof deKeyHint === "object" && deKeyHint.deKey) {
+        deKeyHint = deKeyHint.deKey;
+      }
+      var keyCandidates = [];
+      if (deKeyHint) {
+        keyCandidates.push(String(deKeyHint));
+      }
+      if (deObjId) {
+        keyCandidates.push(String(deObjId));
+      }
+      for (var kc = 0; kc < keyCandidates.length; kc++) {
+        var byKey = prox.retrieve(
+          "DataExtension",
+          ["CustomerKey", "Name"],
+          {
+            Property: "CustomerKey",
+            SimpleOperator: "equals",
+            Value: keyCandidates[kc]
+          }
+        );
+        if (byKey && byKey.Results && byKey.Results.length > 0) {
+          return {
+            customerKey: String(byKey.Results[0].CustomerKey || keyCandidates[kc]),
+            name: String(byKey.Results[0].Name || eventName)
+          };
+        }
+      }
+      if (deObjId) {
+        var byId = prox.retrieve(
+          "DataExtension",
+          ["CustomerKey", "Name"],
+          {
+            Property: "ObjectID",
+            SimpleOperator: "equals",
+            Value: String(deObjId)
+          }
+        );
+        if (byId && byId.Results && byId.Results.length > 0) {
+          return {
+            customerKey: String(byId.Results[0].CustomerKey || ""),
+            name: String(byId.Results[0].Name || eventName)
+          };
+        }
+      }
+    }
+  }
+  var filters = [
+    { Property: "Name", SimpleOperator: "equals", Value: String(eventName) }
+  ];
+  if (assetKey) {
+    filters.push({ Property: "CustomerKey", SimpleOperator: "equals", Value: String(assetKey) });
+  }
+  for (var fi = 0; fi < filters.length; fi++) {
+    var deResp = prox.retrieve("DataExtension", ["CustomerKey", "Name"], filters[fi]);
+    if (deResp && deResp.Results && deResp.Results.length > 0) {
+      return {
+        customerKey: String(deResp.Results[0].CustomerKey || ""),
+        name: String(deResp.Results[0].Name || eventName)
+      };
+    }
+  }
+  return null;
+}
+
+function postResolveQueryObjectId(prox, queryKey) {
+  var lookup = prox.retrieve(
+    "QueryDefinition",
+    ["ObjectID", "CustomerKey"],
+    {
+      Property: "CustomerKey",
+      SimpleOperator: "equals",
+      Value: String(queryKey)
+    }
+  );
+  if (lookup && lookup.Results && lookup.Results.length > 0 && lookup.Results[0].ObjectID) {
+    return String(lookup.Results[0].ObjectID);
+  }
+  lookup = prox.retrieve(
+    "QueryDefinition",
+    ["ObjectID", "Name"],
+    {
+      Property: "Name",
+      SimpleOperator: "equals",
+      Value: String(queryKey)
+    }
+  );
+  if (lookup && lookup.Results && lookup.Results.length > 0 && lookup.Results[0].ObjectID) {
+    return String(lookup.Results[0].ObjectID);
+  }
+  return "";
+}
+
+function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCustomerKey, deName) {
+  var existing = prox.retrieve(
+    "QueryDefinition",
+    ["ObjectID", "CustomerKey", "Name"],
+    {
+      Property: "CustomerKey",
+      SimpleOperator: "equals",
+      Value: String(queryKey)
+    }
+  );
+  if (existing && existing.Results && existing.Results.length > 0 && existing.Results[0].ObjectID) {
+    return {
+      ok: true,
+      skipped: true,
+      objectId: String(existing.Results[0].ObjectID),
+      message: "Step 6 OK - QueryDefinition already exists (CustomerKey=" + queryKey + ")."
+    };
+  }
+  var createResponse = prox.createItem("QueryDefinition", {
+    Name: String(queryName),
+    CustomerKey: String(queryKey),
+    QueryText: queryText,
+    TargetType: "DE",
+    TargetUpdateType: "Overwrite",
+    DataExtensionTarget: {
+      CustomerKey: String(deCustomerKey),
+      Name: String(deName)
+    }
+  });
+  var status =
+    createResponse && createResponse.Status ? String(createResponse.Status) : "UNKNOWN";
+  var msg =
+    createResponse &&
+    createResponse.Results &&
+    createResponse.Results.length > 0 &&
+    createResponse.Results[0].StatusMessage
+      ? String(createResponse.Results[0].StatusMessage)
+      : "No status message returned.";
+  var objectId = "";
+  if (createResponse && createResponse.Results && createResponse.Results.length > 0) {
+    var qr = createResponse.Results[0];
+    objectId = qr.ObjectID
+      ? String(qr.ObjectID)
+      : qr.NewObjectID
+      ? String(qr.NewObjectID)
+      : qr.NewID
+      ? String(qr.NewID)
+      : "";
+  }
+  if (status === "OK" && !objectId) {
+    objectId = postResolveQueryObjectId(prox, queryKey);
+  }
+  if (status === "OK") {
+    if (objectId) {
+      return {
+        ok: true,
+        objectId: objectId,
+        message: "Step 6 OK - QueryDefinition created (CustomerKey=" + queryKey + ", ObjectID=" + objectId + ")."
+      };
+    }
+    return {
+      ok: true,
+      objectId: "",
+      message:
+        "Step 6 OK - QueryDefinition created (CustomerKey=" +
+        queryKey +
+        ") but ObjectID was not returned; automation will resolve by key."
+    };
+  }
+  return {
+    ok: false,
+    message:
+      "Step 6 FAILED - QueryDefinition create " +
+      status +
+      ": " +
+      msg +
+      (createResponse && createResponse.Results && createResponse.Results[0] && createResponse.Results[0].ErrorCode
+        ? " ErrorCode=" + createResponse.Results[0].ErrorCode
+        : "")
+  };
+}
+
+function postCreateAutomation(opts) {
+  var token = opts.token;
+  var subdomain = opts.subdomain;
+  var automationName = opts.automationName;
+  var automationKey = opts.automationKey;
+  var queryObjectId = opts.queryObjectId;
+  var frequency = opts.frequency;
+  var timezoneId = opts.timezoneId;
+  var startDate = opts.startDate;
+  var startOffset = opts.startOffset;
+
+  if (!startDate) {
+    var nowVal = new Date();
+    nowVal.setMinutes(0, 0, 0);
+    nowVal.setHours(nowVal.getHours() + 1);
+    function pad(n) {
+      return (n < 10 ? "0" : "") + n;
+    }
+    startDate =
+      nowVal.getFullYear() +
+      "-" +
+      pad(nowVal.getMonth() + 1) +
+      "-" +
+      pad(nowVal.getDate()) +
+      "T" +
+      pad(nowVal.getHours()) +
+      ":" +
+      pad(nowVal.getMinutes());
+    Platform.Variable.SetValue("@startDate", startDate);
+  }
+
+  var off = String(startOffset || "-05:00");
+  if (off.charAt(0) != "-" && off.charAt(0) != "+") {
+    off = "-" + off;
+  }
+  var startDateForApi = String(startDate);
+  if (startDateForApi.length == 16) {
+    startDateForApi += ":00" + off;
+  } else if (
+    startDateForApi.indexOf("T") > 0 &&
+    startDateForApi.indexOf("+") < 0 &&
+    startDateForApi.indexOf("-", 11) < 0 &&
+    startDateForApi.length == 19
+  ) {
+    startDateForApi += off;
+  }
+  var startDateLocal = postStripTimezoneFromIso(startDateForApi);
+  var endDateLocal = startDateLocal;
+
+  function pad2(n) {
+    return (n < 10 ? "0" : "") + n;
+  }
+  var untilCompact = "";
+  var dmatch = startDateForApi.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (dmatch) {
+    var y0 = parseInt(dmatch[1], 10);
+    var m0 = parseInt(dmatch[2], 10) - 1;
+    var d0 = parseInt(dmatch[3], 10);
+    var dUntil = new Date(y0, m0, d0);
+    dUntil.setDate(dUntil.getDate() + 365);
+    untilCompact =
+      String(dUntil.getFullYear()) +
+      pad2(dUntil.getMonth() + 1) +
+      pad2(dUntil.getDate());
+  } else {
+    var fallback = new Date();
+    fallback.setDate(fallback.getDate() + 365);
+    untilCompact =
+      String(fallback.getFullYear()) +
+      pad2(fallback.getMonth() + 1) +
+      pad2(fallback.getDate());
+  }
+
+  var endpoint = "https://" + subdomain + ".rest.marketingcloudapis.com/automation/v1/automations";
+  var tzId = parseInt(String(timezoneId), 10);
+  var recurRule = "";
+  if (frequency == "hourly") {
+    recurRule = "FREQ=HOURLY;INTERVAL=1;UNTIL=" + untilCompact;
+  } else if (frequency == "daily") {
+    recurRule = "FREQ=DAILY;INTERVAL=1;UNTIL=" + untilCompact;
+  } else if (frequency == "weekly") {
+    recurRule = "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO;UNTIL=" + untilCompact;
+  } else {
+    return { ok: false, message: "Step 7 FAILED - invalid frequency." };
+  }
+
+  var byKeyEndpoint = endpoint + "/key:" + encodeURIComponent(String(automationKey));
+  var keyLookup = postHttpJson(token, subdomain, "GET", byKeyEndpoint, null);
+  var existingObj = keyLookup.status == 200 ? postParseJson(keyLookup.body) : null;
+  var automationId = "";
+  var createdNow = false;
+
+  if (existingObj && existingObj.id) {
+    automationId = String(existingObj.id);
+  } else {
+    var listMatch = postFindAutomationInList(token, subdomain, endpoint, automationName, automationKey);
+    if (listMatch && listMatch.id) {
+      automationId = String(listMatch.id);
+    } else {
+      var recurAttempts = [recurRule];
+      if (frequency == "hourly") {
+        recurAttempts.push("FREQ=HOURLY;COUNT=1;INTERVAL=1");
+        recurAttempts.push("FREQ=MINUTELY;INTERVAL=60;UNTIL=" + untilCompact);
+      }
+      var createStatus = 0;
+      var createBody = "";
+      var usedRecur = recurRule;
+      for (var ri = 0; ri < recurAttempts.length; ri++) {
+        usedRecur = recurAttempts[ri];
+        var payloadObj = {
+          name: String(automationName),
+          description: "Created via Journey Maker stack page",
+          key: String(automationKey),
+          steps: [
+            {
+              annotation: "",
+              stepNumber: 0,
+              activities: [
+                {
+                  name: "Query Activity",
+                  description: "",
+                  objectTypeId: 300,
+                  displayOrder: 0,
+                  activityObjectId: queryObjectId,
+                  serializedObject: ""
+                }
+              ]
+            }
+          ],
+          startSource: {
+            typeId: 1,
+            schedule: postBuildScheduleWrite(usedRecur, startDateLocal, endDateLocal, tzId)
+          }
+        };
+        var cr = postHttpJson(
+          token,
+          subdomain,
+          "POST",
+          endpoint,
+          Platform.Function.Stringify(payloadObj)
+        );
+        createStatus = cr.status;
+        createBody = cr.body;
+        if (createStatus == 200 || createStatus == 201 || createStatus == 202) {
+          recurRule = usedRecur;
+          break;
+        }
+        var dupName =
+          createBody.indexOf("Name already exists") >= 0 ||
+          createBody.indexOf("already exists") >= 0;
+        if (dupName) {
+          var recovered = postFindAutomationInList(
+            token,
+            subdomain,
+            endpoint,
+            automationName,
+            automationKey
+          );
+          if (recovered && recovered.id) {
+            automationId = String(recovered.id);
+            createdNow = false;
+            break;
+          }
+        }
+      }
+      if (automationId) {
+      } else if (!(createStatus == 200 || createStatus == 201 || createStatus == 202)) {
+        return {
+          ok: false,
+          message:
+            "Step 7 FAILED - create automation HTTP " +
+            createStatus +
+            " - " +
+            createBody +
+            " (icalRecur tried: " +
+            usedRecur +
+            ")."
+        };
+      }
+      if (!automationId) {
+        var createObj = postParseJson(createBody);
+        automationId = createObj && createObj.id ? String(createObj.id) : "";
+        createdNow = true;
+      }
+    }
+  }
+
+  if (!automationId) {
+    return { ok: false, message: "Step 7 FAILED - automation ID not available." };
+  }
+
+  var patchEndpoint = endpoint + "/" + encodeURIComponent(automationId);
+  var getCur = postHttpJson(token, subdomain, "GET", patchEndpoint, null);
+  var currentObj = getCur.status == 200 ? postParseJson(getCur.body) : null;
+  var normalizedSteps =
+    currentObj && currentObj.steps ? postNormalizeStepsForWrite(currentObj.steps) : null;
+  if (normalizedSteps && normalizedSteps.length > 0) {
+    postHttpJson(
+      token,
+      subdomain,
+      "PATCH",
+      patchEndpoint,
+      Platform.Function.Stringify({
+        id: currentObj.id,
+        name: currentObj.name,
+        description: currentObj.description || "Created via Journey Maker stack page",
+        key: currentObj.key,
+        categoryId: currentObj.categoryId,
+        steps: normalizedSteps,
+        startSource: {
+          typeId: 1,
+          schedule: postBuildScheduleWrite(recurRule, startDateLocal, endDateLocal, tzId)
+        }
+      })
+    );
+  } else {
+    postHttpJson(
+      token,
+      subdomain,
+      "PATCH",
+      patchEndpoint,
+      Platform.Function.Stringify({
+        startSource: {
+          typeId: 1,
+          schedule: postBuildScheduleWrite(recurRule, startDateLocal, endDateLocal, tzId)
+        }
+      })
+    );
+  }
+
+  var verify = postHttpJson(token, subdomain, "GET", patchEndpoint, null);
+  var verifyObj = verify.status == 200 ? postParseJson(verify.body) : null;
+  var finalRecur = postExtractIcalFromVerify(verifyObj);
+  var scheduleNote = finalRecur
+    ? " icalRecur=" + finalRecur + "."
+    : " Schedule not verified in API response; confirm in Automation Studio.";
+  return {
+    ok: true,
+    automationId: automationId,
+    message:
+      "Step 7 OK - automation " +
+      (createdNow ? "created" : "updated existing") +
+      ". key=" +
+      automationKey +
+      " id=" +
+      automationId +
+      "." +
+      scheduleNote
+  };
+}
+
+if (postDeleteRequested != "1") {
+  try {
+    if (postStackDeReady != "1" || !postDeCustomerKeyVal) {
+      postSuffix =
+        " Step 5 SKIP - query/automation/entry event skipped (entry DE not ready).";
+    } else if (postEventDefId) {
+      postSuffix = "";
+    } else if (!postAccessToken || !postSubdomain || !postCampaignId) {
+      postSuffix =
+        " Step 6 FAILED - missing auth or campaign id for query/automation. token=" +
+        (postAccessToken ? "yes" : "no") +
+        " subdomain=" +
+        (postSubdomain || "none") +
+        " campaignId=" +
+        (postCampaignId || "none") +
+        ".";
+    } else if (!postQueryKey || !postAutomationKey || !postStackName) {
+      postSuffix =
+        " Step 6 FAILED - missing naming variables. queryKey=" +
+        (postQueryKey || "none") +
+        " automationKey=" +
+        (postAutomationKey || "none") +
+        " name=" +
+        (postStackName || "none") +
+        ".";
+    } else {
+      var postProx = new Script.Util.WSProxy();
+      var entryDe = {
+        customerKey: postDeCustomerKeyVal,
+        name: postEventName || postStackName
+      };
+      if (!entryDe.customerKey) {
+        postSuffix = " Step 5 FAILED - entry DE CustomerKey missing.";
+      } else {
+        Platform.Variable.SetValue("@deCustomerKey", entryDe.customerKey);
+        var queryText = postBuildCampaignMemberQuery(
+          postCampaignId,
+          postSfUserId,
+          postJourneyId
+        );
+        var queryResult = postCreateQueryDefinition(
+          postProx,
+          postQueryKey,
+          postStackName,
+          queryText,
+          entryDe.customerKey,
+          entryDe.name
+        );
+        postSuffix = " " + queryResult.message;
+        if (queryResult.ok) {
+          var queryObjectId = queryResult.objectId;
+          if (!queryObjectId) {
+            var qdLookup = postProx.retrieve(
+              "QueryDefinition",
+              ["ObjectID"],
+              {
+                Property: "CustomerKey",
+                SimpleOperator: "equals",
+                Value: String(postQueryKey)
+              }
+            );
+            if (
+              qdLookup &&
+              qdLookup.Results &&
+              qdLookup.Results.length > 0 &&
+              qdLookup.Results[0].ObjectID
+            ) {
+              queryObjectId = String(qdLookup.Results[0].ObjectID);
+            }
+          }
+          if (!queryObjectId) {
+            postSuffix = postSuffix + " Step 7 FAILED - QueryDefinition ObjectID not found.";
+          } else {
+            var autoResult = postCreateAutomation({
+              token: postAccessToken,
+              subdomain: postSubdomain,
+              automationName: postStackName,
+              automationKey: postAutomationKey,
+              queryObjectId: queryObjectId,
+              frequency: postFrequency,
+              timezoneId: postTimezoneId,
+              startDate: postStartDate,
+              startOffset: postStartOffset
+            });
+            postSuffix = postSuffix + " " + autoResult.message;
+            if (autoResult.ok && autoResult.automationId) {
+              Platform.Variable.SetValue("@automationId", autoResult.automationId);
+              var audienceEventKey = "DEAudience-" + postRandomGuid();
+              var deObjId = postEntryDeObjectId;
+              var audienceEvent = postCreateDeAudienceEvent(
+                postAccessToken,
+                postSubdomain,
+                postProx,
+                {
+                  name: postStackName || postEventName,
+                  eventKey: audienceEventKey,
+                  dataExtensionId: deObjId,
+                  dataExtensionName: entryDe.name,
+                  automationId: autoResult.automationId,
+                  automationKey: postAutomationKey
+                }
+              );
+              postSuffix = postSuffix + " " + audienceEvent.message;
+            }
+          }
+        }
+      }
+    }
+  } catch (postEx) {
+    postSuffix = " Step 6 FAILED - " + (postEx.message || String(postEx));
+  }
+}
+
+if (postSuffix) {
+  Platform.Variable.SetValue("@resultText", postResultText + postSuffix);
+}
+</script>
+<script runat="server">
+Platform.Load("core","1");
+var journeyKey = Platform.Variable.GetValue("@journeyKey") || "";
+var journeyUrl = Platform.Variable.GetValue("@journeyUrl") || "";
+var journeyName = Platform.Variable.GetValue("@journeyName") || "";
+var defaultEmailEscaped = Platform.Variable.GetValue("@defaultEmailEscaped") || "";
+var deAudienceTriggerJson = Platform.Variable.GetValue("@deAudienceTriggerJson") || "";
+var newEmailId = Platform.Variable.GetValue("@newEmailId") || "";
+var journeyEmailId = Platform.Variable.GetValue("@journeyEmailId") || "";
+var emailName = Platform.Variable.GetValue("@emailName") || "";
+var subdomain = Platform.Variable.GetValue("@subdomain") || "";
+var accessToken = Platform.Variable.GetValue("@accessToken") || "";
+var resultText = Platform.Variable.GetValue("@resultText") || "";
+var eventKey = Platform.Variable.GetValue("@eventKey") || "";
+var campaignId = Platform.Variable.GetValue("@campaignId") || "";
+var campaignName = Platform.Variable.GetValue("@campaignName") || "";
+var emailSubjectLine = Platform.Variable.GetValue("@emailSubjectLine") || "Campaign Event";
+var journeyDescription = Platform.Variable.GetValue("@journeyDescription") || "";
+var bccEmail = Platform.Variable.GetValue("@bccEmail") || "";
+var senderProfileId = Platform.Variable.GetValue("@senderProfileId") || "";
+var sendClassificationId = Platform.Variable.GetValue("@sendClassificationId") || "";
+var journeyResult = "";
+function jsonEscapeSbU(s) {
+  if (s === null || s === undefined) {
+    return "";
+  }
+  return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+function randomGuidSbU() {
+  var tpl = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx";
+  return tpl.replace(/[xy]/g, function (c) {
+    var r = (Math.random() * 16) | 0;
+    var v = c == "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+function normalizeWsResultsJpa(results) {
+  var out = [];
+  if (!results) return out;
+  if (typeof results.length === "number") {
+    var i;
+    for (i = 0; i < results.length; i++) out.push(results[i]);
+    return out;
+  }
+  if (results.CustomerKey || results.ObjectID || results.Name) out.push(results);
+  return out;
+}
+function wsNestedCustomerKeyJpa(row, propName) {
+  if (!row) return "";
+  if (row[propName] && row[propName].CustomerKey) {
+    return String(row[propName].CustomerKey).replace(/^\s+|\s+$/g, "");
+  }
+  var flat = propName + ".CustomerKey";
+  if (row[flat]) return String(row[flat]).replace(/^\s+|\s+$/g, "");
+  return "";
+}
+function wsNestedObjectIdJpa(row, propName) {
+  if (!row) return "";
+  if (row[propName] && row[propName].ObjectID) {
+    return String(row[propName].ObjectID).replace(/^\s+|\s+$/g, "");
+  }
+  var flat = propName + ".ObjectID";
+  if (row[flat]) return String(row[flat]).replace(/^\s+|\s+$/g, "");
+  return "";
+}
+function trimJpa(v) {
+  return String(v || "").replace(/^\s+|\s+$/g, "");
+}
+function wsNestedIdForJourneyJpa(row, propName) {
+  var oid = wsNestedObjectIdJpa(row, propName);
+  if (oid) return oid;
+  return wsNestedCustomerKeyJpa(row, propName);
+}
+function wsRowIdForJourneyJpa(row) {
+  if (!row) return "";
+  if (row.ObjectID) return trimJpa(row.ObjectID);
+  if (row.CustomerKey) return trimJpa(row.CustomerKey);
+  return "";
+}
+function lookupSenderProfileJpa(profileId) {
+  if (!profileId) return null;
+  try {
+    var prox = new Script.Util.WSProxy();
+    var props = ["Name", "FromName", "FromAddress", "CustomerKey", "ObjectID"];
+    var pid = String(profileId);
+    var byKey = prox.retrieve("SenderProfile", props, {
+      Property: "CustomerKey",
+      SimpleOperator: "equals",
+      Value: pid
+    });
+    var rows = normalizeWsResultsJpa(byKey ? byKey.Results : null);
+    if (rows.length > 0) return rows[0];
+    var byObj = prox.retrieve("SenderProfile", props, {
+      Property: "ObjectID",
+      SimpleOperator: "equals",
+      Value: pid
+    });
+    rows = normalizeWsResultsJpa(byObj ? byObj.Results : null);
+    if (rows.length > 0) return rows[0];
+  } catch (spErr) {}
+  return null;
+}
+function lookupSendClassificationJpa(classificationId) {
+  if (!classificationId) return null;
+  try {
+    var prox = new Script.Util.WSProxy();
+    var props = [
+      "Name",
+      "CustomerKey",
+      "ObjectID",
+      "DeliveryProfile.CustomerKey",
+      "DeliveryProfile.ObjectID"
+    ];
+    var cid = String(classificationId);
+    var byKey = prox.retrieve("SendClassification", props, {
+      Property: "CustomerKey",
+      SimpleOperator: "equals",
+      Value: cid
+    });
+    var rows = normalizeWsResultsJpa(byKey ? byKey.Results : null);
+    if (rows.length > 0) return rows[0];
+    var byObj = prox.retrieve("SendClassification", props, {
+      Property: "ObjectID",
+      SimpleOperator: "equals",
+      Value: cid
+    });
+    rows = normalizeWsResultsJpa(byObj ? byObj.Results : null);
+    if (rows.length > 0) return rows[0];
+  } catch (scErr) {}
+  return null;
+}
+function buildCmUpdateActivitySbU(opts) {
+  var ek = opts.eventKey;
+  var cmIdField = '{{Event."' + ek + '"."sfCampaignMemberId"}}';
+  return {
+    id: randomGuidSbU(),
+    key: "SALESCLOUDACTIVITY-1",
+    name: "Update Campaign Member Activity",
+    description: "",
+    type: "SALESCLOUDACTIVITY",
+    outcomes: [
+      {
+        key: randomGuidSbU(),
+        next: "SALESCLOUDACTIVITY-8",
+        arguments: {},
+        metaData: { invalid: false }
+      }
+    ],
+    arguments: {
+      objectMap: {
+        objects: [
+          {
+            type: "CampaignMember",
+            subtype: null,
+            order: "1",
+            action: "Update",
+            lookup: {
+              type: "salesforceLookup",
+              lookupObject: "CampaignMember",
+              steps: [
+                {
+                  criteria: [
+                    {
+                      FieldName: "Id",
+                      FieldValue: cmIdField,
+                      FieldValueLabel: "sfCampaignMemberId",
+                      FieldType: "id"
+                    }
+                  ],
+                  MultiOutComeOption: "DoNotUpdate",
+                  ZeroOutComeOption: "DoNotUpdate"
+                }
+              ]
+            },
+            fields: [
+              {
+                UpdateType: "OverWriteNewValue",
+                Updateable: "true",
+                FieldName: "Status",
+                FieldLabel: "Status",
+                FieldValue: "Sent",
+                FieldValueLabel: "Sent",
+                Required: "false",
+                FieldType: "picklist",
+                MappingType: "Constant",
+                Processor: "static"
+              }
+            ]
+          }
+        ]
+      },
+      version: "1.0",
+      contactKey: "{{Context.ContactKey}}",
+      contactId: "{{Context.ContactId}}",
+      definitionId: "{{Context.DefinitionId}}",
+      activityId: "{{Activity.Id}}",
+      startActivityKey: "{{Context.StartActivityKey}}",
+      definitionInstanceId: "{{Context.DefinitionInstanceId}}",
+      requestObjectId: "{{Context.RequestObjectId}}"
+    },
+    configurationArguments: {
+      applicationExtensionKey: "Salesforce_Activity_CampaignMember",
+      applicationExtensionId: "00000000-0000-0000-0000-000000000000"
+    },
+    metaData: {
+      isConfigured: true,
+      expressionBuilderPrefix: "Campaign Member"
+    }
+  };
+}
+if (
+  journeyKey &&
+  journeyUrl &&
+  subdomain &&
+  accessToken &&
+  journeyEmailId &&
+  eventKey &&
+  deAudienceTriggerJson &&
+  senderProfileId &&
+  sendClassificationId
+) {
+ try {
+   var scRow = lookupSendClassificationJpa(sendClassificationId);
+   var spRowForJourney = lookupSenderProfileJpa(senderProfileId);
+   var sendClassificationIdForJourney =
+     wsRowIdForJourneyJpa(scRow) || trimJpa(sendClassificationId);
+   var deliveryProfileId = wsNestedIdForJourneyJpa(scRow, "DeliveryProfile");
+   var senderProfileIdForJourney =
+     wsRowIdForJourneyJpa(spRowForJourney) || trimJpa(senderProfileId);
+   if (!sendClassificationIdForJourney) {
+     throw new Error("Send classification is required.");
+   }
+   var emailSubjectEscaped = jsonEscapeSbU(emailSubjectLine);
+   var journeyNameEscaped = jsonEscapeSbU(journeyName);
+   var journeyDescEscaped = jsonEscapeSbU(journeyDescription);
+   var bccEsc = jsonEscapeSbU(bccEmail);
+   var senderProfileIdEsc = jsonEscapeSbU(senderProfileIdForJourney);
+   var sendClassificationIdEsc = jsonEscapeSbU(sendClassificationIdForJourney);
+   var deliveryProfileIdEsc = jsonEscapeSbU(deliveryProfileId);
+   var triggerWithOutcomes = deAudienceTriggerJson;
+   var emailIdNum = journeyEmailId ? parseInt(String(journeyEmailId), 10) : 0;
+   var emailArgs =
+     '{"activityId":"{{Activity.Id}}","definitionId":"{{Context.DefinitionId}}","emailSubjectDataBound":"' +
+     emailSubjectEscaped +
+     '","contactId":"{{Contact.Id}}","contactKey":"{{Contact.Key}}","emailAddress":"{{InteractionDefaults.Email}}","sourceCustomObjectId":"{{Contact.AddressInfo.Email.SourceCustomObjectId}}","sourceCustomObjectKey":"{{Contact.AddressInfo.Email.SourceCustomObjectKey}}","fieldType":"{{Contact.AddressInfo.Email.FieldType}}","eventData":"{{Event}}","obfuscationProperties":"{{InteractionDefaults.Email.ObfuscationProperties}}","customObjectKey":"","definitionInstanceId":"{{Context.DefinitionInstanceId}}"}';
+   var emailNameEscaped = jsonEscapeSbU(emailName || "PreEventEmail1");
+   var tsDesc = jsonEscapeSbU(emailName || "Journey Maker email");
+   var emailActivity =
+     '{"type":"EMAILV2","key":"EMAILV2-1","name":"' +
+     emailNameEscaped +
+     '","outcomes":[{"next":"SALESCLOUDACTIVITY-1","metaData":{"invalid":false}}],"arguments":' +
+     emailArgs +
+     ',"metaData":{"isConfigured":true,"sections":{}},"configurationArguments":{"applicationExtensionKey":"jb-email-activity","isModified":false,"isSimulation":false,"fuelAgentRequested":true,"googleAnalyticsCampaignName":"","useLLTS":false,"isReconcilable":false,"triggeredSend":{"autoAddSubscribers":true,"autoUpdateSubscribers":true,"bccEmail":"' +
+     bccEsc +
+     '","categoryId":58374,"ccEmail":"","created":{"name":"","date":""},"domainExclusions":[],"dynamicEmailSubject":"' +
+     emailSubjectEscaped +
+     '","emailId":' +
+     emailIdNum +
+     ',"emailSubject":"' +
+     emailSubjectEscaped +
+     '","description":"' +
+     tsDesc +
+     '","exclusionFilter":"","isSalesforceTracking":true,"isMultipart":true,"isSendLogging":true,"isStoppedOnJobError":false,"modified":{"name":"","date":""},"preHeader":"","priority":4,"replyToAddress":"","replyToDisplayName":"","sendClassificationId":"' +
+     sendClassificationIdEsc +
+     '","suppressTracking":false,"throttleOpens":"1/1/0001 12:00:00 AM","throttleCloses":"1/1/0001 12:00:00 AM","deliveryProfileId":"' +
+     deliveryProfileIdEsc +
+     '","senderProfileId":"' +
+     senderProfileIdEsc +
+     '","isTrackingClicks":true,"publicationListId":1132}}}';
+   var cmObj = buildCmUpdateActivitySbU({
+     eventKey: eventKey
+   });
+   var cmActivity = Platform.Function.Stringify(cmObj);
+   var taskSubject = "Email Sent: " + (emailName || "Email");
+   var taskDescription = "Email name: " + (emailName || "Email");
+   var taskEvWho = '{{Event."' + eventKey + '"."id"}}';
+   var taskEvOwn = '{{Event."' + eventKey + '"."sfUserId"}}';
+   var taskActivityObj = {
+     id: randomGuidSbU(),
+     type: "SALESCLOUDACTIVITY",
+     key: "SALESCLOUDACTIVITY-8",
+     name: "Create Task Activity",
+     description: "",
+     outcomes: [
+       {
+         key: randomGuidSbU(),
+         arguments: {},
+         metaData: { invalid: false }
+       }
+     ],
+     arguments: {
+       objectMap: {
+         objects: [
+           {
+             type: "Task",
+             subtype: null,
+             order: "1",
+             action: "Create",
+             lookup: null,
+             fields: [
+               {
+                 FieldName: "Subject",
+                 FieldLabel: "Subject",
+                 FieldValue: taskSubject,
+                 FieldValueLabel: taskSubject,
+                 Required: "false",
+                 FieldType: "combobox",
+                 MappingType: "Constant",
+                 Processor: "static"
+               },
+               {
+                 FieldName: "WhoId",
+                 FieldLabel: "Name ID",
+                 FieldValue: taskEvWho,
+                 FieldValueLabel: "id",
+                 Required: "false",
+                 FieldType: "reference",
+                 MappingType: "Constant",
+                 Processor: "static",
+                 ReferenceObjectNames: ["CONTACT","LEAD"]
+               },
+               {
+                 FieldName: "Description",
+                 FieldLabel: "Description",
+                 FieldValue: taskDescription,
+                 FieldValueLabel: taskDescription,
+                 Required: "false",
+                 FieldType: "textarea",
+                 MappingType: "Constant",
+                 Processor: "static"
+               },
+               {
+                 FieldName: "ActivityDate",
+                 FieldLabel: "Due Date Only",
+                 FieldValue: "Date Contact Enters Activity",
+                 FieldValueLabel: "Date Contact Enters Activity",
+                 Required: "false",
+                 FieldType: "date",
+                 MappingType: "Constant",
+                 Processor: "dateContactEnters",
+                 FieldAdjustment: {
+                   SubProcessor: "dateAdjustment",
+                   Units: "Days",
+                   NumUnits: "0",
+                   TimeDirection: "after"
+                 }
+               },
+               {
+                 FieldName: "Status",
+                 FieldLabel: "Status",
+                 FieldValue: "Completed",
+                 FieldValueLabel: "Completed",
+                 Required: "false",
+                 FieldType: "picklist",
+                 MappingType: "Constant",
+                 Processor: "static"
+               },
+               {
+                 FieldName: "OwnerId",
+                 FieldLabel: "Assigned To ID",
+                 FieldValue: taskEvOwn,
+                 FieldValueLabel: "sfUserId",
+                 Required: "false",
+                 FieldType: "reference",
+                 MappingType: "Constant",
+                 Processor: "static",
+                 ReferenceObjectNames: ["GROUP","USER"]
+               }
+             ]
+           }
+         ]
+       },
+       version: "1.0",
+       contactKey: "{{Context.ContactKey}}",
+       contactId: "{{Context.ContactId}}",
+       definitionId: "{{Context.DefinitionId}}",
+       activityId: "{{Activity.Id}}",
+       startActivityKey: "{{Context.StartActivityKey}}",
+       definitionInstanceId: "{{Context.DefinitionInstanceId}}",
+       requestObjectId: "{{Context.RequestObjectId}}"
+     },
+     configurationArguments: {
+       applicationExtensionKey: "Salesforce_Activity_Task",
+       applicationExtensionId: "00000000-0000-0000-0000-000000000000"
+     },
+     metaData: {
+       isConfigured: true,
+       expressionBuilderPrefix: "Task"
+     }
+   };
+   var taskActivity = Platform.Function.Stringify(taskActivityObj);
+   var activitiesJson = emailActivity + "," + cmActivity + "," + taskActivity;
+   var journeyPayload =
+     '{"name":"' +
+     journeyNameEscaped +
+     '","definitionType":"Multistep","channel":"","description":"' +
+     journeyDescEscaped +
+     '","version":1,"workflowApiVersion":1.0,"executionMode":"Production","entryMode":"MultipleEntries","key":"' +
+     journeyKey +
+     '","activities":[' +
+     activitiesJson +
+     '],"notifiers":[],"metaData":{"disableEndWait":true,"dataSource":"ContactsModel","highThroughputSending":{"email":false}},"defaults":{"email":["' +
+     (defaultEmailEscaped || "") +
+     '"],"properties":{"analyticsTracking":{"enabled":true,"analyticsType":"google","urlDomainsToTrack":[]}}},"goals":[],"exits":[],"triggers":[' +
+     triggerWithOutcomes +
+     "]}";
+   var postReq = new Script.Util.HttpRequest(journeyUrl);
+   postReq.emptyContentHandling = 0;
+   postReq.continueOnError = true;
+   postReq.setHeader("Authorization", "Bearer " + accessToken);
+   postReq.method = "POST";
+   postReq.contentType = "application/json";
+   postReq.postData = journeyPayload;
+   var postResp = postReq.send();
+   var journeyStatus = postResp.statusCode;
+   var journeyResponse = postResp.content ? String(postResp.content) : "";
+   if (journeyStatus == 200 || journeyStatus == 201) {
+     journeyResult = " Step 4 OK - Journey created.";
+     var idMatch = journeyResponse.match(/"id"\s*:\s*"?([^",}\s]+)"?/);
+     var journeyId = idMatch ? idMatch[1] : "";
+     if (journeyId) {
+       Platform.Variable.SetValue("@journeyId", journeyId);
+       journeyResult = journeyResult + " Journey ID: " + journeyId + " (draft).";
+     }
+   } else {
+     journeyResult = " Step 4 FAILED: HTTP " + journeyStatus + " - " + journeyResponse;
+     Platform.Variable.SetValue("@cleanupNeeded", "1");
+   }
+ } catch (e) {
+   journeyResult = " Step 4 FAILED: " + (e.message || String(e));
+   Platform.Variable.SetValue("@cleanupNeeded", "1");
+ }
+} else if (
+  journeyKey &&
+  journeyUrl &&
+  subdomain &&
+  accessToken &&
+  journeyEmailId &&
+  eventKey &&
+  deAudienceTriggerJson &&
+  !senderProfileId
+) {
+ journeyResult = " Step 4 FAILED: Sender profile is required.";
+ Platform.Variable.SetValue("@cleanupNeeded", "1");
+} else if (
+  journeyKey &&
+  journeyUrl &&
+  subdomain &&
+  accessToken &&
+  journeyEmailId &&
+  eventKey &&
+  deAudienceTriggerJson &&
+  senderProfileId &&
+  !sendClassificationId
+) {
+ journeyResult = " Step 4 FAILED: Send classification is required.";
+ Platform.Variable.SetValue("@cleanupNeeded", "1");
+}
+Platform.Variable.SetValue("@resultText", resultText + journeyResult);
+</script>
+<script runat="server">
+var cleanupNeeded = Variable.GetValue("cleanupNeeded");
+var eventDefId = Variable.GetValue("eventDefId");
+var newEmailId = Variable.GetValue("newEmailId");
+var subdomain = Variable.GetValue("subdomain");
+var accessToken = Variable.GetValue("accessToken");
+var resultText = Variable.GetValue("resultText");
+if (cleanupNeeded == "1" && (eventDefId || newEmailId) && subdomain && accessToken) {
+ var cleanupLog = "";
+ if (eventDefId) {
+ try {
+   var eventName = Variable.GetValue("eventName");
+   var getEventUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" + eventDefId;
+   var getReq = new Script.Util.HttpRequest(getEventUrl);
+   getReq.emptyContentHandling = 0;
+   getReq.continueOnError = true;
+   getReq.setHeader("Authorization", "Bearer " + accessToken);
+   getReq.method = "GET";
+   var getResp = getReq.send();
+   var dataExtensionId = null;
+   if ((getResp.statusCode == 200 || getResp.statusCode == 201) && getResp.content) {
+     var eventObj = Platform.Function.ParseJSON(String(getResp.content));
+     dataExtensionId = eventObj.dataExtensionId || eventObj.dataExtensionID || null;
+   }
+   var eventDeleteUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" + eventDefId;
+   var eventReq = new Script.Util.HttpRequest(eventDeleteUrl);
+   eventReq.emptyContentHandling = 0;
+   eventReq.continueOnError = true;
+   eventReq.setHeader("Authorization", "Bearer " + accessToken);
+   eventReq.method = "DELETE";
+   var eventResp = eventReq.send();
+   if (eventResp.statusCode == 200 || eventResp.statusCode == 204) {
+     cleanupLog = " Event definition deleted.";
+   } else {
+     cleanupLog = " Event delete HTTP " + eventResp.statusCode + ".";
+   }
+   if (dataExtensionId || eventName) {
+     try {
+       var deObjId = dataExtensionId;
+       if (!deObjId && eventName) {
+         var prox2 = new Script.Util.WSProxy();
+         var deFilter = { Property: "Name", SimpleOperator: "equals", Value: eventName };
+         var retrieveReq = prox2.retrieve("DataExtension", ["ObjectID"], deFilter);
+         if (retrieveReq && retrieveReq.Results && retrieveReq.Results.length > 0 && retrieveReq.Results[0].ObjectID) {
+           deObjId = retrieveReq.Results[0].ObjectID;
+         }
+       }
+       if (deObjId) {
+         var prox = new Script.Util.WSProxy();
+         var deResult = prox.deleteItem("DataExtension", { "ObjectID": deObjId });
+         if (deResult && deResult.Results && deResult.Results.length > 0 && deResult.Results[0].Status == "OK") {
+           cleanupLog = cleanupLog + " Data extension deleted.";
+         } else {
+           cleanupLog = cleanupLog + " DE delete failed.";
+         }
+       }
+     } catch (deEx) {
+       cleanupLog = cleanupLog + " DE delete failed - " + (deEx.message || String(deEx));
+     }
+   }
+ } catch (e) {
+   cleanupLog = cleanupLog + " Cleanup failed - " + (e.message || String(e));
+ }
+ }
+ if (newEmailId) {
+ try {
+   var assetDeleteUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + newEmailId;
+   var assetReq = new Script.Util.HttpRequest(assetDeleteUrl);
+   assetReq.emptyContentHandling = 0;
+   assetReq.continueOnError = true;
+   assetReq.setHeader("Authorization", "Bearer " + accessToken);
+   assetReq.method = "DELETE";
+   var assetResp = assetReq.send();
+   if (assetResp.statusCode == 200 || assetResp.statusCode == 204) {
+     cleanupLog = cleanupLog + " Email asset deleted.";
+   } else {
+     cleanupLog = cleanupLog + " Email delete HTTP " + assetResp.statusCode + ".";
+   }
+ } catch (e) {
+   cleanupLog = cleanupLog + " Email delete failed - " + (e.message || String(e));
+ }
+ }
+ Platform.Variable.SetValue("@resultText", resultText + cleanupLog);
+}
+</script>
+%%[
+IF @showForm == "false" AND @deleteAllRequested != "1" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@newEmailId) THEN
+ SET @analyticsJourneyName = IIF(NOT Empty(@journeyName), @journeyName, @emailName)
+ SET @analyticsJourneyId = IIF(NOT Empty(@journeyId), @journeyId, Concat("email:",@newEmailId))
+ SET @analyticsJourneyType = @builderPageLabel
+ SET @analyticsDeName = IIF(NOT Empty(@eventName), @eventName, "N/A")
+ SET @analyticsDeId = IIF(NOT Empty(@eventDefId), @eventDefId, "N/A")
+ SET @analyticsAutomationName = IIF(NOT Empty(@stackCampaignName), @stackCampaignName, IIF(NOT Empty(@journeyName), @journeyName, ""))
+ SET @analyticsAutomationGuid = IIF(NOT Empty(@automationId), @automationId, "")
+ SET @analyticsQueryKey = IIF(NOT Empty(@queryKey), @queryKey, "")
+ SET @analyticsCampaignId = ""
+ IF NOT Empty(@campaignId) AND Length(@campaignId) >= 15 THEN
+  SET @analyticsCampaignId = Substring(@campaignId,1,18)
+ ENDIF
+ UpsertDE(
+  "Bd_journey_analytics",
+  1,
+  "journeyId",
+  Substring(@analyticsJourneyId,1,250),
+  "journeyName", Substring(@analyticsJourneyName,1,50),
+  "journeyType", Substring(@analyticsJourneyType,1,50),
+  "emailName", Substring(@emailName,1,50),
+  "emailId", Substring(@newEmailId,1,50),
+  "deName", Substring(@analyticsDeName,1,50),
+  "deId", Substring(@analyticsDeId,1,50),
+  "automationName", Substring(@analyticsAutomationName,1,50),
+  "automationGuid", Substring(@analyticsAutomationGuid,1,50),
+  "queryKey", Substring(@analyticsQueryKey,1,50),
+  "campaignId", Substring(@analyticsCampaignId,1,18),
+  "updateDate", Now()
+ )
+ENDIF
+IF @deleteAllRequested == "1" AND @authOk == "true" AND NOT Empty(@deleteJourneyId) THEN
+ SET @analyticsDelCnt = DeleteData("Bd_journey_analytics","journeyId",@deleteJourneyId)
+ENDIF
+]%%
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>%%=v(@builderPageLabel)=%% • Journey Maker</title>
+<link rel="preload" as="image" imagesrcset="https://www.gmgma.com/resource/resmgr/logos_2/logos_3/logos_4/Mag_Mutual_new_logo_2021.png" imagesizes="100vw">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+:root {
+ --primary-color: #6366f1;
+ --primary-dark: #4f46e5;
+ --text-primary: #111827;
+ --text-secondary: #6b7280;
+ --bg-primary: #ffffff;
+ --bg-secondary: #f9fafb;
+ --border-color: #e5e7eb;
+ --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+ --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+ --radius-md: 0.5rem;
+ --gray-200: #e5e7eb;
+ --gray-400: #9ca3af;
+ --gray-500: #6b7280;
+ --gray-600: #4b5563;
+ --gray-900: #111827;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg-secondary); color: var(--text-primary); line-height: 1.6; margin: 0; }
+.dashboard-layout { display: flex; height: 100vh; min-height: 100vh; overflow: hidden; }
+.maker-sidebar {
+  width: 280px;
+  background: #fff;
+  border-right: 1px solid var(--gray-200);
+  display: flex;
+  flex-direction: column;
+  padding: 28px 0;
+  flex-shrink: 0;
+  box-shadow: var(--shadow-sm);
+  height: 100vh;
+  overflow: hidden;
+}
+.sidebar-logo {
+  padding: 0 20px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #eee5e5;
+  padding-bottom: 10px;
+  align-self: center;
+}
+.sidebar-logo a { display: inline-block; }
+.sidebar-logo img { height: 40px; }
+.nav-section { margin-bottom: 8px; }
+.nav-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gray-400);
+  letter-spacing: 0.06em;
+  margin-bottom: 8px;
+  padding: 0 32px;
+  text-transform: uppercase;
+}
+.sidebar-nav .nav-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 32px;
+  color: var(--gray-600);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 14px;
+  border-right: 3px solid transparent;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+.sidebar-nav .nav-link:hover {
+  background: #f9fafb;
+  color: var(--gray-900);
+}
+.sidebar-nav .nav-link.active {
+  background: linear-gradient(90deg, rgb(119 120 196 / 10%) 0%, rgb(2 3 22 / 5%) 100%);
+  color: #000000;
+  border-right-color: #2c2c31;
+}
+.sidebar-nav span.nav-link.active { cursor: default; }
+.nav-icon {
+  width: 20px;
+  height: 20px;
+  opacity: 0.75;
+}
+.maker-main {
+  flex: 1;
+  min-width: 0;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+}
+.maker-main-inner {
+  flex: 1;
+  overflow-y: auto;
+  padding: 32px 40px 48px;
+}
+.maker-main-footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 40px;
+  border-top: 1px solid var(--border-color);
+  background: #fff;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.breadcrumb-section { padding: 4px 0 20px; }
+.breadcrumb-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 14px;
+  gap: 4px;
+}
+.breadcrumb-link {
+  display: inline-flex;
+  align-items: center;
+  color: var(--primary-color);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 16px;
+}
+.breadcrumb-link:hover { color: var(--primary-dark); text-decoration: underline; }
+.breadcrumb-link svg { flex-shrink: 0; }
+.breadcrumb-separator { margin: 0 8px; color: var(--gray-400); font-weight: 400; user-select: none; }
+.breadcrumb-current { font-weight: 600; color: var(--gray-900); }
+.maker-page-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+.maker-page-heading-icon {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #f3f4f6;
+  border: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gray-900);
+}
+.maker-page-heading-icon svg {
+  width: 26px;
+  height: 26px;
+}
+.maker-page-heading-text {
+  flex: 1;
+  min-width: 0;
+}
+.maker-page-title { font-size: 1.75rem; font-weight: 700; margin-bottom: 0; color: var(--gray-900); line-height: 1.25; }
+.maker-page-subtitle { font-size: 1rem; color: var(--text-secondary); max-width: 640px; margin-bottom: 20px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.maker-form-shell {
+  background: #fff;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+.maker-result-inner { padding: 28px 32px 32px; }
+.maker-page-heading-icon.maker-result-status.is-success {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #065f46;
+}
+.maker-page-heading-icon.maker-result-status.is-error {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+.maker-result-dl { margin: 0; padding: 0; }
+.maker-result-dl dt {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--gray-500);
+  margin: 0 0 4px 0;
+}
+.maker-result-dl dd {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--gray-900);
+  margin: 0 0 20px 0;
+  line-height: 1.45;
+  word-break: break-word;
+}
+.maker-result-dl dd:last-child { margin-bottom: 0; }
+.maker-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border-color);
+}
+.maker-result-actions--footer { justify-content: flex-end; }
+.maker-result-log-wrap { margin-top: 0; padding-top: 0; border-top: none; }
+.maker-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+.maker-btn--primary {
+  background: var(--gray-900);
+  color: #fff;
+  border-color: var(--gray-900);
+}
+.maker-btn--primary:hover { background: #000; border-color: #000; color: #fff; }
+.maker-btn--secondary {
+  background: #fff;
+  color: var(--gray-900);
+  border-color: var(--border-color);
+}
+.maker-btn--secondary:hover { background: var(--bg-secondary); border-color: var(--gray-400); }
+.maker-btn--ghost {
+  background: var(--bg-secondary);
+  color: var(--gray-600);
+  border-color: var(--border-color);
+}
+.maker-btn--ghost:hover { color: var(--gray-900); border-color: var(--gray-400); }
+.maker-btn--danger {
+  background: #fff;
+  color: #b42318;
+  border-color: #fecaca;
+}
+.maker-btn--danger:hover { background: #fef2f2; border-color: #f87171; }
+.maker-result-log {
+  margin-top: 12px;
+  padding: 14px 16px;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-size: 0.8125rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-radius: var(--radius-md);
+  max-height: 280px;
+  overflow-y: auto;
+  display: none;
+}
+.maker-result-log.is-visible { display: block; margin-top: 20px; }
+
+.maker-alert {
+  width: 100%;
+  padding: 12px 16px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: var(--radius-md);
+  color: #991b1b;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.survey-header { background: transparent; color: inherit; padding: 0; text-align: start; margin: 0; }
+.logo { margin: 0 0 20px 0; border-bottom: 1px solid #e5e7eb; padding-bottom: 16px; }
+.logo img { height: 40px; }
+.survey-title { font-size: 1.875rem; font-weight: 700; margin-bottom: 8px; }
+.question-card { padding: 24px; margin-bottom: 0; }
+.question-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-top: 24px;
+  border-top: 1px solid #e5e7eb;
+}
+.question-header:first-of-type {
+  padding-top: 8px;
+  border-top: none;
+}
+.question-number { color: black; width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 600; margin-right: 16px; flex-shrink: 0; border: 1px solid #0000001a;}
+.question-text { font-size: 1.125rem; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
+.form-group { margin-bottom: 16px; }
+.select-control, .textarea-control { width: 100%; padding: 12px 16px; border: 1px solid var(--border-color); border-radius: 0px); font-size: 1rem; background: var(--bg-primary); transition: all 0.2s ease; font-family: inherit; }
+.select-control:focus, .textarea-control:focus { outline: none; border-color: var(--primary-color); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1); }
+.submit-section { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border-color); }
+.submit-button { background: #0e0e1d; color: white; border: none; padding: 16px 32px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease; }
+.submit-button:hover { background: var(--primary-dark); transform: translateY(-1px); box-shadow: var(--shadow-md); }
+.submit-button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+.spinner { border: 2px solid rgba(255,255,255,0.3); border-top: 2px solid white; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; display: inline-block; margin-left: 8px; vertical-align: middle; }
+.email-cards { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+.email-card {
+  flex: 1;
+  min-width: 180px;
+  max-width: 280px;
+  position: relative;
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: var(--bg-secondary);
+  text-align: left;
+  overflow: hidden;
+  display: block;
+  box-sizing: border-box;
+  padding: 0;
+}
+.email-card:hover { border-color: var(--primary-color); box-shadow: var(--shadow-md); }
+.email-card.selected { border: 2px solid #53575a; }
+.email-card input { display: none; }
+.email-card-img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.email-card-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 22px;
+  padding: 0 10px;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: #484848;
+  line-height: 1.2;
+  z-index: 2;
+}
+.email-card-id {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 6px;
+  padding: 0 10px;
+  font-size: 0.6875rem;
+  color: #363232eb;
+  z-index: 2;
+}
+.email-card::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 156px;
+  background: linear-gradient(to top, rgb(255 255 255), #fcfeff);
+  pointer-events: none;
+  z-index: 1;
+}
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+@media (max-width: 768px) {
+  body { padding: 0; }
+  .survey-title { font-size: 1.5rem; }
+  .maker-sidebar {
+    width: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    align-items: center;
+    min-height: 0;
+  }
+  .maker-sidebar .sidebar-logo { margin-bottom: 0; flex-shrink: 0; padding-right: 16px; }
+  .maker-sidebar .sidebar-nav { display: flex; flex-direction: row; gap: 4px; padding: 8px 0; flex: 1; flex-wrap: nowrap; }
+  .maker-sidebar .nav-section-title { display: none; }
+  .maker-sidebar .nav-link { white-space: nowrap; padding: 8px 16px; border-right: none; border-radius: 8px; }
+  .dashboard-layout { flex-direction: column; height: auto; overflow: visible; }
+  .maker-sidebar { height: auto; overflow: visible; }
+  .maker-main { height: auto; overflow: visible; }
+  .maker-main-inner { overflow: visible; padding: 16px !important; }
+  .maker-main-footer { padding: 14px 16px; }
+}
+</style>
+</head>
+<body>
+<div class="dashboard-layout">
+  <aside class="maker-sidebar sidebar" aria-label="Primary">
+    <div class="sidebar-logo">
+      <a href="%%=v(@hubUrl)=%%"><img src="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" alt="MagMutual" style="filter: invert(1);"></a>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section"><span class="nav-section-title">MENU</span></div>
+      <span class="nav-link active" role="presentation">
+        <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17h2v-5H3v5zm8 5h2V6h-2v16zM13 9h8V7h-8v2zM3 5v4h14V5H3zm8 14h10v-2H11v2zM13 17h8v-2h-8v2z"/></svg>
+        %%=v(@builderPageLabel)=%%
+      </span>
+    </nav>
+  </aside>
+  <main class="maker-main">
+    <div class="maker-main-inner">
+    <div class="breadcrumb-section">
+      <nav class="breadcrumb-nav" aria-label="Breadcrumb">
+        <a href="%%=v(@hubUrl)=%%" class="breadcrumb-link">
+          <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+          Back
+        </a>
+        <span class="breadcrumb-separator" aria-hidden="true">/</span>
+%%[ IF @showForm == "true" THEN ]%%
+        <span class="breadcrumb-current">%%=v(@builderPageLabel)=%%</span>
+%%[ ELSE ]%%
+        <span class="breadcrumb-current">%%=Concat(@builderPageLabel," • Result")=%%</span>
+%%[ ENDIF ]%%
+      </nav>
+    </div>
+%%[ IF @showForm == "true" THEN ]%%
+    <div class="maker-page-heading">
+      <div class="maker-page-heading-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 17h2v-5H3v5zm8 5h2V6h-2v16zM13 9h8V7h-8v2zM3 5v4h14V5H3zm8 14h10v-2H11v2zM13 17h8v-2h-8v2z"/></svg>
+      </div>
+      <div class="maker-page-heading-text">
+        <h1 class="maker-page-title">Journey + Automation</h1>
+      </div>
+    </div>
+    <p class="maker-page-subtitle">One <strong>Campaign Name</strong> is used for the journey, entry event, data extension, query, automation, and email.<br>
+      <strong>Salesforce Campaign ID</strong> filters the query and updates Campaign Member status in the journey.</p>
+    <div class="maker-form-shell">
+   <form method="post" action="">
+     %%[ IF NOT Empty(@flow) THEN ]%%
+     <input type="hidden" name="flow" value="%%=v(@flow)=%%">
+     %%[ ENDIF ]%%
+     <div class="question-card">
+       <div class="question-header">
+         <div class="question-number">1</div>
+         <div class="question-text">Campaign name</div>
+       </div>
+       <div class="form-group">
+         <input type="text" class="textarea-control" name="stackCampaignName" value="%%=v(@stackCampaignName)=%%" placeholder="e.g. SBU Cross-sell Q3 — used for journey, DE, query, automation, and email" required>
+       </div>
+       <div class="question-header" style="margin-top: 24px;">
+         <div class="question-number">2</div>
+         <div class="question-text">Salesforce Campaign ID</div>
+       </div>
+       <div class="form-group">
+         <input type="text" class="textarea-control" name="campaignId" value="%%=v(@campaignId)=%%" placeholder="e.g. 701WL00000pFzUEYA0 — INNER JOIN filter in query + Campaign Member update" required>
+       </div>
+       <div class="question-header" style="margin-top: 24px;">
+         <div class="question-number">3</div>
+         <div class="question-text">Account owner User ID (optional)</div>
+       </div>
+       <div class="form-group">
+         <input type="text" class="textarea-control" name="sfUserId" value="%%=v(@sfUserId)=%%" placeholder="Optional — adds AND u.id = '...' on the User_Salesforce join">
+       </div>
+       <div class="question-header" style="margin-top: 24px;">
+         <div class="question-number">4</div>
+         <div class="question-text">Journey description (optional)</div>
+       </div>
+       <div class="form-group">
+         <input type="text" class="textarea-control" name="journeyDescription" value="%%=v(@journeyDescription)=%%" placeholder="Stored on the journey definition API payload">
+       </div>
+       <div class="question-header" style="margin-top: 24px;">
+         <div class="question-number">5</div>
+         <div class="question-text">Email subject line</div>
+       </div>
+       <div class="form-group">
+         <input type="text" class="textarea-control" name="emailSubjectLine" value="%%=v(@emailSubjectLine)=%%" placeholder="Defaults to Campaign Event if left blank">
+       </div>
+       <div class="form-group">
+         <label for="bccEmail" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">BCC on triggered send (optional)</label>
+         <input id="bccEmail" type="text" class="textarea-control" name="bccEmail" value="%%=v(@bccEmail)=%%" placeholder="Leave blank for no BCC">
+       </div>
+       <div class="question-header" style="margin-top: 24px;">
+         <div class="question-number">6</div>
+         <div class="question-text">Sender profile</div>
+       </div>
+       <div class="form-group">
+%%[ IF @senderProfileConfigOk == "true" THEN ]%%
+         <select id="senderProfileId" class="select-control" name="senderProfileId">
+           %%=TreatAsContent(@senderProfileOptionsHtml)=%%
+         </select>
+%%[ ELSE ]%%
+         <div class="maker-alert" role="alert">Could not load sender profiles from Marketing Cloud.</div>
+%%[ ENDIF ]%%
+       </div>
+       <div class="question-header" style="margin-top: 24px;">
+         <div class="question-number">7</div>
+         <div class="question-text">Send classification</div>
+       </div>
+       <div class="form-group">
+%%[ IF @sendClassificationConfigOk == "true" THEN ]%%
+         <select id="sendClassificationId" class="select-control" name="sendClassificationId">
+           %%=TreatAsContent(@sendClassificationOptionsHtml)=%%
+         </select>
+%%[ ELSE ]%%
+         <div class="maker-alert" role="alert">Could not load send classifications from Marketing Cloud.</div>
+%%[ ENDIF ]%%
+       </div>
+       <div class="question-header" style="margin-top: 24px;">
+         <div class="question-number">8</div>
+         <div class="question-text">Choose Email Template</div>
+       </div>
+       <div class="email-cards">
+         %%[ IF @templateConfigOk == "true" THEN
+           FOR @ti = 1 TO @templateCount DO
+             SET @templateRow = Row(@templateRows,@ti)
+             SET @cardEmailId = Trim(Field(@templateRow,"email_id"))
+             SET @cardEmailName = Field(@templateRow,"email_name")
+             SET @cardEmailPreview = Field(@templateRow,"email_preview")
+             SET @cardLabel = @cardEmailName
+             IF Length(@cardLabel) > 10 THEN
+               SET @cardLabel = Concat(Substring(@cardLabel,1,10),"...")
+             ENDIF
+         ]%%
+         <label class="email-card %%[ IF @emailId == @cardEmailId THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@cardEmailId)=%%">
+           <input type="radio" name="emailId" value="%%=v(@cardEmailId)=%%" %%[ IF @emailId == @cardEmailId THEN ]%%checked%%[ ENDIF ]%%>
+           <img class="email-card-img" src="%%=v(@cardEmailPreview)=%%" alt="%%=v(@cardEmailName)=%%">
+           <div class="email-card-label">%%=v(@cardLabel)=%%</div>
+           <div class="email-card-id">ID: %%=v(@cardEmailId)=%%</div>
+         </label>
+         %%[ NEXT @ti ELSE ]%%
+         <div class="maker-alert" role="alert">Template config missing in `bd_sst_email_templates` (email_type=template).</div>
+         %%[ ENDIF ]%%
+       </div>
+       <div class="question-header" style="margin-top: 24px;">
+         <div class="question-number">9</div>
+         <div class="question-text">Automation schedule</div>
+       </div>
+       <div class="form-group">
+         <label for="frequency" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Frequency</label>
+         <select id="frequency" name="frequency" class="select-control">
+           <option value="hourly" %%[ IF @frequency == "hourly" THEN ]%%selected%%[ ENDIF ]%%>Hourly</option>
+           <option value="daily" %%[ IF @frequency == "daily" THEN ]%%selected%%[ ENDIF ]%%>Daily</option>
+           <option value="weekly" %%[ IF @frequency == "weekly" THEN ]%%selected%%[ ENDIF ]%%>Weekly (Monday)</option>
+         </select>
+       </div>
+       <div class="form-group">
+         <label for="startDate" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Start date (local)</label>
+         <input id="startDate" type="datetime-local" class="textarea-control" name="startDate" value="%%=v(@startDate)=%%">
+       </div>
+       <div class="form-group">
+         <label for="startOffset" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">UTC offset (e.g. -05:00)</label>
+         <input id="startOffset" type="text" class="textarea-control" name="startOffset" value="%%=v(@startOffset)=%%" placeholder="-05:00">
+       </div>
+       <div class="form-group">
+         <label for="timezoneId" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Timezone ID</label>
+         <input id="timezoneId" type="text" class="textarea-control" name="timezoneId" value="%%=v(@timezoneId)=%%" placeholder="1">
+       </div>
+       <div class="submit-section">
+         <input type="hidden" name="create" value="1">
+         <button type="submit" class="submit-button" id="submitBtn">
+           <span id="btnText"> Create stack </span>
+           <span id="btnSpinner" class="spinner" style="display:none"></span>
+         </button>
+       </div>
+     </div>
+   </form>
+    </div>
+%%[ ELSE ]%%
+    <div class="maker-page-heading">
+      <div class="maker-page-heading-icon maker-result-status %%[ IF IndexOf(@resultText,"FAILED") > 0 THEN ]%%is-error%%[ ELSE ]%%is-success%%[ ENDIF ]%%" aria-hidden="true">
+%%[ IF IndexOf(@resultText,"FAILED") > 0 THEN ]%%
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>
+%%[ ELSE ]%%
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+%%[ ENDIF ]%%
+      </div>
+      <div class="maker-page-heading-text">
+        <h1 class="maker-page-title">%%=IIF(@deleteAllRequested == "1","Delete all finished",IIF(IndexOf(@resultText,"FAILED") > 0,"Could not complete setup","Build finished"))=%%</h1>
+      </div>
+    </div>
+    <p class="maker-page-subtitle">
+%%[ IF @deleteAllRequested == "1" THEN ]%%
+Review the log below for each removed asset, then return to the builder to start another run.
+%%[ ELSEIF IndexOf(@resultText,"FAILED") > 0 THEN ]%%
+Review the technical log below, adjust your inputs if needed, and try again.
+%%[ ELSE ]%%
+Your data extension, query automation, journey, and email are in Marketing Cloud. Open them below or return to the builder to start another run.
+%%[ ENDIF ]%%
+    </p>
+    <div class="maker-form-shell">
+      <div class="maker-result-inner">
+        <dl class="maker-result-dl">
+%%[ IF NOT Empty(@journeyId) OR NOT Empty(@eventDefId) THEN ]%%
+          <dt>Data extension</dt>
+          <dd>%%=IIF(NOT Empty(@eventName), @eventName, "—")=%% %%[ IF NOT Empty(@deCustomerKey) THEN ]%%(CustomerKey: %%=v(@deCustomerKey)=%%)%%[ ENDIF ]%%</dd>
+          <dt>Query</dt>
+          <dd>%%=IIF(NOT Empty(@queryKey), @queryKey, "—")=%%</dd>
+          <dt>Automation</dt>
+          <dd>%%=IIF(NOT Empty(@automationId), Concat(@stackCampaignName, " (", @automationId, ")"), IIF(NOT Empty(@stackCampaignName), @stackCampaignName, "—"))=%%</dd>
+          <dt>Journey</dt>
+          <dd>%%=IIF(NOT Empty(@journeyName), @journeyName, "—")=%%</dd>
+          <dt>Email</dt>
+          <dd>%%=IIF(NOT Empty(@emailName), @emailName, "—")=%%</dd>
+%%[ ENDIF ]%%
+        </dl>
+        <div class="maker-result-actions">
+%%[ IF NOT Empty(@journeyId) THEN ]%%
+          <a href="https://mc.s13.exacttarget.com/cloud/#app/Journey%20Builder/%23%%=v(@journeyId)=%%/1" target="_blank" rel="noopener noreferrer" class="maker-btn maker-btn--primary">Open journey</a>
+%%[ ENDIF ]%%
+          <a href="https://mc.s13.exacttarget.com/cloud/#app/Content%20Builder/" target="_blank" rel="noopener noreferrer" class="maker-btn maker-btn--secondary">Open Content Builder</a>
+%%[ IF NOT Empty(@automationId) THEN ]%%
+          <a href="https://mc.s13.exacttarget.com/cloud/#app/Automation%20Studio/" target="_blank" rel="noopener noreferrer" class="maker-btn maker-btn--secondary js-automation-home-link" data-automation-name="%%=Replace(Replace(v(@stackCampaignName),'"','&quot;'),'&','&amp;')=%%" title="%%[ IF NOT Empty(@stackCampaignName) THEN ]%%Copies automation name to clipboard%%[ ELSE ]%%Opens Automation Studio%%[ ENDIF ]%%">Open automation</a>
+%%[ ENDIF ]%%
+%%[ IF NOT Empty(@newEmailId) OR NOT Empty(@journeyId) OR NOT Empty(@automationId) THEN ]%%
+          <form method="post" action="" style="margin:0;display:inline" onsubmit="return confirm('Delete the journey, automation, query, entry event, data extension, email, and analytics log row for this build?');">
+            <input type="hidden" name="deleteAll" value="1">
+            <input type="hidden" name="deleteJourneyId" value="%%=v(@journeyId)=%%">
+            <input type="hidden" name="deleteEventDefId" value="%%=v(@eventDefId)=%%">
+            <input type="hidden" name="deleteAutomationId" value="%%=v(@automationId)=%%">
+            <input type="hidden" name="deleteQueryKey" value="%%=v(@queryKey)=%%">
+            <input type="hidden" name="deleteEmailId" value="%%=v(@newEmailId)=%%">
+            <input type="hidden" name="deleteEventName" value="%%=v(@eventName)=%%">
+            <button type="submit" class="maker-btn maker-btn--danger">Delete all</button>
+          </form>
+%%[ ENDIF ]%%
+        </div>
+        <div class="maker-result-log-wrap">
+          <pre class="maker-result-log" id="apiLog">%%=v(@resultText)=%%</pre>
+        </div>
+        <div class="maker-result-actions maker-result-actions--footer">
+          <form method="post" action="" style="margin:0">
+%%[ IF NOT Empty(@flow) THEN ]%%
+            <input type="hidden" name="flow" value="%%=v(@flow)=%%">
+%%[ ENDIF ]%%
+            <button type="submit" class="maker-btn maker-btn--secondary">Back to builder</button>
+          </form>
+          <button type="button" class="maker-btn maker-btn--ghost" id="showLogBtn">Show log</button>
+        </div>
+      </div>
+    </div>
+%%[ ENDIF ]%%
+    </div>
+    <footer class="maker-main-footer">
+      <span>Self Service</span>
+      <span>© 2026 All rights reserved | MagMutual</span>
+    </footer>
+  </main>
+</div>
+<script>
+(function(){
+ var form = document.querySelector('form[method="post"]');
+ if (form && form.querySelector('#submitBtn')) {
+   var btn = document.getElementById('submitBtn');
+   var btnText = document.getElementById('btnText');
+   var btnSpinner = document.getElementById('btnSpinner');
+   form.addEventListener('submit', function() {
+     btn.disabled = true;
+     if (btnText) btnText.textContent = 'Creating...';
+     if (btnSpinner) btnSpinner.style.display = 'inline-block';
+   });
+ }
+ var cards = document.querySelectorAll('.email-card');
+ cards.forEach(function(card) {
+   card.addEventListener('click', function() {
+     cards.forEach(function(c) { c.classList.remove('selected'); });
+     card.classList.add('selected');
+     card.querySelector('input[type="radio"]').checked = true;
+   });
+ });
+ var showLogBtn = document.getElementById('showLogBtn');
+ var apiLog = document.getElementById('apiLog');
+ if (showLogBtn && apiLog) {
+   showLogBtn.onclick = function() {
+     apiLog.classList.toggle('is-visible');
+     showLogBtn.textContent = apiLog.classList.contains('is-visible') ? 'Hide log' : 'Show log';
+   };
+ }
+ function copyText(text) {
+  if (!text) {
+   return;
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+   navigator.clipboard.writeText(text).catch(function () {
+    fallbackCopy(text);
+   });
+   return;
+  }
+  fallbackCopy(text);
+ }
+ function fallbackCopy(text) {
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+   document.execCommand('copy');
+  } catch (copyErr) {}
+  document.body.removeChild(ta);
+ }
+ var autoLinks = document.querySelectorAll('.js-automation-home-link');
+ var ai;
+ for (ai = 0; ai < autoLinks.length; ai++) {
+  autoLinks[ai].addEventListener('click', function () {
+   var name = this.getAttribute('data-automation-name') || '';
+   if (name) {
+    copyText(name);
+   }
+  });
+ }
+})();
+</script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
