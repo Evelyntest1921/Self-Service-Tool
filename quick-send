@@ -817,50 +817,110 @@ var eventDefId = Platform.Variable.GetValue("@eventDefId") || "";
 var journeyNameAmp = Platform.Variable.GetValue("@journeyName") || "";
 var authOk = Platform.Variable.GetValue("@authOk") || "";
 var createEmailOnly = Platform.Variable.GetValue("@createEmailOnly") || "";
+var subdomain = Platform.Variable.GetValue("@subdomain") || "";
+var accessToken = Platform.Variable.GetValue("@accessToken") || "";
+var eventResponse = Platform.Variable.GetValue("@eventResponse") || "";
+var resultText = Platform.Variable.GetValue("@resultText") || "";
+
+function parseEventDefJson(text) {
+  try {
+    return Platform.Function.ParseJSON(String(text || ""));
+  } catch (parseEx) {
+    return null;
+  }
+}
+
+function readDataExtensionId(evObj) {
+  if (!evObj) {
+    return "";
+  }
+  return String(evObj.dataExtensionId || evObj.dataExtensionID || "");
+}
+
+function resolveEventDataExtensionId(evId, sub, token, createResponse) {
+  var fromCreate = readDataExtensionId(parseEventDefJson(createResponse));
+  if (fromCreate) {
+    return fromCreate;
+  }
+  if (!evId || !sub || !token) {
+    return "";
+  }
+  var getUrl =
+    "https://" +
+    sub +
+    ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
+    encodeURIComponent(String(evId));
+  var getReq = new Script.Util.HttpRequest(getUrl);
+  getReq.emptyContentHandling = 0;
+  getReq.retries = 1;
+  getReq.continueOnError = true;
+  getReq.setHeader("Authorization", "Bearer " + token);
+  getReq.method = "GET";
+  var getResp = getReq.send();
+  if (getResp.statusCode != 200 && getResp.statusCode != 201) {
+    return "";
+  }
+  return readDataExtensionId(parseEventDefJson(getResp.content));
+}
+
 if (
   authOk == "true" &&
   createEmailOnly != "1" &&
   eventKey &&
-  eventDefId
+  eventDefId &&
+  subdomain &&
+  accessToken
 ) {
-  var trigName = journeyNameAmp
-    ? String(journeyNameAmp).substring(0, 120)
-    : "API Entry";
-  var trigObj = {
-    key: "TRIGGER",
-    name: trigName,
-    description: "",
-    type: "APIEvent",
-    outcomes: [],
-    arguments: {
-      serializedObjectType: 11,
-      eventDefinitionId: eventDefId,
-      eventDefinitionKey: eventKey,
-      dataExtensionId: "00000000-0000-0000-0000-000000000000"
-    },
-    configurationArguments: {
-      criteria: ""
-    },
-    metaData: {
-      scheduleState: "No Schedule",
-      eventDefinitionId: eventDefId,
-      eventDefinitionKey: eventKey,
-      chainType: "None",
-      configurationRequired: false,
-      iconUrl: "",
-      title: "",
-      category: "Event",
-      entrySourceGroupConfigUrl:
-        "jb:///data/entry/api-event/entrysourcegroupconfig.json",
-      sourceInteractionId: "00000000-0000-0000-0000-000000000000"
-    }
-  };
-  Platform.Variable.SetValue(
-    "@apiEventTriggerJson",
-    Platform.Function.Stringify(trigObj)
+  var eventDataExtensionId = resolveEventDataExtensionId(
+    eventDefId,
+    subdomain,
+    accessToken,
+    eventResponse
   );
+  if (!eventDataExtensionId) {
+    Platform.Variable.SetValue("@apiEventTriggerJson", "");
+    Platform.Variable.SetValue("@eventDataExtensionId", "");
+    Platform.Variable.SetValue("@eventKey", "");
+    Platform.Variable.SetValue("@eventDefId", "");
+    Platform.Variable.SetValue("@cleanupNeeded", "1");
+    Platform.Variable.SetValue(
+      "@resultText",
+      resultText +
+        " Step 3 FAILED: Could not resolve entry event dataExtensionId."
+    );
+  } else {
+    var trigName = journeyNameAmp
+      ? String(journeyNameAmp).substring(0, 120)
+      : "API Entry";
+    var trigObj = {
+      key: "TRIGGER",
+      name: trigName,
+      description: "",
+      type: "APIEvent",
+      outcomes: [],
+      arguments: {},
+      configurationArguments: {},
+      metaData: {
+        eventDefinitionId: eventDefId,
+        eventDefinitionKey: eventKey,
+        chainType: "None",
+        configurationRequired: false,
+        iconUrl: "/images/icon_journeyBuilder-event-api-blue.svg",
+        title: "",
+        entrySourceGroupConfigUrl:
+          "jb:///data/entry/api-event/entrysourcegroupconfig.json",
+        sourceInteractionId: "00000000-0000-0000-0000-000000000000"
+      }
+    };
+    Platform.Variable.SetValue("@eventDataExtensionId", eventDataExtensionId);
+    Platform.Variable.SetValue(
+      "@apiEventTriggerJson",
+      Platform.Function.Stringify(trigObj)
+    );
+  }
 } else {
   Platform.Variable.SetValue("@apiEventTriggerJson", "");
+  Platform.Variable.SetValue("@eventDataExtensionId", "");
 }
 </script>
 <script runat="server">
