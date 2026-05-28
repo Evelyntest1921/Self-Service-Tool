@@ -1,0 +1,1996 @@
+%%[
+SET @HOME_URL = ""
+SET @BUILD_PAGE_SELF = ""
+SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
+IF RowCount(@navRows) > 0 THEN
+ SET @navRow = Row(@navRows,1)
+ SET @HOME_URL = Field(@navRow,"ss_home")
+ SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit")
+ENDIF
+SET @MC_CLOUD = "https://mc.s13.exacttarget.com/cloud/"
+SET @DETAIL_EXTERNAL_KEY_DE = "Bd_journey_analytics"
+SET @STACK_JOURNEY_TYPE = "Journey + Automation"
+
+
+VAR @jid, @detailRows, @detailRow, @detailCount
+VAR @dispName, @dispType, @dispEmailName, @dispEmailId, @dispDeName, @dispDeId, @dispCampaignId
+VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationName, @dispQueryText, @isStackBuild, @showChecklist
+VAR @chkCampaignId, @chkCampaignStatus, @chkCampaignMsg, @chkCampaignIcon
+VAR @chkPublishStatus, @chkPublishMsg, @chkPublishIcon
+VAR @chkEmailIdStatus, @chkEmailIdMsg, @chkJbEmailId, @chkEmailIdIcon
+VAR @chkSubjectStatus, @chkSubjectMsg, @chkSubjectVal, @chkSubjectIcon
+VAR @chkBccStatus, @chkBccMsg, @chkBccVal, @chkBccIcon
+VAR @chkTrackingStatus, @chkTrackingMsg, @chkTrackingIcon
+VAR @chkSfStepsStatus, @chkSfStepsMsg, @chkSfStepsIcon
+VAR @chkAnalyticsStatus, @chkAnalyticsMsg, @chkAnalyticsIcon
+VAR @chkEntryStatus, @chkEntryMsg, @chkJbEntryId, @chkEntryIcon
+VAR @chkSenderStatus, @chkSenderMsg, @chkSenderName, @chkSenderProfileId, @chkSenderIcon
+VAR @chkAutoNameStatus, @chkAutoNameMsg, @chkAutoNameIcon
+VAR @chkQueryStatus, @chkQueryMsg, @chkQueryText, @chkQueryIcon
+VAR @chkAutoStatusStatus, @chkAutoStatusMsg, @chkAutoStatusIcon
+VAR @deleteRequested, @removeLogOnly, @deleteEmailFromPost, @purgeRequested
+VAR @authOk, @accessToken, @subdomain
+VAR @resultText, @pageStatus
+VAR @logDelCount, @analyticsDelCnt
+VAR @attemptPurgeBuild, @purgeBuildLog, @purgeEmailOk
+VAR @attemptDeleteAsset, @step3bResult
+VAR @updRaw
+
+
+SET @purgeRequested = IIF(NOT Empty(RequestParameter("confirmPurgeBuild")),"1","0")
+SET @showChecklist = IIF(NOT Empty(RequestParameter("checklist")),"1","0")
+SET @jid = Trim(RequestParameter("journeyId"))
+SET @deleteRequested = IIF(NOT Empty(RequestParameter("confirmDeleteAsset")),"1","0")
+SET @removeLogOnly = IIF(NOT Empty(RequestParameter("confirmRemoveLog")),"1","0")
+SET @deleteEmailFromPost = Trim(RequestParameter("deleteEmailId"))
+
+
+SET @resultText = ""
+SET @step3bResult = ""
+SET @authOk = "false"
+SET @accessToken = ""
+SET @subdomain = ""
+SET @pageStatus = "view"
+SET @dispName = ""
+SET @dispType = ""
+SET @dispEmailName = ""
+SET @dispEmailId = ""
+SET @dispDeName = ""
+SET @dispDeId = ""
+SET @dispCampaignId = ""
+SET @detailCount = 0
+
+
+SET @dispUpdated = ""
+
+
+SET @attemptPurgeBuild = "false"
+SET @purgeBuildLog = ""
+SET @purgeEmailOk = "false"
+SET @isStackBuild = "false"
+SET @dispQueryKey = ""
+SET @dispQueryText = ""
+SET @dispAutomationGuid = ""
+SET @dispAutomationName = ""
+SET @chkCampaignId = ""
+SET @chkCampaignStatus = "pending"
+SET @chkCampaignMsg = ""
+SET @chkAutoNameStatus = "skip"
+SET @chkAutoNameMsg = ""
+SET @chkQueryStatus = "skip"
+SET @chkQueryMsg = ""
+SET @chkQueryText = ""
+SET @chkAutoStatusStatus = "skip"
+SET @chkAutoStatusMsg = ""
+SET @chkTrackingStatus = "pending"
+SET @chkTrackingMsg = ""
+SET @chkPublishStatus = "pending"
+SET @chkPublishMsg = ""
+SET @chkEmailIdStatus = "pending"
+SET @chkEmailIdMsg = ""
+SET @chkJbEmailId = ""
+SET @chkSubjectStatus = "pending"
+SET @chkSubjectMsg = ""
+SET @chkSubjectVal = ""
+SET @chkBccStatus = "pending"
+SET @chkBccMsg = ""
+SET @chkBccVal = ""
+SET @chkSfStepsStatus = "pending"
+SET @chkSfStepsMsg = ""
+SET @chkAnalyticsStatus = "pending"
+SET @chkAnalyticsMsg = ""
+SET @chkEntryStatus = "pending"
+SET @chkEntryMsg = ""
+SET @chkJbEntryId = ""
+SET @chkSenderStatus = "pending"
+SET @chkSenderMsg = ""
+SET @chkSenderName = ""
+SET @chkSenderProfileId = ""
+IF Empty(@jid) THEN
+SET @pageStatus = "nodata"
+ELSE
+SET @detailRows = LookupRows(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
+SET @detailCount = RowCount(@detailRows)
+IF @detailCount > 0 THEN
+  SET @detailRow = Row(@detailRows,1)
+  SET @dispName = Field(@detailRow,"journeyName")
+  SET @dispType = Field(@detailRow,"journeyType")
+  SET @dispEmailName = Field(@detailRow,"emailName")
+  SET @dispEmailId = Trim(Field(@detailRow,"emailId"))
+  SET @dispDeName = Field(@detailRow,"deName")
+  SET @dispDeId = Field(@detailRow,"deId")
+  IF Trim(@dispType) == @STACK_JOURNEY_TYPE THEN
+    SET @isStackBuild = "true"
+    SET @dispQueryKey = Trim(Field(@detailRow,"queryKey"))
+    SET @dispAutomationGuid = Trim(Field(@detailRow,"automationGuid"))
+    SET @dispAutomationName = Trim(Field(@detailRow,"automationName"))
+  ENDIF
+  SET @updRaw = Field(@detailRow,"updateDate")
+  IF NOT Empty(@updRaw) THEN
+    SET @dispUpdated = Format(@updRaw, "yyyy-MM-dd HH:mm:ss")
+  ELSE
+    SET @dispUpdated = ""
+  ENDIF
+ELSE
+  SET @pageStatus = "notfound"
+ENDIF
+ENDIF
+
+
+IF (@showChecklist == "1") AND (@detailCount > 0) THEN
+SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
+IF RowCount(@authRow) > 0 THEN
+  SET @authR = Row(@authRow,1)
+  SET @clientId = Field(@authR,"clientId")
+  SET @clientSecret = Field(@authR,"clientSecret")
+  SET @subdomain = Field(@authR,"subdomain")
+  IF NOT Empty(@clientId) AND NOT Empty(@clientSecret) AND NOT Empty(@subdomain) THEN
+    SET @authUrl = Concat("https://",@subdomain,".auth.marketingcloudapis.com/v2/token")
+    SET @accountId = Trim(Field(@authR,"accountId"))
+    SET @authPayload = Concat('{"grant_type":"client_credentials","client_id":"',@clientId,'","client_secret":"',@clientSecret,'"')
+    IF NOT Empty(@accountId) THEN
+      SET @authPayload = Concat(@authPayload,',"account_id":"',@accountId,'"')
+    ENDIF
+    SET @authPayload = Concat(@authPayload,'}')
+    SET @authStatus = HTTPPost2(@authUrl,"application/json",@authPayload,false,@authResponse,@authResponseHeader)
+    IF @authStatus == 200 THEN
+      SET @tokenPattern = '"access_token":"([^"]+)"'
+      SET @accessToken = RegExMatch(@authResponse,@tokenPattern,1)
+      IF NOT Empty(@accessToken) THEN
+        SET @authOk = "true"
+      ELSE
+        SET @chkCampaignMsg = "Auth response missing access token."
+      ENDIF
+    ELSE
+      SET @chkCampaignMsg = Concat("Auth HTTP ",@authStatus)
+    ENDIF
+  ELSE
+    SET @chkCampaignMsg = "SFMC_AUTH incomplete for subdomain or credentials."
+  ENDIF
+ELSE
+  SET @chkCampaignMsg = "SFMC_AUTH has no Admin row."
+ENDIF
+ENDIF
+
+
+IF (@removeLogOnly == "1") AND (@detailCount > 0) THEN
+SET @postedJid = Trim(RequestParameter("postedJourneyId"))
+IF Empty(@postedJid) THEN
+  SET @postedJid = @jid
+ENDIF
+IF @postedJid != @jid THEN
+  SET @pageStatus = "tamper"
+  SET @resultText = "Journey identifier did not match."
+ELSE
+  SET @logDelCount = DeleteData(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
+  IF @logDelCount > 0 THEN
+    SET @pageStatus = "removed_log"
+    Redirect(Concat(@HOME_URL,"?logRemoved=1"))
+  ELSE
+    SET @pageStatus = "drop_log_failed"
+    SET @resultText = Concat("DeleteData returned zero rows deleted. Typical causes: Cloud Page lacks delete rights on ",@DETAIL_EXTERNAL_KEY_DE,", the External Key or journeyId column differs from LookupRows expectations, or the row was removed already.")
+  ENDIF
+ENDIF
+ENDIF
+
+
+SET @attemptDeleteAsset = "false"
+SET @attemptPurgeBuild = "false"
+
+
+IF ((@deleteRequested == "1") OR (@purgeRequested == "1")) AND (@detailCount > 0) THEN
+SET @postedJidDel = Trim(RequestParameter("postedJourneyId"))
+IF Empty(@postedJidDel) THEN
+  SET @postedJidDel = @jid
+ENDIF
+IF (@postedJidDel != @jid) OR Empty(@deleteEmailFromPost) OR (@deleteEmailFromPost != @dispEmailId) THEN
+  SET @pageStatus = "tamper"
+  SET @resultText = "Deletion request did not match this build row."
+ELSE
+  IF (@purgeRequested == "1") THEN
+    SET @attemptPurgeBuild = "true"
+  ELSEIF (@deleteRequested == "1") THEN
+    SET @attemptDeleteAsset = "true"
+  ENDIF
+  SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
+  IF RowCount(@authRow) > 0 THEN
+    SET @authR = Row(@authRow,1)
+    SET @clientId = Field(@authR,"clientId")
+    SET @clientSecret = Field(@authR,"clientSecret")
+    SET @subdomain = Field(@authR,"subdomain")
+    IF NOT Empty(@clientId) AND NOT Empty(@clientSecret) AND NOT Empty(@subdomain) THEN
+      SET @authUrl = Concat("https://",@subdomain,".auth.marketingcloudapis.com/v2/token")
+      SET @accountId = Trim(Field(@authR,"accountId"))
+      SET @authPayload = Concat('{"grant_type":"client_credentials","client_id":"',@clientId,'","client_secret":"',@clientSecret,'"')
+      IF NOT Empty(@accountId) THEN
+        SET @authPayload = Concat(@authPayload,',"account_id":"',@accountId,'"')
+      ENDIF
+      SET @authPayload = Concat(@authPayload,'}')
+      SET @authStatus = HTTPPost2(@authUrl,"application/json",@authPayload,false,@authResponse,@authResponseHeader)
+      IF @authStatus == 200 THEN
+        SET @tokenPattern = '"access_token":"([^"]+)"'
+        SET @accessToken = RegExMatch(@authResponse,@tokenPattern,1)
+        IF NOT Empty(@accessToken) THEN
+          SET @resultText = "Auth succeeded."
+          SET @authOk = "true"
+        ELSE
+          SET @resultText = "Auth response missing access token."
+          SET @authOk = "false"
+        ENDIF
+      ELSE
+        SET @resultText = Concat("Auth HTTP ",@authStatus," — ",Substring(IIF(NOT Empty(@authResponse),@authResponse,"(empty)"),1,200))
+        SET @authOk = "false"
+      ENDIF
+    ELSE
+      SET @resultText = "SFMC_AUTH incomplete for subdomain or credentials."
+    ENDIF
+  ELSE
+    SET @resultText = "SFMC_AUTH has no Admin row."
+  ENDIF
+ENDIF
+ENDIF
+]%%
+<script runat="server" language="javascript">
+Platform.Load("core", "1");
+
+
+function strTrim(s) {
+ if (s == null || s === undefined) {
+   return "";
+ }
+ return String(s).replace(/^\s+|\s+$/g, "");
+}
+
+
+function lookupSenderProfile(profileId) {
+ if (!profileId) {
+   return null;
+ }
+ try {
+   var prox = new Script.Util.WSProxy();
+   var props = ["Name", "FromName", "FromAddress", "CustomerKey", "ObjectID"];
+   var byKey = prox.retrieve("SenderProfile", props, {
+     Property: "CustomerKey",
+     SimpleOperator: "equals",
+     Value: String(profileId)
+   });
+   if (byKey && byKey.Results && byKey.Results.length > 0) {
+     return byKey.Results[0];
+   }
+   var byObj = prox.retrieve("SenderProfile", props, {
+     Property: "ObjectID",
+     SimpleOperator: "equals",
+     Value: String(profileId)
+   });
+   if (byObj && byObj.Results && byObj.Results.length > 0) {
+     return byObj.Results[0];
+   }
+ } catch (spErr) {}
+ return null;
+}
+
+
+function lookupQueryText(queryKey) {
+ if (!queryKey) {
+   return "";
+ }
+ try {
+   var proxQ = new Script.Util.WSProxy();
+   var qdRes = proxQ.retrieve(
+     "QueryDefinition",
+     ["CustomerKey", "QueryText", "Name"],
+     {
+       Property: "CustomerKey",
+       SimpleOperator: "equals",
+       Value: String(queryKey)
+     }
+   );
+   if (qdRes && qdRes.Results && qdRes.Results.length > 0) {
+     return String(qdRes.Results[0].QueryText || "");
+   }
+ } catch (qLookupErr) {}
+ return "";
+}
+
+
+function truncQueryDisplay(text) {
+ var s = String(text || "");
+ if (s.length > 4000) {
+   return s.substring(0, 4000) + "...";
+ }
+ return s;
+}
+
+
+function automationStatusLabel(statusId, statusText) {
+ if (statusText) {
+   return String(statusText);
+ }
+ var map = {
+   0: "Unknown",
+   1: "Building",
+   2: "Ready",
+   3: "Running",
+   4: "Paused",
+   5: "Stopped",
+   6: "Scheduled",
+   7: "Waiting",
+   8: "Inactive"
+ };
+ if (statusId !== undefined && statusId !== null && map[statusId]) {
+   return map[statusId];
+ }
+ if (statusId !== undefined && statusId !== null) {
+   return "Status " + statusId;
+ }
+ return "Unknown";
+}
+
+
+function automationStatusIsOk(label) {
+ var u = String(label || "").toLowerCase();
+ return (
+   u === "ready" ||
+   u === "scheduled" ||
+   u === "running" ||
+   u === "waiting"
+ );
+}
+
+
+function automationStatusLevel(label) {
+ if (automationStatusIsOk(label)) {
+   return "pass";
+ }
+ if (String(label || "").toLowerCase() === "paused") {
+   return "warn";
+ }
+ return "fail";
+}
+
+
+function logDeField(jid, colName) {
+ if (!jid || !colName) {
+   return "";
+ }
+ try {
+   var rows = Platform.Function.LookupRows(
+     "Bd_journey_analytics",
+     "journeyId",
+     String(jid)
+   );
+   if (!rows || rows.length === 0) {
+     return "";
+   }
+   var val = rows[0][colName];
+   if (val === undefined || val === null) {
+     return "";
+   }
+   return strTrim(String(val));
+ } catch (logDeEx) {
+   return "";
+ }
+}
+
+
+var authOk = Platform.Variable.GetValue("@authOk") || "";
+var accessToken = Platform.Variable.GetValue("@accessToken") || "";
+var subdomain = Platform.Variable.GetValue("@subdomain") || "";
+var attemptDeleteAsset =
+ Platform.Variable.GetValue("@attemptDeleteAsset") || "";
+var attemptPurgeBuild =
+ Platform.Variable.GetValue("@attemptPurgeBuild") || "";
+var deleteEmailFromPost =
+ Platform.Variable.GetValue("@deleteEmailFromPost") || "";
+var jidClean = Platform.Variable.GetValue("@jid") || "";
+var dispDeIdVal = Platform.Variable.GetValue("@dispDeId") || "";
+var dispDeNameVal = Platform.Variable.GetValue("@dispDeName") || "";
+var step3bResult = " Step 3b SKIP — Nothing to delete.";
+var purgeParts = [];
+
+
+function truncLog(part) {
+ if (purgeParts.join(" ").length > 8200 && part.length > 200) {
+   part = String(part).substring(0, 200) + "...";
+ }
+ purgeParts.push(String(part || ""));
+}
+
+
+function deleteEmailAsset(sdom, tok, aid) {
+ if (!aid) {
+   truncLog("[Email asset] SKIP - no asset id.");
+   return false;
+ }
+ try {
+   var deleteUrl =
+     "https://" +
+     sdom +
+     ".rest.marketingcloudapis.com/asset/v1/content/assets/" +
+     aid;
+   var deleteReq = new Script.Util.HttpRequest(deleteUrl);
+   deleteReq.emptyContentHandling = 0;
+   deleteReq.retries = 2;
+   deleteReq.continueOnError = true;
+   deleteReq.setHeader("Authorization", "Bearer " + tok);
+   deleteReq.method = "DELETE";
+   var deleteResp = deleteReq.send();
+   if (deleteResp.statusCode == 200 || deleteResp.statusCode == 204) {
+     truncLog("[Email asset] DELETE OK.");
+     return true;
+   }
+   truncLog("[Email asset] DELETE HTTP " + deleteResp.statusCode + ".");
+ } catch (e0) {
+   truncLog("[Email asset] FAILED: " + (e0.message || String(e0)));
+ }
+ return false;
+}
+
+
+function purgeHttpDel(sdom, tok, url) {
+ try {
+   var req = new Script.Util.HttpRequest(url);
+   req.emptyContentHandling = 0;
+   req.continueOnError = true;
+   req.setHeader("Authorization", "Bearer " + tok);
+   req.method = "DELETE";
+   var resp = req.send();
+   return resp.statusCode;
+ } catch (purgeDelEx) {
+   return 0;
+ }
+}
+
+
+try {
+ if (attemptPurgeBuild == "true" && authOk == "true" && accessToken && subdomain) {
+   var isStackPurge = Platform.Variable.GetValue("@isStackBuild") || "";
+   if (isStackPurge == "true") {
+     var autoDelId = strTrim(Platform.Variable.GetValue("@dispAutomationGuid") || "");
+     var queryDelKey = strTrim(Platform.Variable.GetValue("@dispQueryKey") || "");
+     if (!autoDelId && jidClean) {
+       autoDelId = logDeField(jidClean, "automationGuid");
+     }
+     if (!queryDelKey && jidClean) {
+       queryDelKey = logDeField(jidClean, "queryKey");
+     }
+     if (autoDelId) {
+       var autoDelUrl =
+         "https://" +
+         subdomain +
+         ".rest.marketingcloudapis.com/automation/v1/automations/" +
+         encodeURIComponent(String(autoDelId));
+       var autoSt = purgeHttpDel(subdomain, accessToken, autoDelUrl);
+       if (autoSt == 200 || autoSt == 204) {
+         truncLog("[Automation] DELETE OK.");
+       } else {
+         truncLog("[Automation] DELETE HTTP " + autoSt + ".");
+       }
+     } else {
+       truncLog("[Automation] SKIP - no id on build log.");
+     }
+     if (queryDelKey) {
+       try {
+         var proxQDel = new Script.Util.WSProxy();
+         var qdDelRes = proxQDel.retrieve(
+           "QueryDefinition",
+           ["ObjectID"],
+           {
+             Property: "CustomerKey",
+             SimpleOperator: "equals",
+             Value: String(queryDelKey)
+           }
+         );
+         if (
+           qdDelRes &&
+           qdDelRes.Results &&
+           qdDelRes.Results.length > 0 &&
+           qdDelRes.Results[0].ObjectID
+         ) {
+           var qDelResult = proxQDel.deleteItem("QueryDefinition", {
+             ObjectID: String(qdDelRes.Results[0].ObjectID)
+           });
+           if (
+             qDelResult &&
+             qDelResult.Results &&
+             qDelResult.Results.length > 0 &&
+             qDelResult.Results[0].Status == "OK"
+           ) {
+             truncLog("[Query] DELETE OK.");
+           } else {
+             truncLog("[Query] deleteItem did not report OK.");
+           }
+         } else {
+           truncLog("[Query] SKIP - not found for key " + queryDelKey + ".");
+         }
+       } catch (qDelEx) {
+         truncLog("[Query] FAILED: " + (qDelEx.message || String(qDelEx)));
+       }
+     } else {
+       truncLog("[Query] SKIP - no key on build log.");
+     }
+   }
+   var jStr = jidClean ? String(jidClean) : "";
+   var pref = jStr.length >= 7 ? jStr.substring(0, 7).toLowerCase() : "";
+   if (jStr && pref != "email:") {
+     try {
+       var jUrl =
+         "https://" +
+         subdomain +
+         ".rest.marketingcloudapis.com/interaction/v1/interactions/" +
+         strTrim(jStr);
+       var jr = new Script.Util.HttpRequest(jUrl);
+       jr.emptyContentHandling = 0;
+       jr.continueOnError = true;
+       jr.setHeader("Authorization", "Bearer " + accessToken);
+       jr.method = "DELETE";
+       var jrsp = jr.send();
+       truncLog("[Journey] DELETE HTTP " + jrsp.statusCode + ".");
+     } catch (jex) {
+       truncLog("[Journey] DELETE fault: " + (jex.message || String(jex)));
+     }
+   } else {
+     truncLog("[Journey] SKIP - email-only build (no journey GUID in log key).");
+   }
+
+
+   var evRaw = dispDeIdVal ? strTrim(dispDeIdVal) : "";
+   var evU = evRaw.toUpperCase();
+   if (evRaw && evU != "N/A") {
+     var dataExtensionId = null;
+     try {
+       var getEventUrl =
+         "https://" +
+         subdomain +
+         ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
+         evRaw;
+       var getReq = new Script.Util.HttpRequest(getEventUrl);
+       getReq.emptyContentHandling = 0;
+       getReq.continueOnError = true;
+       getReq.setHeader("Authorization", "Bearer " + accessToken);
+       getReq.method = "GET";
+       var getResp = getReq.send();
+       if ((getResp.statusCode == 200 || getResp.statusCode == 201) && getResp.content) {
+         var evtObj = Platform.Function.ParseJSON(String(getResp.content));
+         dataExtensionId =
+           evtObj.dataExtensionId || evtObj.dataExtensionID || null;
+       }
+       var eventDeleteUrl =
+         "https://" +
+         subdomain +
+         ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
+         evRaw;
+       var evDel = new Script.Util.HttpRequest(eventDeleteUrl);
+       evDel.emptyContentHandling = 0;
+       evDel.continueOnError = true;
+       evDel.setHeader("Authorization", "Bearer " + accessToken);
+       evDel.method = "DELETE";
+       var evRsp = evDel.send();
+       if (evRsp.statusCode == 200 || evRsp.statusCode == 204) {
+         truncLog("[Entry event definition] DELETE OK.");
+       } else {
+         truncLog("[Entry event definition] DELETE HTTP " + evRsp.statusCode + ".");
+       }
+     } catch (evEx) {
+       truncLog("[Entry event definition] FAILED: " + (evEx.message || String(evEx)));
+     }
+     try {
+       var deObjId = dataExtensionId;
+       if (!deObjId && dispDeNameVal) {
+         var proxLook = new Script.Util.WSProxy();
+         var deFilter = {
+           Property: "Name",
+           SimpleOperator: "equals",
+           Value: String(dispDeNameVal)
+         };
+         var rde = proxLook.retrieve("DataExtension", ["ObjectID"], deFilter);
+         if (
+           rde &&
+           rde.Results &&
+           rde.Results.length > 0 &&
+           rde.Results[0].ObjectID
+         ) {
+           deObjId = rde.Results[0].ObjectID;
+         }
+       }
+       if (deObjId) {
+         var proxDel = new Script.Util.WSProxy();
+         var deResult = proxDel.deleteItem(
+           "DataExtension",
+           { ObjectID: deObjId }
+         );
+         if (
+           deResult &&
+           deResult.Results &&
+           deResult.Results.length > 0 &&
+           deResult.Results[0].Status == "OK"
+         ) {
+           truncLog("[Entry data extension] DELETED.");
+         } else {
+           truncLog("[Entry data extension] deleteItem did not report OK.");
+         }
+       } else {
+         truncLog("[Entry data extension] SKIP - no ObjectID resolved.");
+       }
+     } catch (deEx) {
+       truncLog("[Entry data extension] FAILED: " + (deEx.message || String(deEx)));
+     }
+   } else {
+     truncLog("[Entry event] SKIP - none stored or N/A.");
+   }
+
+
+   var emailOk = deleteEmailAsset(subdomain, accessToken, deleteEmailFromPost);
+   Platform.Variable.SetValue("@purgeEmailOk", emailOk ? "true" : "false");
+
+
+   var pl = purgeParts.join(" ");
+   if (String(pl).length > 12000) {
+     pl = String(pl).substring(0, 12000);
+   }
+   Platform.Variable.SetValue("@purgeBuildLog", pl);
+
+
+   step3bResult = " FULL PURGE run - see purge log.";
+ } else if (
+   attemptDeleteAsset == "true" &&
+   authOk == "true" &&
+   accessToken &&
+   subdomain &&
+   deleteEmailFromPost
+ ) {
+   try {
+     var assetId = String(deleteEmailFromPost);
+     var deleteUrl2 =
+       "https://" +
+       subdomain +
+       ".rest.marketingcloudapis.com/asset/v1/content/assets/" +
+       assetId;
+     var deleteReq2 = new Script.Util.HttpRequest(deleteUrl2);
+     deleteReq2.emptyContentHandling = 0;
+     deleteReq2.retries = 2;
+     deleteReq2.continueOnError = true;
+     deleteReq2.setHeader("Authorization", "Bearer " + accessToken);
+     deleteReq2.method = "DELETE";
+     var deleteResp2 = deleteReq2.send();
+     if (deleteResp2.statusCode == 200 || deleteResp2.statusCode == 204) {
+       step3bResult = " Step 3b OK - Email deleted.";
+     } else {
+       step3bResult =
+         " Step 3b FAILED - Email delete HTTP " +
+         deleteResp2.statusCode +
+         ".";
+     }
+   } catch (deleteEx) {
+     step3bResult =
+       " Step 3b FAILED - Email delete failed: " +
+       (deleteEx.message || String(deleteEx));
+   }
+ }
+} catch (purgeTopEx) {
+ step3bResult =
+   " SERVER SCRIPT ERROR - " +
+   (purgeTopEx.message || String(purgeTopEx)) +
+   " ";
+ Platform.Variable.SetValue("@purgeEmailOk", "false");
+}
+
+
+var stackBuildPage = Platform.Variable.GetValue("@isStackBuild") || "";
+var queryKeyPage = strTrim(Platform.Variable.GetValue("@dispQueryKey") || "");
+var dispQueryTextVal = "";
+if (stackBuildPage == "true" && queryKeyPage) {
+ dispQueryTextVal = truncQueryDisplay(lookupQueryText(queryKeyPage));
+}
+Platform.Variable.SetValue("@dispQueryText", dispQueryTextVal);
+
+
+var stackAutoGuid = strTrim(Platform.Variable.GetValue("@dispAutomationGuid") || "");
+var stackAutoName = strTrim(Platform.Variable.GetValue("@dispAutomationName") || "");
+if (stackBuildPage == "true") {
+ var jidForAutoGuid = Platform.Variable.GetValue("@jid") || "";
+ if (!stackAutoGuid && jidForAutoGuid) {
+   stackAutoGuid = logDeField(jidForAutoGuid, "automationGuid");
+ }
+ if (!stackAutoName && jidForAutoGuid) {
+   stackAutoName = logDeField(jidForAutoGuid, "automationName");
+ }
+ Platform.Variable.SetValue("@dispAutomationGuid", stackAutoGuid);
+ Platform.Variable.SetValue("@dispAutomationName", stackAutoName);
+}
+
+
+var showChecklist = Platform.Variable.GetValue("@showChecklist") || "";
+if (showChecklist == "1") {
+ var chkAuthOk = Platform.Variable.GetValue("@authOk") || "";
+ var chkToken = Platform.Variable.GetValue("@accessToken") || "";
+ var chkSubdomain = Platform.Variable.GetValue("@subdomain") || "";
+ var chkJid = Platform.Variable.GetValue("@jid") || "";
+ var chkIsStack = Platform.Variable.GetValue("@isStackBuild") || "";
+ var chkLogEmailId = strTrim(Platform.Variable.GetValue("@dispEmailId") || "");
+ var chkLogDeId = strTrim(Platform.Variable.GetValue("@dispDeId") || "");
+ var chkLogCampaignId = logDeField(chkJid, "campaignId");
+ var campStatus = "fail";
+ var campMsg = "No campaign id on build log.";
+ var campId = chkLogCampaignId;
+ var pubStatus = "skip";
+ var pubMsg = "No journey to inspect.";
+ var emailIdStatus = "skip";
+ var emailIdMsg = "No journey email step.";
+ var jbEmailId = "";
+ var subjectStatus = "skip";
+ var subjectMsg = "No subject on journey email step.";
+ var subjectVal = "";
+ var bccStatus = "skip";
+ var bccMsg = "No journey email step.";
+ var bccVal = "";
+ var trackStatus = "skip";
+ var trackMsg = "No journey guid on this build.";
+ var sfStepsStatus = "skip";
+ var sfStepsMsg = "No journey to inspect.";
+ var analyticsStatus = "skip";
+ var analyticsMsg = "No journey to inspect.";
+ var entryStatus = "skip";
+ var entryMsg = "No journey entry trigger.";
+ var jbEntryId = "";
+ var senderStatus = "skip";
+ var senderMsg = "No sender profile on journey email step.";
+ var senderProfileName = "";
+ var senderProfileId = "";
+ var autoNameStatus = "skip";
+ var autoNameMsg = "";
+ var queryStatus = "skip";
+ var queryMsg = "";
+ var autoStatusStatus = "skip";
+ var autoStatusMsg = "";
+ if (chkLogCampaignId && chkLogCampaignId.substring(0, 3) === "701") {
+   campStatus = "pass";
+   campMsg = "Campaign id recorded at build time.";
+ } else if (chkLogCampaignId) {
+   campStatus = "fail";
+   campMsg = "Build log campaign id is not a valid Salesforce campaign (701...).";
+ }
+ if (chkIsStack == "true") {
+   var autoName = logDeField(chkJid, "automationName");
+   var queryKey = strTrim(Platform.Variable.GetValue("@dispQueryKey") || "");
+   if (autoName) {
+     autoNameStatus = "pass";
+     autoNameMsg = autoName;
+   } else {
+     autoNameStatus = "fail";
+     autoNameMsg = "No automation name on build log.";
+   }
+   if (queryKey) {
+     var queryText = dispQueryTextVal || lookupQueryText(queryKey);
+     queryText = truncQueryDisplay(queryText);
+     if (queryText) {
+       queryStatus = "pass";
+       queryMsg = queryKey;
+     } else {
+       queryStatus = "fail";
+       queryMsg = "Query not found for key " + queryKey + ".";
+     }
+     Platform.Variable.SetValue("@chkQueryText", queryText);
+   } else {
+     Platform.Variable.SetValue("@chkQueryText", "");
+   }
+   autoStatusStatus = "fail";
+   autoStatusMsg = "No automation id on build log.";
+   if (chkAuthOk == "true" && chkToken && chkSubdomain) {
+     var autoId = logDeField(chkJid, "automationGuid");
+     if (autoId) {
+       try {
+         var autoGetUrl =
+           "https://" +
+           chkSubdomain +
+           ".rest.marketingcloudapis.com/automation/v1/automations/" +
+           encodeURIComponent(autoId);
+         var autoGetReq = new Script.Util.HttpRequest(autoGetUrl);
+         autoGetReq.emptyContentHandling = 0;
+         autoGetReq.retries = 1;
+         autoGetReq.continueOnError = true;
+         autoGetReq.setHeader("Authorization", "Bearer " + chkToken);
+         autoGetReq.method = "GET";
+         var autoGetResp = autoGetReq.send();
+         if (autoGetResp.statusCode == 200 || autoGetResp.statusCode == 201) {
+           var autoObj = null;
+           try {
+             autoObj = Platform.Function.ParseJSON(String(autoGetResp.content));
+           } catch (autoPe) {
+             autoObj = null;
+           }
+           if (autoObj) {
+             var autoLabel = automationStatusLabel(autoObj.statusId, autoObj.status);
+             autoStatusMsg = autoLabel;
+             autoStatusStatus = automationStatusLevel(autoLabel);
+           } else {
+             autoStatusStatus = "fail";
+             autoStatusMsg = "Could not parse automation response.";
+           }
+         } else {
+           autoStatusStatus = "fail";
+           autoStatusMsg = "Automation GET HTTP " + autoGetResp.statusCode + ".";
+         }
+       } catch (autoErr) {
+         autoStatusStatus = "fail";
+         autoStatusMsg =
+           "Automation lookup failed: " + (autoErr.message || String(autoErr));
+       }
+     }
+   }
+ }
+ if (chkAuthOk == "true" && chkToken && chkSubdomain) {
+   var jidStr = chkJid ? String(chkJid) : "";
+   var jidPref = jidStr.length >= 7 ? jidStr.substring(0, 7).toLowerCase() : "";
+   if (jidStr && jidPref !== "email:") {
+     try {
+       var jGetUrl =
+         "https://" +
+         chkSubdomain +
+         ".rest.marketingcloudapis.com/interaction/v1/interactions/" +
+         encodeURIComponent(strTrim(jidStr)) +
+         "?extras=all";
+       var jGetReq = new Script.Util.HttpRequest(jGetUrl);
+       jGetReq.emptyContentHandling = 0;
+       jGetReq.retries = 1;
+       jGetReq.continueOnError = true;
+       jGetReq.setHeader("Authorization", "Bearer " + chkToken);
+       jGetReq.method = "GET";
+       var jGetResp = jGetReq.send();
+       if (jGetResp.statusCode == 200 || jGetResp.statusCode == 201) {
+         var jObj = null;
+         try {
+           jObj = Platform.Function.ParseJSON(String(jGetResp.content));
+         } catch (pe) {
+           jObj = null;
+         }
+         if (jObj) {
+           var jStatus = jObj.status ? String(jObj.status) : "";
+           var lastPub = jObj.lastPublishedDate ? String(jObj.lastPublishedDate) : "";
+           var neverPublished = !lastPub || lastPub.indexOf("0001-01-01") >= 0;
+           if (jStatus === "Published" && !neverPublished) {
+             pubStatus = "pass";
+             pubMsg = "Published (last " + lastPub.substring(0, 10) + ").";
+           } else if (jStatus === "Draft" || neverPublished) {
+             pubStatus = "fail";
+             pubMsg = "Journey is " + (jStatus || "Draft") + " - publish before send.";
+           } else {
+             pubStatus = "fail";
+             pubMsg = "Journey status: " + (jStatus || "unknown") + ".";
+           }
+           var triggers = jObj.triggers || [];
+           if (triggers.length > 0 && triggers[0]) {
+             var trigMeta = triggers[0].metaData || {};
+             jbEntryId = strTrim(trigMeta.eventDefinitionId || "");
+             if (!jbEntryId && triggers[0].arguments) {
+               jbEntryId = strTrim(triggers[0].arguments.eventDefinitionId || "");
+             }
+           }
+           if (jbEntryId) {
+             if (chkLogDeId && chkLogDeId.toUpperCase() !== "N/A") {
+               if (jbEntryId === chkLogDeId) {
+                 entryStatus = "pass";
+                 entryMsg = "Entry event matches build log (" + jbEntryId + ").";
+               } else {
+                 entryStatus = "fail";
+                 entryMsg = "Journey entry " + jbEntryId + " does not match log " + chkLogDeId + ".";
+               }
+             } else {
+               entryStatus = "pass";
+               entryMsg = "Entry event id: " + jbEntryId + ".";
+             }
+           } else {
+             entryStatus = "fail";
+             entryMsg = "No eventDefinitionId on journey trigger.";
+           }
+           var analytics = null;
+           if (jObj.defaults && jObj.defaults.properties) {
+             analytics = jObj.defaults.properties.analyticsTracking || null;
+           }
+           if (analytics && analytics.enabled === true) {
+             var domains = analytics.urlDomainsToTrack || [];
+             var domainList = [];
+             var di;
+             for (di = 0; di < domains.length; di++) {
+               if (domains[di]) {
+                 domainList.push(String(domains[di]));
+               }
+             }
+             if (domainList.length > 0) {
+               analyticsStatus = "pass";
+               analyticsMsg =
+                 String(analytics.analyticsType || "analytics") +
+                 " enabled, domains: " +
+                 domainList.join(", ");
+             } else {
+               analyticsStatus = "fail";
+               analyticsMsg = "Analytics enabled but urlDomainsToTrack is empty.";
+             }
+           } else {
+             analyticsStatus = "skip";
+             analyticsMsg = "Analytics tracking not enabled on journey.";
+           }
+           var emailFound = false;
+           var trackingOn = false;
+           var sfTypes = [];
+           var sfSeen = {};
+           if (jObj.activities && jObj.activities.length) {
+             var ai;
+             for (ai = 0; ai < jObj.activities.length; ai++) {
+               var act = jObj.activities[ai];
+               if (!act) {
+                 continue;
+               }
+               if (act.type === "EMAILV2" || act.type === "EMAIL") {
+                 emailFound = true;
+                 var ts =
+                   (act.configurationArguments &&
+                     act.configurationArguments.triggeredSend) ||
+                   {};
+                 if (ts.isSalesforceTracking === true) {
+                   trackingOn = true;
+                 }
+                 if (!jbEmailId && ts.emailId) {
+                   jbEmailId = String(ts.emailId);
+                 }
+                 if (!subjectVal) {
+                   subjectVal = strTrim(
+                     ts.emailSubject || ts.dynamicEmailSubject || ""
+                   );
+                 }
+                 if (!bccVal && ts.bccEmail) {
+                   bccVal = strTrim(String(ts.bccEmail));
+                 }
+                 if (!senderProfileId && ts.senderProfileId) {
+                   senderProfileId = strTrim(String(ts.senderProfileId));
+                 }
+               }
+               if (act.type === "SALESCLOUDACTIVITY") {
+                 var objMap =
+                   act.arguments && act.arguments.objectMap
+                     ? act.arguments.objectMap.objects
+                     : null;
+                 if (objMap && objMap.length) {
+                   var oi;
+                   for (oi = 0; oi < objMap.length; oi++) {
+                     var sfType = objMap[oi] && objMap[oi].type ? String(objMap[oi].type) : "";
+                     if (sfType && !sfSeen[sfType]) {
+                       sfSeen[sfType] = true;
+                       sfTypes.push(sfType);
+                     }
+                   }
+                 } else {
+                   if (!sfSeen.SALESCLOUDACTIVITY) {
+                     sfSeen.SALESCLOUDACTIVITY = true;
+                     sfTypes.push("SALESCLOUDACTIVITY");
+                   }
+                 }
+               }
+             }
+           }
+           if (jbEmailId) {
+             emailIdMsg = jbEmailId;
+             if (chkLogEmailId) {
+               emailIdStatus = jbEmailId === chkLogEmailId ? "pass" : "fail";
+             } else {
+               emailIdStatus = "pass";
+             }
+           } else if (emailFound) {
+             emailIdStatus = "fail";
+             emailIdMsg = "Email activity found but emailId is missing.";
+           } else {
+             emailIdStatus = "fail";
+             emailIdMsg = "No EMAILV2 activity in journey.";
+           }
+           if (subjectVal) {
+             var subjU = subjectVal.toUpperCase();
+             if (
+               subjU.indexOf("UAT") === 0 ||
+               subjU.indexOf("UAT ") === 0 ||
+               subjU.indexOf("UAT-") === 0 ||
+               subjU.indexOf("UAT:") === 0
+             ) {
+               subjectStatus = "fail";
+               subjectMsg = "Subject looks like UAT: " + subjectVal;
+             } else {
+               subjectStatus = "pass";
+               subjectMsg = subjectVal;
+             }
+           } else if (emailFound) {
+             subjectStatus = "fail";
+             subjectMsg = "Email step has no subject configured.";
+           }
+           if (emailFound) {
+             if (bccVal) {
+               bccStatus = "pass";
+               bccMsg = bccVal;
+             } else {
+               bccStatus = "skip";
+               bccMsg = "No BCC configured.";
+             }
+           }
+           if (senderProfileId) {
+             var spRow = lookupSenderProfile(senderProfileId);
+             var spName = "";
+             var spFrom = "";
+             var spAddr = "";
+             if (spRow) {
+               spName = strTrim(spRow.Name || "");
+               spFrom = strTrim(spRow.FromName || "");
+               spAddr = strTrim(spRow.FromAddress || "");
+             }
+             senderProfileName = spName || spFrom || "";
+             if (spFrom && spAddr) {
+               senderMsg = spFrom + " <" + spAddr + ">";
+             } else if (spAddr) {
+               senderMsg = spAddr;
+             } else if (spFrom) {
+               senderMsg = spFrom;
+             } else if (spName) {
+               senderMsg = spName;
+             }
+             if (senderProfileName || senderMsg) {
+               senderStatus = "pass";
+             } else {
+               senderStatus = "fail";
+               senderMsg =
+                 "Could not resolve sender profile for id " +
+                 senderProfileId +
+                 ".";
+             }
+           } else if (emailFound) {
+             senderStatus = "fail";
+             senderMsg = "Sender profile id missing on email step.";
+           }
+           if (sfTypes.length > 0) {
+             sfStepsStatus = "pass";
+             sfStepsMsg = sfTypes.join(", ");
+           } else {
+             sfStepsStatus = "fail";
+             sfStepsMsg = "No SALESCLOUDACTIVITY steps found.";
+           }
+           if (!emailFound) {
+             trackStatus = "fail";
+             trackMsg = "No email activity found in journey.";
+           } else if (trackingOn && sfTypes.length > 0) {
+             trackStatus = "pass";
+             trackMsg = "Send to Salesforce tracking is enabled.";
+           } else if (trackingOn) {
+             trackStatus = "fail";
+             trackMsg = "Email tracking is on but no Salesforce activity step was found.";
+           } else {
+             trackStatus = "fail";
+             trackMsg = "Send to Salesforce tracking is off on the email step.";
+           }
+         } else {
+           pubStatus = "fail";
+           pubMsg = "Could not parse journey response.";
+           trackStatus = "fail";
+           trackMsg = "Could not parse journey response.";
+         }
+       } else {
+         pubStatus = "fail";
+         pubMsg = "Journey GET HTTP " + jGetResp.statusCode + ".";
+         trackStatus = "fail";
+         trackMsg = "Journey GET HTTP " + jGetResp.statusCode + ".";
+         emailIdStatus = "fail";
+         emailIdMsg = "Journey GET failed.";
+         entryStatus = "fail";
+         entryMsg = "Journey GET failed.";
+       }
+     } catch (jErr) {
+       pubStatus = "fail";
+       pubMsg = "Journey lookup failed: " + (jErr.message || String(jErr));
+       trackStatus = "fail";
+       trackMsg = "Journey lookup failed.";
+     }
+   } else if (jidPref === "email:") {
+     pubStatus = "skip";
+     pubMsg = "Email-only build (no Journey Builder canvas).";
+     trackStatus = "skip";
+     trackMsg = "Not applicable for email-only builds.";
+   }
+ } else {
+   var authFailMsg =
+     Platform.Variable.GetValue("@chkCampaignMsg") ||
+     "Auth failed - checklist could not run.";
+   pubStatus = "fail";
+   pubMsg = authFailMsg;
+   emailIdStatus = "fail";
+   emailIdMsg = authFailMsg;
+   subjectStatus = "fail";
+   subjectMsg = authFailMsg;
+   bccStatus = "fail";
+   bccMsg = authFailMsg;
+   trackStatus = "fail";
+   trackMsg = authFailMsg;
+   sfStepsStatus = "fail";
+   sfStepsMsg = authFailMsg;
+   analyticsStatus = "fail";
+   analyticsMsg = authFailMsg;
+   entryStatus = "fail";
+   entryMsg = authFailMsg;
+   senderStatus = "fail";
+   senderMsg = authFailMsg;
+   if (!chkLogCampaignId) {
+     campMsg = authFailMsg;
+   }
+   if (chkIsStack == "true") {
+     autoNameStatus = "fail";
+     autoNameMsg = authFailMsg;
+     queryStatus = "fail";
+     queryMsg = authFailMsg;
+     autoStatusStatus = "fail";
+     autoStatusMsg = authFailMsg;
+   }
+ }
+ if (chkLogEmailId) {
+  emailIdMsg = chkLogEmailId;
+ } else if (jbEmailId) {
+  emailIdMsg = jbEmailId;
+ } else if (!emailIdMsg || emailIdMsg === "No journey email step.") {
+  emailIdMsg = "—";
+ }
+ emailIdStatus = "pass";
+ Platform.Variable.SetValue("@chkCampaignId", campId);
+ Platform.Variable.SetValue("@chkCampaignStatus", campStatus);
+ Platform.Variable.SetValue("@chkCampaignMsg", campMsg);
+ Platform.Variable.SetValue("@chkPublishStatus", pubStatus);
+ Platform.Variable.SetValue("@chkPublishMsg", pubMsg);
+ Platform.Variable.SetValue("@chkEmailIdStatus", emailIdStatus);
+ Platform.Variable.SetValue("@chkEmailIdMsg", emailIdMsg);
+ Platform.Variable.SetValue("@chkJbEmailId", jbEmailId);
+ Platform.Variable.SetValue("@chkSubjectStatus", subjectStatus);
+ Platform.Variable.SetValue("@chkSubjectMsg", subjectMsg);
+ Platform.Variable.SetValue("@chkSubjectVal", subjectVal);
+ Platform.Variable.SetValue("@chkBccStatus", bccStatus);
+ Platform.Variable.SetValue("@chkBccMsg", bccMsg);
+ Platform.Variable.SetValue("@chkBccVal", bccVal);
+ Platform.Variable.SetValue("@chkTrackingStatus", trackStatus);
+ Platform.Variable.SetValue("@chkTrackingMsg", trackMsg);
+ Platform.Variable.SetValue("@chkSfStepsStatus", sfStepsStatus);
+ Platform.Variable.SetValue("@chkSfStepsMsg", sfStepsMsg);
+ Platform.Variable.SetValue("@chkAnalyticsStatus", analyticsStatus);
+ Platform.Variable.SetValue("@chkAnalyticsMsg", analyticsMsg);
+ Platform.Variable.SetValue("@chkEntryStatus", entryStatus);
+ Platform.Variable.SetValue("@chkEntryMsg", entryMsg);
+ Platform.Variable.SetValue("@chkJbEntryId", jbEntryId);
+ Platform.Variable.SetValue("@chkSenderStatus", senderStatus);
+ Platform.Variable.SetValue("@chkSenderMsg", senderMsg);
+ Platform.Variable.SetValue("@chkSenderName", senderProfileName);
+ Platform.Variable.SetValue("@chkSenderProfileId", senderProfileId);
+ Platform.Variable.SetValue("@chkAutoNameStatus", autoNameStatus);
+ Platform.Variable.SetValue("@chkAutoNameMsg", autoNameMsg);
+ Platform.Variable.SetValue("@chkQueryStatus", queryStatus);
+ Platform.Variable.SetValue("@chkQueryMsg", queryMsg);
+ Platform.Variable.SetValue("@chkAutoStatusStatus", autoStatusStatus);
+ Platform.Variable.SetValue("@chkAutoStatusMsg", autoStatusMsg);
+}
+
+
+Platform.Variable.SetValue("@step3bResult", step3bResult);
+</script>
+%%[
+VAR @combinedLog, @trailBody
+
+
+IF @attemptPurgeBuild == "true" THEN
+SET @trailBody = IIF(NOT Empty(@purgeBuildLog), @purgeBuildLog, Concat("Purge incomplete. ",Substring(IIF(NOT Empty(@step3bResult), @step3bResult, ""),1,620)))
+ELSE
+SET @trailBody = IIF(NOT Empty(@step3bResult), Substring(@step3bResult, 1, 620), "")
+ENDIF
+
+
+SET @combinedLog = Concat(IIF(NOT Empty(@resultText), Concat(@resultText," "), ""), Substring(IIF(NOT Empty(@trailBody), @trailBody, ""),1,6200))
+
+
+IF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk == "true") THEN
+SET @analyticsDelCnt = DeleteData(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
+SET @pageStatus = "purged"
+ELSEIF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk != "true") THEN
+SET @pageStatus = "purge_partial"
+ELSEIF (@attemptDeleteAsset == "true") AND (@authOk == "true") AND (IndexOf(IIF(NOT Empty(@step3bResult), @step3bResult, ""),"OK - Email deleted") > 0) THEN
+SET @analyticsDelCnt = DeleteData(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
+SET @pageStatus = "deleted"
+ENDIF
+VAR @jidIsJbGuid
+SET @jidIsJbGuid = IIF(Substring(IIF(NOT Empty(@jid), @jid, ""),1,7) == "email:", "false","true")
+VAR @jidForJbUi
+SET @jidForJbUi = IIF(Substring(IIF(NOT Empty(@jid), @jid, ""),1,7) == "email:", "", @jid)
+IF @showChecklist == "1" THEN
+ IF @chkCampaignStatus == "pass" THEN
+  SET @chkCampaignIcon = "pass"
+ ELSEIF @chkCampaignStatus == "skip" THEN
+  SET @chkCampaignIcon = "skip"
+ ELSE
+  SET @chkCampaignIcon = "fail"
+ ENDIF
+ IF @chkPublishStatus == "pass" THEN
+  SET @chkPublishIcon = "pass"
+ ELSEIF @chkPublishStatus == "skip" THEN
+  SET @chkPublishIcon = "skip"
+ ELSE
+  SET @chkPublishIcon = "fail"
+ ENDIF
+ IF @chkEntryStatus == "pass" THEN
+  SET @chkEntryIcon = "pass"
+ ELSEIF @chkEntryStatus == "skip" THEN
+  SET @chkEntryIcon = "skip"
+ ELSE
+  SET @chkEntryIcon = "fail"
+ ENDIF
+ SET @chkEmailIdIcon = "pass"
+ IF @chkSubjectStatus == "pass" THEN
+  SET @chkSubjectIcon = "pass"
+ ELSEIF @chkSubjectStatus == "skip" THEN
+  SET @chkSubjectIcon = "skip"
+ ELSE
+  SET @chkSubjectIcon = "fail"
+ ENDIF
+ IF @chkBccStatus == "pass" THEN
+  SET @chkBccIcon = "pass"
+ ELSEIF @chkBccStatus == "skip" THEN
+  SET @chkBccIcon = "skip"
+ ELSE
+  SET @chkBccIcon = "fail"
+ ENDIF
+ IF @chkTrackingStatus == "pass" THEN
+  SET @chkTrackingIcon = "pass"
+ ELSEIF @chkTrackingStatus == "skip" THEN
+  SET @chkTrackingIcon = "skip"
+ ELSE
+  SET @chkTrackingIcon = "fail"
+ ENDIF
+ IF @chkSfStepsStatus == "pass" THEN
+  SET @chkSfStepsIcon = "pass"
+ ELSEIF @chkSfStepsStatus == "skip" THEN
+  SET @chkSfStepsIcon = "skip"
+ ELSE
+  SET @chkSfStepsIcon = "fail"
+ ENDIF
+ IF @chkAnalyticsStatus == "pass" THEN
+  SET @chkAnalyticsIcon = "pass"
+ ELSEIF @chkAnalyticsStatus == "skip" THEN
+  SET @chkAnalyticsIcon = "skip"
+ ELSE
+  SET @chkAnalyticsIcon = "fail"
+ ENDIF
+ IF @chkSenderStatus == "pass" THEN
+  SET @chkSenderIcon = "pass"
+ ELSEIF @chkSenderStatus == "skip" THEN
+  SET @chkSenderIcon = "skip"
+ ELSE
+  SET @chkSenderIcon = "fail"
+ ENDIF
+ IF @isStackBuild == "true" THEN
+  IF @chkAutoNameStatus == "pass" THEN
+   SET @chkAutoNameIcon = "pass"
+  ELSEIF @chkAutoNameStatus == "skip" THEN
+   SET @chkAutoNameIcon = "skip"
+  ELSE
+   SET @chkAutoNameIcon = "fail"
+  ENDIF
+  IF @chkQueryStatus == "pass" THEN
+   SET @chkQueryIcon = "pass"
+  ELSEIF @chkQueryStatus == "skip" THEN
+   SET @chkQueryIcon = "skip"
+  ELSE
+   SET @chkQueryIcon = "fail"
+  ENDIF
+  IF @chkAutoStatusStatus == "pass" THEN
+   SET @chkAutoStatusIcon = "pass"
+  ELSEIF @chkAutoStatusStatus == "skip" THEN
+   SET @chkAutoStatusIcon = "skip"
+  ELSEIF @chkAutoStatusStatus == "warn" THEN
+   SET @chkAutoStatusIcon = "warn"
+  ELSE
+   SET @chkAutoStatusIcon = "fail"
+  ENDIF
+ ENDIF
+ENDIF
+]%%
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Build • Journey Maker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+:root {
+--primary-color: #6366f1;
+--primary-dark: #4f46e5;
+--text-primary: #111827;
+--text-secondary: #6b7280;
+--bg-secondary: #f9fafb;
+--border-color: #e5e7eb;
+--shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+--radius-md: 0.5rem;
+--gray-200: #e5e7eb;
+--gray-400: #9ca3af;
+--gray-600: #4b5563;
+--gray-900: #111827;
+--danger:#b91c1c;
+--dangerbg:#fef2f2;
+--radius-lg:12px;
+--warn:#92400e;
+--warnbg:#fffbeb;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg-secondary);color:var(--text-primary);line-height:1.55;}
+.dashboard-layout{display:flex;height:100vh;min-height:100vh;overflow:hidden}
+.maker-sidebar{
+width:280px;
+background:#fff;
+border-right:1px solid var(--gray-200);
+display:flex;
+flex-direction:column;
+padding:28px 0;
+flex-shrink:0;
+box-shadow:var(--shadow-sm);
+height:100vh;
+overflow:hidden;
+}
+.sidebar-logo{padding:0 20px;margin-bottom:12px;border-bottom:1px solid #eee5e5;padding-bottom:10px;align-self:center}
+.sidebar-logo a{display:inline-block}
+.sidebar-logo img{height:40px}
+.nav-section{margin-bottom:8px}
+.nav-section-title{
+font-size:11px;
+font-weight:600;
+color:var(--gray-400);
+letter-spacing:0.06em;
+margin-bottom:8px;
+padding:0 32px;
+text-transform:uppercase;
+}
+.sidebar-nav .nav-link{
+display:flex;
+align-items:center;
+gap:12px;
+padding:12px 32px;
+color:var(--gray-600);
+text-decoration:none;
+font-weight:500;
+font-size:14px;
+border-right:3px solid transparent;
+transition:background 0.2s ease,color 0.2s ease;
+}
+.sidebar-nav .nav-link:hover{background:#f9fafb;color:var(--gray-900)}
+.sidebar-nav .nav-link.active,.sidebar-nav span.nav-link.active{
+background:linear-gradient(90deg,rgb(119 120 196 / 10%) 0%,rgb(2 3 22 / 5%) 100%);
+color:#000;
+border-right-color:#2c2c31;
+}
+.sidebar-nav span.nav-link.active{cursor:default}
+.nav-icon{width:20px;height:20px;opacity:0.75;flex-shrink:0}
+.maker-main{
+flex:1;
+min-width:0;
+height:100vh;
+overflow:hidden;
+display:flex;
+flex-direction:column;
+background:var(--bg-secondary);
+}
+.maker-main-inner{
+flex:1;
+overflow-y:auto;
+padding:32px 40px 48px;
+}
+.maker-main-footer{
+flex-shrink:0;
+display:flex;
+align-items:center;
+justify-content:space-between;
+gap:16px;
+padding:14px 40px;
+border-top:1px solid var(--border-color);
+background:#fff;
+font-size:13px;
+color:var(--text-secondary);
+}
+.breadcrumb-section{padding:4px 0 20px}
+.breadcrumb-nav{display:flex;align-items:center;flex-wrap:wrap;font-size:14px;gap:4px}
+.breadcrumb-link{display:inline-flex;align-items:center;color:var(--primary-color);text-decoration:none;font-weight:500;font-size:16px}
+.breadcrumb-link:hover{color:var(--primary-dark);text-decoration:underline}
+.breadcrumb-link svg{flex-shrink:0}
+.breadcrumb-separator{margin:0 8px;color:var(--gray-400);font-weight:400;user-select:none}
+.breadcrumb-current{font-weight:600;color:var(--gray-900)}
+h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
+.sub{color:var(--text-secondary);max-width:44rem;margin-bottom:22px}
+.panel{background:#fff;border:1px solid var(--border-color);border-radius:var(--radius-lg);padding:26px 30px;margin-bottom:20px}
+.builder-path-row{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.builder-path-dl{margin:0;flex:1;min-width:0}
+.builder-path-dl dt{margin-top:0}
+.builder-path-action{flex-shrink:0;padding-top:2px}
+.btn-sm{padding:8px 14px;font-size:13px}
+.checklist-panel{border:1px solid var(--border-color);border-radius:10px;background:#fafafa;margin:16px 0 22px 0;overflow:hidden}
+.checklist-head{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border-color);background:#fff}
+.checklist-head h2{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;margin:0}
+.checklist-list{list-style:none;margin:0;padding:0}
+.checklist-row{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border-color);background:#fff}
+.checklist-row:last-child{border-bottom:none}
+.checklist-icon{width:22px;height:22px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-radius:50%}
+.checklist-icon--pass{background:#ecfdf5;color:#059669}
+.checklist-icon--fail{background:#fef2f2;color:#dc2626}
+.checklist-icon--warn{background:var(--warnbg);color:#d97706}
+.checklist-icon--skip{background:#f3f4f6;color:#6b7280}
+.checklist-body{flex:1;min-width:0}
+.checklist-title{font-size:14px;font-weight:600;margin:0 0 2px 0;color:var(--gray-900)}
+.checklist-detail{font-size:13px;color:var(--text-secondary);margin:0;word-break:break-word}
+.checklist-row--has-expand{flex-wrap:wrap;align-items:center}
+.checklist-row--has-expand > .checklist-icon,
+.checklist-row--has-expand > .checklist-body,
+.checklist-row--has-expand > .checklist-action{align-self:center}
+.checklist-query-expand{flex:0 0 100%;width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;white-space:pre-wrap;max-height:180px;overflow:auto;margin:8px 0 0 0;padding:10px;background:#f3f4f6;border-radius:6px;border:1px solid var(--border-color);color:#374151;box-sizing:border-box}
+.checklist-query-expand[hidden]{display:none}
+.checklist-action{flex-shrink:0;margin-left:auto;align-self:center}
+dl{margin:0}
+dt{font-size:11px;color:var(--gray-600);text-transform:uppercase;font-weight:600;letter-spacing:0.05em;margin:16px 0 4px 0}
+dt:first-child{margin-top:0}
+dd{font-weight:600;font-size:1rem;margin:0;padding:0;color:var(--gray-900);word-break:break-word}
+.detail-dd-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.detail-dd-row form{margin:0;flex-shrink:0}
+.act{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px;padding-top:22px;border-top:1px solid var(--border-color)}
+.act--split{justify-content:space-between;align-items:flex-start}
+.act-open{display:flex;flex-wrap:wrap;gap:10px}
+.act-right{display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-end}
+.btn{padding:11px 18px;border-radius:var(--radius-md);font-weight:600;font-size:14px;cursor:pointer;border:1px solid transparent;font:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:6px;background:#fff}
+.btn-neutral{color:var(--gray-900);border-color:var(--border-color)}
+.btn-neutral:hover{border-color:#d1d5db;background:#fafafa}
+.btn-primary{background:var(--gray-900);color:#fff;border-color:var(--gray-900)}
+.btn-primary:hover{background:#000;border-color:#000;color:#fff}
+.btn-danger{background:var(--dangerbg);color:var(--danger);border-color:#fecaca}
+.btn-danger:hover{background:#fee2e2}
+.banner{padding:14px 16px;border-radius:10px;margin-bottom:16px;font-size:14px;border:1px solid var(--border-color)}
+.banner.warn{border-color:#fde68a;background:var(--warnbg);color:var(--warn)}
+.banner.bad{border-color:#fecaca;background:var(--dangerbg);color:var(--danger)}
+.banner.good{border-color:#a7f3d0;background:#ecfdf5;color:#065f46}
+.small{font-size:13px;color:var(--text-secondary);margin-top:10px}
+pre.log{white-space:pre-wrap;background:#fafafa;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border-color);font-size:12px;margin-top:16px;display:none;color:#374151}
+pre.log.show{display:block}
+@media (max-width:768px){
+.maker-sidebar{width:100%;flex-direction:row;overflow-x:auto;align-items:center;min-height:0;padding:12px 0}
+.maker-sidebar .sidebar-logo{margin-bottom:0;flex-shrink:0;padding-right:16px}
+.maker-sidebar .sidebar-nav{display:flex;flex-direction:row;gap:4px;padding:8px 0;flex:1;flex-wrap:nowrap}
+.maker-sidebar .nav-section-title{display:none}
+.maker-sidebar .nav-link{white-space:nowrap;padding:8px 16px;border-right:none;border-radius:8px}
+.dashboard-layout{flex-direction:column;height:auto;overflow:visible}
+.maker-sidebar{height:auto;overflow:visible}
+.maker-main{height:auto;overflow:visible}
+.maker-main-inner{overflow:visible;padding:16px !important}
+.maker-main-footer{padding:14px 16px}
+}
+</style>
+</head>
+<body>
+<div class="dashboard-layout">
+<aside class="maker-sidebar sidebar" aria-label="Primary">
+  <div class="sidebar-logo">
+    <a href="%%=v(@HOME_URL)=%%"><img src="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" alt="MagMutual" style="filter: invert(1);"></a>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-section"><span class="nav-section-title">MENU</span></div>
+    <span class="nav-link active" role="presentation">
+      <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17h2v-5H3v5zm8 5h2V6h-2v16zM13 9h8V7h-8v2zM3 5v4h14V5H3zm8 14h10v-2H11v2zM13 17h8v-2h-8v2z"/></svg>
+      Manage build
+    </span>
+  </nav>
+</aside>
+<main class="maker-main">
+<div class="maker-main-inner">
+%%[ IF @pageStatus == "nodata" THEN ]%%
+<div class="breadcrumb-section">
+<nav class="breadcrumb-nav" aria-label="Breadcrumb">
+ <a href="%%=v(@HOME_URL)=%%" class="breadcrumb-link">
+  <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+  Back
+ </a>
+</nav>
+</div>
+<h1>Add a journey identifier</h1>
+<p class="sub">Open a build card from Recent builds so the URL includes <strong>journeyId</strong>. You cannot browse all rows from here without that key.</p>
+%%[ ELSEIF @pageStatus == "tamper" THEN ]%%
+<div class="breadcrumb-section">
+<nav class="breadcrumb-nav" aria-label="Breadcrumb">
+ <a href="%%=v(@HOME_URL)=%%" class="breadcrumb-link">
+  <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+  Back
+ </a>
+ <span class="breadcrumb-separator" aria-hidden="true">/</span>
+ <span class="breadcrumb-current">Request blocked</span>
+</nav>
+</div>
+<h1>Something blocked the request</h1>
+<p class="sub">Details do not line up with the stored log row. Use the Recent builds grid again.</p>
+<div class="banner bad">%%=v(@resultText)=%%</div>
+%%[ ELSEIF @pageStatus == "drop_log_failed" THEN ]%%
+<div class="breadcrumb-section">
+<nav class="breadcrumb-nav" aria-label="Breadcrumb">
+ <a href="%%=v(@HOME_URL)=%%" class="breadcrumb-link">
+  <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+  Back
+ </a>
+ <span class="breadcrumb-separator" aria-hidden="true">/</span>
+ <span class="breadcrumb-current">Recent builds log unchanged</span>
+</nav>
+</div>
+<h1>Could not remove the log row</h1>
+<p class="sub">The page tried to delete the matching row via <strong>DeleteData()</strong>, which SFMC exposes for Cloud Pages (not DeleteDE).</p>
+<div class="banner bad">%%=v(@resultText)=%%</div>
+<p class="sub">Confirm this Cloud Pages app/user can delete rows on <strong>%%=v(@DETAIL_EXTERNAL_KEY_DE)=%%</strong>.</p>
+<p class="sub"><a class="breadcrumb-link" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Back to manage this build</a></p>
+%%[ ELSEIF @pageStatus == "notfound" THEN ]%%
+<div class="breadcrumb-section">
+<nav class="breadcrumb-nav" aria-label="Breadcrumb">
+ <a href="%%=v(@HOME_URL)=%%" class="breadcrumb-link">
+  <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+  Back
+ </a>
+ <span class="breadcrumb-separator" aria-hidden="true">/</span>
+ <span class="breadcrumb-current">Build not found</span>
+</nav>
+</div>
+<h1>This build was not found</h1>
+<p class="sub">There is no row in the log DE for journeyId <strong>%%=v(@jid)=%%</strong>.</p>
+%%[ ELSEIF @pageStatus == "deleted" THEN ]%%
+<div class="breadcrumb-section">
+<nav class="breadcrumb-nav" aria-label="Breadcrumb">
+ <a href="%%=v(@HOME_URL)=%%" class="breadcrumb-link">
+  <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+  Back
+ </a>
+ <span class="breadcrumb-separator" aria-hidden="true">/</span>
+ <span class="breadcrumb-current">Manage build • Result</span>
+</nav>
+</div>
+<h1>Email deleted</h1>
+<p class="sub">The email asset was removed from Content Builder where the API succeeded, and the log row was removed from recent builds.</p>
+<div class="banner good">Journeys themselves are unchanged in Journey Builder. Delete or revise the canvas there when still needed.</div>
+<pre class="log show">%%=v(@combinedLog)=%%</pre>
+<div class="act">
+<a href="%%=v(@HOME_URL)=%%" class="btn btn-primary">Back to Journey home</a>
+</div>
+%%[ ELSEIF @pageStatus == "purged" THEN ]%%
+<div class="breadcrumb-section">
+<nav class="breadcrumb-nav" aria-label="Breadcrumb">
+ <a href="%%=v(@HOME_URL)=%%" class="breadcrumb-link">
+  <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+  Back
+ </a>
+ <span class="breadcrumb-separator" aria-hidden="true">/</span>
+ <span class="breadcrumb-current">Manage build • Result</span>
+</nav>
+</div>
+<h1>Build successfully deleted</h1>
+<p class="sub">The page attempted deletes for journey, entry event definition, Content Builder email, and Automation Studio DE.</p>
+<div class="banner good">If any step failed, you should manually remove the remaining remnants.</div>
+<pre class="log show">%%=v(@combinedLog)=%%</pre>
+<div class="act">
+<a href="%%=v(@HOME_URL)=%%" class="btn btn-primary">Back to Journey home</a>
+</div>
+%%[ ELSEIF @pageStatus == "purge_partial" THEN ]%%
+<div class="breadcrumb-section">
+<nav class="breadcrumb-nav" aria-label="Breadcrumb">
+ <a href="%%=v(@HOME_URL)=%%" class="breadcrumb-link">
+  <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+  Back
+ </a>
+ <span class="breadcrumb-separator" aria-hidden="true">/</span>
+ <span class="breadcrumb-current">Manage build • Partial cleanup</span>
+</nav>
+</div>
+<h1>Purge incomplete</h1>
+<p class="sub">Something in the teardown chain blocked full removal — often the HTTP token scope, Journey publish state, or entry event locks.</p>
+<div class="banner warn">The Recent builds log row was kept so you can retry or clean up manually.</div>
+<pre class="log show">%%=v(@combinedLog)=%%</pre>
+<div class="act">
+<a href="%%=v(@HOME_URL)=%%" class="btn btn-primary">Journey home</a>
+<a href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%" class="btn btn-neutral">Try this page again</a>
+</div>
+%%[ ELSE ]%%
+<div class="breadcrumb-section">
+<nav class="breadcrumb-nav" aria-label="Breadcrumb">
+ <a href="%%=v(@HOME_URL)=%%" class="breadcrumb-link">
+  <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+  Back
+ </a>
+ <span class="breadcrumb-separator" aria-hidden="true">/</span>
+ <span class="breadcrumb-current">Manage build</span>
+</nav>
+</div>
+<h1>%%=IIF(NOT Empty(@dispName), @dispName, "Build detail")=%%</h1>
+<p class="sub">Edit journeys and templates in SFMC UI. Choose what else to tidy up.</p>
+
+
+%%[ IF (@pageStatus == "view") AND ( IndexOf(IIF(NOT Empty(@combinedLog), @combinedLog, ""),"FAILED") > 0 OR (@attemptPurgeBuild == "true" AND @authOk == "true" AND @purgeEmailOk != "true") ) THEN ]%%
+<div class="banner warn">One or more API steps reported a problem — inspect the technical log.</div>
+%%[ ENDIF ]%%
+
+
+%%[ IF (@pageStatus == "view") AND ((@attemptDeleteAsset == "true") OR (@attemptPurgeBuild == "true")) THEN ]%%
+<pre class="log show">%%=v(@combinedLog)=%%</pre>
+%%[ ENDIF ]%%
+
+
+<div class="panel">
+<div class="builder-path-row">
+ <dl class="builder-path-dl">
+  <dt>Builder path</dt>
+  <dd>%%=v(@dispType)=%%</dd>
+ </dl>
+ <div class="builder-path-action">
+%%[ IF @showChecklist == "1" THEN ]%%
+  <a class="btn btn-neutral btn-sm" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Hide checklist</a>
+%%[ ELSE ]%%
+  <a class="btn btn-neutral btn-sm" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid,"&checklist=1")=%%">
+   <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-9 14l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+   Checklist
+  </a>
+%%[ ENDIF ]%%
+ </div>
+</div>
+%%[ IF @showChecklist == "1" THEN ]%%
+<div class="checklist-panel">
+ <div class="checklist-head">
+  <h2>
+   <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-9 14l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+   Checklist
+  </h2>
+ </div>
+ <ul class="checklist-list">
+  <li class="checklist-row">
+   <span class="checklist-icon checklist-icon--%%=v(@chkCampaignIcon)=%%" aria-hidden="true">
+%%[ IF @chkCampaignIcon == "pass" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+%%[ ELSEIF @chkCampaignIcon == "skip" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+%%[ ELSE ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+%%[ ENDIF ]%%
+   </span>
+   <div class="checklist-body">
+    <p class="checklist-title">Campaign ID</p>
+    <p class="checklist-detail">%%[ IF NOT Empty(@chkCampaignId) THEN ]%%
+%%=v(@chkCampaignId)=%% —
+%%[ ENDIF ]%%
+%%=v(@chkCampaignMsg)=%%</p>
+   </div>
+  </li>
+  <li class="checklist-row">
+   <span class="checklist-icon checklist-icon--%%=v(@chkPublishIcon)=%%" aria-hidden="true">
+%%[ IF @chkPublishIcon == "pass" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+%%[ ELSEIF @chkPublishIcon == "skip" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+%%[ ELSE ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+%%[ ENDIF ]%%
+   </span>
+   <div class="checklist-body">
+    <p class="checklist-title">Journey published</p>
+    <p class="checklist-detail">%%=v(@chkPublishMsg)=%%</p>
+   </div>
+  </li>
+  <li class="checklist-row">
+   <span class="checklist-icon checklist-icon--%%=v(@chkEntryIcon)=%%" aria-hidden="true">
+%%[ IF @chkEntryIcon == "pass" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+%%[ ELSEIF @chkEntryIcon == "skip" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+%%[ ELSE ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+%%[ ENDIF ]%%
+   </span>
+   <div class="checklist-body">
+    <p class="checklist-title">Entry event id</p>
+    <p class="checklist-detail">%%=v(@chkEntryMsg)=%%</p>
+   </div>
+  </li>
+  <li class="checklist-row">
+   <span class="checklist-icon checklist-icon--pass" aria-hidden="true">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+   </span>
+   <div class="checklist-body">
+    <p class="checklist-title">Email asset id</p>
+    <p class="checklist-detail">%%=v(@chkEmailIdMsg)=%%</p>
+   </div>
+  </li>
+  <li class="checklist-row">
+   <span class="checklist-icon checklist-icon--%%=v(@chkSubjectIcon)=%%" aria-hidden="true">
+%%[ IF @chkSubjectIcon == "pass" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+%%[ ELSEIF @chkSubjectIcon == "skip" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+%%[ ELSE ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+%%[ ENDIF ]%%
+   </span>
+   <div class="checklist-body">
+    <p class="checklist-title">Subject line</p>
+    <p class="checklist-detail">%%=v(@chkSubjectMsg)=%%</p>
+   </div>
+  </li>
+  <li class="checklist-row">
+   <span class="checklist-icon checklist-icon--%%=v(@chkBccIcon)=%%" aria-hidden="true">
+%%[ IF @chkBccIcon == "pass" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+%%[ ELSEIF @chkBccIcon == "skip" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+%%[ ELSE ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+%%[ ENDIF ]%%
+   </span>
+   <div class="checklist-body">
+    <p class="checklist-title">BCC</p>
+    <p class="checklist-detail">%%=v(@chkBccMsg)=%%</p>
+   </div>
+  </li>
+  <li class="checklist-row">
+   <span class="checklist-icon checklist-icon--%%=v(@chkTrackingIcon)=%%" aria-hidden="true">
+%%[ IF @chkTrackingIcon == "pass" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+%%[ ELSEIF @chkTrackingIcon == "skip" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+%%[ ELSE ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+%%[ ENDIF ]%%
+   </span>
+   <div class="checklist-body">
+    <p class="checklist-title">Send to Salesforce tracking</p>
+    <p class="checklist-detail">%%=v(@chkTrackingMsg)=%%</p>
+   </div>
+%%[ IF @jidIsJbGuid == "true" AND NOT Empty(@jidForJbUi) THEN ]%%
+   <div class="checklist-action">
+    <a class="btn btn-neutral btn-sm" href="%%=Concat(@MC_CLOUD,"#app/Journey%20Builder/%23",@jidForJbUi,"/1")=%%" target="_blank" rel="noopener noreferrer">Open journey</a>
+   </div>
+%%[ ENDIF ]%%
+  </li>
+  <li class="checklist-row">
+   <span class="checklist-icon checklist-icon--%%=v(@chkSfStepsIcon)=%%" aria-hidden="true">
+%%[ IF @chkSfStepsIcon == "pass" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+%%[ ELSEIF @chkSfStepsIcon == "skip" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+%%[ ELSE ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+%%[ ENDIF ]%%
+   </span>
+   <div class="checklist-body">
+    <p class="checklist-title">Salesforce activities</p>
+    <p class="checklist-detail">%%=v(@chkSfStepsMsg)=%%</p>
+   </div>
+  </li>
+  <li class="checklist-row">
+   <span class="checklist-icon checklist-icon--%%=v(@chkAnalyticsIcon)=%%" aria-hidden="true">
+%%[ IF @chkAnalyticsIcon == "pass" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+%%[ ELSEIF @chkAnalyticsIcon == "skip" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+%%[ ELSE ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+%%[ ENDIF ]%%
+   </span>
+   <div class="checklist-body">
+    <p class="checklist-title">Analytics / URL domains</p>
+    <p class="checklist-detail">%%=v(@chkAnalyticsMsg)=%%</p>
+   </div>
+  </li>
+  <li class="checklist-row">
+   <span class="checklist-icon checklist-icon--%%=v(@chkSenderIcon)=%%" aria-hidden="true">
+%%[ IF @chkSenderIcon == "pass" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+%%[ ELSEIF @chkSenderIcon == "skip" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+%%[ ELSE ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+%%[ ENDIF ]%%
+   </span>
+   <div class="checklist-body">
+    <p class="checklist-title">Sender profile</p>
+    <p class="checklist-detail">%%[ IF NOT Empty(@chkSenderName) AND NOT Empty(@chkSenderMsg) AND @chkSenderName != @chkSenderMsg THEN ]%%
+%%=v(@chkSenderName)=%% — %%=v(@chkSenderMsg)=%%
+%%[ ELSEIF NOT Empty(@chkSenderName) THEN ]%%
+%%=v(@chkSenderName)=%%
+%%[ ELSE ]%%
+%%=v(@chkSenderMsg)=%%
+%%[ ENDIF ]%%</p>
+   </div>
+  </li>
+%%[ IF @isStackBuild == "true" THEN ]%%
+  <li class="checklist-row">
+   <span class="checklist-icon checklist-icon--%%=v(@chkAutoNameIcon)=%%" aria-hidden="true">
+%%[ IF @chkAutoNameIcon == "pass" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+%%[ ELSEIF @chkAutoNameIcon == "skip" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+%%[ ELSE ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+%%[ ENDIF ]%%
+   </span>
+   <div class="checklist-body">
+    <p class="checklist-title">Automation name</p>
+    <p class="checklist-detail">%%=v(@chkAutoNameMsg)=%%</p>
+   </div>
+   <div class="checklist-action">
+    <a class="btn btn-neutral btn-sm js-automation-home-link" href="%%=Concat(@MC_CLOUD,"#app/Automation%20Studio/")=%%" target="_blank" rel="noopener noreferrer" data-automation-name="%%=Replace(Replace(v(@dispAutomationName),'"','&quot;'),'&','&amp;')=%%" title="%%[ IF NOT Empty(@dispAutomationName) THEN ]%%Copies automation name to clipboard%%[ ELSE ]%%Opens Automation Studio%%[ ENDIF ]%%">Open automation</a>
+   </div>
+  </li>
+  <li class="checklist-row checklist-row--has-expand">
+   <span class="checklist-icon checklist-icon--%%=v(@chkQueryIcon)=%%" aria-hidden="true">
+%%[ IF @chkQueryIcon == "pass" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+%%[ ELSEIF @chkQueryIcon == "skip" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+%%[ ELSE ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+%%[ ENDIF ]%%
+   </span>
+   <div class="checklist-body">
+    <p class="checklist-title">Query</p>
+    <p class="checklist-detail">%%=v(@chkQueryMsg)=%%</p>
+   </div>
+%%[ IF NOT Empty(@chkQueryText) THEN ]%%
+   <div class="checklist-action">
+    <button type="button" class="btn btn-neutral btn-sm" id="chkQuerySqlBtn">View query SQL</button>
+   </div>
+   <pre id="chkQuerySqlPre" class="checklist-query-expand" hidden>%%=v(@chkQueryText)=%%</pre>
+%%[ ENDIF ]%%
+  </li>
+  <li class="checklist-row">
+   <span class="checklist-icon checklist-icon--%%=v(@chkAutoStatusIcon)=%%" aria-hidden="true">
+%%[ IF @chkAutoStatusIcon == "pass" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+%%[ ELSEIF @chkAutoStatusIcon == "skip" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+%%[ ELSEIF @chkAutoStatusIcon == "warn" THEN ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+%%[ ELSE ]%%
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+%%[ ENDIF ]%%
+   </span>
+   <div class="checklist-body">
+    <p class="checklist-title">Automation status</p>
+    <p class="checklist-detail">%%=v(@chkAutoStatusMsg)=%%</p>
+   </div>
+  </li>
+%%[ ENDIF ]%%
+ </ul>
+</div>
+%%[ ENDIF ]%%
+%%[ IF @showChecklist != "1" THEN ]%%
+<dl>
+ <dt>Email name</dt>
+ <dd>%%=v(@dispEmailName)=%%</dd>
+ <dt>Email asset Id</dt>
+ <dd>%%=v(@dispEmailId)=%%</dd>
+ <dt>Log key (journeyId)</dt>
+ <dd>%%=v(@jid)=%%</dd>
+ <dt>Entry source</dt>
+ <dd>%%=IIF(NOT Empty(@dispDeId) AND @dispDeId != "N/A", @dispDeId, "—")=%%</dd>
+ <dt>Data extension name</dt>
+ <dd>%%=IIF(NOT Empty(@dispDeName) AND @dispDeName != "N/A", @dispDeName, "—")=%%</dd>
+%%[ IF @isStackBuild == "true" THEN ]%%
+ <dt>Query key</dt>
+ <dd>%%=IIF(NOT Empty(@dispQueryKey), @dispQueryKey, "—")=%%</dd>
+%%[ ENDIF ]%%
+ <dt>Last logged</dt>
+ <dd>%%=v(@dispUpdated)=%%</dd>
+</dl>
+%%[ ENDIF ]%%
+<div class="act act--split">
+ <div class="act-open">
+%%[ IF @jidIsJbGuid == "true" AND NOT Empty(@jidForJbUi) THEN ]%%
+  <a class="btn btn-neutral" href="%%=Concat(@MC_CLOUD,"#app/Journey%20Builder/%23",@jidForJbUi,"/1")=%%" target="_blank" rel="noopener noreferrer">Open in Journey Builder</a>
+%%[ ENDIF ]%%
+  <a class="btn btn-neutral" href="%%=Concat(@MC_CLOUD,"#app/Content%20Builder/")=%%" target="_blank" rel="noopener noreferrer">Open Content Builder</a>
+%%[ IF @isStackBuild == "true" THEN ]%%
+  <a class="btn btn-neutral js-automation-home-link" href="%%=Concat(@MC_CLOUD,"#app/Automation%20Studio/")=%%" target="_blank" rel="noopener noreferrer" data-automation-name="%%=Replace(Replace(v(@dispAutomationName),'"','&quot;'),'&','&amp;')=%%" title="%%[ IF NOT Empty(@dispAutomationName) THEN ]%%Copies automation name to clipboard%%[ ELSE ]%%Opens Automation Studio%%[ ENDIF ]%%">Open automation</a>
+%%[ ENDIF ]%%
+ </div>
+ <div class="act-right">
+%%[ IF NOT Empty(@dispEmailId) THEN ]%%
+  <form method="post" action="" style="margin:0" onsubmit="return confirm('Delete email %%=v(@dispEmailId)=%% from Content Builder only (journey and entry event stay).');">
+   <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
+   <input type="hidden" name="postedJourneyId" value="%%=v(@jid)=%%">
+   <input type="hidden" name="deleteEmailId" value="%%=v(@dispEmailId)=%%">
+   <button type="submit" name="confirmDeleteAsset" value="1" class="btn btn-neutral">Delete email</button>
+  </form>
+%%[ ENDIF ]%%
+  <form method="post" action="" style="margin:0" onsubmit="return confirm('Delete automation and query (stack builds), journey (REST), Salesforce entry event and entry DE where possible, the Content Builder email asset, then remove this row from Recent builds. Published journeys sometimes block DELETE until stopped in Journey Builder.');">
+   <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
+   <input type="hidden" name="postedJourneyId" value="%%=v(@jid)=%%">
+   <input type="hidden" name="deleteEmailId" value="%%=v(@dispEmailId)=%%">
+   <button type="submit" name="confirmPurgeBuild" value="1" class="btn btn-danger">Delete this build</button>
+  </form>
+ </div>
+</div>
+
+
+</div>
+
+
+%%[ ENDIF ]%%
+</div>
+<footer class="maker-main-footer">
+ <span>Self Service</span>
+ <span>© 2026 All rights reserved | MagMutual</span>
+</footer>
+</main>
+</div>
+<script>
+(function () {
+ function copyText(text) {
+  if (!text) {
+   return;
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+   navigator.clipboard.writeText(text).catch(function () {
+    fallbackCopy(text);
+   });
+   return;
+  }
+  fallbackCopy(text);
+ }
+ function fallbackCopy(text) {
+  var ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+   document.execCommand("copy");
+  } catch (copyErr) {}
+  document.body.removeChild(ta);
+ }
+ var autoLinks = document.querySelectorAll(".js-automation-home-link");
+ var ai;
+ for (ai = 0; ai < autoLinks.length; ai++) {
+  autoLinks[ai].addEventListener("click", function () {
+   var name = this.getAttribute("data-automation-name") || "";
+   if (name) {
+    copyText(name);
+   }
+  });
+ }
+ var btn = document.getElementById("chkQuerySqlBtn");
+ var pre = document.getElementById("chkQuerySqlPre");
+ if (btn && pre) {
+  btn.addEventListener("click", function () {
+   var show = pre.hidden;
+   pre.hidden = !show;
+   btn.textContent = show ? "Hide query SQL" : "View query SQL";
+  });
+ }
+})();
+</script>
+</body>
+</html>
+
+
+
+
