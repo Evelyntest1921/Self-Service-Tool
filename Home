@@ -1,0 +1,2858 @@
+%%[ 
+VAR @recentBuildsOk, @jaEmpty, @jaRecentBuildsMarkup, @jaBuildsLoadError
+VAR @navRows, @navRow, @environment, @environmentSwitchUrl, @envDisplayName, @envDisplayEmail, @envAvatarLetter, @envSwitchLabel
+SET @recentBuildsOk = "false"
+SET @jaBuildsLoadError = ""
+SET @jaEmpty = "1"
+SET @jaRecentBuildsMarkup = ""
+SET @redirect = requestparameter("redirect")
+SET @allJourneysTotal = DataExtensionRowCount("Bd_journey_analytics")
+SET @quickSends = LookupRows("Bd_journey_analytics", "journeyType", "Quick Send")
+SET @quickSendsTotal = RowCount(@quickSends)
+SET @automationsCount = LookupRows("Bd_journey_analytics", "journeyType", "Journey + Automation")
+SET @automationsTotal = RowCount(@automationsCount)
+SET @oneSendCount = LookupRows("Bd_journey_analytics", "journeyType", "One Sender")
+SET @oneSendTotal = RowCount(@oneSendCount)
+SET @hubUrl = ""
+SET @buildDetailUrl = ""
+SET @emailOnlyUrl = ""
+SET @quickSendUrl = ""
+SET @campaignOnlyUrl = ""
+SET @campaignAutomationUrl = ""
+SET @environment = ""
+SET @environmentSwitchUrl = ""
+SET @envDisplayName = ""
+SET @envDisplayEmail = ""
+SET @envAvatarLetter = ""
+SET @envSwitchLabel = ""
+SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
+IF RowCount(@navRows) > 0 THEN
+  SET @navRow = Row(@navRows,1)
+  SET @hubUrl = Field(@navRow,"ss_home")
+  SET @buildDetailUrl = Field(@navRow,"ss_edit")
+  SET @emailOnlyUrl = Field(@navRow,"ss_email_only")
+  SET @quickSendUrl = Field(@navRow,"ss_quick_send")
+  SET @campaignOnlyUrl = Field(@navRow,"ss_campaign_only")
+  SET @campaignAutomationUrl = Field(@navRow,"ss_campaign_automation")
+  SET @environment = Trim(Lowercase(Field(@navRow,"environment")))
+  SET @environmentSwitchUrl = Trim(Field(@navRow,"environment_switch"))
+ENDIF
+IF @environment == "uat" THEN
+  SET @envDisplayName = "UAT"
+  SET @envDisplayEmail = "UAT+admin@magmutual.com"
+  SET @envAvatarLetter = "U"
+  SET @envSwitchLabel = "Switch to production environment"
+ELSEIF @environment == "prod" THEN
+  SET @envDisplayName = "PROD"
+  SET @envDisplayEmail = "admin@magmutual.com"
+  SET @envAvatarLetter = "P"
+  SET @envSwitchLabel = "Switch to UAT environment"
+ENDIF
+
+IF @redirect == "true" THEN
+  Redirect(@hubUrl)
+ENDIF
+
+]%%
+<script runat="server" language="javascript">
+Platform.Load("Core", "1.1");
+
+var DE_EXTERNAL_KEY = "Bd_journey_analytics";
+var DE_RETRIEVE_KEY = String(DE_EXTERNAL_KEY).toLowerCase();
+var MAX_GRID = 48;
+var BUILD_DETAIL_URL = Platform.Variable.GetValue("@buildDetailUrl") || "";
+
+function esc(s) {
+  if (s == null || s === undefined) return "";
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/"/g, "&quot;");
+}
+
+function msFromRow(r) {
+  var ud = r["updateDate"] != null ? r["updateDate"] : r["UpdateDate"];
+  if (ud === null || ud === undefined || ud === "") return 0;
+  try {
+    if (typeof ud === "object" && ud.getTime) return ud.getTime();
+    var p = Platform.Function.ParseDate(ud);
+    if (p && p.getTime) return p.getTime();
+  } catch (e2) {}
+  return 0;
+}
+
+function setV(key, val) {
+  var s = val == null ? "" : String(val);
+  try {
+    Platform.Variable.SetValue(key, s);
+  } catch (e0) {}
+  try {
+    Platform.Variable.SetValue("@" + key, s);
+  } catch (e1) {}
+}
+
+function lenArrayish(x) {
+  if (x == null) return -1;
+  if (typeof x.length === "number") return x.length;
+  return -1;
+}
+
+function coerceRows(raw) {
+  if (raw == null) return [];
+  var r = raw;
+  if (r.Results && typeof r.Results.length === "number") r = r.Results;
+  var n = lenArrayish(r);
+  if (n < 0) return [];
+  var out = [];
+  var i;
+  for (i = 0; i < n; i++) out.push(r[i]);
+  return out;
+}
+
+try {
+  var rows = [];
+  var deObj = null;
+  try {
+    deObj = DataExtension.Init(DE_RETRIEVE_KEY);
+    rows = coerceRows(deObj.Rows.Retrieve());
+  } catch (ie0) {
+    try {
+      deObj = DataExtension.Init(DE_EXTERNAL_KEY);
+      rows = coerceRows(deObj.Rows.Retrieve());
+    } catch (ie1) {}
+  }
+
+  if (!rows.length) {
+    setV("recentBuildsOk", "true");
+    setV("jaEmpty", "1");
+    setV("jaRecentBuildsMarkup", "");
+    setV("jaBuildsLoadError", "");
+  } else {
+    rows.sort(function (a, b) {
+      return msFromRow(b) - msFromRow(a);
+    });
+
+    var nGrid = rows.length > MAX_GRID ? MAX_GRID : rows.length;
+    var gx, r, nm, jidv, tp, emn, emid, cr;
+    var parts = [];
+    for (gx = 0; gx < nGrid; gx++) {
+      r = rows[gx];
+      nm =
+        r["journeyName"] ||
+        r["JourneyName"] ||
+        r["emailName"] ||
+        r["EmailName"] ||
+        "Untitled journey";
+      jidv =
+        r["journeyId"] != null ? String(r["journeyId"]) :
+        r["JourneyId"] != null ? String(r["JourneyId"]) :
+        r["JourneyID"] != null ? String(r["JourneyID"]) : "";
+      tp = r["journeyType"] != null ? String(r["journeyType"]) : "";
+      emn = r["emailName"] != null ? String(r["emailName"]) : "";
+      emid = r["emailId"] != null ? String(r["emailId"]) : "";
+      try {
+        var udx = r["updateDate"] != null ? r["updateDate"] : r["UpdateDate"];
+        cr = udx ? Platform.Function.FormatDate(udx, "yyyy-MM-dd HH:mm") : "";
+      } catch (e3) {
+        cr = "";
+      }
+      var detailHref =
+        jidv !== ""
+          ? BUILD_DETAIL_URL + "?journeyId=" + encodeURIComponent(jidv)
+          : BUILD_DETAIL_URL;
+      parts.push(
+        '<div class="survey-card">' +
+          '<div class="survey-header">' +
+          '<div class="survey-icon">📋</div>' +
+          '<div class="survey-status status-Active">' +
+          esc(tp.length > 28 ? tp.substring(0, 28) + "…" : tp) +
+          "</div>" +
+          "</div>" +
+          '<h3 class="survey-title">' +
+          esc(String(nm).length > 20 ? String(nm).substring(0, 20) + "..." : String(nm)) +
+          "</h3>" +
+          '<div class="survey-meta">' +
+          '<span class="survey-id">ID: ' + esc(jidv) + '</span>' +
+          '<span class="survey-date">' + esc(cr) + "</span>" +
+          "</div>" +
+          '<div class="survey-progress">' +
+          '<div class="progress-info">' +
+          "<span>" + esc(emn || "Email") + "</span>" +
+          '<span class="progress-percentage">Asset ' + esc(emid || "—") + "</span>" +
+          "</div>" +
+          '<div class="progress-bar">' +
+          '<div class="progress-fill" style="width:35%;">' +
+          "</div>" +
+          "</div>" +
+          "</div>" +
+          '<div class="survey-actions">' +
+          '<a href="' +
+          detailHref +
+          '" class="btn-secondary">Manage build</a>' +
+          '<button class="btn-icon" title="More options">' +
+          '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>' +
+          "</button>" +
+          "</div>" +
+          "</div>"
+      );
+    }
+    setV("jaRecentBuildsMarkup", parts.join(""));
+    setV("jaEmpty", "0");
+    setV("recentBuildsOk", "true");
+    setV("jaBuildsLoadError", "");
+  }
+} catch (e) {
+  var errMsg = "Could not read recent builds.";
+  try {
+    errMsg = e.message != null && e.message !== "" ? String(e.message) : String(e);
+    if (errMsg.length > 400) errMsg = errMsg.substring(0, 400);
+  } catch (err2) {}
+  setV("jaBuildsLoadError", errMsg);
+  setV("recentBuildsOk", "false");
+  setV("jaEmpty", "1");
+  setV("jaRecentBuildsMarkup", "");
+}
+
+</script>
+<div class="dashboard-layout">
+  <!-- Modern Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+   <img style="filter: invert(1);" src="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" alt="MagMutual">
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section">
+        <span class="nav-section-title">MENU</span>
+      </div>
+      <a class="nav-link active" href="%%=v(@hubUrl)=%%">
+        <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/>
+        </svg>
+        <span>Journey home</span>
+      </a>
+      <a class="nav-link" href="#" onclick="showAllJourneys(); return false;">
+        <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/>
+        </svg>
+        <span>Recent builds</span>
+      </a>
+      <a class="nav-link" href="#" onclick="showReports(); return false;">
+        <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M9 11H7v6h2v-6zm4 0h-2v6h2v-6zm4 0h-2v6h2v-6zM5 20h14V4H5v16zm14 2H5c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v16c0 1.1-.9 2-2 2z"/>
+        </svg>
+        <span>Performance</span>
+      </a>
+      <a class="nav-link" href="#" onclick="showResponses(); return false;">
+        <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M20 6h-2.18c.11-.31.18-.65.18-1a2.996 2.996 0 0 0-5.5-1.65l-.5.67-.5-.68C10.96 2.54 10 2 10 2 10 2 9 3 8.18 4H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-5-2c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zM9 4c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1z"/>
+        </svg>
+        <span>Activity</span>
+      </a>
+     
+    </nav>
+    
+    <div class="sidebar-footer">
+      <div class="sidebar-user">
+        <div class="user-avatar">%%=v(@envAvatarLetter)=%%</div>
+        <div class="user-info">
+          <div class="user-name">%%=v(@envDisplayName)=%%</div>
+          <div class="user-email">%%=v(@envDisplayEmail)=%%</div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main-content">
+    <!-- Breadcrumb Section (Hidden by default) -->
+    <div class="breadcrumb-section" id="breadcrumbSection" style="display: none;">
+      <div class="breadcrumb">
+        <a href="#" onclick="showDashboard(); return false;" class="breadcrumb-link">Journey home</a>
+        <span class="breadcrumb-separator">/</span>
+        <span class="breadcrumb-current">Recent builds</span>
+      </div>
+    </div>
+
+    <!-- Hero Section -->
+    <div class="hero-section" id="heroSection">
+      <div class="hero-content">
+        <div class="hero-badge">MAKE A JOURNEY, DATA EXTENSION, AND AUTOMATIONS</div>
+        <h1>Quickly build and monitor<br> journeys in Marketing Cloud</h1>
+        <p>Central hub to spin up emails, journeys, data extensions, automations and connect Salesforce campaigns to track engagements.</p>
+        <button type="button" class="hero-cta" id="heroOpenBuilderBtn" onclick="toggleJourneyBuilderPanel(event)">
+          Start building
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/>
+          </svg>
+        </button>
+      </div>
+      <div class="hero-illustration">
+        <div class="floating-card card-1">
+          <div class="mini-chart"></div>
+        </div>
+        <div class="floating-card card-2">
+          <div class="mini-stat">85%</div>
+        </div>
+        <div class="floating-card card-3">
+          <div class="mini-progress"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="journey-builder-panel-wrap" id="journeyBuilderPanel" aria-hidden="true">
+      <div class="journey-builder-panel">
+        <div class="journey-builder-panel-head">
+          <h2 class="journey-builder-panel-title">Choose a builder path</h2>
+          <button type="button" class="journey-builder-panel-close" onclick="closeJourneyBuilderPanel()" aria-label="Close">✕</button>
+        </div>
+        <div class="journey-builder-panel-cards">
+          <a href="%%=v(@emailOnlyUrl)=%%" class="journey-builder-choice">
+            <span class="journey-builder-choice-label">Create an Email</span>
+            <span class="journey-builder-choice-hint">Spin up a new email — no journey</span>
+          </a>
+          <a href="%%=v(@quickSendUrl)=%%" class="journey-builder-choice">
+            <span class="journey-builder-choice-label">Quick Send</span>
+            <span class="journey-builder-choice-hint">Distributed marketing cloud</span>
+          </a>
+          <a href="%%=v(@campaignAutomationUrl)=%%" class="journey-builder-choice">
+            <span class="journey-builder-choice-label">Automation</span>
+            <span class="journey-builder-choice-hint">Full journeys, entry sources, and activities</span>
+          </a>
+          <a href="%%=v(@campaignOnlyUrl)=%%" class="journey-builder-choice">
+            <span class="journey-builder-choice-label">One Sender</span>
+            <span class="journey-builder-choice-hint">Consistent sender profile across messages</span>
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Statistics Cards -->
+    <div class="stats-grid">
+      %%[
+        VAR @surveyCount, @qsCount, @emailsCount, @automationsCount, @oneSend
+        SET @surveyCount = @allJourneysTotal
+        SET @emailsCount = @allJourneysTotal
+        SET @qsCount = @quickSendsTotal
+        SET @automationsCount = @automationsTotal
+        SET @oneSend = @oneSendTotal
+      ]%%
+      
+      <div class="stat-card primary">
+        <div class="stat-icon">    
+           📁     
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@surveyCount)=%%</div>
+          <div class="stat-label">All builds</div>
+          <div class="stat-change">Self serviced journeys</div>
+        </div>
+      </div>
+      
+      <div class="stat-card">
+        <div class="stat-icon success" style="color: #52575a;">
+          📄
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@emailsCount)=%%</div>
+          <div class="stat-label">Emails Created</div>
+          <div class="stat-change success">Illustrative totals</div>
+        </div>
+      </div>
+      
+      <div class="stat-card">
+        <div class="stat-icon warning">
+      🌍
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@qsCount)=%%</div>
+          <div class="stat-label">Quick Send</div>
+          <div class="stat-change">Distributed marketing campaigns</div>
+        </div>
+      </div>
+      
+      <div class="stat-card">
+        <div class="stat-icon info">
+          
+            👤
+          
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@automationsCount)=%%</div>
+          <div class="stat-label">Automations</div>
+          <div class="stat-change">Automations created</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon info">
+          
+            📆
+          
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@oneSend)=%%</div>
+          <div class="stat-label">One Send</div>
+          <div class="stat-change">One sends Created</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recent Activity Section -->
+    %%[
+      VAR @activityData, @currentDate, @monthNames, @surveyActivity, @responseActivity
+      SET @currentDate = Now()
+      SET @monthNames = "Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec"
+      
+      /* Calculate real dates for the last 12 months */
+      VAR @date1, @date2, @date3, @date4, @date5, @date6, @date7, @date8, @date9, @date10, @date11, @date12
+      VAR @month1, @month2, @month3, @month4, @month5, @month6, @month7, @month8, @month9, @month10, @month11, @month12
+      VAR @surveys1, @surveys2, @surveys3, @surveys4, @surveys5, @surveys6, @surveys7, @surveys8, @surveys9, @surveys10, @surveys11, @surveys12
+      VAR @responses1, @responses2, @responses3, @responses4, @responses5, @responses6, @responses7, @responses8, @responses9, @responses10, @responses11, @responses12
+      
+      /* Generate real dates going back 12 months */
+      SET @date12 = @currentDate
+      SET @date11 = DateAdd(@currentDate, -1, "M")
+      SET @date10 = DateAdd(@currentDate, -2, "M")
+      SET @date9 = DateAdd(@currentDate, -3, "M")
+      SET @date8 = DateAdd(@currentDate, -4, "M")
+      SET @date7 = DateAdd(@currentDate, -5, "M")
+      SET @date6 = DateAdd(@currentDate, -6, "M")
+      SET @date5 = DateAdd(@currentDate, -7, "M")
+      SET @date4 = DateAdd(@currentDate, -8, "M")
+      SET @date3 = DateAdd(@currentDate, -9, "M")
+      SET @date2 = DateAdd(@currentDate, -10, "M")
+      SET @date1 = DateAdd(@currentDate, -11, "M")
+      
+      /* Format month labels */
+      SET @month1 = Format(@date1, "MMM")
+      SET @month2 = Format(@date2, "MMM")
+      SET @month3 = Format(@date3, "MMM")
+      SET @month4 = Format(@date4, "MMM")
+      SET @month5 = Format(@date5, "MMM")
+      SET @month6 = Format(@date6, "MMM")
+      SET @month7 = Format(@date7, "MMM")
+      SET @month8 = Format(@date8, "MMM")
+      SET @month9 = Format(@date9, "MMM")
+      SET @month10 = Format(@date10, "MMM")
+      SET @month11 = Format(@date11, "MMM")
+      SET @month12 = Format(@date12, "MMM")
+      SET @surveys1 = 8
+        SET @surveys2 = 12
+        SET @surveys3 = 6
+        SET @surveys4 = 15
+        SET @surveys5 = 9
+        SET @surveys6 = 14
+        SET @surveys7 = 11
+        SET @surveys8 = 7
+        SET @surveys9 = 13
+        SET @surveys10 = 16
+        SET @surveys11 = 10
+        SET @surveys12 = 18
+        
+        SET @responses1 = 0
+        SET @responses2 = 0
+        SET @responses3 = 34
+        SET @responses4 = 92
+        SET @responses5 = 56
+        SET @responses6 = 87
+        SET @responses7 = 63
+        SET @responses8 = 41
+        SET @responses9 = 75
+        SET @responses10 = 98
+        SET @responses11 = 67
+        SET @responses12 = 5
+      VAR @last3MonthResponses, @recent30DayResponses
+      SET @last3MonthResponses = Add(Add(@responses10, @responses11), @responses12)
+      SET @recent30DayResponses = @responses12
+    ]%%
+    
+    <div class="section-header">
+      <h2>Engagement pulse</h2>
+      <div class="activity-filters">
+        <button class="activity-filter active" onclick="filterActivity('12months')" data-period="12months">12 months</button>
+        <button class="activity-filter" onclick="filterActivity('3months')" data-period="3months">3 months</button>
+        <button class="activity-filter" onclick="filterActivity('30days')" data-period="30days">30 days</button>
+      </div>
+    </div>
+    
+    <!-- Interactive Chart -->
+    <div class="activity-chart-container">
+      <div class="chart-header">
+        <h3>Engagement trends</h3>
+        <div class="chart-legend">
+          <div class="legend-item">
+            <div class="legend-color responses"></div>
+            <span>Events received</span>
+          </div>
+          <div class="chart-info">
+            <span style="font-size: 12px; color: #6b7280;">Months with measurable volume only</span>
+          </div>
+        </div>
+      </div>
+      <div class="chart-wrapper">
+        <canvas id="activityChart"></canvas>
+      </div>
+    </div>
+    
+
+    
+    <!-- Hidden data for JavaScript -->
+    <script type="application/json" id="activityChartData">
+    {
+      "12months": {
+        "labels": ["%%=v(@month1)=%%", "%%=v(@month2)=%%", "%%=v(@month3)=%%", "%%=v(@month4)=%%", "%%=v(@month5)=%%", "%%=v(@month6)=%%", "%%=v(@month7)=%%", "%%=v(@month8)=%%", "%%=v(@month9)=%%", "%%=v(@month10)=%%", "%%=v(@month11)=%%", "%%=v(@month12)=%%"],
+        "responses": [%%=v(@responses1)=%%, %%=v(@responses2)=%%, %%=v(@responses3)=%%, %%=v(@responses4)=%%, %%=v(@responses5)=%%, %%=v(@responses6)=%%, %%=v(@responses7)=%%, %%=v(@responses8)=%%, %%=v(@responses9)=%%, %%=v(@responses10)=%%, %%=v(@responses11)=%%, %%=v(@responses12)=%%],
+        "hasData": true
+      },
+      "3months": {
+        "labels": ["%%=v(@month10)=%%", "%%=v(@month11)=%%", "%%=v(@month12)=%%"],
+        "responses": [%%=v(@responses10)=%%, %%=v(@responses11)=%%, %%=v(@responses12)=%%],
+        "hasData": true
+      },
+      "30days": {
+        "labels": ["Last 30 Days"],
+        "responses": [%%=v(@recent30DayResponses)=%%],
+        "hasData": true
+      }
+    }
+    </script>
+
+    <!-- Hidden data for Reports Chart -->
+    <script type="application/json" id="reportsChartData">
+    {
+      "12months": {
+        "labels": ["%%=v(@month1)=%%", "%%=v(@month2)=%%", "%%=v(@month3)=%%", "%%=v(@month4)=%%", "%%=v(@month5)=%%", "%%=v(@month6)=%%", "%%=v(@month7)=%%", "%%=v(@month8)=%%", "%%=v(@month9)=%%", "%%=v(@month10)=%%", "%%=v(@month11)=%%", "%%=v(@month12)=%%"],
+        "responses": [%%=v(@responses1)=%%, %%=v(@responses2)=%%, %%=v(@responses3)=%%, %%=v(@responses4)=%%, %%=v(@responses5)=%%, %%=v(@responses6)=%%, %%=v(@responses7)=%%, %%=v(@responses8)=%%, %%=v(@responses9)=%%, %%=v(@responses10)=%%, %%=v(@responses11)=%%, %%=v(@responses12)=%%],
+        "hasData": true
+      },
+      "3months": {
+        "labels": ["%%=v(@month10)=%%", "%%=v(@month11)=%%", "%%=v(@month12)=%%"],
+        "responses": [%%=v(@responses10)=%%, %%=v(@responses11)=%%, %%=v(@responses12)=%%],
+        "hasData": true
+      },
+      "30days": {
+        "labels": ["Last 30 Days"],
+        "responses": [%%=v(@recent30DayResponses)=%%],
+        "hasData": true
+      }
+    }
+    </script>
+
+    <div class="section-header" id="allSurveysSection">
+      <h2>Recent builds</h2>
+      <div class="search-section">
+        <input class="search-input" type="text" placeholder="Search journeys by name or ID..." id="journeySearch" onkeyup="searchJourneys()">
+        <button class="filter-btn" onclick="toggleFilter()">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/>
+          </svg>
+          Filter
+        </button>
+      </div>
+    </div>
+    
+    <div class="surveys-grid">
+      %%[ IF @recentBuildsOk == "true" AND @jaEmpty == "1" THEN ]%%
+      <div class="no-surveys-message">
+        <div class="empty-state">
+          <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+            <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/>
+            <path d="M9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/>
+          </svg>
+          <h3>No builds yet</h3>
+          <p>You haven't built anything yet.</p>
+         
+        </div>
+      </div>
+      %%[ ELSEIF @recentBuildsOk == "true" THEN ]%%
+      %%=TreatAsContent(@jaRecentBuildsMarkup)=%%
+      %%[ ELSE ]%%
+      %%[ IF NOT Empty(@jaBuildsLoadError) THEN ]%%
+      <div class="no-surveys-message" style="grid-column: 1 / -1; margin-bottom: 0;">
+        <div class="empty-state" style="padding: 16px 20px;">
+          <p style="margin: 0; font-size: 14px;">Recent builds could not be loaded from the log. Showing sample journeys below.</p>
+          <p style="margin: 8px 0 0; font-size: 12px; opacity: 0.85;">%%=Replace(Replace(@jaBuildsLoadError,"\n"," "),"\r","")=%%</p>
+        </div>
+      </div>
+      %%[ ENDIF ]%%
+      %%[
+        VAR @rowCount, @i, @name, @id, @status, @created, @responseCount
+        SET @rowCount = 3
+        FOR @i = 1 TO @rowCount DO
+          IF @i == 1 THEN
+            SET @name = "Q3 renewal nurture"
+            SET @id = "DEMO-J001"
+            SET @status = "Active"
+            SET @created = "2024-01-15"
+            SET @responseCount = 47
+          ELSEIF @i == 2 THEN
+            SET @name = "Onboarding drip v2"
+            SET @id = "DEMO-J002"
+            SET @status = "Completed"
+            SET @created = "2024-01-10"
+            SET @responseCount = 89
+          ELSE
+            SET @name = "Webinar follow-up"
+            SET @id = "DEMO-J003"
+            SET @status = "Draft"
+            SET @created = "2024-01-05"
+            SET @responseCount = 11
+          ENDIF
+          IF Length(@name) > 20 THEN
+            SET @name = Concat(Substring(@name,1,20),"...")
+          ENDIF
+      ]%%
+      <div class="survey-card">
+        <div class="survey-header">
+          <div class="survey-icon">
+           📋
+          </div>
+          <div class="survey-status status-%%=v(@status)=%%">%%=v(@status)=%%</div>
+        </div>
+        <h3 class="survey-title">%%=v(@name)=%%</h3>
+        <div class="survey-meta">
+          <span class="survey-id">ID: %%=v(@id)=%%</span>
+          <span class="survey-date">%%=v(@created)=%%</span>
+        </div>
+        <div class="survey-progress">
+          <div class="progress-info">
+            <span>%%=v(@responseCount)=%% entry signals</span>
+            <span class="progress-percentage">%%=IIF(@responseCount > 0, FormatNumber(Multiply(Divide(@responseCount, 100), 100), 0), 0)=%%/100</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" style="width: %%=IIF(@responseCount > 0, FormatNumber(Multiply(Divide(@responseCount, 100), 100), 0), 0)=%%%;"></div>
+          </div>
+        </div>
+        <div class="survey-actions">
+          <a href="%%=v(@hubUrl)=%%" class="btn-secondary">Open builder</a>
+          <button class="btn-icon" title="More options">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      %%[ NEXT @i ]%%
+      %%[ ENDIF ]%%
+    </div>
+
+    <!-- Reports Section (Hidden by default) -->
+    <div class="reports-section" id="reportsSection" style="display: none;">
+      <div class="section-header">
+        <h2>Performance</h2>
+        <div class="activity-filters">
+          <button class="activity-filter active" onclick="filterActivity('12months')" data-period="12months">12 months</button>
+          <button class="activity-filter" onclick="filterActivity('3months')" data-period="3months">3 months</button>
+          <button class="activity-filter" onclick="filterActivity('30days')" data-period="30days">30 days</button>
+        </div>
+      </div>
+      
+      <!-- Chart for Reports (same as activity chart but prioritized) -->
+      <div class="activity-chart-container">
+        <div class="chart-header">
+          <h3>Engagement trends</h3>
+          <div class="chart-legend">
+            <div class="legend-item">
+              <div class="legend-color responses"></div>
+              <span>Events received</span>
+            </div>
+            <div class="chart-info">
+              <span style="font-size: 12px; color: #6b7280;">Months with measurable volume only</span>
+            </div>
+          </div>
+        </div>
+        <div class="chart-wrapper">
+          <canvas id="reportsChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Responses Section (Hidden by default) -->
+     
+    <div class="responses-section" id="responsesSection" style="display: none;">
+      <div class="section-header deploy-checklist-header">
+        <div>
+          <h2>Activity</h2>
+          <p class="deploy-checklist-intro">Deployment checklist — check items off as you complete Prod validation.</p>
+        </div>
+        <button type="button" class="filter-btn" id="deployChecklistResetBtn">Reset checklist</button>
+      </div>
+      <div class="deploy-checklist-panel">
+        <ul class="deploy-checklist-list" id="deployChecklistList">
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="campaign-prod">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Use correct campaign numbers from SF Prod (BD setups)</span>
+                <span class="deploy-checklist-desc">Confirm Salesforce Campaign IDs match Production BD campaign setup records, not UAT or stale values.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="verify-queries">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Verify queries return the required records</span>
+                <span class="deploy-checklist-desc">Run or preview audience queries and confirm row counts and filters match the intended send population.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="sf-tracking">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Enable Send to Salesforce tracking (for IER creation)</span>
+                <span class="deploy-checklist-desc">Turn on Send to Salesforce tracking on the journey email so Individual Email Results are created in Salesforce.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="prod-cloudpages">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Ensure Unsubscribe and Manage Preferences links go to Prod CloudPages</span>
+                <span class="deploy-checklist-desc">Check footer links point to Production CloudPages URLs, not UAT or placeholder pages.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="review-email">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Review the email in the journey</span>
+                <span class="deploy-checklist-desc">Open the email activity in Journey Builder and confirm content, links, and dynamic content render as expected.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="subject-line">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Confirm the subject line is correct (no UAT prefix)</span>
+                <span class="deploy-checklist-desc">Verify the subject line matches Production standards and does not include UAT prefixes or test wording.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="sender-profile">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Confirm the sender profile is correct</span>
+                <span class="deploy-checklist-desc">Validate From name, From address, and send classification match the approved Production sender profile.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="email-test">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Validate a successful email test</span>
+                <span class="deploy-checklist-desc">Send a test to a subscribed contact. Some AMPscript issues do not surface as errors in Marketing Cloud; if the test will not deploy, AMPscript may be faulty or the contact may be unsubscribed.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="confirm-tracking">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Confirm tracking after deployment</span>
+                <span class="deploy-checklist-desc">One-time sends: verify within the hour or by the next day. Features or automations from other systems: verify within the same week.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="bcc-address">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Add a BCC address if needed to track deployments</span>
+                <span class="deploy-checklist-desc">Configure BCC on the triggered send when you need a copy of production sends for monitoring.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="event-portal">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Event Portal: test new features after deployment</span>
+                <span class="deploy-checklist-desc">After go-live, exercise new Event Portal functionality in Production to confirm end-to-end behavior.</span>
+              </span>
+            </label>
+          </li>
+        </ul>
+        <p class="deploy-checklist-progress" id="deployChecklistProgress" aria-live="polite"></p>
+      </div>
+    </div>
+
+    <!-- Team Section (Hidden by default) -->
+    <div class="team-section" id="teamSection" style="display: none;">
+      <div class="section-header">
+        <h2>Builder team</h2>
+        <div class="team-filters">
+          <button class="activity-filter active" onclick="filterTeam('all')" data-team-filter="all">All Users</button>
+          <button class="activity-filter" onclick="filterTeam('online')" data-team-filter="online">Online</button>
+          <button class="activity-filter" onclick="filterTeam('recent')" data-team-filter="recent">Recent Activity</button>
+        </div>
+      </div>
+      
+      <div class="team-grid">
+        <div class="team-card">
+          <div class="team-avatar">JD</div>
+          <div class="team-info">
+            <h4>John Doe</h4>
+            <p class="team-role">Administrator</p>
+            <p class="team-status online">Online</p>
+            <p class="team-last-seen">Last active: 2 minutes ago</p>
+          </div>
+          <div class="team-activity">
+            <div class="activity-item">
+              <span class="activity-icon">📸</span>
+              <span class="activity-text">Reviewed journey canvas</span>
+            </div>
+          
+          </div>
+        </div>       
+        <div class="team-card">
+          <div class="team-avatar">JS</div>
+          <div class="team-info">
+            <h4>Jane Smith</h4>
+            <p class="team-role">Journey editor</p>
+            <p class="team-status online">Online</p>
+            <p class="team-last-seen">Last active: 5 minutes ago</p>
+          </div>
+          <div class="team-activity">
+            <div class="activity-item">
+              <span class="activity-icon">📸</span>
+              <span class="activity-text">Reviewed journey canvas</span>
+            </div>
+         
+          </div>
+        </div>
+      </div>
+    </div>
+    <footer class="maker-main-footer">
+      <span>Self Service</span>
+      <div class="maker-main-footer-end">
+%%[ IF NOT Empty(@environmentSwitchUrl) THEN ]%%
+        <a href="%%=v(@environmentSwitchUrl)=%%" class="home-env-switch" aria-label="%%=v(@envSwitchLabel)=%%">
+          <svg class="home-env-switch-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M6.99 11L3 15l3.99 4v-3H14v-2H6.99v-3zM21 9l-3.99-4v3H10v2h7.01v3L21 9z"/>
+          </svg>
+          <span>%%=v(@envDisplayName)=%%</span>
+        </a>
+%%[ ENDIF ]%%
+        <span>© 2026 All rights reserved | MagMutual</span>
+      </div>
+    </footer>
+  </main>
+</div>
+
+<style>
+/* Modern Design System */
+:root {
+  --primary-gradient: linear-gradient(135deg, #000000 0%, #060507 100%);
+  --primary-color: #6366f1;
+  --primary-dark: #4f46e5;
+  --success-color: #10b981;
+  --warning-color: #f59e0b;
+  --info-color: #3b82f6;
+  --danger-color: #ef4444;
+  --gray-50: #f9fafb;
+  --gray-100: #f3f4f6;
+  --gray-200: #e5e7eb;
+  --gray-300: #d1d5db;
+  --gray-400: #9ca3af;
+  --gray-500: #6b7280;
+  --gray-600: #4b5563;
+  --gray-700: #374151;
+  --gray-800: #1f2937;
+  --gray-900: #111827;
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background: var(--gray-50);
+  color: var(--gray-900);
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* Layout */
+.dashboard-layout {
+  display: flex;
+  height: 100vh;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+/* Sidebar */
+.sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  height: 100vh;
+  overflow: hidden;
+  background: white;
+  border-right: 1px solid var(--gray-200);
+  display: flex;
+  flex-direction: column;
+  padding: 32px 0 0 0;
+  box-shadow: var(--shadow-sm);
+}
+
+.sidebar-logo {
+  padding: 0 20px;
+  margin-bottom: 40px;
+}
+
+.nav-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gray-400);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 0 32px;
+  margin-bottom: 16px;
+}
+
+.sidebar-nav {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 32px;
+  color: var(--gray-600);
+  text-decoration: none;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  border-right: 3px solid transparent;
+}
+
+.nav-link:hover {
+  background: var(--gray-50);
+  color: var(--gray-900);
+}
+
+.nav-link.active {
+  background: linear-gradient(90deg, rgb(119 120 196 / 10%) 0%, rgb(2 3 22 / 5%) 100%);
+    color: #000000;
+    border-right-color: #2c2c31;
+}
+
+.nav-icon {
+  width: 20px;
+  height: 20px;
+  opacity: 0.7;
+}
+
+.nav-link.active .nav-icon {
+  opacity: 1;
+}
+
+.sidebar-footer {
+  flex-shrink: 0;
+  padding: 24px 32px 20px;
+  border-top: 1px solid var(--gray-200);
+  background: #fff;
+}
+
+.sidebar-user {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-avatar {
+  width: 40px;
+  height: 40px;
+  background: #000000;
+  color: white;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.user-name {
+  font-weight: 600;
+  color: var(--gray-900);
+  font-size: 14px;
+}
+
+.user-email {
+  color: var(--gray-500);
+  font-size: 12px;
+}
+
+/* Main Content */
+.main-content {
+  flex: 1;
+  min-width: 0;
+  height: 100vh;
+  padding: 40px;
+  overflow-y: auto;
+  background: var(--gray-50);
+}
+
+.maker-main-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 48px;
+  padding-top: 14px;
+  border-top: 1px solid var(--gray-200);
+  font-size: 13px;
+  color: var(--gray-500);
+}
+
+.maker-main-footer-end {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.home-env-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--gray-700);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.home-env-switch:hover {
+  color: var(--gray-900);
+}
+
+.home-env-switch-icon {
+  display: block;
+  color: var(--gray-500);
+}
+
+/* Demo Notice */
+.demo-notice {
+  background: linear-gradient(90deg, #fef3c7, #fde68a);
+  border: 1px solid #f59e0b;
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  animation: slideIn 0.5s ease-out;
+}
+
+@keyframes slideIn {
+  from { transform: translateY(-10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.demo-icon {
+  font-size: 20px;
+}
+
+.demo-content {
+  flex: 1;
+  font-size: 14px;
+  color: #92400e;
+}
+
+.demo-content strong {
+  color: #78350f;
+}
+
+/* Hero Section */
+.hero-section {
+     background: url(https://image.go.magmutual.com/lib/fe3411747364047e771073/m/1/662fb4a6-136a-4eaa-96d5-24ae513bb1bd.png);
+    border-radius: 20px;
+    padding: 48px 48px 48px 48px;
+    margin-bottom: 40px;
+    color: white;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background-position: right;
+    background-repeat: no-repeat;
+    background-color: #52575a;
+}
+
+.hero-content {
+  flex: 1;
+  z-index: 2;
+}
+
+.hero-badge {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  display: inline-block;
+  margin-bottom: 24px;
+}
+
+.hero-section h1 {
+  font-size: 42px;
+  font-weight: 700;
+  line-height: 1.2;
+  margin-bottom: 16px;
+}
+
+.hero-section p {
+  font-size: 18px;
+  opacity: 0.9;
+  margin-bottom: 32px;
+  max-width: 500px;
+}
+
+.hero-cta {
+  background: #0053ff;
+  color: #fdfdff;
+  padding: 16px 32px;
+  border-radius: 26px;
+  border: none;
+  font-weight: 600;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.hero-cta:hover {
+  background: white;
+  color: var(--primary-color);
+  
+}
+
+.journey-builder-panel-wrap {
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-height 0.45s ease, opacity 0.3s ease, margin 0.3s ease;
+  margin-bottom: 0;
+}
+
+.journey-builder-panel-wrap.is-open {
+  max-height: 480px;
+  opacity: 1;
+  margin-bottom: 32px;
+}
+
+.journey-builder-panel {
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 16px;
+  padding: 24px 28px 28px;
+  box-shadow: var(--shadow-md);
+}
+
+.journey-builder-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.journey-builder-panel-title {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--gray-900);
+  margin: 0;
+}
+
+.journey-builder-panel-close {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--gray-200);
+  background: var(--gray-50);
+  border-radius: 10px;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--gray-600);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.journey-builder-panel-close:hover {
+  background: var(--gray-100);
+  border-color: var(--gray-300);
+  color: var(--gray-900);
+}
+
+.journey-builder-panel-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.journey-builder-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 20px 18px;
+  border-radius: 12px;
+  border: 1px solid var(--gray-200);
+  background: var(--gray-50);
+  text-decoration: none;
+  color: inherit;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  cursor: pointer;
+}
+
+.journey-builder-choice:hover {
+ 
+  border-color: var(--gray-400);
+  /*-- background: #f9fafb0a;
+ filter: drop-shadow(3px 3px 1px #e5e7eb);*/
+  background: #f9fafb0a; 
+    filter: drop-shadow(3px 3px 2px #e5e7eb);
+}
+
+.journey-builder-choice-featured {
+  border-color: #121314;
+  background: linear-gradient(145deg, #f8fafc 0%, #eef2ff 100%);
+}
+
+.journey-builder-choice-featured:hover {
+  border-color: var(--primary-dark);
+  box-shadow: var(--shadow-md);
+}
+
+.journey-builder-choice-label {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--gray-900);
+}
+
+.journey-builder-choice-hint {
+  font-size: 0.8125rem;
+  color: var(--gray-600);
+  line-height: 1.35;
+}
+
+@media (max-width: 900px) {
+  .journey-builder-panel-cards {
+    grid-template-columns: 1fr;
+  }
+  .journey-builder-panel-wrap.is-open {
+    max-height: none;
+    overflow: visible;
+  }
+}
+
+.hero-illustration {
+  position: relative;
+  width: 300px;
+  height: 200px;
+}
+
+.floating-card {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(10px);
+  border-radius: 12px;
+  padding: 16px;
+  animation: float 6s ease-in-out infinite;
+}
+
+.card-1 {
+  top: 20px;
+  right: 40px;
+  animation-delay: 0s;
+}
+
+.card-2 {
+  top: 80px;
+  right: 120px;
+  animation-delay: 2s;
+}
+
+.card-3 {
+  top: 140px;
+  right: 20px;
+  animation-delay: 4s;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+}
+
+.mini-chart {
+  width: 40px;
+  height: 20px;
+  background: linear-gradient(45deg, rgba(255,255,255,0.3) 0%, rgba(255,255,255,0.1) 100%);
+  border-radius: 4px;
+}
+
+.mini-stat {
+  font-weight: 700;
+  font-size: 18px;
+  color: white;
+}
+
+.mini-progress {
+  width: 50px;
+  height: 6px;
+  background: rgba(255,255,255,0.2);
+  border-radius: 3px;
+  position: relative;
+}
+
+.mini-progress::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 70%;
+  height: 100%;
+  background: white;
+  border-radius: 3px;
+}
+
+/* Statistics Grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 24px;
+  margin-bottom: 40px;
+}
+
+.stat-card {
+  background: white;
+  padding: 10px 28px;
+  border-radius: 12px;
+  /* box-shadow: var(--shadow-sm); */
+  border: 1px solid var(--gray-200);
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  transition: all 0.2s ease;
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.stat-card.primary {
+     background: url("https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/megaphone-new.png");
+    /* color: white; */
+    border: 1px solid #e5e7eb;
+    background-size: cover;
+    background-position: bottom;
+}
+
+.stat-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gray-600);
+  font-size: 43px;
+}
+
+.stat-card.primary .stat-icon {
+ 
+  color: white;
+ font-size: 43px;
+}
+
+.stat-icon.success {
+
+  color: var(--success-color);
+ 
+  
+}
+
+.stat-icon.warning {
+ 
+  color: var(--warning-color);
+
+}
+
+.stat-icon.info {
+
+  color: var(--info-color);
+ 
+}
+
+.stat-value {
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.stat-label {
+  font-size: 14px;
+  font-weight: 500;
+  opacity: 0.8;
+  margin-bottom: 4px;
+}
+
+.stat-change {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.stat-change.success {
+  color: var(--success-color);
+}
+
+/* Section Headers */
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.section-header h2 {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--gray-900);
+}
+
+.activity-filters {
+  display: flex;
+  gap: 8px;
+}
+
+.activity-filter {
+  background: var(--gray-100);
+  border: none;
+  color: var(--gray-600);
+  font-weight: 500;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 14px;
+}
+
+.activity-filter.active  {
+  background: #121314;
+  color: white;
+}
+  .activity-filter:hover {
+    background: #52575a;
+    color: white;
+  }
+
+.search-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.search-input {
+  padding: 10px 16px;
+  border: 1px solid var(--gray-300);
+  border-radius: 8px;
+  font-size: 14px;
+  width: 300px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.search-input:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.filter-btn {
+  background: var(--gray-100);
+  border: none;
+  color: var(--gray-600);
+  padding: 10px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+
+.filter-btn:hover {
+  background: var(--gray-200);
+}
+
+/* Activity Chart Container */
+.activity-chart-container {
+  background: white;
+  border-radius: 16px;
+  padding: 32px;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--gray-200);
+  margin-bottom: 32px;
+}
+
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.chart-header h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--gray-900);
+  margin: 0;
+}
+
+.chart-legend {
+  display: flex;
+  gap: 24px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--gray-600);
+}
+
+.legend-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+}
+
+.legend-color.surveys {
+  background: var(--primary-color);
+}
+
+.legend-color.responses {
+  background: var(--success-color);
+}
+
+.chart-wrapper {
+  position: relative;
+  height: 350px;
+  width: 100%;
+  padding: 20px 0;
+}
+
+#activityChart {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+
+
+
+/* Journey roster grid cards */
+.surveys-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  margin-bottom: 40px;
+  width: 100%;
+}
+
+.survey-card {
+  background: white;
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--gray-200);
+  transition: all 0.2s ease;
+  max-width: 400px;
+  flex: 0 0 auto;
+  width: 350px;
+}
+
+.survey-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.survey-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.survey-icon {
+  width: 40px;
+  height: 40px;
+  background: var(--gray-100);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gray-600);
+  font-size: 30;
+}
+
+.survey-status {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.status-Active {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--success-color);
+}
+
+.status-Completed {
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--info-color);
+}
+
+.status-Draft {
+  background: rgba(245, 158, 11, 0.1);
+  color: var(--warning-color);
+}
+
+.survey-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--gray-900);
+  margin-bottom: 12px;
+  line-height: 1.3;
+}
+
+.survey-meta {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: var(--gray-500);
+}
+
+.survey-progress {
+  margin-bottom: 20px;
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.progress-percentage {
+  font-weight: 600;
+  color: var(--primary-color);
+}
+
+.progress-bar {
+  height: 6px;
+  background: var(--gray-200);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(135deg, #000000fa 0%, #4be11a 100%);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.survey-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.btn-secondary {
+  background: var(--gray-100);
+  color: var(--gray-700);
+  padding: 8px 16px;
+  border-radius: 8px;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  flex: 1;
+  text-align: center;
+}
+
+.btn-secondary:hover {
+  background: #000000;
+  color: #ffffff;
+}
+
+.btn-icon {
+  width: 36px;
+  height: 36px;
+  background: var(--gray-100);
+  border: none;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gray-600);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-icon:hover {
+  background: var(--gray-200);
+}
+
+/* Empty State */
+.no-surveys-message {
+  grid-column: 1 / -1;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 60px 40px;
+  background: white;
+  border-radius: 16px;
+  border: 1px solid var(--gray-200);
+}
+
+.empty-state svg {
+  color: var(--gray-400);
+  margin-bottom: 24px;
+}
+
+.empty-state h3 {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--gray-900);
+  margin-bottom: 12px;
+}
+
+.empty-state p {
+  color: var(--gray-600);
+  margin-bottom: 32px;
+  max-width: 400px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.btn-primary {
+  background: var(--primary-gradient);
+  color: white;
+  padding: 12px 24px;
+  border-radius: 8px;
+  border: none;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+/* Breadcrumb Styles */
+.breadcrumb-section {
+  padding: 16px 0;
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--gray-600);
+}
+
+.breadcrumb-link {
+  color: var(--primary-color);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.2s ease;
+}
+
+.breadcrumb-link:hover {
+  color: var(--primary-dark);
+  text-decoration: underline;
+}
+
+.breadcrumb-separator {
+  color: var(--gray-400);
+}
+
+.breadcrumb-current {
+  color: var(--gray-900);
+  font-weight: 500;
+}
+
+/* Deployment checklist (Activity tab) */
+.deploy-checklist-header {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.deploy-checklist-intro {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: var(--gray-600);
+  max-width: 42rem;
+  line-height: 1.5;
+}
+.deploy-checklist-panel {
+  background: #fff;
+  border: 1px solid var(--gray-200);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 40px;
+}
+.deploy-checklist-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.deploy-checklist-item {
+  border-bottom: 1px solid var(--gray-200);
+}
+.deploy-checklist-item:last-child {
+  border-bottom: none;
+}
+.deploy-checklist-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px 20px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.deploy-checklist-label:hover {
+  background: var(--gray-50);
+}
+.deploy-checklist-input {
+  width: 18px;
+  height: 18px;
+  margin-top: 3px;
+  flex-shrink: 0;
+  accent-color: var(--primary-color);
+  cursor: pointer;
+}
+.deploy-checklist-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.deploy-checklist-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--gray-900);
+  line-height: 1.35;
+}
+.deploy-checklist-desc {
+  font-size: 13px;
+  color: var(--gray-600);
+  line-height: 1.5;
+}
+.deploy-checklist-item.is-checked .deploy-checklist-title {
+  color: var(--gray-500);
+  text-decoration: line-through;
+  text-decoration-color: var(--gray-400);
+}
+.deploy-checklist-item.is-checked .deploy-checklist-desc {
+  color: var(--gray-500);
+}
+.deploy-checklist-progress {
+  margin: 0;
+  padding: 14px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-600);
+  border-top: 1px solid var(--gray-200);
+  background: var(--gray-50);
+}
+
+/* Responses Grid */
+.responses-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: 24px;
+  margin-bottom: 40px;
+}
+
+.response-card {
+  background: white;
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--gray-200);
+  transition: all 0.2s ease;
+}
+
+.response-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.response-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.response-survey h4 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--gray-900);
+  margin-bottom: 4px;
+  line-height: 1.3;
+}
+
+.response-id {
+  font-size: 12px;
+  color: var(--gray-500);
+}
+
+.response-status {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.status-Completed {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--success-color);
+}
+
+.response-meta {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: var(--gray-500);
+}
+
+.response-answers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.answer-item {
+  font-size: 13px;
+  color: var(--gray-700);
+  line-height: 1.4;
+}
+
+.answer-item strong {
+  color: var(--gray-900);
+  font-weight: 600;
+}
+
+/* Team Grid */
+.team-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  gap: 24px;
+  margin-bottom: 40px;
+}
+
+.team-card {
+  background: white;
+    border-radius: 12px;
+    padding: 20px 24px;
+    /* box-shadow: var(--shadow-sm); */
+    border: 1px solid var(--gray-200);
+    transition: all 0.2s ease;
+}
+
+.team-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.team-avatar {
+  width: 48px;
+  height: 48px;
+  background: #000000;
+  color: white;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 18px;
+  margin-bottom: 16px;
+}
+
+.team-info h4 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--gray-900);
+  margin-bottom: 4px;
+}
+
+.team-role {
+  font-size: 14px;
+  color: var(--gray-600);
+  margin-bottom: 8px;
+}
+
+.team-status {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.team-status.online {
+  color: var(--success-color);
+}
+
+.team-status.offline {
+  color: var(--gray-500);
+}
+
+.team-last-seen {
+  font-size: 12px;
+  color: var(--gray-500);
+  margin-bottom: 16px;
+}
+
+.team-activity {
+  border-top: 1px solid var(--gray-200);
+  padding-top: 16px;
+}
+
+.activity-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--gray-600);
+}
+
+.activity-item:last-child {
+  margin-bottom: 0;
+}
+
+.activity-icon {
+  font-size: 16px;
+}
+
+.activity-text {
+  flex: 1;
+}
+
+.team-filters {
+  display: flex;
+  gap: 8px;
+}
+
+/* Responsive Design */
+  .main-content {
+    padding: 24px;
+  }
+  
+  .hero-section {
+    flex-direction: row;
+    text-align: left;
+    padding: 40px 32px;
+  }
+  
+  .hero-illustration {
+    display: none;
+  }
+  
+  .stats-grid {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  }
+  
+  .surveys-grid {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 768px) {
+  .dashboard-layout {
+    flex-direction: column;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+  .survey-card {
+    max-width: none;
+    width: 100%;
+  }
+  .sidebar {
+    width: 100%;
+    height: auto;
+    flex-direction: row;
+    padding: 16px 0;
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+  
+  .sidebar-logo {
+    padding: 0 16px;
+    margin-bottom: 0;
+  }
+  
+  .sidebar-nav {
+    display: flex;
+    gap: 8px;
+    padding: 0 16px;
+  }
+  
+  .nav-link {
+    white-space: nowrap;
+    padding: 8px 16px;
+    border-radius: 8px;
+    border-right: none;
+  }
+  /*  this is the prof icon */
+  .sidebar-footer {
+    padding: 0 16px;
+    margin-left: auto;
+    width: auto;
+    position: static;
+    border-top: none;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+
+  .maker-main-footer {
+    margin-top: 32px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .maker-main-footer-end {
+    gap: 12px;
+  }
+
+  .main-content {
+    height: auto;
+    padding: 16px;
+  }
+  
+  .hero-section h1 {
+    font-size: 28px;
+  }
+  
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .section-header {
+    flex-direction: column;
+    gap: 16px;
+    align-items: flex-start;
+  }
+  
+  .search-section {
+    width: 100%;
+  }
+  
+  .search-input {
+    flex: 1;
+  }
+  
+  .responses-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .team-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
+
+<script>
+// Journey roster search
+function searchJourneys() {
+  const searchInput = document.getElementById('journeySearch');
+  const searchTerm = searchInput.value.toLowerCase();
+  const journeyCards = document.querySelectorAll('.survey-card');
+  let visibleCount = 0;
+
+  journeyCards.forEach(card => {
+    const journeyTitle = card.querySelector('.survey-title').textContent.toLowerCase();
+    const journeyId = card.querySelector('.survey-id').textContent.toLowerCase();
+    const journeyStatus = card.querySelector('.survey-status').textContent.toLowerCase();
+    
+    const isMatch = journeyTitle.includes(searchTerm) || 
+                   journeyId.includes(searchTerm) || 
+                   journeyStatus.includes(searchTerm);
+    
+    if (isMatch) {
+      card.style.display = 'block';
+      visibleCount++;
+    } else {
+      card.style.display = 'none';
+    }
+  });
+
+  toggleNoResultsMessage(visibleCount === 0 && searchTerm !== '');
+}
+
+function toggleFilter() {
+  alert('Filter is not available yet. Use search to find journeys by name, ID, or status.');
+}
+
+function toggleNoResultsMessage(show) {
+  let noResultsMsg = document.querySelector('.no-search-results');
+  
+  if (show && !noResultsMsg) {
+    const grid = document.querySelector('.surveys-grid');
+    noResultsMsg = document.createElement('div');
+    noResultsMsg.className = 'no-search-results';
+    noResultsMsg.innerHTML = `
+      <div class="empty-state">
+        <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+          <circle cx="11" cy="11" r="8"></circle>
+          <path d="m21 21-4.35-4.35"></path>
+        </svg>
+        <h3>No journeys found</h3>
+        <p>Adjust your search or clear it to see the full list.</p>
+        <button class="btn-primary" onclick="clearSearch()">Clear search</button>
+      </div>
+    `;
+    grid.appendChild(noResultsMsg);
+  } else if (!show && noResultsMsg) {
+    noResultsMsg.remove();
+  }
+}
+
+function clearSearch() {
+  document.getElementById('journeySearch').value = '';
+  searchJourneys();
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  const searchInput = document.getElementById('journeySearch');
+  if (searchInput) {
+    searchInput.addEventListener('keypress', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        searchJourneys();
+      }
+    });
+  }
+  
+  initializeActivityChart();
+});
+
+function toggleJourneyBuilderPanel(ev) {
+  if (ev) ev.stopPropagation();
+  const wrap = document.getElementById('journeyBuilderPanel');
+  if (!wrap) return;
+  const next = !wrap.classList.contains('is-open');
+  wrap.classList.toggle('is-open', next);
+  wrap.setAttribute('aria-hidden', next ? 'false' : 'true');
+  if (next) wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function closeJourneyBuilderPanel() {
+  const wrap = document.getElementById('journeyBuilderPanel');
+  if (!wrap) return;
+  wrap.classList.remove('is-open');
+  wrap.setAttribute('aria-hidden', 'true');
+}
+
+document.addEventListener('click', function(e) {
+  const wrap = document.getElementById('journeyBuilderPanel');
+  const btn = document.getElementById('heroOpenBuilderBtn');
+  if (!wrap || !wrap.classList.contains('is-open')) return;
+  if (btn && btn.contains(e.target)) return;
+  if (wrap.contains(e.target)) return;
+  closeJourneyBuilderPanel();
+});
+
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeJourneyBuilderPanel();
+});
+
+// Activity Chart Functionality
+let activityChart = null;
+
+function initializeActivityChart() {
+  const canvas = document.getElementById('activityChart');
+  if (!canvas) return;
+  
+  // Make canvas responsive
+  resizeCanvas(canvas);
+  
+  const ctx = canvas.getContext('2d');
+  const chartData = JSON.parse(document.getElementById('activityChartData').textContent);
+  
+  // Create initial chart with 12 months data
+  createChart(ctx, chartData['12months']);
+  
+  // Add resize listener
+  window.addEventListener('resize', function() {
+    resizeCanvas(canvas);
+    createChart(ctx, chartData[getActivePeriod()]);
+  });
+}
+
+function resizeCanvas(canvas) {
+  const container = canvas.parentElement;
+  const containerRect = container.getBoundingClientRect();
+  
+  // Set canvas size based on container
+  canvas.width = containerRect.width;
+  canvas.height = containerRect.height;
+  
+  // Scale for high-DPI displays
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width *= dpr;
+  canvas.height *= dpr;
+  
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  
+  // Reset canvas style size
+  canvas.style.width = containerRect.width + 'px';
+  canvas.style.height = containerRect.height + 'px';
+}
+
+function getActivePeriod() {
+  const activeBtn = document.querySelector('.activity-filter.active');
+  return activeBtn ? activeBtn.getAttribute('data-period') : '12months';
+}
+
+function createChart(ctx, data) {
+  // Get canvas dimensions
+  const canvas = ctx.canvas;
+  const containerRect = canvas.parentElement.getBoundingClientRect();
+  const width = containerRect.width;
+  const height = containerRect.height;
+  
+  // Clear canvas
+  ctx.clearRect(0, 0, width, height);
+  
+  // Filter out months with zero responses
+  const filteredData = {
+    labels: [],
+    responses: []
+  };
+  
+  for (let i = 0; i < data.responses.length; i++) {
+    if (data.responses[i] > 0) {
+      filteredData.labels.push(data.labels[i]);
+      filteredData.responses.push(data.responses[i]);
+    }
+  }
+  
+  // Check if we have data to display after filtering
+  if (filteredData.responses.length === 0) {
+    drawNoDataMessage(ctx, width, height);
+    return;
+  }
+  
+  // Use filtered data for the rest of the function
+  data = filteredData;
+  
+  // Chart dimensions with better padding for full width
+  const chartPadding = {
+    top: 30,
+    right: 40,
+    bottom: 60,
+    left: 70
+  };
+  const chartWidth = width - chartPadding.left - chartPadding.right;
+  const chartHeight = height - chartPadding.top - chartPadding.bottom;
+  
+  // Find max values for scaling (only responses now)
+  const maxResponses = Math.max(...data.responses);
+  const scaledMaxValue = Math.max(maxResponses, 10);
+  
+  // Draw background
+  ctx.fillStyle = '#fafafa';
+  ctx.fillRect(0, 0, width, height);
+  
+  // Draw chart background
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(chartPadding.left, chartPadding.top, chartWidth, chartHeight);
+  
+  // Draw grid lines
+  ctx.strokeStyle = '#f3f4f6';
+  ctx.lineWidth = 1;
+  
+  // Horizontal grid lines
+  for (let i = 0; i <= 5; i++) {
+    const y = chartPadding.top + (chartHeight / 5) * i;
+    ctx.beginPath();
+    ctx.moveTo(chartPadding.left, y);
+    ctx.lineTo(chartPadding.left + chartWidth, y);
+    ctx.stroke();
+    
+    // Y-axis labels
+    ctx.fillStyle = '#6b7280';
+    ctx.font = '11px Inter, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    const labelValue = Math.round((scaledMaxValue * (5 - i)) / 5);
+    ctx.fillText(labelValue, chartPadding.left - 10, y);
+  }
+  
+  // Vertical grid lines
+  for (let i = 0; i < data.labels.length; i++) {
+    const x = chartPadding.left + (chartWidth / (data.labels.length - 1)) * i;
+    ctx.beginPath();
+    ctx.moveTo(x, chartPadding.top);
+    ctx.lineTo(x, chartPadding.top + chartHeight);
+    ctx.stroke();
+  }
+  
+  // Draw area fill for responses (gradient)
+  const responseGradient = ctx.createLinearGradient(0, chartPadding.top, 0, chartPadding.top + chartHeight);
+  responseGradient.addColorStop(0, 'rgba(16, 185, 129, 0.3)');
+  responseGradient.addColorStop(1, 'rgba(16, 185, 129, 0.08)');
+  
+  ctx.fillStyle = responseGradient;
+  ctx.beginPath();
+  ctx.moveTo(chartPadding.left, chartPadding.top + chartHeight);
+  
+  data.responses.forEach((value, index) => {
+    const x = chartPadding.left + (chartWidth / (data.responses.length - 1)) * index;
+    const y = chartPadding.top + chartHeight - (value / scaledMaxValue) * chartHeight;
+    if (index === 0) {
+      ctx.lineTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  });
+  
+  ctx.lineTo(chartPadding.left + chartWidth, chartPadding.top + chartHeight);
+  ctx.closePath();
+  ctx.fill();
+
+  
+  // Draw responses line
+  ctx.strokeStyle = '#10b981';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  
+  data.responses.forEach((value, index) => {
+    const x = chartPadding.left + (chartWidth / (data.responses.length - 1)) * index;
+    const y = chartPadding.top + chartHeight - (value / scaledMaxValue) * chartHeight;
+    
+    if (index === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  });
+  ctx.stroke();
+  
+
+  
+  // Draw response points with shadow
+  ctx.shadowColor = 'rgba(16, 185, 129, 0.3)';
+  ctx.fillStyle = '#10b981';
+  data.responses.forEach((value, index) => {
+    const x = chartPadding.left + (chartWidth / (data.responses.length - 1)) * index;
+    const y = chartPadding.top + chartHeight - (value / scaledMaxValue) * chartHeight;
+    
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, 2 * Math.PI);
+    ctx.fill();
+    
+    // White center
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(x, y, 2, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.fillStyle = '#10b981';
+  });
+  
+  // Reset shadow
+  ctx.shadowBlur = 0;
+  
+  // Draw X-axis labels
+  ctx.fillStyle = '#6b7280';
+  ctx.font = '12px Inter, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  
+  data.labels.forEach((label, index) => {
+    const x = chartPadding.left + (chartWidth / (data.labels.length - 1)) * index;
+    const y = chartPadding.top + chartHeight + 15;
+    ctx.fillText(label, x, y);
+  });
+  
+  // Draw Y-axis title
+  ctx.save();
+  ctx.translate(15, chartPadding.top + chartHeight / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillStyle = '#6b7280';
+  ctx.font = '12px Inter, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Count', 0, 0);
+  ctx.restore();
+}
+
+// Draw no data message
+function drawNoDataMessage(ctx, width, height) {
+  // Draw background
+  ctx.fillStyle = '#fafafa';
+  ctx.fillRect(0, 0, width, height);
+  
+  // Draw message
+  ctx.fillStyle = '#9ca3af';
+  ctx.font = '16px Inter, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('No engagement data for this period', width / 2, height / 2 - 10);
+  
+  ctx.font = '14px Inter, sans-serif';
+  ctx.fillStyle = '#6b7280';
+  ctx.fillText('Data appears once journey events flow into reporting', width / 2, height / 2 + 15);
+}
+
+// Activity filter functionality
+function filterActivity(period) {
+  // Update active filter button
+  document.querySelectorAll('.activity-filter').forEach(btn => {
+    btn.classList.remove('active');
+  });
+  document.querySelector(`[data-period="${period}"]`).classList.add('active');
+  
+  // Get chart data and update chart
+  const chartData = JSON.parse(document.getElementById('activityChartData').textContent);
+  const canvas = document.getElementById('activityChart');
+  if (canvas) {
+    const ctx = canvas.getContext('2d');
+    createChart(ctx, chartData[period]);
+  }
+}
+
+function showAllJourneys() {
+  hideAllSections();
+  
+  document.getElementById('allSurveysSection').style.display = 'block';
+  document.querySelector('.surveys-grid').style.display = 'grid';
+  
+  document.getElementById('breadcrumbSection').style.display = 'block';
+  
+  document.querySelectorAll('.nav-link').forEach(link => {
+    link.classList.remove('active');
+  });
+  document.querySelector('.nav-link[onclick*="showAllJourneys"]').classList.add('active');
+  
+  document.getElementById('allSurveysSection').scrollIntoView({ behavior: 'smooth' });
+}
+
+// Show Dashboard functionality
+function showDashboard() {
+  hideAllSections();
+  document.getElementById('heroSection').style.display = 'flex';
+  document.querySelector('.stats-grid').style.display = 'grid';
+  document.querySelector('.section-header').style.display = 'flex';
+  document.querySelector('.activity-chart-container').style.display = 'block';
+
+  document.getElementById('breadcrumbSection').style.display = 'none';
+
+  document.querySelectorAll('.nav-link').forEach(link => {
+    link.classList.remove('active');
+  });
+  document.querySelector('.nav-link:first-of-type').classList.add('active');
+
+  window.scrollTo(0, 0);
+}
+
+// Show Reports functionality
+function showReports() {
+  // Hide all sections first
+  hideAllSections();
+  
+  // Show reports section
+  document.getElementById('reportsSection').style.display = 'block';
+  
+  // Update navigation active state
+  document.querySelectorAll('.nav-link').forEach(link => {
+    link.classList.remove('active');
+  });
+  document.querySelector('.nav-link[onclick*="showReports"]').classList.add('active');
+  
+  // Initialize reports chart
+  initializeReportsChart();
+  
+  // Scroll to top
+  window.scrollTo(0, 0);
+}
+
+// Show Responses functionality
+function showResponses() {
+  hideAllSections();
+  document.getElementById('responsesSection').style.display = 'block';
+  document.querySelectorAll('.nav-link').forEach(link => {
+    link.classList.remove('active');
+  });
+  document.querySelector('.nav-link[onclick*="showResponses"]').classList.add('active');
+  initDeployChecklist();
+  window.scrollTo(0, 0);
+}
+
+function updateDeployChecklistProgress() {
+  var inputs = document.querySelectorAll('.deploy-checklist-input');
+  var progressEl = document.getElementById('deployChecklistProgress');
+  if (!inputs.length || !progressEl) return;
+  var done = 0;
+  inputs.forEach(function (input) {
+    if (input.checked) done++;
+  });
+  progressEl.textContent = done + ' of ' + inputs.length + ' complete';
+}
+
+function initDeployChecklist() {
+  var inputs = document.querySelectorAll('.deploy-checklist-input');
+  if (!inputs.length) return;
+  inputs.forEach(function (input) {
+    var item = input.closest('.deploy-checklist-item');
+    if (item) item.classList.toggle('is-checked', input.checked);
+    if (input._deployChecklistBound) return;
+    input._deployChecklistBound = true;
+    input.addEventListener('change', function () {
+      var row = input.closest('.deploy-checklist-item');
+      if (row) row.classList.toggle('is-checked', input.checked);
+      updateDeployChecklistProgress();
+    });
+  });
+  updateDeployChecklistProgress();
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  initDeployChecklist();
+  var resetBtn = document.getElementById('deployChecklistResetBtn');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', function () {
+      document.querySelectorAll('.deploy-checklist-input').forEach(function (input) {
+        input.checked = false;
+        var item = input.closest('.deploy-checklist-item');
+        if (item) item.classList.remove('is-checked');
+      });
+      updateDeployChecklistProgress();
+    });
+  }
+});
+
+// Show Team functionality
+function showTeam() {
+  // Hide all sections first
+  hideAllSections();
+  
+  // Show team section
+  document.getElementById('teamSection').style.display = 'block';
+  
+  // Update navigation active state
+  document.querySelectorAll('.nav-link').forEach(link => {
+    link.classList.remove('active');
+  });
+  document.querySelector('.nav-link[onclick*="showTeam"]').classList.add('active');
+  
+  // Scroll to top
+  window.scrollTo(0, 0);
+}
+
+// Hide all sections helper function
+function hideAllSections() {
+  document.getElementById('heroSection').style.display = 'none';
+  closeJourneyBuilderPanel();
+  document.querySelector('.stats-grid').style.display = 'none';
+  document.querySelector('.section-header').style.display = 'none';
+  document.querySelector('.activity-chart-container').style.display = 'none';
+  document.getElementById('allSurveysSection').style.display = 'none';
+  document.querySelector('.surveys-grid').style.display = 'none';
+  document.getElementById('reportsSection').style.display = 'none';
+  document.getElementById('responsesSection').style.display = 'none';
+  document.getElementById('teamSection').style.display = 'none';
+}
+
+// Initialize reports chart
+function initializeReportsChart() {
+  const canvas = document.getElementById('reportsChart');
+  if (!canvas) return;
+  
+  // Make canvas responsive
+  resizeCanvas(canvas);
+  
+  const ctx = canvas.getContext('2d');
+  const chartData = JSON.parse(document.getElementById('reportsChartData').textContent);
+  
+  // Create chart with 12 months data
+  createChart(ctx, chartData['12months']);
+  
+  // Add resize listener
+  window.addEventListener('resize', function() {
+    resizeCanvas(canvas);
+    createChart(ctx, chartData[getActivePeriod()]);
+  });
+}
+
+// Search responses functionality
+function searchResponses() {
+  const searchInput = document.getElementById('responseSearch');
+  const searchTerm = searchInput.value.toLowerCase();
+  const responseCards = document.querySelectorAll('.response-card');
+  let visibleCount = 0;
+
+  responseCards.forEach(card => {
+    const journeyTitle = card.querySelector('.response-survey h4').textContent.toLowerCase();
+    const journeyKey = card.querySelector('.response-id').textContent.toLowerCase();
+    const contact = card.querySelector('.response-contact').textContent.toLowerCase();
+    const status = card.querySelector('.response-status').textContent.toLowerCase();
+
+    const isMatch = journeyTitle.includes(searchTerm) ||
+                   journeyKey.includes(searchTerm) ||
+                   contact.includes(searchTerm) || 
+                   status.includes(searchTerm);
+    
+    if (isMatch) {
+      card.style.display = 'block';
+      visibleCount++;
+    } else {
+      card.style.display = 'none';
+    }
+  });
+
+  // Show/hide no results message
+  toggleNoResponsesMessage(visibleCount === 0 && searchTerm !== '');
+}
+
+// Toggle response filter (placeholder for future functionality)
+function toggleResponseFilter() {
+  alert('Response filters are not available yet. Search by journey name, ID, contact, or status.');
+}
+
+// Show/hide no responses message
+function toggleNoResponsesMessage(show) {
+  let noResultsMsg = document.querySelector('.no-responses-message');
+  
+  if (show && !noResultsMsg) {
+    // Create no results message
+    const responsesGrid = document.querySelector('.responses-grid');
+    noResultsMsg = document.createElement('div');
+    noResultsMsg.className = 'no-responses-message';
+    noResultsMsg.innerHTML = `
+      <div class="empty-state">
+        <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+          <circle cx="11" cy="11" r="8"></circle>
+          <path d="m21 21-4.35-4.35"></path>
+        </svg>
+        <h3>No activity rows found</h3>
+        <p>Adjust your search or clear it to reload the subscriber log demo.</p>
+        <button class="btn-primary" onclick="clearResponseSearch()">Clear search</button>
+      </div>
+    `;
+    responsesGrid.appendChild(noResultsMsg);
+  } else if (!show && noResultsMsg) {
+    noResultsMsg.remove();
+  }
+}
+
+// Clear response search functionality
+function clearResponseSearch() {
+  document.getElementById('responseSearch').value = '';
+  searchResponses();
+}
+
+// Filter team functionality
+function filterTeam(filter) {
+  // Update active filter button
+  document.querySelectorAll('[data-team-filter]').forEach(btn => {
+    btn.classList.remove('active');
+  });
+  document.querySelector(`[data-team-filter="${filter}"]`).classList.add('active');
+  
+  const teamCards = document.querySelectorAll('.team-card');
+  
+  teamCards.forEach(card => {
+    const status = card.querySelector('.team-status').textContent.toLowerCase();
+    const lastSeen = card.querySelector('.team-last-seen').textContent.toLowerCase();
+    
+    let shouldShow = true;
+    
+    if (filter === 'online') {
+      shouldShow = status === 'online';
+    } else if (filter === 'recent') {
+      // Show users active in last 30 minutes
+      shouldShow = lastSeen.includes('minutes ago') || lastSeen.includes('minute ago');
+    }
+    // 'all' shows everything
+    
+    card.style.display = shouldShow ? 'block' : 'none';
+  });
+}
+
+
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
