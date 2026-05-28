@@ -973,6 +973,8 @@ var subdomain = Platform.Variable.GetValue("@subdomain") || "";
 var accessToken = Platform.Variable.GetValue("@accessToken") || "";
 var resultText = Platform.Variable.GetValue("@resultText") || "";
 var eventKey = Platform.Variable.GetValue("@eventKey") || "";
+var eventDefId = Platform.Variable.GetValue("@eventDefId") || "";
+var eventDataExtensionId = Platform.Variable.GetValue("@eventDataExtensionId") || "";
 var campaignId = Platform.Variable.GetValue("@campaignId") || "";
 var campaignName = Platform.Variable.GetValue("@campaignName") || "";
 var emailSubjectLine = Platform.Variable.GetValue("@emailSubjectLine") || "Campaign Event";
@@ -1089,6 +1091,187 @@ function lookupSendClassificationQs(classificationId) {
     if (rows.length > 0) return rows[0];
   } catch (scErr) {}
   return null;
+}
+function parseJsonSafeSbU(text) {
+  try {
+    return Platform.Function.ParseJSON(String(text || ""));
+  } catch (parseEx) {
+    return null;
+  }
+}
+function deepReplaceEventKeySbU(val, oldKey, newKey) {
+  if (val === null || val === undefined) {
+    return val;
+  }
+  if (typeof val === "string") {
+    if (val.indexOf(oldKey) < 0) {
+      return val;
+    }
+    return val.split(oldKey).join(newKey);
+  }
+  if (typeof val.length === "number") {
+    var i;
+    for (i = 0; i < val.length; i++) {
+      val[i] = deepReplaceEventKeySbU(val[i], oldKey, newKey);
+    }
+    return val;
+  }
+  if (typeof val === "object") {
+    for (var k in val) {
+      val[k] = deepReplaceEventKeySbU(val[k], oldKey, newKey);
+    }
+  }
+  return val;
+}
+function configureJourneyBoundEntrySbU(opts) {
+  var sub = opts.subdomain;
+  var token = opts.accessToken;
+  var journeyId = opts.journeyId;
+  var journeyUrl = opts.journeyUrl;
+  var journeyName = opts.journeyName;
+  var bootstrapEventDefId = opts.bootstrapEventDefId;
+  var bootstrapEventKey = opts.bootstrapEventKey;
+  var dataExtensionId = opts.dataExtensionId;
+  var eventDefBase =
+    "https://" + sub + ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions";
+  var srcExtId = "";
+  if (bootstrapEventDefId) {
+    var getBootReq = new Script.Util.HttpRequest(
+      eventDefBase + "/" + encodeURIComponent(String(bootstrapEventDefId))
+    );
+    getBootReq.emptyContentHandling = 0;
+    getBootReq.continueOnError = true;
+    getBootReq.setHeader("Authorization", "Bearer " + token);
+    getBootReq.method = "GET";
+    var getBootResp = getBootReq.send();
+    if (getBootResp.statusCode == 200 || getBootResp.statusCode == 201) {
+      var bootObj = parseJsonSafeSbU(getBootResp.content);
+      if (bootObj && bootObj.sourceApplicationExtensionId) {
+        srcExtId = String(bootObj.sourceApplicationExtensionId);
+      }
+    }
+  }
+  var boundEventKey = "APIEvent-" + randomGuidSbU();
+  var boundPayload = {
+    name: journeyName,
+    description: "",
+    type: "APIEvent",
+    mode: "Production",
+    eventDefinitionKey: boundEventKey,
+    dataExtensionId: dataExtensionId,
+    isVisibleInPicker: false
+  };
+  if (srcExtId) {
+    boundPayload.sourceApplicationExtensionId = srcExtId;
+  }
+  var postEvReq = new Script.Util.HttpRequest(eventDefBase);
+  postEvReq.emptyContentHandling = 0;
+  postEvReq.continueOnError = true;
+  postEvReq.setHeader("Authorization", "Bearer " + token);
+  postEvReq.method = "POST";
+  postEvReq.contentType = "application/json";
+  postEvReq.postData = Platform.Function.Stringify(boundPayload);
+  var postEvResp = postEvReq.send();
+  if (postEvResp.statusCode != 200 && postEvResp.statusCode != 201) {
+    return {
+      ok: false,
+      message:
+        " Step 4b FAILED: bound entry event HTTP " +
+        postEvResp.statusCode +
+        " - " +
+        (postEvResp.content ? String(postEvResp.content) : "")
+    };
+  }
+  var boundObj = parseJsonSafeSbU(postEvResp.content);
+  var boundEventDefId =
+    boundObj && boundObj.id ? String(boundObj.id) : "";
+  if (!boundEventDefId) {
+    var boundIdMatch = String(postEvResp.content || "").match(
+      /"id"\s*:\s*"([^"]+)"/
+    );
+    boundEventDefId = boundIdMatch ? boundIdMatch[1] : "";
+  }
+  if (boundObj && boundObj.eventDefinitionKey) {
+    boundEventKey = String(boundObj.eventDefinitionKey);
+  }
+  if (!boundEventDefId) {
+    return {
+      ok: false,
+      message: " Step 4b FAILED: bound entry event id missing."
+    };
+  }
+  var getJourneyUrl =
+    journeyUrl + "/" + encodeURIComponent(String(journeyId)) + "?extras=all";
+  var getJReq = new Script.Util.HttpRequest(getJourneyUrl);
+  getJReq.emptyContentHandling = 0;
+  getJReq.continueOnError = true;
+  getJReq.setHeader("Authorization", "Bearer " + token);
+  getJReq.method = "GET";
+  var getJResp = getJReq.send();
+  if (getJResp.statusCode != 200 && getJResp.statusCode != 201) {
+    return {
+      ok: false,
+      message:
+        " Step 4c FAILED: GET journey HTTP " +
+        getJResp.statusCode +
+        " - " +
+        (getJResp.content ? String(getJResp.content) : "")
+    };
+  }
+  var jObj = parseJsonSafeSbU(getJResp.content);
+  if (!jObj || !jObj.triggers || !jObj.triggers.length) {
+    return {
+      ok: false,
+      message: " Step 4c FAILED: journey triggers missing."
+    };
+  }
+  deepReplaceEventKeySbU(jObj, bootstrapEventKey, boundEventKey);
+  jObj.triggers[0].metaData = jObj.triggers[0].metaData || {};
+  jObj.triggers[0].metaData.eventDefinitionId = boundEventDefId;
+  jObj.triggers[0].metaData.eventDefinitionKey = boundEventKey;
+  jObj.triggers[0].arguments = {};
+  jObj.triggers[0].configurationArguments = {};
+  if (!jObj.triggers[0].metaData.sourceInteractionId) {
+    jObj.triggers[0].metaData.sourceInteractionId =
+      "00000000-0000-0000-0000-000000000000";
+  }
+  var versionNum = jObj.version || 1;
+  var putUrl =
+    journeyUrl + "?versionNumber=" + encodeURIComponent(String(versionNum));
+  var putReq = new Script.Util.HttpRequest(putUrl);
+  putReq.emptyContentHandling = 0;
+  putReq.continueOnError = true;
+  putReq.setHeader("Authorization", "Bearer " + token);
+  putReq.method = "PUT";
+  putReq.contentType = "application/json";
+  putReq.postData = Platform.Function.Stringify(jObj);
+  var putResp = putReq.send();
+  if (putResp.statusCode != 200 && putResp.statusCode != 201) {
+    return {
+      ok: false,
+      message:
+        " Step 4c FAILED: PUT journey HTTP " +
+        putResp.statusCode +
+        " - " +
+        (putResp.content ? String(putResp.content) : "")
+    };
+  }
+  if (bootstrapEventDefId && bootstrapEventDefId != boundEventDefId) {
+    var delReq = new Script.Util.HttpRequest(
+      eventDefBase + "/" + encodeURIComponent(String(bootstrapEventDefId))
+    );
+    delReq.emptyContentHandling = 0;
+    delReq.continueOnError = true;
+    delReq.setHeader("Authorization", "Bearer " + token);
+    delReq.method = "DELETE";
+    delReq.send();
+  }
+  return {
+    ok: true,
+    message: " Step 4b OK - Journey entry event configured.",
+    boundEventKey: boundEventKey,
+    boundEventDefId: boundEventDefId
+  };
 }
 function buildCmUpdateActivitySbU(opts) {
   var ek = opts.eventKey;
@@ -1423,6 +1606,36 @@ if (
      if (journeyId) {
        Platform.Variable.SetValue("@journeyId", journeyId);
        journeyResult = journeyResult + " Journey ID: " + journeyId + " (draft).";
+       if (eventDefId && eventKey && eventDataExtensionId) {
+         var bindResult = configureJourneyBoundEntrySbU({
+           subdomain: subdomain,
+           accessToken: accessToken,
+           journeyId: journeyId,
+           journeyUrl: journeyUrl,
+           journeyName: journeyName,
+           bootstrapEventDefId: eventDefId,
+           bootstrapEventKey: eventKey,
+           dataExtensionId: eventDataExtensionId
+         });
+         if (bindResult.ok) {
+           journeyResult = journeyResult + bindResult.message;
+           Platform.Variable.SetValue("@eventKey", bindResult.boundEventKey);
+           Platform.Variable.SetValue("@eventDefId", bindResult.boundEventDefId);
+           Platform.Variable.SetValue(
+             "@defaultEmailEscaped",
+             ("{{Event." + bindResult.boundEventKey + '.\"email\"}}').replace(
+               /"/g,
+               '\\"'
+             )
+           );
+         } else {
+           journeyResult = journeyResult + bindResult.message;
+           Platform.Variable.SetValue("@cleanupNeeded", "1");
+         }
+       } else {
+         journeyResult =
+           journeyResult + " Step 4b SKIP - Entry event ids not available.";
+       }
      }
    } else {
      journeyResult = " Step 4 FAILED: HTTP " + journeyStatus + " - " + journeyResponse;
