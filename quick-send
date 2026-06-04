@@ -173,7 +173,6 @@ IF @showForm != "true" THEN
  ENDIF
 ENDIF
 ]%%
-%%[ IF @showForm == "true" THEN ]%%
 <script runat="server">
 Platform.Load("core","1");
 var senderProfileIdReq = Platform.Variable.GetValue("@senderProfileId") || "";
@@ -365,8 +364,6 @@ try {
 Platform.Variable.SetValue("@sendClassificationConfigOk", sendClassificationConfigOk);
 Platform.Variable.SetValue("@sendClassificationOptionsHtml", sendClassificationOptionsHtml);
 </script>
-%%[ ENDIF ]%%
-%%[ IF @showForm != "true" THEN ]%%
 <script runat="server">
 Platform.Load("core","1");
 var authOk = Variable.GetValue("authOk");
@@ -426,43 +423,6 @@ function summarizeEmailOptions(dataObj) {
  if (!dataObj || !dataObj.email || !dataObj.email.options) return null;
  return cloneObject(dataObj.email.options);
 }
-function isDuplicateAssetNameError(statusCode, responseText) {
- if (statusCode != 400 || !responseText) {
-   return false;
- }
- var text = String(responseText);
- if (text.indexOf("already taken") >= 0) {
-   return true;
- }
- if (text.indexOf("118039") >= 0) {
-   return true;
- }
- return false;
-}
-function extractSuggestedAssetName(responseText) {
- var match = String(responseText || "").match(/Suggested name:\s*([^"}\]]+)/i);
- if (!match) {
-   return "";
- }
- return String(match[1]).replace(/\s+$/, "");
-}
-function postEmailAssetPayload(payload, subdomainValue, accessTokenValue) {
- var assetUrl =
-   "https://" + subdomainValue + ".rest.marketingcloudapis.com/asset/v1/content/assets";
- var postReq = new Script.Util.HttpRequest(assetUrl);
- postReq.emptyContentHandling = 0;
- postReq.retries = 0;
- postReq.continueOnError = true;
- postReq.setHeader("Authorization", "Bearer " + accessTokenValue);
- postReq.method = "POST";
- postReq.contentType = "application/json";
- postReq.postData = Platform.Function.Stringify(payload);
- var postResp = postReq.send();
- return {
-   statusCode: postResp.statusCode,
-   content: postResp.content ? String(postResp.content) : ""
- };
-}
 function fetchAssetById(assetId, subdomainValue, accessTokenValue) {
  var result = {
    ok: false,
@@ -478,7 +438,7 @@ function fetchAssetById(assetId, subdomainValue, accessTokenValue) {
    var assetUrl = "https://" + subdomainValue + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + parsedId;
    var req = new Script.Util.HttpRequest(assetUrl);
    req.emptyContentHandling = 0;
-   req.retries = 0;
+   req.retries = 2;
    req.continueOnError = true;
    req.setHeader("Authorization", "Bearer " + accessTokenValue);
    req.method = "GET";
@@ -638,7 +598,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
    var deleteUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + deleteEmailId;
    var deleteReq = new Script.Util.HttpRequest(deleteUrl);
    deleteReq.emptyContentHandling = 0;
-   deleteReq.retries = 0;
+   deleteReq.retries = 2;
    deleteReq.continueOnError = true;
    deleteReq.setHeader("Authorization", "Bearer " + accessToken);
    deleteReq.method = "DELETE";
@@ -656,7 +616,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
    var templateUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + sourceEmailId;
    var getReq = new Script.Util.HttpRequest(templateUrl);
    getReq.emptyContentHandling = 0;
-   getReq.retries = 0;
+   getReq.retries = 2;
    getReq.continueOnError = true;
    getReq.setHeader("Authorization", "Bearer " + accessToken);
    getReq.method = "GET";
@@ -731,28 +691,44 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
        step3bResult = " Step 3b SKIP - Email not duplicated: Unsupported source asset type " + assetTypeId + "." + debugPrefix;
      }
      if (payload && !step3bResult.match(/views\.html\.template is missing|Unsupported source asset type/)) {
-       var attemptName = emailName;
-       var assetStatus = 0;
-       var assetResponse = "";
-       var maxAttempts = 3;
-       var attempt;
-       for (attempt = 0; attempt < maxAttempts; attempt++) {
-         payload.name = attemptName;
-         var postResult = postEmailAssetPayload(payload, subdomain, accessToken);
-         assetStatus = postResult.statusCode;
-         assetResponse = postResult.content;
-         if (assetStatus == 200 || assetStatus == 201) {
-           break;
+       var debugObj = {
+         source: {
+           assetTypeId: assetTypeId,
+           subjectlineLength: safeLength(subjectlineContent),
+           preheaderLength: safeLength(preheaderContent),
+           textLength: safeLength(textContent),
+           html: summarizeHtmlView(htmlView),
+           emailOptions: summarizeEmailOptions(template.data),
+           resolvedTemplate: resolvedTemplateAsset ? {
+             id: resolvedTemplateAsset.id || "",
+             contentLength: safeLength(resolvedTemplateAsset.content),
+             slotKeys: objectKeys(resolvedTemplateAsset.slots)
+           } : null
+         },
+         outgoing: {
+           assetType: payload.assetType || null,
+           category: payload.category || null,
+           channels: payload.channels || null,
+           subjectlineLength: (payload.views && payload.views.subjectline) ? safeLength(payload.views.subjectline.content) : 0,
+           preheaderLength: (payload.views && payload.views.preheader) ? safeLength(payload.views.preheader.content) : 0,
+           textLength: (payload.views && payload.views.text) ? safeLength(payload.views.text.content) : 0,
+           html: summarizeHtmlView(payload.views ? payload.views.html : null),
+           emailOptions: summarizeEmailOptions(payload.data)
          }
-         if (
-           !isDuplicateAssetNameError(assetStatus, assetResponse) ||
-           attempt >= maxAttempts - 1
-         ) {
-           break;
-         }
-         var suggestedName = extractSuggestedAssetName(assetResponse);
-         attemptName = suggestedName || String(emailName) + " (" + (attempt + 1) + ")";
-       }
+       };
+       payloadDebug = truncateString(Platform.Function.Stringify(debugObj), 2500);
+       var assetUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets";
+       var postReq = new Script.Util.HttpRequest(assetUrl);
+       postReq.emptyContentHandling = 0;
+       postReq.retries = 2;
+       postReq.continueOnError = true;
+       postReq.setHeader("Authorization", "Bearer " + accessToken);
+       postReq.method = "POST";
+       postReq.contentType = "application/json";
+       postReq.postData = Platform.Function.Stringify(payload);
+       var postResp = postReq.send();
+       var assetStatus = postResp.statusCode;
+       var assetResponse = postResp.content ? String(postResp.content) : "";
        if ((assetStatus == 200 || assetStatus == 201) && assetResponse) {
          var idMatch = assetResponse.match(/"id"\s*:\s*"?([^",}\s]+)"?/);
          if (idMatch) {
@@ -764,12 +740,6 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
              createdAsset = null;
            }
            journeyEmailId = extractLegacyEmailId(createdAsset);
-           if (!journeyEmailId && assetResponse) {
-             var legacyMatch = assetResponse.match(/"legacyId"\s*:\s*"?(\d+)"?/);
-             if (legacyMatch) {
-               journeyEmailId = legacyMatch[1];
-             }
-           }
            if (!journeyEmailId && newEmailId) {
              var createdAssetFetch = fetchAssetById(newEmailId, subdomain, accessToken);
              if (createdAssetFetch.ok && createdAssetFetch.asset) {
@@ -778,10 +748,6 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
            }
            if (journeyEmailId) {
              step3bResult = " Step 3b OK - Email duplicated.";
-             if (attemptName && attemptName != emailName) {
-               step3bResult =
-                 step3bResult + " Asset name: " + attemptName + " (base name taken).";
-             }
            } else {
              step3bResult = " Step 3b SKIP - Email duplicated but legacy email ID was not available for Journey Builder.";
            }
@@ -789,32 +755,6 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
            step3bResult = " Step 3b SKIP - Email duplicated but new ID was not returned." + debugPrefix + " Response: " + assetResponse + " Debug: " + payloadDebug;
          }
        } else {
-         var debugObj = {
-           source: {
-             assetTypeId: assetTypeId,
-             subjectlineLength: safeLength(subjectlineContent),
-             preheaderLength: safeLength(preheaderContent),
-             textLength: safeLength(textContent),
-             html: summarizeHtmlView(htmlView),
-             emailOptions: summarizeEmailOptions(template.data),
-             resolvedTemplate: resolvedTemplateAsset ? {
-               id: resolvedTemplateAsset.id || "",
-               contentLength: safeLength(resolvedTemplateAsset.content),
-               slotKeys: objectKeys(resolvedTemplateAsset.slots)
-             } : null
-           },
-           outgoing: {
-             assetType: payload.assetType || null,
-             category: payload.category || null,
-             channels: payload.channels || null,
-             subjectlineLength: (payload.views && payload.views.subjectline) ? safeLength(payload.views.subjectline.content) : 0,
-             preheaderLength: (payload.views && payload.views.preheader) ? safeLength(payload.views.preheader.content) : 0,
-             textLength: (payload.views && payload.views.text) ? safeLength(payload.views.text.content) : 0,
-             html: summarizeHtmlView(payload.views ? payload.views.html : null),
-             emailOptions: summarizeEmailOptions(payload.data)
-           }
-         };
-         payloadDebug = truncateString(Platform.Function.Stringify(debugObj), 2500);
          step3bResult = " Step 3b SKIP - Email not duplicated: HTTP " + assetStatus + " - " + (assetResponse || "No response body.") + debugPrefix + " Debug: " + payloadDebug;
        }
      }
@@ -931,7 +871,7 @@ function resolveEventDefinition(evId, sub, token, createResponse) {
     encodeURIComponent(String(evId));
   var getReq = new Script.Util.HttpRequest(getUrl);
   getReq.emptyContentHandling = 0;
-  getReq.retries = 0;
+  getReq.retries = 1;
   getReq.continueOnError = true;
   getReq.setHeader("Authorization", "Bearer " + token);
   getReq.method = "GET";
@@ -992,7 +932,7 @@ if (
       eventDefinitionId: eventDefId,
       eventDefinitionKey: eventKey,
       chainType: "None",
-      configurationRequired: false,
+      configurationRequired: true,
       iconUrl: "/images/icon_journeyBuilder-event-api-blue.svg",
       title: "",
       entrySourceGroupConfigUrl:
@@ -1159,61 +1099,395 @@ function parseJsonSafeSbU(text) {
     return null;
   }
 }
-function createBoundEntryEventSbU(sub, token, journeyName, dataExtensionId) {
-  var eventDefBase =
-    "https://" + sub + ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions";
-  var boundEventKey = "APIEvent-" + randomGuidSbU();
-  var boundPayload = {
+function httpJsonSbU(token, method, url, bodyStr) {
+  var req = new Script.Util.HttpRequest(url);
+  req.emptyContentHandling = 0;
+  req.continueOnError = true;
+  req.setHeader("Authorization", "Bearer " + token);
+  req.method = method;
+  if (bodyStr) {
+    req.contentType = "application/json";
+    req.postData = bodyStr;
+  }
+  var resp = req.send();
+  return {
+    status: resp.statusCode,
+    body: resp.content ? String(resp.content) : ""
+  };
+}
+function resolveApiEventSourceExtensionId(token, subdomain) {
+  var listUrl =
+    "https://" +
+    subdomain +
+    ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions?$page=1&$pagesize=200";
+  var resp = httpJsonSbU(token, "GET", listUrl, null);
+  if (resp.status != 200 && resp.status != 201) {
+    return "";
+  }
+  var data = parseJsonSafeSbU(resp.body);
+  var items =
+    data && data.items
+      ? data.items
+      : data && data.count !== undefined && data.items === undefined
+      ? []
+      : Array.isArray(data)
+      ? data
+      : [];
+  var i;
+  for (i = 0; i < items.length; i++) {
+    var item = items[i];
+    if (!item) {
+      continue;
+    }
+    var itemType = String(item.type || "");
+    if (
+      (itemType == "APIEvent" || itemType == "Event") &&
+      item.sourceApplicationExtensionId
+    ) {
+      return String(item.sourceApplicationExtensionId);
+    }
+  }
+  return "";
+}
+function replaceEventKeyInJourneyObject(jObj, oldKey, newKey) {
+  if (!jObj || !oldKey || !newKey || oldKey == newKey) {
+    return jObj;
+  }
+  var serialized = Platform.Function.Stringify(jObj);
+  serialized = serialized.split(oldKey).join(newKey);
+  return parseJsonSafeSbU(serialized);
+}
+function readTriggerEventDefIdSbU(trig) {
+  if (!trig) {
+    return "";
+  }
+  var meta = trig.metaData || {};
+  var args = trig.arguments || {};
+  return String(meta.eventDefinitionId || args.eventDefinitionId || "");
+}
+function readTriggerEventKeySbU(trig, fallbackKey) {
+  if (!trig) {
+    return String(fallbackKey || "");
+  }
+  var meta = trig.metaData || {};
+  var args = trig.arguments || {};
+  return String(
+    meta.eventDefinitionKey || args.eventDefinitionKey || fallbackKey || ""
+  );
+}
+function resolveEventDefinitionIdByKeySbU(token, subdomain, eventKey) {
+  if (!token || !subdomain || !eventKey) {
+    return "";
+  }
+  var listUrl =
+    "https://" +
+    subdomain +
+    ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions?$page=1&$pagesize=200";
+  var resp = httpJsonSbU(token, "GET", listUrl, null);
+  if (resp.status != 200 && resp.status != 201) {
+    return "";
+  }
+  var data = parseJsonSafeSbU(resp.body);
+  var items =
+    data && data.items
+      ? data.items
+      : data && data.count !== undefined && data.items === undefined
+      ? []
+      : Array.isArray(data)
+      ? data
+      : [];
+  var i;
+  for (i = 0; i < items.length; i++) {
+    var item = items[i];
+    if (item && String(item.eventDefinitionKey || "") == eventKey && item.id) {
+      return String(item.id);
+    }
+  }
+  return "";
+}
+function configureJourneyEntryEvent(opts) {
+  var oldEventKey = String(opts.oldEventKey || "");
+  var oldEventDefId = String(opts.oldEventDefId || "");
+  var dataExtensionId = String(opts.dataExtensionId || "");
+  var journeyId = String(opts.journeyId || "");
+  var journeyUrl = String(opts.journeyUrl || "");
+  var journeyName = String(opts.journeyName || "API Entry");
+  var subdomain = String(opts.subdomain || "");
+  var token = String(opts.accessToken || "");
+  if (
+    !oldEventKey ||
+    !oldEventDefId ||
+    !dataExtensionId ||
+    !journeyId ||
+    !journeyUrl ||
+    !subdomain ||
+    !token
+  ) {
+    return { ok: false, message: " Step 4b FAILED: Entry configure inputs missing." };
+  }
+  var eventBaseUrl =
+    "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions";
+  var getOldEv = httpJsonSbU(
+    token,
+    "GET",
+    eventBaseUrl + "/" + encodeURIComponent(oldEventDefId),
+    null
+  );
+  if (getOldEv.status != 200 && getOldEv.status != 201) {
+    return {
+      ok: false,
+      message:
+        " Step 4b FAILED: event GET HTTP " + getOldEv.status + " - " + getOldEv.body
+    };
+  }
+  var evObj = parseJsonSafeSbU(getOldEv.body);
+  if (!evObj || !evObj.schema) {
+    return { ok: false, message: " Step 4b FAILED: entry event schema missing." };
+  }
+  var srcAppExtId = resolveApiEventSourceExtensionId(token, subdomain);
+  if (!srcAppExtId && evObj.sourceApplicationExtensionId) {
+    srcAppExtId = String(evObj.sourceApplicationExtensionId);
+  }
+  var getJourneyUrl =
+    journeyUrl + "/" + encodeURIComponent(journeyId) + "?extras=all";
+  var getJ = httpJsonSbU(token, "GET", getJourneyUrl, null);
+  if (getJ.status != 200 && getJ.status != 201) {
+    return {
+      ok: false,
+      message:
+        " Step 4b FAILED: journey GET HTTP " + getJ.status + " - " + getJ.body
+    };
+  }
+  var jObj = parseJsonSafeSbU(getJ.body);
+  if (!jObj || !jObj.triggers || !jObj.triggers.length) {
+    return { ok: false, message: " Step 4b FAILED: journey triggers missing." };
+  }
+  var newEventKey = "APIEvent-" + randomGuidSbU();
+  var newEventPayload = {
     name: journeyName,
     description: "",
     type: "APIEvent",
     mode: "Production",
-    eventDefinitionKey: boundEventKey,
-    dataExtensionId: dataExtensionId,
-    isVisibleInPicker: false
+    eventDefinitionKey: newEventKey,
+    isVisibleInPicker: false,
+    dataExtensionId: dataExtensionId
   };
-  var postEvReq = new Script.Util.HttpRequest(eventDefBase);
-  postEvReq.emptyContentHandling = 0;
-  postEvReq.continueOnError = true;
-  postEvReq.setHeader("Authorization", "Bearer " + token);
-  postEvReq.method = "POST";
-  postEvReq.contentType = "application/json";
-  postEvReq.postData = Platform.Function.Stringify(boundPayload);
-  var postEvResp = postEvReq.send();
-  if (postEvResp.statusCode != 200 && postEvResp.statusCode != 201) {
+  if (srcAppExtId) {
+    newEventPayload.sourceApplicationExtensionId = srcAppExtId;
+  }
+  var postEv = httpJsonSbU(
+    token,
+    "POST",
+    eventBaseUrl,
+    Platform.Function.Stringify(newEventPayload)
+  );
+  if (postEv.status != 200 && postEv.status != 201) {
     return {
       ok: false,
       message:
-        " Step 4a FAILED: bound entry event HTTP " +
-        postEvResp.statusCode +
+        " Step 4b FAILED: journey-bound event POST HTTP " +
+        postEv.status +
         " - " +
-        (postEvResp.content ? String(postEvResp.content) : "")
+        postEv.body
     };
   }
-  var boundObj = parseJsonSafeSbU(postEvResp.content);
-  var boundEventDefId =
-    boundObj && boundObj.id ? String(boundObj.id) : "";
-  if (!boundEventDefId) {
-    var boundIdMatch = String(postEvResp.content || "").match(
-      /"id"\s*:\s*"([^"]+)"/
-    );
-    boundEventDefId = boundIdMatch ? boundIdMatch[1] : "";
-  }
-  if (boundObj && boundObj.eventDefinitionKey) {
-    boundEventKey = String(boundObj.eventDefinitionKey);
-  }
-  if (!boundEventDefId) {
+  var newEvObj = parseJsonSafeSbU(postEv.body);
+  var newEventDefId = newEvObj && newEvObj.id ? String(newEvObj.id) : "";
+  if (!newEventDefId) {
     return {
       ok: false,
-      message: " Step 4a FAILED: bound entry event id missing."
+      message: " Step 4b FAILED: journey-bound event id missing from POST."
     };
   }
+  if (newEvObj && newEvObj.eventDefinitionKey) {
+    newEventKey = String(newEvObj.eventDefinitionKey);
+  }
+  var newDataExtensionId = dataExtensionId;
+  jObj = replaceEventKeyInJourneyObject(jObj, oldEventKey, newEventKey);
+  if (!jObj || !jObj.triggers || !jObj.triggers.length) {
+    httpJsonSbU(
+      token,
+      "DELETE",
+      eventBaseUrl + "/" + encodeURIComponent(newEventDefId),
+      null
+    );
+    return { ok: false, message: " Step 4b FAILED: journey key swap parse failed." };
+  }
+  var trig = jObj.triggers[0];
+  trig.arguments = {
+    serializedObjectType: 11,
+    eventDefinitionId: newEventDefId,
+    eventDefinitionKey: newEventKey,
+    dataExtensionId: newDataExtensionId
+  };
+  trig.configurationArguments = {
+    schema: evObj.schema,
+    name: journeyName,
+    eventDefinitionKey: newEventKey
+  };
+  if (srcAppExtId) {
+    trig.configurationArguments.sourceApplicationExtensionId = srcAppExtId;
+  }
+  trig.metaData = trig.metaData || {};
+  trig.metaData.eventDefinitionKey = newEventKey;
+  trig.metaData.eventDefinitionId = newEventDefId;
+  trig.metaData.configurationRequired = false;
+  var versionNum = jObj.version || 1;
+  var putUrl =
+    journeyUrl + "?versionNumber=" + encodeURIComponent(String(versionNum));
+  var putJ = httpJsonSbU(token, "PUT", putUrl, Platform.Function.Stringify(jObj));
+  if (putJ.status != 200 && putJ.status != 201) {
+    httpJsonSbU(
+      token,
+      "DELETE",
+      eventBaseUrl + "/" + encodeURIComponent(newEventDefId),
+      null
+    );
+    return {
+      ok: false,
+      message:
+        " Step 4b FAILED: journey configure PUT HTTP " +
+        putJ.status +
+        " - " +
+        putJ.body
+    };
+  }
+  var putJObj = parseJsonSafeSbU(putJ.body);
+  var getJ2 = httpJsonSbU(token, "GET", getJourneyUrl, null);
+  if (getJ2.status != 200 && getJ2.status != 201) {
+    return {
+      ok: false,
+      message:
+        " Step 4b FAILED: journey re-GET HTTP " + getJ2.status + " - " + getJ2.body
+    };
+  }
+  var jObj2 = parseJsonSafeSbU(getJ2.body);
+  if (!jObj2 || !jObj2.triggers || !jObj2.triggers.length) {
+    return {
+      ok: false,
+      message: " Step 4b FAILED: configured journey triggers missing."
+    };
+  }
+  var finalEventDefId = readTriggerEventDefIdSbU(jObj2.triggers[0]);
+  var finalEventKey = readTriggerEventKeySbU(jObj2.triggers[0], newEventKey);
+  if (!finalEventDefId && putJObj && putJObj.triggers && putJObj.triggers.length) {
+    finalEventDefId = readTriggerEventDefIdSbU(putJObj.triggers[0]);
+    finalEventKey = readTriggerEventKeySbU(putJObj.triggers[0], finalEventKey);
+  }
+  if (!finalEventDefId) {
+    finalEventDefId = resolveEventDefinitionIdByKeySbU(token, subdomain, finalEventKey);
+  }
+  if (!finalEventDefId) {
+    finalEventDefId = newEventDefId;
+  }
+  if (!finalEventDefId) {
+    httpJsonSbU(
+      token,
+      "DELETE",
+      eventBaseUrl + "/" + encodeURIComponent(newEventDefId),
+      null
+    );
+    return {
+      ok: false,
+      message: " Step 4b FAILED: journey-bound entry event id missing after configure."
+    };
+  }
+  if (finalEventKey != newEventKey) {
+    jObj2 = replaceEventKeyInJourneyObject(jObj2, newEventKey, finalEventKey);
+  }
+  if (!jObj2 || !jObj2.triggers || !jObj2.triggers.length) {
+    return {
+      ok: false,
+      message: " Step 4b FAILED: journey finalize parse failed."
+    };
+  }
+  jObj2.triggers[0].arguments = {};
+  jObj2.triggers[0].configurationArguments = {};
+  jObj2.triggers[0].metaData = jObj2.triggers[0].metaData || {};
+  jObj2.triggers[0].metaData.eventDefinitionId = finalEventDefId;
+  jObj2.triggers[0].metaData.eventDefinitionKey = finalEventKey;
+  jObj2.triggers[0].metaData.configurationRequired = false;
+  var versionNum2 = jObj2.version || versionNum;
+  var putUrl2 =
+    journeyUrl + "?versionNumber=" + encodeURIComponent(String(versionNum2));
+  var putJ2 = httpJsonSbU(
+    token,
+    "PUT",
+    putUrl2,
+    Platform.Function.Stringify(jObj2)
+  );
+  if (putJ2.status != 200 && putJ2.status != 201) {
+    return {
+      ok: false,
+      message:
+        " Step 4b FAILED: journey finalize PUT HTTP " +
+        putJ2.status +
+        " - " +
+        putJ2.body
+    };
+  }
+  httpJsonSbU(
+    token,
+    "DELETE",
+    eventBaseUrl + "/" + encodeURIComponent(oldEventDefId),
+    null
+  );
   return {
     ok: true,
-    message: " Step 4a OK - Entry event configured.",
-    boundEventKey: boundEventKey,
-    boundEventDefId: boundEventDefId
+    message:
+      " Step 4b OK - Entry event configured (" +
+      finalEventKey +
+      ").",
+    newEventKey: finalEventKey,
+    newEventDefId: finalEventDefId,
+    newDataExtensionId: newDataExtensionId
   };
+}
+function buildCampaignSecondaryLookupSbU(campId, campLabel) {
+  var lookupObj = {
+    label: "Campaign ID",
+    name: "CampaignId",
+    datatype: "reference",
+    length: 18,
+    nillable: false,
+    custom: false,
+    updateable: false,
+    createable: true,
+    defaultedoncreate: false,
+    externalid: false,
+    idlookup: false,
+    precision: 0,
+    scale: 0,
+    displaydatatype: "Lookup Relationship",
+    objectname: "CampaignMember",
+    relationname: "Campaign",
+    referenceto: ["Campaign"],
+    isnamefield: false,
+    id: "CampaignId",
+    config: {
+      uiComponent: "typeahead",
+      processors: ["static"],
+      validators: [{}],
+      relatedFields: [
+        {
+          fieldName: "Status",
+          routeConfig: {
+            objectType: "campaignmemberstatus",
+            fields: "campaignid,id,label,isdeleted",
+            sortField: "label",
+            filterParams: "isdeleted=false|campaignId="
+          }
+        }
+      ]
+    },
+    required: true,
+    multipleOptions: false,
+    attributeMatch: ["Text"],
+    value: { id: campId, name: campLabel },
+    valueLabel: campLabel,
+    referenceObject: "Campaign"
+  };
+  return Platform.Function.Stringify(lookupObj);
 }
 function buildCmUpdateActivitySbU(opts) {
   var ek = opts.eventKey;
@@ -1235,6 +1509,7 @@ function buildCmUpdateActivitySbU(opts) {
       }
     ],
     arguments: {
+      version: "1.0",
       objectMap: {
         objects: [
           {
@@ -1266,7 +1541,12 @@ function buildCmUpdateActivitySbU(opts) {
                       FieldValue: campId,
                       FieldValueLabel: campLabel,
                       FieldType: "reference",
-                      AdditionalInfo: { secondaryLookup: "{}" }
+                      AdditionalInfo: {
+                        secondaryLookup: buildCampaignSecondaryLookupSbU(
+                          campId,
+                          campLabel
+                        )
+                      }
                     }
                   ],
                   MultiOutComeOption: "DoNotUpdate",
@@ -1315,15 +1595,7 @@ function buildCmUpdateActivitySbU(opts) {
             ]
           }
         ]
-      },
-      version: "1.0",
-      contactKey: "{{Context.ContactKey}}",
-      contactId: "{{Context.ContactId}}",
-      definitionId: "{{Context.DefinitionId}}",
-      activityId: "{{Activity.Id}}",
-      startActivityKey: "{{Context.StartActivityKey}}",
-      definitionInstanceId: "{{Context.DefinitionInstanceId}}",
-      requestObjectId: "{{Context.RequestObjectId}}"
+      }
     },
     configurationArguments: {
       applicationExtensionKey: "Salesforce_Activity_CampaignMember"
@@ -1331,6 +1603,87 @@ function buildCmUpdateActivitySbU(opts) {
     metaData: {
       isConfigured: true,
       expressionBuilderPrefix: "Campaign Member"
+    },
+    schema: {
+      arguments: {
+        salesforceObjectID: {
+          dataType: "Text",
+          isNullable: true,
+          direction: "Out",
+          readOnly: false,
+          access: "Visible"
+        },
+        asyncDiscardDate: {
+          dataType: "Date",
+          isNullable: false,
+          direction: "Out",
+          readOnly: false,
+          access: "Visible"
+        },
+        objectMap: {
+          dataType: "Text",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        version: {
+          dataType: "Text",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        contactKey: {
+          dataType: "Text",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        contactId: {
+          dataType: "Number",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        definitionId: {
+          dataType: "Text",
+          isNullable: false,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        activityId: {
+          dataType: "Text",
+          isNullable: false,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        startActivityKey: {
+          dataType: "Text",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        definitionInstanceId: {
+          dataType: "Text",
+          isNullable: false,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        requestObjectId: {
+          dataType: "LongNumber",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        }
+      }
     }
   };
 }
@@ -1346,33 +1699,6 @@ if (
   sendClassificationId
 ) {
  try {
-   if (!eventDataExtensionId) {
-     throw new Error("Entry event data extension id is required.");
-   }
-   var boundEntry = createBoundEntryEventSbU(
-     subdomain,
-     accessToken,
-     journeyName,
-     eventDataExtensionId
-   );
-   if (!boundEntry.ok) {
-     throw new Error(String(boundEntry.message || "Entry event configure failed.").replace(/^\s+/, ""));
-   }
-   eventKey = boundEntry.boundEventKey;
-   eventDefId = boundEntry.boundEventDefId;
-   defaultEmailEscaped = ("{{Event." + eventKey + '.\"email\"}}').replace(/"/g, '\\"');
-   var triggerObj = parseJsonSafeSbU(apiEventTriggerJson);
-   if (triggerObj && triggerObj.metaData) {
-     triggerObj.metaData.eventDefinitionId = eventDefId;
-     triggerObj.metaData.eventDefinitionKey = eventKey;
-   }
-   apiEventTriggerJson = triggerObj
-     ? Platform.Function.Stringify(triggerObj)
-     : apiEventTriggerJson;
-   Platform.Variable.SetValue("@eventKey", eventKey);
-   Platform.Variable.SetValue("@eventDefId", eventDefId);
-   Platform.Variable.SetValue("@defaultEmailEscaped", defaultEmailEscaped);
-   journeyResult = boundEntry.message;
    var scRow = lookupSendClassificationQs(sendClassificationId);
    var spRowForJourney = lookupSenderProfileQs(senderProfileId);
    var sendClassificationIdForJourney =
@@ -1569,12 +1895,39 @@ if (
    var journeyStatus = postResp.statusCode;
    var journeyResponse = postResp.content ? String(postResp.content) : "";
    if (journeyStatus == 200 || journeyStatus == 201) {
-     journeyResult = journeyResult + " Step 4 OK - Journey created.";
+     journeyResult = " Step 4 OK - Journey created.";
      var idMatch = journeyResponse.match(/"id"\s*:\s*"?([^",}\s]+)"?/);
      var journeyId = idMatch ? idMatch[1] : "";
      if (journeyId) {
        Platform.Variable.SetValue("@journeyId", journeyId);
        journeyResult = journeyResult + " Journey ID: " + journeyId + " (draft).";
+       if (eventDefId && eventKey && eventDataExtensionId) {
+         var bindResult = configureJourneyEntryEvent({
+           oldEventKey: eventKey,
+           oldEventDefId: eventDefId,
+           dataExtensionId: eventDataExtensionId,
+           journeyId: journeyId,
+           journeyUrl: journeyUrl,
+           journeyName: journeyName,
+           subdomain: subdomain,
+           accessToken: accessToken
+         });
+         journeyResult = journeyResult + bindResult.message;
+         if (bindResult.ok && bindResult.newEventKey && bindResult.newEventDefId) {
+           Platform.Variable.SetValue("@eventKey", bindResult.newEventKey);
+           Platform.Variable.SetValue("@eventDefId", bindResult.newEventDefId);
+           if (bindResult.newDataExtensionId) {
+             Platform.Variable.SetValue(
+               "@eventDataExtensionId",
+               bindResult.newDataExtensionId
+             );
+           }
+           Platform.Variable.SetValue(
+             "@defaultEmailEscaped",
+             ("{{Event." + bindResult.newEventKey + '.\"email\"}}').replace(/"/g, '\\"')
+           );
+         }
+       }
      }
    } else {
      journeyResult = " Step 4 FAILED: HTTP " + journeyStatus + " - " + journeyResponse;
@@ -1699,7 +2052,6 @@ if (cleanupNeeded == "1" && (eventDefId || newEmailId) && subdomain && accessTok
  Platform.Variable.SetValue("@resultText", resultText + cleanupLog);
 }
 </script>
-%%[ ENDIF ]%%
 %%[
 IF @showForm == "false" AND @deleteRequested != "1" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@newEmailId) THEN
  SET @analyticsJourneyName = IIF(NOT Empty(@journeyName), @journeyName, @emailName)

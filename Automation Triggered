@@ -14,9 +14,12 @@ SET @sendClassificationId = Trim(RequestParameter("sendClassificationId"))
 SET @addTaskActivity = IIF(RequestParameter("addTaskActivity") == "1","1","0")
 SET @flow = "stack"
 SET @hubUrl = ""
+SET @environment = ""
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
- SET @hubUrl = Field(Row(@navRows,1),"ss_home")
+ SET @navRow = Row(@navRows,1)
+ SET @hubUrl = Field(@navRow,"ss_home")
+ SET @environment = Trim(Lowercase(Field(@navRow,"environment")))
 ENDIF
 SET @builderPageLabel = "Journey + Automation"
 SET @stackCampaignName = Trim(RequestParameter("stackCampaignName"))
@@ -931,9 +934,10 @@ Platform.Load("core","1");
 
 function stackEventSchemaFields() {
   return [
+    { name: "SubscriberKey", dataType: "Text", maxLength: "254", isNullable: true },
     { name: "greeting", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "id", dataType: "Text", maxLength: "50", isNullable: false },
-    { name: "email", dataType: "EmailAddress", maxLength: "254", isNullable: false },
+    { name: "id", dataType: "Text", maxLength: "254", isNullable: true },
+    { name: "email", dataType: "EmailAddress", maxLength: "254", isNullable: true },
     { name: "sfCampaignId", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "sfCampaignMemberId", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "sfQuickSendId", dataType: "Text", maxLength: "50", isNullable: true },
@@ -941,8 +945,9 @@ function stackEventSchemaFields() {
     { name: "Account_Owner_Email", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "firstName", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "lastName", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "sfUserId", dataType: "Text", maxLength: "50", isNullable: false },
+    { name: "sfUserId", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "journeyID", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "sfOrgId", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "smsValue", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "mobilePhone", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "EntryObjectId", dataType: "Text", maxLength: "50", isNullable: true },
@@ -974,6 +979,102 @@ function stackRetrieveDeByFilter(prox, filter) {
     };
   }
   return null;
+}
+
+function stackDeHasField(prox, customerKey, fieldName) {
+  if (!customerKey || !fieldName) {
+    return false;
+  }
+  try {
+    var fieldResp = prox.retrieve(
+      "DataExtensionField",
+      ["Name"],
+      {
+        Property: "DataExtension.CustomerKey",
+        SimpleOperator: "equals",
+        Value: String(customerKey)
+      }
+    );
+    var target = String(fieldName).toLowerCase();
+    if (fieldResp && fieldResp.Results) {
+      for (var fi = 0; fi < fieldResp.Results.length; fi++) {
+        if (
+          String(fieldResp.Results[fi].Name || "").toLowerCase() === target
+        ) {
+          return true;
+        }
+      }
+    }
+  } catch (fieldLookupEx) {}
+  return false;
+}
+
+function stackConfigureSendableDe(prox, customerKey) {
+  if (!customerKey) {
+    return { ok: false, message: "Missing DE CustomerKey." };
+  }
+  try {
+    var upd = prox.updateItem("DataExtension", {
+      CustomerKey: String(customerKey),
+      IsSendable: true,
+      IsTestable: true,
+      SendableDataExtensionField: "email",
+      SendableSubscriberField: "SubscriberKey",
+      SendableCustomObjectField: "SubscriberKey"
+    });
+    var status = upd && upd.Status ? String(upd.Status) : "";
+    if (status === "OK") {
+      return { ok: true };
+    }
+    var msg =
+      upd &&
+      upd.Results &&
+      upd.Results.length > 0 &&
+      upd.Results[0].StatusMessage
+        ? String(upd.Results[0].StatusMessage)
+        : "Could not mark DE sendable.";
+    return { ok: false, message: msg };
+  } catch (sendableEx) {
+    return {
+      ok: false,
+      message: sendableEx.message || String(sendableEx)
+    };
+  }
+}
+
+function stackEnsureSubscriberKeyField(prox, customerKey) {
+  if (!customerKey || stackDeHasField(prox, customerKey, "SubscriberKey")) {
+    return { ok: true, added: false };
+  }
+  try {
+    var createField = prox.createItem("DataExtensionField", {
+      CustomerKey: String(customerKey),
+      Name: "SubscriberKey",
+      FieldType: "Text",
+      MaxLength: 254,
+      IsRequired: false,
+      IsNullable: true
+    });
+    var status =
+      createField && createField.Status ? String(createField.Status) : "";
+    if (status === "OK") {
+      return { ok: true, added: true };
+    }
+    var msg =
+      createField &&
+      createField.Results &&
+      createField.Results.length > 0 &&
+      createField.Results[0].StatusMessage
+        ? String(createField.Results[0].StatusMessage)
+        : "Could not add SubscriberKey column.";
+    return { ok: false, added: false, message: msg };
+  } catch (addFieldEx) {
+    return {
+      ok: false,
+      added: false,
+      message: addFieldEx.message || String(addFieldEx)
+    };
+  }
 }
 
 function stackResolveExistingDe(prox, customerKey, deName) {
@@ -1009,12 +1110,33 @@ function stackEnsureEntryDe(prox, token, subdomain, customerKey, deName) {
   var name = String(deName || customerKey || "Entry DE");
   var existing = stackResolveExistingDe(prox, customerKey, name);
   if (existing) {
+    var repairKey = existing.customerKey || String(customerKey || "");
+    var repairResult = stackEnsureSubscriberKeyField(prox, repairKey);
+    var sendableResult = stackConfigureSendableDe(prox, repairKey);
+    var repairNote = "";
+    if (repairResult.added) {
+      repairNote =
+        " SubscriberKey column added to existing DE; re-run automation query to populate it.";
+    } else if (!repairResult.ok) {
+      repairNote =
+        " Warning: existing DE is missing SubscriberKey and could not be patched (" +
+        (repairResult.message || "unknown error") +
+        "). Delete the DE in Email Studio and rebuild, or emails may not send.";
+    }
+    if (!sendableResult.ok) {
+      repairNote =
+        repairNote +
+        " Warning: could not set sendable flags on DE (" +
+        (sendableResult.message || "unknown error") +
+        ").";
+    }
     return {
       ok: true,
       skipped: true,
       objectId: existing.objectId,
-      customerKey: existing.customerKey || String(customerKey || ""),
-      name: existing.name || name
+      customerKey: repairKey,
+      name: existing.name || name,
+      message: repairNote
     };
   }
 
@@ -1030,7 +1152,7 @@ function stackEnsureEntryDe(prox, token, subdomain, customerKey, deName) {
     eventDefinitionKey: tempEventKey,
     isVisibleInPicker: false,
     schema: {
-      sendableCustomObjectField: "id",
+      sendableCustomObjectField: "SubscriberKey",
       SendableSubscriberField: "SubscriberKey",
       fields: stackEventSchemaFields()
     }
@@ -1096,12 +1218,24 @@ function stackEnsureEntryDe(prox, token, subdomain, customerKey, deName) {
     };
   }
 
+  var finalKey = resolved.customerKey || String(customerKey || "");
+  stackEnsureSubscriberKeyField(prox, finalKey);
+  var sendableCfg = stackConfigureSendableDe(prox, finalKey);
+  var createNote = "";
+  if (!sendableCfg.ok) {
+    createNote =
+      " Warning: DE created but sendable config failed (" +
+      (sendableCfg.message || "unknown error") +
+      ").";
+  }
+
   return {
     ok: true,
     skipped: false,
     objectId: dataExtensionId,
-    customerKey: resolved.customerKey || String(customerKey || ""),
-    name: resolved.name || name
+    customerKey: finalKey,
+    name: resolved.name || name,
+    message: createNote
   };
 }
 
@@ -1172,7 +1306,8 @@ if (
         deNote +
         " CustomerKey=" +
         deResult.customerKey +
-        ").";
+        ")." +
+        (deResult.message ? String(deResult.message) : "");
       Platform.Variable.SetValue("@deCustomerKey", deResult.customerKey);
       Platform.Variable.SetValue("@entryDeObjectId", deResult.objectId);
       Platform.Variable.SetValue("@stackDeReady", "1");
@@ -1232,6 +1367,7 @@ var postStackDeReady = postVar("stackDeReady");
 var postEntryDeObjectId = postVar("entryDeObjectId");
 var postDeCustomerKeyVal = postVar("deCustomerKey");
 var postResultText = postVar("resultText");
+var postEnvironment = postVar("environment");
 var postSuffix = "";
 
 function postParseJson(s) {
@@ -1411,30 +1547,52 @@ function postEscapeSql(value) {
   return String(value || "").replace(/'/g, "''");
 }
 
-function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId) {
+function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environment) {
   var camp = postEscapeSql(campaignId);
   var jid = postEscapeSql(journeyId || "");
-  var userJoin = "LEFT JOIN User_Salesforce u on cm.Account_Owner__c = u.id";
+  var env = String(environment || "").toLowerCase();
+  var cmTable = "CampaignMember_Salesforce_1";
+  var contactTable = "Contact_Salesforce";
+  var userTable = "User_Salesforce";
+  if (env === "uat") {
+    cmTable = "ENT.CampaignMember_Salesforce_2";
+    contactTable = "ENT.Contact_Salesforce_1";
+    userTable = "ENT.User_Salesforce_1";
+  }
+  var emailExpr =
+    "COALESCE(NULLIF(RTRIM(ISNULL(cm.email, '')), ''), NULLIF(RTRIM(ISNULL(con.Email, '')), ''))";
+  var whereClause =
+    "WHERE cm.CampaignId = '" + camp + "'\n" +
+    "  AND cm.ContactId IS NOT NULL\n" +
+    "  AND RTRIM(ISNULL(cm.ContactId, '')) <> ''\n" +
+    "  AND " + emailExpr + " <> ''";
   if (sfUserId) {
-    userJoin = userJoin + " AND u.id = '" + postEscapeSql(sfUserId) + "'";
+    whereClause =
+      whereClause + "\n  AND u.id = '" + postEscapeSql(sfUserId) + "'";
   }
   return (
     "SELECT\n" +
+    "  cm.ContactId AS SubscriberKey,\n" +
     "  '' AS greeting,\n" +
     "  cm.ContactId AS id,\n" +
-    "  cm.email,\n" +
+    "  " + emailExpr + " AS email,\n" +
     "  cm.id AS sfCampaignMemberId,\n" +
     "  cm.CampaignId AS sfCampaignId,\n" +
+    "  '' AS sfQuickSendId,\n" +
     "  u.Name AS Account_Owner_Name,\n" +
     "  u.Email AS Account_Owner_Email,\n" +
     "  con.firstName,\n" +
     "  con.lastName,\n" +
-    "  u.id AS sfUserId,\n" +
+    "  COALESCE(NULLIF(RTRIM(ISNULL(u.id, '')), ''), '') AS sfUserId,\n" +
     "  '" +
     jid +
     "' AS journeyID,\n" +
+    "  '' AS sfOrgId,\n" +
     "  GETDATE() AS DateAdded,\n" +
-    "  con.Role__c AS Role,\n" +
+    "  '' AS smsValue,\n" +
+    "  con.MobilePhone AS mobilePhone,\n" +
+    "  '' AS EntryObjectId,\n" +
+    "  '' AS Role,\n" +
     "  cm.Account_Owner__c AS OwnerId,\n" +
     "  con.AccountName__c AS AccountName,\n" +
     "  con.MailingState AS State,\n" +
@@ -1443,16 +1601,15 @@ function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId) {
     "  u.Phone AS senderPhone,\n" +
     "  u.Title AS senderTitle,\n" +
     "  u.Sales_License_Number__c AS senderLicense,\n" +
+    "  '' AS senderMobile,\n" +
     "  con.Salutation AS Salutation,\n" +
     "  u.Appointment_Link__c AS AppointmentLink,\n" +
     "  '' AS VAWP,\n" +
     "  cm.Campaign_Name__c AS EmailName\n" +
-    "FROM CampaignMember_Salesforce_1 cm\n" +
-    "LEFT JOIN Contact_Salesforce con on cm.ContactId = con.id\n" +
-    userJoin + "\n" +
-    "INNER JOIN Campaign_Salesforce_1 c on c.id = '" +
-    camp +
-    "'"
+    "FROM " + cmTable + " cm\n" +
+    "LEFT JOIN " + contactTable + " con ON cm.ContactId = con.id\n" +
+    "LEFT JOIN " + userTable + " u ON cm.Account_Owner__c = u.id\n" +
+    whereClause
   );
 }
 
@@ -2049,7 +2206,8 @@ if (postDeleteRequested != "1") {
         var queryText = postBuildCampaignMemberQuery(
           postCampaignId,
           postSfUserId,
-          postJourneyId
+          postJourneyId,
+          postEnvironment
         );
         var queryResult = postCreateQueryDefinition(
           postProx,
@@ -2259,9 +2417,57 @@ function lookupSendClassificationJpa(classificationId) {
   } catch (scErr) {}
   return null;
 }
+function buildCampaignSecondaryLookupSbU(campId, campLabel) {
+  var lookupObj = {
+    label: "Campaign ID",
+    name: "CampaignId",
+    datatype: "reference",
+    length: 18,
+    nillable: false,
+    custom: false,
+    updateable: false,
+    createable: true,
+    defaultedoncreate: false,
+    externalid: false,
+    idlookup: false,
+    precision: 0,
+    scale: 0,
+    displaydatatype: "Lookup Relationship",
+    objectname: "CampaignMember",
+    relationname: "Campaign",
+    referenceto: ["Campaign"],
+    isnamefield: false,
+    id: "CampaignId",
+    config: {
+      uiComponent: "typeahead",
+      processors: ["static"],
+      validators: [{}],
+      relatedFields: [
+        {
+          fieldName: "Status",
+          routeConfig: {
+            objectType: "campaignmemberstatus",
+            fields: "campaignid,id,label,isdeleted",
+            sortField: "label",
+            filterParams: "isdeleted=false|campaignId="
+          }
+        }
+      ]
+    },
+    required: true,
+    multipleOptions: false,
+    attributeMatch: ["Text"],
+    value: { id: campId, name: campLabel },
+    valueLabel: campLabel,
+    referenceObject: "Campaign"
+  };
+  return Platform.Function.Stringify(lookupObj);
+}
 function buildCmUpdateActivitySbU(opts) {
   var ek = opts.eventKey;
-  var cmIdField = '{{Event."' + ek + '"."sfCampaignMemberId"}}';
+  var campId = opts.campaignId;
+  var campLabel = opts.campaignLabel || campId;
+  var mergeContactId = '{{Event."' + ek + '"."id"}}';
   return {
     id: randomGuidSbU(),
     key: "SALESCLOUDACTIVITY-1",
@@ -2277,6 +2483,7 @@ function buildCmUpdateActivitySbU(opts) {
       }
     ],
     arguments: {
+      version: "1.0",
       objectMap: {
         objects: [
           {
@@ -2291,18 +2498,62 @@ function buildCmUpdateActivitySbU(opts) {
                 {
                   criteria: [
                     {
-                      FieldName: "Id",
-                      FieldValue: cmIdField,
-                      FieldValueLabel: "sfCampaignMemberId",
-                      FieldType: "id"
+                      FieldName: "ContactId",
+                      FieldValue: mergeContactId,
+                      FieldValueLabel: "id",
+                      FieldType: "reference",
+                      ReferenceObjectNames: ["CONTACT"],
+                      AdditionalInfo: {
+                        objectLookupType: "Contact",
+                        identifyingField: "ContactId",
+                        identifyingFieldType: "reference",
+                        identifyingFieldLabel: "Contact ID"
+                      }
+                    },
+                    {
+                      FieldName: "CampaignId",
+                      FieldValue: campId,
+                      FieldValueLabel: campLabel,
+                      FieldType: "reference",
+                      AdditionalInfo: {
+                        secondaryLookup: buildCampaignSecondaryLookupSbU(
+                          campId,
+                          campLabel
+                        )
+                      }
                     }
                   ],
                   MultiOutComeOption: "DoNotUpdate",
-                  ZeroOutComeOption: "DoNotUpdate"
+                  ZeroOutComeOption: "CreateNew"
                 }
               ]
             },
             fields: [
+              {
+                Updateable: "false",
+                FieldName: "CampaignId",
+                FieldLabel: "Campaign ID",
+                FieldValue: campId,
+                FieldValueLabel: campLabel,
+                Required: "true",
+                FieldType: "reference",
+                MappingType: "Constant",
+                Processor: "static",
+                ReferenceObjectNames: ["CAMPAIGN"],
+                AdditionalInfo: { ReferenceObject: "Campaign" }
+              },
+              {
+                Updateable: "false",
+                FieldName: "ContactId",
+                FieldLabel: "Contact ID",
+                FieldValue: mergeContactId,
+                FieldValueLabel: "id",
+                Required: "false",
+                FieldType: "reference",
+                MappingType: "Constant",
+                Processor: "static",
+                ReferenceObjectNames: ["CONTACT"]
+              },
               {
                 UpdateType: "OverWriteNewValue",
                 Updateable: "true",
@@ -2318,23 +2569,95 @@ function buildCmUpdateActivitySbU(opts) {
             ]
           }
         ]
-      },
-      version: "1.0",
-      contactKey: "{{Context.ContactKey}}",
-      contactId: "{{Context.ContactId}}",
-      definitionId: "{{Context.DefinitionId}}",
-      activityId: "{{Activity.Id}}",
-      startActivityKey: "{{Context.StartActivityKey}}",
-      definitionInstanceId: "{{Context.DefinitionInstanceId}}",
-      requestObjectId: "{{Context.RequestObjectId}}"
+      }
     },
     configurationArguments: {
-      applicationExtensionKey: "Salesforce_Activity_CampaignMember",
-      applicationExtensionId: "00000000-0000-0000-0000-000000000000"
+      applicationExtensionKey: "Salesforce_Activity_CampaignMember"
     },
     metaData: {
       isConfigured: true,
       expressionBuilderPrefix: "Campaign Member"
+    },
+    schema: {
+      arguments: {
+        salesforceObjectID: {
+          dataType: "Text",
+          isNullable: true,
+          direction: "Out",
+          readOnly: false,
+          access: "Visible"
+        },
+        asyncDiscardDate: {
+          dataType: "Date",
+          isNullable: false,
+          direction: "Out",
+          readOnly: false,
+          access: "Visible"
+        },
+        objectMap: {
+          dataType: "Text",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        version: {
+          dataType: "Text",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        contactKey: {
+          dataType: "Text",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        contactId: {
+          dataType: "Number",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        definitionId: {
+          dataType: "Text",
+          isNullable: false,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        activityId: {
+          dataType: "Text",
+          isNullable: false,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        startActivityKey: {
+          dataType: "Text",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        definitionInstanceId: {
+          dataType: "Text",
+          isNullable: false,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        requestObjectId: {
+          dataType: "LongNumber",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        }
+      }
     }
   };
 }
@@ -2398,7 +2721,9 @@ if (
      senderProfileIdEsc +
      '","isTrackingClicks":true,"publicationListId":1132}}}';
    var cmObj = buildCmUpdateActivitySbU({
-     eventKey: eventKey
+     eventKey: eventKey,
+     campaignId: campaignId,
+     campaignLabel: campaignName
    });
    var cmActivity = Platform.Function.Stringify(cmObj);
    var taskSubject = "Email Sent: " + (emailName || "Email");
@@ -2682,6 +3007,7 @@ IF @showForm == "false" AND @deleteAllRequested != "1" AND IndexOf(@resultText,"
  SET @analyticsDeId = IIF(NOT Empty(@eventDefId), @eventDefId, "N/A")
  SET @analyticsAutomationName = IIF(NOT Empty(@stackCampaignName), @stackCampaignName, IIF(NOT Empty(@journeyName), @journeyName, ""))
  SET @analyticsAutomationGuid = IIF(NOT Empty(@automationId), @automationId, "")
+ SET @analyticsAutomationCustomerKey = IIF(NOT Empty(@automationKey), @automationKey, "")
  SET @analyticsQueryKey = IIF(NOT Empty(@queryKey), @queryKey, "")
  SET @analyticsCampaignId = ""
  IF NOT Empty(@campaignId) AND Length(@campaignId) >= 15 THEN
@@ -2700,6 +3026,7 @@ IF @showForm == "false" AND @deleteAllRequested != "1" AND IndexOf(@resultText,"
   "deId", Substring(@analyticsDeId,1,50),
   "automationName", Substring(@analyticsAutomationName,1,50),
   "automationGuid", Substring(@analyticsAutomationGuid,1,50),
+  "automationCustomerKey", Substring(@analyticsAutomationCustomerKey,1,50),
   "queryKey", Substring(@analyticsQueryKey,1,50),
   "campaignId", Substring(@analyticsCampaignId,1,18),
   "updateDate", Now()

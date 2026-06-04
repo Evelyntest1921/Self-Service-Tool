@@ -1,0 +1,3298 @@
+%%[
+VAR @HOME_URL, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @navRows, @navRow, @BU, @configError, @dashboardRows, @firstRow, @jid
+VAR @emailPreviewUrl, @articlePreviewUrl, @automationId, @syncAutomationId, @homeUrl, @switchEnvironment
+VAR @contactIdToAdd, @triggerAutomationId, @triggerAutomationStatus, @triggerAutomationResult
+VAR @syncAutomationIdVar, @syncAutomationStatus, @syncAutomationResult, @unregisteredOpenedCount, @engagementTrimmed
+VAR @email, @contactId, @primarySpecialty, @state, @jobId, @accountName, @firstName, @lastName, @designation, @role
+VAR @mobile, @auth0UserId, @openDate, @campaignType, @emailHistory, @courseHistory, @viewEmailUrl, @responseEntry
+VAR @responseContactId, @responseEmail, @responseDate, @responseEngagement, @responsePrimarySpecialty, @responseState
+VAR @responseJobId, @responseAccountName, @responseFirstName, @responseLastName, @responseDesignation, @responseRole
+VAR @responseMobile, @responseAuth0UserId, @responseOpenDate, @responseViewEmailUrl, @responseEmailHistory, @responseCourseHistory
+VAR @openedArray, @openedArrayCount, @openedRow, @openedValue, @openedUniqueArray, @openedCountArray, @newCounts
+VAR @bouncedArray, @bouncedArrayCount, @bouncedRow, @bouncedValue, @bouncedUniqueArray, @found2, @foundIndex2, @uniqueRow2, @uniqueValue2
+VAR @bouncedCountArray, @newCounts2, @countRow2, @countValue2, @didNotOpenArray, @didNotOpenArrayCount, @didNotOpenRow, @didNotOpenValue
+VAR @didNotOpenUniqueArray, @found3, @foundIndex3, @uniqueRow3, @uniqueValue3, @didNotOpenCountArray, @newCounts3, @countRow3, @countValue3
+VAR @clickedArray, @clickedArrayCount, @clickedRow, @clickedValue, @clickedUniqueArray, @found4, @foundIndex4, @uniqueRow4, @uniqueValue4
+VAR @clickedCountArray, @newCounts4, @countRow4, @countValue4, @n, @o, @p, @q, @r, @s, @t, @u, @m, @j
+
+SET @HOME_URL = ""
+SET @BUILD_PAGE_SELF = ""
+SET @PERFORMANCE_URL = ""
+SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
+IF RowCount(@navRows) > 0 THEN
+ SET @navRow = Row(@navRows,1)
+ SET @HOME_URL = Field(@navRow,"ss_home")
+ SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit")
+ SET @PERFORMANCE_URL = Field(@navRow,"ss_performance")
+ENDIF
+
+SET @jid = Trim(RequestParameter("journeyId"))
+SET @BU = memberid
+SET @configError = ""
+
+IF IndexOf(@BU, "546") > 0 THEN
+ SET @BU = "UAT"
+ELSE
+ SET @BU = "PROD"
+ENDIF
+
+SET @dashboardRows = LookupRows("SFMC_SS_DASHBOARD", "Environment", @BU)
+
+IF RowCount(@dashboardRows) > 0 THEN
+  SET @firstRow = Row(@dashboardRows, 1)
+  SET @emailPreviewUrl = IIF(NOT Empty(Field(@firstRow, "Email_Preview_Code")), Field(@firstRow, "Email_Preview_Code"), "")
+  SET @articlePreviewUrl = IIF(NOT Empty(Field(@firstRow, "Article_Preview_Code")), Field(@firstRow, "Article_Preview_Code"), "")
+  SET @automationId = IIF(NOT Empty(Field(@firstRow, "Automation_GUID")), Field(@firstRow, "Automation_GUID"), "")
+  SET @syncAutomationId = IIF(NOT Empty(Field(@firstRow, "SyncAutomationId")), Field(@firstRow, "SyncAutomationId"), "")
+  SET @homeUrl = IIF(NOT Empty(Field(@firstRow, "Home_URL")), Field(@firstRow, "Home_URL"), "")
+  SET @switchEnvironment = IIF(NOT Empty(Field(@firstRow, "EnvironmentSwitchUrl")), Field(@firstRow, "EnvironmentSwitchUrl"), "")
+  
+  IF Empty(@emailPreviewUrl) OR Empty(@articlePreviewUrl) OR Empty(@automationId) THEN
+    SET @configError = "Configuration error: missing required values in SFMC_SS_DASHBOARD."
+  ENDIF
+ELSE
+  SET @configError = Concat("Configuration error: no row found in SFMC_SS_DASHBOARD for Environment=", @BU)
+ENDIF
+
+IF Empty(@jid) AND Empty(@configError) THEN
+  SET @configError = "Missing journeyId. Open Performance from Manage build."
+ENDIF
+
+IF RequestParameter("do") == "addContact" AND NOT Empty(RequestParameter("contactId")) AND Empty(@configError) THEN
+  SET @contactIdToAdd = RequestParameter("contactId")
+  Redirect(Concat(@articlePreviewUrl, "?subscriberKey=", @contactIdToAdd))
+ENDIF
+
+SET @triggerAutomationId = @automationId
+SET @triggerAutomationStatus = ""
+SET @triggerAutomationResult = ""
+
+SET @syncAutomationIdVar = @syncAutomationId
+SET @syncAutomationStatus = ""
+SET @syncAutomationResult = ""
+
+VAR @analyticsData, @totalRecords, @openedCount, @bouncedCount, @didNotOpenCount, @clickedCount, @dateData, @openedDateData, @clickedDateData, @unsubscribedDateData, @unregisteredOpenedDateData, @openedData, @bouncedData,
+@didNotOpenData, @clickedData, @openedUnique, @openedCounts, @bouncedUnique, @bouncedCounts, @didNotOpenUnique, @didNotOpenCounts,
+@clickedUnique, @clickedCounts, @row, @i, @engagement, @date, @engagementArray, @engagementArrayCount, @engagementRow, @engagementValue,
+@engagementUniqueArray, @found, @foundIndex, @engagementCountArray, @countRow, @countValue, @newCounts, @k, @uniqueRow,
+@uniqueValue, @l, @responsesData, @stateData, @specialtyData, @jobIdData, @stateLabels, @stateOpenedData,
+@stateDidNotOpenData,
+@stateBouncedData, @stateClickedData, @stateTotalData, @stateEngagementMap, @stateKey, @stateOpenedCount, @stateBouncedCount,
+@stateDidNotOpenCount, @stateClickedCount,
+@stateTotalCount, @stateMapKeys, @stateMapKey, @stateMapRow, @stateMapValue, @stateMapIdx, @stateMapIdx2, @stateMapRow2,
+@stateMapValue2, @stateNewValue, @stateParts, @stateName, @stateMapKeysNew, @stateTrimmed, @stateFound, @stateFoundIndex,
+@specialtyLabels, @specialtyOpenedData, @specialtyDidNotOpenData, @specialtyBouncedData, @specialtyClickedData, @specialtyTotalData,
+@specialtyEngagementMap, @specialtyKey, @specialtyOpenedCount, @specialtyBouncedCount, @specialtyDidNotOpenCount, @specialtyClickedCount,
+@specialtyTotalCount, @specialtyMapKeys, @specialtyMapKey, @specialtyMapRow, @specialtyMapValue, @specialtyMapIdx,
+@specialtyMapIdx2, @specialtyMapRow2, @specialtyMapValue2, @specialtyNewValue, @specialtyParts, @specialtyName,
+@specialtyMapKeysNew, @specialtyTrimmed, @specialtyFound, @specialtyFoundIndex, @stateCount
+
+SET @totalRecords = 0
+IF NOT Empty(@jid) AND Empty(@configError) THEN
+  SET @analyticsData = LookupRows("bd_self_service_engagement", "JourneyID", @jid)
+  SET @totalRecords = RowCount(@analyticsData)
+ENDIF
+SET @openedCount = 0
+SET @bouncedCount = 0
+SET @didNotOpenCount = 0
+SET @clickedCount = 0
+SET @unregisteredOpenedCount = 0
+SET @dateData = ""
+SET @openedDateData = ""
+SET @clickedDateData = ""
+SET @unsubscribedDateData = ""
+SET @unregisteredOpenedDateData = ""
+SET @openedData = ""
+SET @bouncedData = ""
+SET @didNotOpenData = ""
+SET @clickedData = ""
+SET @openedUnique = ""
+SET @openedCounts = ""
+SET @bouncedUnique = ""
+SET @bouncedCounts = ""
+SET @didNotOpenUnique = ""
+SET @didNotOpenCounts = ""
+SET @clickedUnique = ""
+SET @clickedCounts = ""
+SET @responsesData = ""
+SET @stateData = ""
+SET @specialtyData = ""
+SET @jobIdData = ""
+SET @stateLabels = ""
+SET @stateOpenedData = ""
+SET @stateDidNotOpenData = ""
+SET @stateBouncedData = ""
+SET @stateClickedData = ""
+SET @stateTotalData = ""
+SET @stateEngagementMap = ""
+SET @specialtyLabels = ""
+SET @specialtyOpenedData = ""
+SET @specialtyDidNotOpenData = ""
+SET @specialtyBouncedData = ""
+SET @specialtyClickedData = ""
+SET @specialtyTotalData = ""
+SET @specialtyEngagementMap = "" 
+
+IF @totalRecords > 0 THEN
+FOR @i = 1 TO @totalRecords DO
+SET @row = Row(@analyticsData, @i)
+SET @engagement = Field(@row, "Engagement")
+SET @date = Field(@row, "LastSent")
+SET @email = Field(@row, "Email")
+SET @contactId = Field(@row, "Contact_Id")
+SET @primarySpecialty = Field(@row, "Primary_Specialty")
+SET @state = Field(@row, "Related_Account_Primary_State")
+SET @jobId = Field(@row, "JobID")
+SET @accountName = Field(@row, "Related_Account_Name")
+SET @firstName = Field(@row, "First_Name")
+SET @lastName = Field(@row, "Last_Name")
+SET @designation = Field(@row, "Designation")
+SET @role = Field(@row, "Role")
+SET @mobile = Field(@row, "Mobile")
+SET @auth0UserId = Field(@row, "Auth0UserId")
+SET @openDate = Field(@row, "campaign_type")
+SET @campaignType = Field(@row, "campaign_type")
+SET @emailHistory = Concat(@emailPreviewUrl, "?subscriberKey=", Field(@row, "Contact_Id"))
+SET @courseHistory = Concat(@articlePreviewUrl, "?subscriberKey=", Field(@row, "Contact_Id"))
+SET @viewEmailUrl = Field(@row, "view_email_url") 
+IF NOT Empty(@engagement) THEN
+SET @engagementTrimmed = Trim(@engagement) 
+
+IF @engagementTrimmed == "Opened" THEN
+SET @openedCount = Add(@openedCount, 1)
+SET @openedData = Concat(@openedData, @engagementTrimmed, "|||")
+IF NOT Empty(@date) THEN
+SET @openedDateData = Concat(@openedDateData, @date, ",")
+ENDIF
+IF Empty(@auth0UserId) THEN
+SET @unregisteredOpenedCount = Add(@unregisteredOpenedCount, 1)
+IF NOT Empty(@date) THEN
+SET @unregisteredOpenedDateData = Concat(@unregisteredOpenedDateData, @date, ",")
+ENDIF
+ENDIF
+ELSEIF @engagementTrimmed == "Bounced" THEN
+SET @bouncedCount = Add(@bouncedCount, 1)
+SET @bouncedData = Concat(@bouncedData, @engagementTrimmed, "|||")
+ELSEIF @engagementTrimmed == "Did Not Open" THEN
+SET @didNotOpenCount = Add(@didNotOpenCount, 1)
+SET @didNotOpenData = Concat(@didNotOpenData, @engagementTrimmed, "|||")
+ELSEIF @engagementTrimmed == "Clicked" THEN
+SET @clickedCount = Add(@clickedCount, 1)
+SET @clickedData = Concat(@clickedData, @engagementTrimmed, "|||")
+IF NOT Empty(@date) THEN
+SET @clickedDateData = Concat(@clickedDateData, @date, ",")
+ENDIF
+ELSEIF @engagementTrimmed == "Unsubscribed" THEN
+IF NOT Empty(@date) THEN
+SET @unsubscribedDateData = Concat(@unsubscribedDateData, @date, ",")
+ENDIF
+ENDIF
+ENDIF 
+
+IF NOT Empty(@date) THEN
+SET @dateData = Concat(@dateData, @date, ",")
+ENDIF 
+
+IF NOT Empty(@state) AND NOT Empty(@engagement) THEN
+SET @stateData = Concat(@stateData, @state, ",")
+SET @stateTrimmed = Trim(@state)
+SET @stateKey = Concat(@stateTrimmed, ":::")
+SET @stateFound = 0
+SET @stateFoundIndex = 0
+IF NOT Empty(@stateEngagementMap) THEN
+SET @stateMapKeys = BuildRowsetFromString(@stateEngagementMap, "|||")
+FOR @stateMapIdx = 1 TO RowCount(@stateMapKeys) DO
+SET @stateMapRow = Row(@stateMapKeys, @stateMapIdx)
+SET @stateMapValue = Field(@stateMapRow, 1)
+IF IndexOf(@stateMapValue, @stateKey) == 1 THEN
+SET @stateFound = 1
+SET @stateFoundIndex = @stateMapIdx
+ENDIF
+NEXT @stateMapIdx
+ENDIF
+IF @stateFound == 0 THEN
+SET @stateOpenedCount = 0
+SET @stateBouncedCount = 0
+SET @stateDidNotOpenCount = 0
+SET @stateClickedCount = 0
+SET @stateTotalCount = 0
+IF @engagementTrimmed == "Opened" THEN
+SET @stateOpenedCount = 1
+ELSEIF @engagementTrimmed == "Bounced" THEN
+SET @stateBouncedCount = 1
+ELSEIF @engagementTrimmed == "Did Not Open" THEN
+SET @stateDidNotOpenCount = 1
+ELSEIF @engagementTrimmed == "Clicked" THEN
+SET @stateClickedCount = 1
+ENDIF
+SET @stateTotalCount = 1
+IF Empty(@stateEngagementMap) THEN
+SET @stateEngagementMap = Concat(@stateTrimmed, ":::", @stateOpenedCount, ":::", @stateBouncedCount, ":::",
+@stateDidNotOpenCount, ":::", @stateClickedCount, ":::", @stateTotalCount)
+ELSE
+SET @stateEngagementMap = Concat(@stateEngagementMap, "|||", @stateTrimmed, ":::", @stateOpenedCount, ":::",
+@stateBouncedCount, ":::", @stateDidNotOpenCount, ":::", @stateClickedCount, ":::", @stateTotalCount)
+ENDIF
+ELSE
+SET @stateMapRow = Row(@stateMapKeys, @stateFoundIndex)
+SET @stateMapValue = Field(@stateMapRow, 1)
+SET @stateParts = BuildRowsetFromString(@stateMapValue, ":::")
+SET @stateName = Field(Row(@stateParts, 1), 1)
+SET @stateOpenedCount = Field(Row(@stateParts, 2), 1)
+SET @stateBouncedCount = Field(Row(@stateParts, 3), 1)
+SET @stateDidNotOpenCount = Field(Row(@stateParts, 4), 1)
+SET @stateClickedCount = Field(Row(@stateParts, 5), 1)
+SET @stateTotalCount = Field(Row(@stateParts, 6), 1)
+IF @engagementTrimmed == "Opened" THEN
+SET @stateOpenedCount = Add(@stateOpenedCount, 1)
+ELSEIF @engagementTrimmed == "Bounced" THEN
+SET @stateBouncedCount = Add(@stateBouncedCount, 1)
+ELSEIF @engagementTrimmed == "Did Not Open" THEN
+SET @stateDidNotOpenCount = Add(@stateDidNotOpenCount, 1)
+ELSEIF @engagementTrimmed == "Clicked" THEN
+SET @stateClickedCount = Add(@stateClickedCount, 1)
+ENDIF
+SET @stateTotalCount = Add(@stateTotalCount, 1)
+SET @stateNewValue = Concat(@stateName, ":::", @stateOpenedCount, ":::", @stateBouncedCount, ":::",
+@stateDidNotOpenCount, ":::", @stateClickedCount, ":::", @stateTotalCount)
+SET @stateMapKeysNew = BuildRowsetFromString(@stateEngagementMap, "|||")
+SET @stateEngagementMap = ""
+FOR @stateMapIdx2 = 1 TO RowCount(@stateMapKeysNew) DO
+SET @stateMapRow2 = Row(@stateMapKeysNew, @stateMapIdx2)
+IF @stateMapIdx2 == @stateFoundIndex THEN
+SET @stateMapValue2 = @stateNewValue
+ELSE
+SET @stateMapValue2 = Field(@stateMapRow2, 1)
+ENDIF
+IF Empty(@stateEngagementMap) THEN
+SET @stateEngagementMap = @stateMapValue2
+ELSE
+SET @stateEngagementMap = Concat(@stateEngagementMap, "|||", @stateMapValue2)
+ENDIF
+NEXT @stateMapIdx2
+ENDIF
+ENDIF 
+
+IF NOT Empty(@primarySpecialty) AND NOT Empty(@engagement) THEN
+SET @specialtyData = Concat(@specialtyData, @primarySpecialty, ",")
+SET @specialtyTrimmed = Trim(@primarySpecialty)
+SET @specialtyKey = Concat(@specialtyTrimmed, ":::")
+SET @specialtyFound = 0
+SET @specialtyFoundIndex = 0
+IF NOT Empty(@specialtyEngagementMap) THEN
+SET @specialtyMapKeys = BuildRowsetFromString(@specialtyEngagementMap, "|||")
+FOR @specialtyMapIdx = 1 TO RowCount(@specialtyMapKeys) DO
+SET @specialtyMapRow = Row(@specialtyMapKeys, @specialtyMapIdx)
+SET @specialtyMapValue = Field(@specialtyMapRow, 1)
+IF IndexOf(@specialtyMapValue, @specialtyKey) == 1 THEN
+SET @specialtyFound = 1
+SET @specialtyFoundIndex = @specialtyMapIdx
+ENDIF
+NEXT @specialtyMapIdx
+ENDIF
+IF @specialtyFound == 0 THEN
+SET @specialtyOpenedCount = 0
+SET @specialtyBouncedCount = 0
+SET @specialtyDidNotOpenCount = 0
+SET @specialtyClickedCount = 0
+SET @specialtyTotalCount = 0
+IF @engagementTrimmed == "Opened" THEN
+SET @specialtyOpenedCount = 1
+ELSEIF @engagementTrimmed == "Bounced" THEN
+SET @specialtyBouncedCount = 1
+ELSEIF @engagementTrimmed == "Did Not Open" THEN
+SET @specialtyDidNotOpenCount = 1
+ELSEIF @engagementTrimmed == "Clicked" THEN
+SET @specialtyClickedCount = 1
+ENDIF
+SET @specialtyTotalCount = 1
+IF Empty(@specialtyEngagementMap) THEN
+SET @specialtyEngagementMap = Concat(@specialtyTrimmed, ":::", @specialtyOpenedCount, ":::", @specialtyBouncedCount, ":::",
+@specialtyDidNotOpenCount, ":::", @specialtyClickedCount, ":::", @specialtyTotalCount)
+ELSE
+SET @specialtyEngagementMap = Concat(@specialtyEngagementMap, "|||", @specialtyTrimmed, ":::", @specialtyOpenedCount, ":::",
+@specialtyBouncedCount, ":::", @specialtyDidNotOpenCount, ":::", @specialtyClickedCount, ":::", @specialtyTotalCount)
+ENDIF
+ELSE
+SET @specialtyMapRow = Row(@specialtyMapKeys, @specialtyFoundIndex)
+SET @specialtyMapValue = Field(@specialtyMapRow, 1)
+SET @specialtyParts = BuildRowsetFromString(@specialtyMapValue, ":::")
+SET @specialtyName = Field(Row(@specialtyParts, 1), 1)
+SET @specialtyOpenedCount = Field(Row(@specialtyParts, 2), 1)
+SET @specialtyBouncedCount = Field(Row(@specialtyParts, 3), 1)
+SET @specialtyDidNotOpenCount = Field(Row(@specialtyParts, 4), 1)
+SET @specialtyClickedCount = Field(Row(@specialtyParts, 5), 1)
+SET @specialtyTotalCount = Field(Row(@specialtyParts, 6), 1)
+IF @engagementTrimmed == "Opened" THEN
+SET @specialtyOpenedCount = Add(@specialtyOpenedCount, 1)
+ELSEIF @engagementTrimmed == "Bounced" THEN
+SET @specialtyBouncedCount = Add(@specialtyBouncedCount, 1)
+ELSEIF @engagementTrimmed == "Did Not Open" THEN
+SET @specialtyDidNotOpenCount = Add(@specialtyDidNotOpenCount, 1)
+ELSEIF @engagementTrimmed == "Clicked" THEN
+SET @specialtyClickedCount = Add(@specialtyClickedCount, 1)
+ENDIF
+SET @specialtyTotalCount = Add(@specialtyTotalCount, 1)
+SET @specialtyNewValue = Concat(@specialtyName, ":::", @specialtyOpenedCount, ":::", @specialtyBouncedCount, ":::",
+@specialtyDidNotOpenCount, ":::", @specialtyClickedCount, ":::", @specialtyTotalCount)
+SET @specialtyMapKeysNew = BuildRowsetFromString(@specialtyEngagementMap, "|||")
+SET @specialtyEngagementMap = ""
+FOR @specialtyMapIdx2 = 1 TO RowCount(@specialtyMapKeysNew) DO
+SET @specialtyMapRow2 = Row(@specialtyMapKeysNew, @specialtyMapIdx2)
+IF @specialtyMapIdx2 == @specialtyFoundIndex THEN
+SET @specialtyMapValue2 = @specialtyNewValue
+ELSE
+SET @specialtyMapValue2 = Field(@specialtyMapRow2, 1)
+ENDIF
+IF Empty(@specialtyEngagementMap) THEN
+SET @specialtyEngagementMap = @specialtyMapValue2
+ELSE
+SET @specialtyEngagementMap = Concat(@specialtyEngagementMap, "|||", @specialtyMapValue2)
+ENDIF
+NEXT @specialtyMapIdx2
+ENDIF
+ENDIF 
+
+IF NOT Empty(@jobId) THEN
+SET @jobIdData = Concat(@jobIdData, @jobId, ",")
+ENDIF 
+
+SET @responseContactId = IIF(Empty(@contactId), "N/A", @contactId)
+SET @responseEmail = IIF(Empty(@email), "N/A", @email)
+SET @responseDate = IIF(Empty(@date), "N/A", @date)
+SET @responseEngagement = IIF(Empty(@engagement), "N/A", @engagement)
+SET @responsePrimarySpecialty = IIF(Empty(@primarySpecialty), "N/A", @primarySpecialty)
+SET @responseState = IIF(Empty(@state), "N/A", @state)
+SET @responseJobId = IIF(Empty(@jobId), "N/A", @jobId)
+SET @responseAccountName = IIF(Empty(@accountName), "N/A", @accountName)
+SET @responseFirstName = IIF(Empty(@firstName), "N/A", @firstName)
+SET @responseLastName = IIF(Empty(@lastName), "N/A", @lastName)
+SET @responseDesignation = IIF(Empty(@designation), "N/A", @designation)
+SET @responseRole = IIF(Empty(@role), "N/A", @role)
+SET @responseMobile = IIF(Empty(@mobile), "N/A", @mobile)
+SET @responseAuth0UserId = IIF(Empty(@auth0UserId), "N/A", @auth0UserId)
+SET @responseOpenDate = IIF(Empty(@openDate), "N/A", @openDate)
+SET @responseViewEmailUrl = IIF(Empty(@viewEmailUrl), "N/A", @viewEmailUrl)
+SET @responseEmailHistory = IIF(Empty(@emailHistory), "N/A", @emailHistory) 
+SET @responseCourseHistory = IIF(Empty(@courseHistory), "N/A", @courseHistory) 
+SET @responseEntry = Concat(@responseContactId, ":::", @responseEmail, ":::", @responseDate, ":::", @responseEngagement,
+":::", @responsePrimarySpecialty, ":::", @responseState, ":::", @responseJobId, ":::", @responseAccountName, ":::",
+@responseFirstName, ":::", @responseLastName, ":::", @responseDesignation, ":::", @responseRole, ":::", @responseMobile,
+":::", @responseAuth0UserId, ":::", @responseOpenDate, ":::", @responseViewEmailUrl, ":::", @responseEmailHistory, ":::",@responseCourseHistory, ":::")
+SET @responsesData = Concat(@responsesData, @responseEntry, "|||")
+NEXT @i
+ENDIF 
+
+SET @stateCount = 0
+IF NOT Empty(@stateEngagementMap) THEN
+SET @stateMapKeys = BuildRowsetFromString(@stateEngagementMap, "|||")
+SET @stateCount = RowCount(@stateMapKeys)
+FOR @stateMapIdx = 1 TO RowCount(@stateMapKeys) DO
+SET @stateMapRow = Row(@stateMapKeys, @stateMapIdx)
+SET @stateMapValue = Field(@stateMapRow, 1)
+SET @stateParts = BuildRowsetFromString(@stateMapValue, ":::")
+SET @stateName = Field(Row(@stateParts, 1), 1)
+SET @stateOpenedCount = Field(Row(@stateParts, 2), 1)
+SET @stateBouncedCount = Field(Row(@stateParts, 3), 1)
+SET @stateDidNotOpenCount = Field(Row(@stateParts, 4), 1)
+SET @stateClickedCount = Field(Row(@stateParts, 5), 1)
+SET @stateTotalCount = Field(Row(@stateParts, 6), 1)
+IF Empty(@stateLabels) THEN
+SET @stateLabels = @stateName
+SET @stateOpenedData = @stateOpenedCount
+SET @stateBouncedData = @stateBouncedCount
+SET @stateDidNotOpenData = @stateDidNotOpenCount
+SET @stateClickedData = @stateClickedCount
+SET @stateTotalData = @stateTotalCount
+ELSE
+SET @stateLabels = Concat(@stateLabels, ",", @stateName)
+SET @stateOpenedData = Concat(@stateOpenedData, ",", @stateOpenedCount)
+SET @stateBouncedData = Concat(@stateBouncedData, ",", @stateBouncedCount)
+SET @stateDidNotOpenData = Concat(@stateDidNotOpenData, ",", @stateDidNotOpenCount)
+SET @stateClickedData = Concat(@stateClickedData, ",", @stateClickedCount)
+SET @stateTotalData = Concat(@stateTotalData, ",", @stateTotalCount)
+ENDIF
+NEXT @stateMapIdx
+ENDIF        
+
+IF NOT Empty(@specialtyEngagementMap) THEN
+SET @specialtyMapKeys = BuildRowsetFromString(@specialtyEngagementMap, "|||")
+FOR @specialtyMapIdx = 1 TO RowCount(@specialtyMapKeys) DO
+SET @specialtyMapRow = Row(@specialtyMapKeys, @specialtyMapIdx)
+SET @specialtyMapValue = Field(@specialtyMapRow, 1)
+SET @specialtyParts = BuildRowsetFromString(@specialtyMapValue, ":::")
+SET @specialtyName = Field(Row(@specialtyParts, 1), 1)
+SET @specialtyOpenedCount = Field(Row(@specialtyParts, 2), 1)
+SET @specialtyBouncedCount = Field(Row(@specialtyParts, 3), 1)
+SET @specialtyDidNotOpenCount = Field(Row(@specialtyParts, 4), 1)
+SET @specialtyClickedCount = Field(Row(@specialtyParts, 5), 1)
+SET @specialtyTotalCount = Field(Row(@specialtyParts, 6), 1)
+IF Empty(@specialtyLabels) THEN
+SET @specialtyLabels = @specialtyName
+SET @specialtyOpenedData = @specialtyOpenedCount
+SET @specialtyBouncedData = @specialtyBouncedCount
+SET @specialtyDidNotOpenData = @specialtyDidNotOpenCount
+SET @specialtyClickedData = @specialtyClickedCount
+SET @specialtyTotalData = @specialtyTotalCount
+ELSE
+SET @specialtyLabels = Concat(@specialtyLabels, ",", @specialtyName)
+SET @specialtyOpenedData = Concat(@specialtyOpenedData, ",", @specialtyOpenedCount)
+SET @specialtyBouncedData = Concat(@specialtyBouncedData, ",", @specialtyBouncedCount)
+SET @specialtyDidNotOpenData = Concat(@specialtyDidNotOpenData, ",", @specialtyDidNotOpenCount)
+SET @specialtyClickedData = Concat(@specialtyClickedData, ",", @specialtyClickedCount)
+SET @specialtyTotalData = Concat(@specialtyTotalData, ",", @specialtyTotalCount)
+ENDIF
+NEXT @specialtyMapIdx
+ENDIF 
+
+IF NOT Empty(@openedData) THEN
+SET @openedArray = BuildRowsetFromString(@openedData, "|||")
+SET @openedArrayCount = RowCount(@openedArray)
+FOR @j = 1 TO @openedArrayCount DO
+SET @openedRow = Row(@openedArray, @j)
+SET @openedValue = Trim(Field(@openedRow, 1))
+IF NOT Empty(@openedValue) THEN
+IF Empty(@openedUnique) THEN
+SET @openedUnique = @openedValue
+SET @openedCounts = "1"
+ELSE
+SET @openedUniqueArray = BuildRowsetFromString(@openedUnique, "|||")
+SET @found = 0
+SET @foundIndex = 0
+FOR @k = 1 TO RowCount(@openedUniqueArray) DO
+SET @uniqueRow = Row(@openedUniqueArray, @k)
+SET @uniqueValue = Trim(Field(@uniqueRow, 1))
+IF @uniqueValue == @openedValue THEN
+SET @found = 1
+SET @foundIndex = @k
+ENDIF
+NEXT @k
+IF @found == 0 THEN
+SET @openedUnique = Concat(@openedUnique, "|||", @openedValue)
+SET @openedCounts = Concat(@openedCounts, "|||", "1")
+ELSE
+SET @openedCountArray = BuildRowsetFromString(@openedCounts, "|||")
+SET @newCounts = ""
+FOR @l = 1 TO RowCount(@openedCountArray) DO
+SET @countRow = Row(@openedCountArray, @l)
+SET @countValue = Field(@countRow, 1)
+IF @l == @foundIndex THEN
+SET @countValue = Add(@countValue, 1)
+ENDIF
+IF Empty(@newCounts) THEN
+SET @newCounts = @countValue
+ELSE
+SET @newCounts = Concat(@newCounts, "|||", @countValue)
+ENDIF
+NEXT @l
+SET @openedCounts = @newCounts
+ENDIF
+ENDIF
+ENDIF
+NEXT @j
+ENDIF 
+
+IF NOT Empty(@bouncedData) THEN
+SET @bouncedArray = BuildRowsetFromString(@bouncedData, "|||")
+SET @bouncedArrayCount = RowCount(@bouncedArray)
+FOR @m = 1 TO @bouncedArrayCount DO
+SET @bouncedRow = Row(@bouncedArray, @m)
+SET @bouncedValue = Trim(Field(@bouncedRow, 1))
+IF NOT Empty(@bouncedValue) THEN
+IF Empty(@bouncedUnique) THEN
+SET @bouncedUnique = @bouncedValue
+SET @bouncedCounts = "1"
+ELSE
+SET @bouncedUniqueArray = BuildRowsetFromString(@bouncedUnique, "|||")
+SET @found2 = 0
+SET @foundIndex2 = 0
+FOR @n = 1 TO RowCount(@bouncedUniqueArray) DO
+SET @uniqueRow2 = Row(@bouncedUniqueArray, @n)
+SET @uniqueValue2 = Trim(Field(@uniqueRow2, 1))
+IF @uniqueValue2 == @bouncedValue THEN
+SET @found2 = 1
+SET @foundIndex2 = @n
+ENDIF
+NEXT @n
+IF @found2 == 0 THEN
+SET @bouncedUnique = Concat(@bouncedUnique, "|||", @bouncedValue)
+SET @bouncedCounts = Concat(@bouncedCounts, "|||", "1")
+ELSE
+SET @bouncedCountArray = BuildRowsetFromString(@bouncedCounts, "|||")
+SET @newCounts2 = ""
+FOR @o = 1 TO RowCount(@bouncedCountArray) DO
+SET @countRow2 = Row(@bouncedCountArray, @o)
+SET @countValue2 = Field(@countRow2, 1)
+IF @o == @foundIndex2 THEN
+SET @countValue2 = Add(@countValue2, 1)
+ENDIF
+IF Empty(@newCounts2) THEN
+SET @newCounts2 = @countValue2
+ELSE
+SET @newCounts2 = Concat(@newCounts2, "|||", @countValue2)
+ENDIF
+NEXT @o
+SET @bouncedCounts = @newCounts2
+ENDIF
+ENDIF
+ENDIF
+NEXT @m
+ENDIF 
+
+IF NOT Empty(@didNotOpenData) THEN
+SET @didNotOpenArray = BuildRowsetFromString(@didNotOpenData, "|||")
+SET @didNotOpenArrayCount = RowCount(@didNotOpenArray)
+FOR @p = 1 TO @didNotOpenArrayCount DO
+SET @didNotOpenRow = Row(@didNotOpenArray, @p)
+SET @didNotOpenValue = Trim(Field(@didNotOpenRow, 1))
+IF NOT Empty(@didNotOpenValue) THEN
+IF Empty(@didNotOpenUnique) THEN
+SET @didNotOpenUnique = @didNotOpenValue
+SET @didNotOpenCounts = "1"
+ELSE
+SET @didNotOpenUniqueArray = BuildRowsetFromString(@didNotOpenUnique, "|||")
+SET @found3 = 0
+SET @foundIndex3 = 0
+FOR @q = 1 TO RowCount(@didNotOpenUniqueArray) DO
+SET @uniqueRow3 = Row(@didNotOpenUniqueArray, @q)
+SET @uniqueValue3 = Trim(Field(@uniqueRow3, 1))
+IF @uniqueValue3 == @didNotOpenValue THEN
+SET @found3 = 1
+SET @foundIndex3 = @q
+ENDIF
+NEXT @q
+IF @found3 == 0 THEN
+SET @didNotOpenUnique = Concat(@didNotOpenUnique, "|||", @didNotOpenValue)
+SET @didNotOpenCounts = Concat(@didNotOpenCounts, "|||", "1")
+ELSE
+SET @didNotOpenCountArray = BuildRowsetFromString(@didNotOpenCounts, "|||")
+SET @newCounts3 = ""
+FOR @r = 1 TO RowCount(@didNotOpenCountArray) DO
+SET @countRow3 = Row(@didNotOpenCountArray, @r)
+SET @countValue3 = Field(@countRow3, 1)
+IF @r == @foundIndex3 THEN
+SET @countValue3 = Add(@countValue3, 1)
+ENDIF
+IF Empty(@newCounts3) THEN
+SET @newCounts3 = @countValue3
+ELSE
+SET @newCounts3 = Concat(@newCounts3, "|||", @countValue3)
+ENDIF
+NEXT @r
+SET @didNotOpenCounts = @newCounts3
+ENDIF
+ENDIF
+ENDIF
+NEXT @p
+ENDIF    
+
+IF NOT Empty(@clickedData) THEN
+SET @clickedArray = BuildRowsetFromString(@clickedData, "|||")
+SET @clickedArrayCount = RowCount(@clickedArray)
+FOR @s = 1 TO @clickedArrayCount DO
+SET @clickedRow = Row(@clickedArray, @s)
+SET @clickedValue = Trim(Field(@clickedRow, 1))
+IF NOT Empty(@clickedValue) THEN
+IF Empty(@clickedUnique) THEN
+SET @clickedUnique = @clickedValue
+SET @clickedCounts = "1"
+ELSE
+SET @clickedUniqueArray = BuildRowsetFromString(@clickedUnique, "|||")
+SET @found4 = 0
+SET @foundIndex4 = 0
+FOR @t = 1 TO RowCount(@clickedUniqueArray) DO
+SET @uniqueRow4 = Row(@clickedUniqueArray, @t)
+SET @uniqueValue4 = Trim(Field(@uniqueRow4, 1))
+IF @uniqueValue4 == @clickedValue THEN
+SET @found4 = 1
+SET @foundIndex4 = @t
+ENDIF
+NEXT @t
+IF @found4 == 0 THEN
+SET @clickedUnique = Concat(@clickedUnique, "|||", @clickedValue)
+SET @clickedCounts = Concat(@clickedCounts, "|||", "1")
+ELSE
+SET @clickedCountArray = BuildRowsetFromString(@clickedCounts, "|||")
+SET @newCounts4 = ""
+FOR @u = 1 TO RowCount(@clickedCountArray) DO
+SET @countRow4 = Row(@clickedCountArray, @u)
+SET @countValue4 = Field(@countRow4, 1)
+IF @u == @foundIndex4 THEN
+SET @countValue4 = Add(@countValue4, 1)
+ENDIF
+IF Empty(@newCounts4) THEN
+SET @newCounts4 = @countValue4
+ELSE
+SET @newCounts4 = Concat(@newCounts4, "|||", @countValue4)
+ENDIF
+NEXT @u
+SET @clickedCounts = @newCounts4
+ENDIF
+ENDIF
+ENDIF
+NEXT @s
+ENDIF
+]%%
+
+<script runat="server">
+Platform.Load("core", "1");
+
+var action = String(Request.GetFormField("do") || Request.GetQueryStringParameter("do") || "");
+var confirm = String(Request.GetFormField("confirm") || Request.GetQueryStringParameter("confirm") || "");
+var automationId = String(Variable.GetValue("@triggerAutomationId") || "");
+
+if (action === "triggerAutomation" && confirm === "1") {
+  try {
+    if (!automationId) {
+      Variable.SetValue("@triggerAutomationStatus", "FAILED");
+      Variable.SetValue("@triggerAutomationResult", "FAILED: missing automation id.");
+    } else {
+      var prox = new Script.Util.WSProxy();
+      var perform = prox.performItem("Program", { ObjectID: automationId }, "start", {});
+      var topStatus = perform && perform.Status ? String(perform.Status) : "";
+      var itemCode = perform && perform.Results && perform.Results.length > 0 && perform.Results[0].StatusCode ? String(perform.Results[0].StatusCode) : "";
+      var itemMsg = perform && perform.Results && perform.Results.length > 0 && perform.Results[0].StatusMessage ? String(perform.Results[0].StatusMessage) : "";
+
+      if (topStatus === "OK" || itemCode === "OK") {
+        Variable.SetValue("@triggerAutomationStatus", "OK");
+        Variable.SetValue("@triggerAutomationResult", "Success: automation has been successfully triggered. ID " + automationId + ".");
+      } else {
+        Variable.SetValue("@triggerAutomationStatus", "FAILED");
+        Variable.SetValue("@triggerAutomationResult", "FAILED: SOAP start rejected. topStatus=" + topStatus + " itemCode=" + itemCode + " itemMsg=" + itemMsg);
+      }
+    }
+  } catch (e) {
+    Variable.SetValue("@triggerAutomationStatus", "FAILED");
+    Variable.SetValue("@triggerAutomationResult", "FAILED: " + (e && e.message ? e.message : String(e)));
+  }
+}
+
+var syncAutomationId = String(Variable.GetValue("@syncAutomationIdVar") || "");
+
+if (action === "syncAutomation" && confirm === "1") {
+  try {
+    if (!syncAutomationId) {
+      Variable.SetValue("@syncAutomationStatus", "FAILED");
+      Variable.SetValue("@syncAutomationResult", "FAILED: missing sync automation id.");
+    } else {
+      var proxSync = new Script.Util.WSProxy();
+      var performSync = proxSync.performItem("Program", { ObjectID: syncAutomationId }, "start", {});
+      var topStatusSync = performSync && performSync.Status ? String(performSync.Status) : "";
+      var itemCodeSync = performSync && performSync.Results && performSync.Results.length > 0 && performSync.Results[0].StatusCode ? String(performSync.Results[0].StatusCode) : "";
+      var itemMsgSync = performSync && performSync.Results && performSync.Results.length > 0 && performSync.Results[0].StatusMessage ? String(performSync.Results[0].StatusMessage) : "";
+
+      if (topStatusSync === "OK" || itemCodeSync === "OK") {
+        Variable.SetValue("@syncAutomationStatus", "OK");
+        Variable.SetValue("@syncAutomationResult", "Success: sync automation has been successfully triggered. ID " + syncAutomationId + ".");
+      } else {
+        Variable.SetValue("@syncAutomationStatus", "FAILED");
+        Variable.SetValue("@syncAutomationResult", "FAILED: SOAP start rejected. topStatus=" + topStatusSync + " itemCode=" + itemCodeSync + " itemMsg=" + itemMsgSync);
+      }
+    }
+  } catch (e) {
+    Variable.SetValue("@syncAutomationStatus", "FAILED");
+    Variable.SetValue("@syncAutomationResult", "FAILED: " + (e && e.message ? e.message : String(e)));
+  }
+}
+</script>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Performance • Journey Maker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+:root {
+--primary-color: #6366f1;
+--primary-dark: #4f46e5;
+--text-primary: #111827;
+--text-secondary: #6b7280;
+--bg-secondary: #f9fafb;
+--border-color: #e5e7eb;
+--shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+--radius-md: 0.5rem;
+--gray-200: #e5e7eb;
+--gray-400: #9ca3af;
+--gray-600: #4b5563;
+--gray-900: #111827;
+--danger:#b91c1c;
+--dangerbg:#fef2f2;
+--radius-lg:12px;
+--warn:#92400e;
+--warnbg:#fffbeb;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg-secondary);color:var(--text-primary);line-height:1.55;margin:0;padding:0}
+.dashboard-layout{display:flex;height:100vh;min-height:100vh;overflow:hidden}
+.maker-sidebar{
+width:280px;
+background:#fff;
+border-right:1px solid var(--gray-200);
+display:flex;
+flex-direction:column;
+padding:28px 0;
+flex-shrink:0;
+box-shadow:var(--shadow-sm);
+height:100vh;
+overflow:hidden;
+}
+.sidebar-logo{padding:0 20px;margin-bottom:12px;border-bottom:1px solid #eee5e5;padding-bottom:10px;align-self:center}
+.sidebar-logo a{display:inline-block}
+.sidebar-logo img{height:40px}
+.nav-section{margin-bottom:8px}
+.nav-section-title{
+font-size:11px;
+font-weight:600;
+color:var(--gray-400);
+letter-spacing:0.06em;
+margin-bottom:8px;
+padding:0 32px;
+text-transform:uppercase;
+}
+.sidebar-nav .nav-link{
+display:flex;
+align-items:center;
+gap:12px;
+padding:12px 32px;
+color:var(--gray-600);
+text-decoration:none;
+font-weight:500;
+font-size:14px;
+border-right:3px solid transparent;
+transition:background 0.2s ease,color 0.2s ease;
+}
+.sidebar-nav .nav-link:hover{background:#f9fafb;color:var(--gray-900)}
+.sidebar-nav .nav-link.active,.sidebar-nav span.nav-link.active{
+background:linear-gradient(90deg,rgb(119 120 196 / 10%) 0%,rgb(2 3 22 / 5%) 100%);
+color:#000;
+border-right-color:#2c2c31;
+}
+.sidebar-nav span.nav-link.active{cursor:default}
+.nav-icon{width:20px;height:20px;opacity:0.75;flex-shrink:0}
+.maker-main{
+flex:1;
+min-width:0;
+height:100vh;
+overflow:hidden;
+display:flex;
+flex-direction:column;
+background:var(--bg-secondary);
+}
+.maker-main-inner{
+flex:1;
+overflow-y:auto;
+padding:32px 40px 48px;
+}
+.maker-main-footer{
+flex-shrink:0;
+display:flex;
+align-items:center;
+justify-content:space-between;
+gap:16px;
+padding:14px 40px;
+border-top:1px solid var(--border-color);
+background:#fff;
+font-size:13px;
+color:var(--text-secondary);
+}
+.breadcrumb-section{padding:4px 0 20px}
+.breadcrumb-nav{display:flex;align-items:center;flex-wrap:wrap;font-size:14px;gap:4px}
+.breadcrumb-link{display:inline-flex;align-items:center;color:var(--primary-color);text-decoration:none;font-weight:500;font-size:16px}
+.breadcrumb-link:hover{color:var(--primary-dark);text-decoration:underline}
+.breadcrumb-link svg{flex-shrink:0}
+.breadcrumb-separator{margin:0 8px;color:var(--gray-400);font-weight:400;user-select:none}
+.breadcrumb-current{font-weight:600;color:var(--gray-900)}
+h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
+.sub{color:var(--text-secondary);max-width:44rem;margin-bottom:22px}
+.panel{background:#fff;border:1px solid var(--border-color);border-radius:var(--radius-lg);padding:26px 30px;margin-bottom:20px}
+.builder-path-row{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.builder-path-dl{margin:0;flex:1;min-width:0}
+.builder-path-dl dt{margin-top:0}
+.builder-path-action{flex-shrink:0;padding-top:2px}
+.btn-sm{padding:8px 14px;font-size:13px}
+.checklist-panel{border:1px solid var(--border-color);border-radius:10px;background:#fafafa;margin:16px 0 22px 0;overflow:hidden}
+.checklist-head{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border-color);background:#fff}
+.checklist-head h2{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;margin:0}
+.checklist-list{list-style:none;margin:0;padding:0}
+.checklist-row{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border-color);background:#fff}
+.checklist-row:last-child{border-bottom:none}
+.checklist-icon{width:22px;height:22px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-radius:50%}
+.checklist-icon--pass{background:#ecfdf5;color:#059669}
+.checklist-icon--fail{background:#fef2f2;color:#dc2626}
+.checklist-icon--warn{background:var(--warnbg);color:#d97706}
+.checklist-icon--skip{background:#f3f4f6;color:#6b7280}
+.checklist-body{flex:1;min-width:0}
+.checklist-title{font-size:14px;font-weight:600;margin:0 0 2px 0;color:var(--gray-900)}
+.checklist-detail{font-size:13px;color:var(--text-secondary);margin:0;word-break:break-word}
+.checklist-row--has-expand{flex-wrap:wrap;align-items:center}
+.checklist-row--has-expand > .checklist-icon,
+.checklist-row--has-expand > .checklist-body,
+.checklist-row--has-expand > .checklist-action{align-self:center}
+.checklist-query-expand{flex:0 0 100%;width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;white-space:pre-wrap;max-height:180px;overflow:auto;margin:8px 0 0 0;padding:10px;background:#f3f4f6;border-radius:6px;border:1px solid var(--border-color);color:#374151;box-sizing:border-box}
+.checklist-query-expand[hidden]{display:none}
+.checklist-action{flex-shrink:0;margin-left:auto;align-self:center}
+dl{margin:0}
+dt{font-size:11px;color:var(--gray-600);text-transform:uppercase;font-weight:600;letter-spacing:0.05em;margin:16px 0 4px 0}
+dt:first-child{margin-top:0}
+dd{font-weight:600;font-size:1rem;margin:0;padding:0;color:var(--gray-900);word-break:break-word}
+.detail-dd-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.detail-dd-row form{margin:0;flex-shrink:0}
+.act{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px;padding-top:22px;border-top:1px solid var(--border-color)}
+.act--split{justify-content:space-between;align-items:flex-start}
+.act-open{display:flex;flex-wrap:wrap;gap:10px}
+.act-right{display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-end}
+.btn{padding:11px 18px;border-radius:var(--radius-md);font-weight:600;font-size:14px;cursor:pointer;border:1px solid transparent;font:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:6px;background:#fff}
+.btn-neutral{color:var(--gray-900);border-color:var(--border-color)}
+.btn-neutral:hover{border-color:#d1d5db;background:#fafafa}
+.btn-primary{background:var(--gray-900);color:#fff;border-color:var(--gray-900)}
+.btn-primary:hover{background:#000;border-color:#000;color:#fff}
+.btn-danger{background:var(--dangerbg);color:var(--danger);border-color:#fecaca}
+.btn-danger:hover{background:#fee2e2}
+.banner{padding:14px 16px;border-radius:10px;margin-bottom:16px;font-size:14px;border:1px solid var(--border-color)}
+.banner.warn{border-color:#fde68a;background:var(--warnbg);color:var(--warn)}
+.banner.bad{border-color:#fecaca;background:var(--dangerbg);color:var(--danger)}
+.banner.good{border-color:#a7f3d0;background:#ecfdf5;color:#065f46}
+.small{font-size:13px;color:var(--text-secondary);margin-top:10px}
+pre.log{white-space:pre-wrap;background:#fafafa;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border-color);font-size:12px;margin-top:16px;display:none;color:#374151}
+pre.log.show{display:block}
+@media (max-width:768px){
+.maker-sidebar{width:100%;flex-direction:row;overflow-x:auto;align-items:center;min-height:0;padding:12px 0}
+.maker-sidebar .sidebar-logo{margin-bottom:0;flex-shrink:0;padding-right:16px}
+.maker-sidebar .sidebar-nav{display:flex;flex-direction:row;gap:4px;padding:8px 0;flex:1;flex-wrap:nowrap}
+.maker-sidebar .nav-section-title{display:none}
+.maker-sidebar .nav-link{white-space:nowrap;padding:8px 16px;border-right:none;border-radius:8px}
+.dashboard-layout{flex-direction:column;height:auto;overflow:visible}
+.maker-sidebar{height:auto;overflow:visible}
+.maker-main{height:auto;overflow:visible}
+.maker-main-inner{overflow:visible;padding:16px !important}
+.maker-main-footer{padding:14px 16px}
+}
+.maker-main-inner{padding:0}
+.performance-dashboard{padding:20px}
+
+       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap'); 
+
+       :root {
+           --primary-color: #6366f1;
+           --primary-dark: #4f46e5;
+           --secondary-color: #10b981;
+           --accent-color: #f59e0b;
+           --text-primary: #111827;
+           --text-secondary: #6b7280;
+           --text-muted: #9ca3af;
+           --bg-primary: #ffffff;
+           --bg-secondary: #f9fafb;
+           --bg-tertiary: #f3f4f6;
+           --border-color: #e5e7eb;
+           --border-light: #f3f4f6;
+           --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+           --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+           --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+           --radius-sm: 0.375rem;
+           --radius-md: 0.5rem;
+           --radius-lg: 0.75rem;
+       } 
+
+       * {
+           margin: 0;
+           padding: 0;
+           box-sizing: border-box;
+       } 
+
+       body {
+           margin: 0;
+           padding: 0;
+       } 
+
+       .survey-container {
+           max-width: none;
+           margin: 0;
+           overflow: visible;
+           background: transparent;
+       }
+     .environment-button {
+     
+     transition: background-color 0.3s ease-in-out, transform 0.3s ease-in-out;
+     }
+.environment-button:hover {
+  background-color: #000000;
+    padding: 3px 7px;
+    color: white;
+  transform: scale(1.1);
+     }
+       .survey-header {
+           background: #eff0f1;
+           color: #060606;
+           padding: 20px 40px;
+           text-align: center;
+           border: 1px solid #cacad3;
+       } 
+     
+     @keyframes flickerRedOnce {
+  0%   { background-color: #ebebeb; }
+  50%  { background-color: #bfffbf; }
+  100% { background-color: #ebebeb; }
+}
+
+.flicker {
+  animation: flickerRedOnce 0.5s ease-in-out 5;
+}
+
+       .logo {
+           margin-bottom: 20px;
+       } 
+
+       .logo img {
+           height: 40px;
+       } 
+
+       .survey-title {
+           font-size: 1.875rem;
+           font-weight: 700;
+           margin-bottom: 8px;
+       } 
+
+       .survey-subtitle {
+           font-size: 1.125rem;
+           opacity: 0.9;
+       } 
+
+       .progress-bar {
+           background: rgb(217 217 217 / 88%);
+           height: 4px;
+           border-radius: 2px;
+           margin-top: 20px;
+           overflow: hidden;
+       } 
+
+       .progress-fill {
+           background: linear-gradient(264deg, black, black);
+           height: 100%;
+           border-radius: 2px;
+           transition: width 0.3s ease;
+       } 
+
+       .survey-content {
+           background: transparent;
+           border: none;
+           margin-bottom: 0;
+       }
+
+       .chart-container {
+           background: var(--bg-primary);
+           border: 1px solid var(--border-color);
+           border-radius: var(--radius-md);
+           padding: 24px;
+           margin: 24px;
+           box-shadow: var(--shadow-sm);
+       }  
+
+       .chart-header {
+           display: flex;
+           align-items: center;
+           margin-bottom: 20px;
+       } 
+
+       .chart-number {
+           background: #000000;
+           color: white;
+           width: 42px;
+           height: 42px;
+           border-radius: 50%;
+           display: flex;
+           align-items: center;
+           justify-content: center;
+           font-size: 24px;
+           font-weight: 600;
+           margin-right: 16px;
+           flex-shrink: 0;
+       } 
+
+       .chart-content {
+           flex: 1;
+       } 
+
+       .chart-text {
+           font-size: 1.125rem;
+           font-weight: 600;
+           color: var(--text-primary);
+           margin-bottom: 8px;
+       } 
+
+       .chart-type {
+           font-size: 0.875rem;
+           color: var(--text-secondary);
+           text-transform: uppercase;
+           letter-spacing: 0.05em;
+       } 
+
+       .chart-wrapper {
+           position: relative;
+           height: 300px;
+           margin-top: 20px;
+       } 
+
+       .analytics-grid {
+           display: grid;
+           grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+           gap: 24px;
+           padding: 24px;
+       } 
+
+       .analytics-card {
+           background: var(--bg-primary);
+           border: 1px solid var(--border-color);
+           border-radius: var(--radius-md);
+           padding: 24px;
+           transition: all 0.2s ease;
+           box-shadow: var(--shadow-sm);
+       } 
+
+       .analytics-card:hover {
+           box-shadow: var(--shadow-md);
+       } 
+
+       .analytics-header {
+           display: flex;
+           align-items: flex-start;
+           margin-bottom: 20px;
+           align-items: center;
+       } 
+
+       .analytics-number {
+           background: #000000;
+           color: white;
+           width: 42px;
+           height: 42px;
+           border-radius: 50%;
+           display: flex;
+           align-items: center;
+           justify-content: center;
+           font-size: 24px;
+           font-weight: 600;
+           margin-right: 16px;
+           flex-shrink: 0;
+       } 
+
+       .analytics-content {
+           flex: 1;
+       } 
+
+       .analytics-text {
+           font-size: 1.125rem;
+           font-weight: 600;
+           color: var(--text-primary);
+           margin-bottom: 8px;
+       } 
+
+       .analytics-type {
+           font-size: 0.875rem;
+           color: var(--text-secondary);
+           text-transform: uppercase;
+           letter-spacing: 0.05em;
+       } 
+
+       .analytics-value {
+           font-size: 1.25rem;
+           font-weight: 700;
+           color: var(--primary-color);
+           margin-top: 8px;
+       } 
+
+       .analytics-description {
+           font-size: 0.875rem;
+           color: var(--text-secondary);
+           margin-top: 4px;
+       } 
+
+       .answer-breakdown {
+           margin-top: 16px;
+           padding-top: 16px;
+           border-top: 1px solid var(--border-light);
+       } 
+
+       .answer-item {
+           display: flex;
+           justify-content: space-between;
+           align-items: center;
+           padding: 8px 0;
+           font-size: 0.875rem;
+       } 
+
+       .answer-text {
+           color: var(--text-primary);
+           flex: 1;
+           margin-right: 12px;
+           word-break: break-word;
+       } 
+
+       .answer-count {
+           color: var(--primary-color);
+           font-weight: 600;
+           flex-shrink: 0;
+       } 
+
+       .responses-section {
+           background: var(--bg-primary);
+           border: 1px solid var(--border-color);
+           border-radius: var(--radius-md);
+           padding: 24px;
+           margin: 24px;
+           box-shadow: var(--shadow-sm);
+       } 
+
+       .responses-header {
+           display: flex;
+           align-items: center;
+           margin-bottom: 20px;
+       } 
+
+       .responses-title {
+           font-size: 1.125rem;
+           font-weight: 600;
+           color: var(--text-primary);
+           margin-bottom: 8px;
+       } 
+
+       .responses-subtitle {
+           font-size: 0.875rem;
+           color: var(--text-secondary);
+           text-transform: uppercase;
+           letter-spacing: 0.05em;
+       } 
+
+       .table-wrapper {
+           overflow-x: auto;
+           margin-top: 20px;
+           -webkit-overflow-scrolling: touch;
+       } 
+
+       .responses-table {
+           width: 100%;
+           border-collapse: collapse;
+           font-size: 0.75rem;
+           min-width: 1000px;
+       } 
+
+       .responses-table thead {
+           background: var(--bg-tertiary);
+       } 
+
+       .responses-table th {
+           padding: 12px;
+           text-align: left;
+           font-size: 0.875rem;
+           font-weight: 600;
+           color: var(--text-primary);
+           text-transform: uppercase;
+           letter-spacing: 0.05em;
+           border-bottom: 2px solid var(--border-color);
+       } 
+
+       .responses-table td {
+           padding: 12px;
+           font-size: 0.875rem;
+           color: var(--text-primary);
+           border-bottom: 1px solid var(--border-light);
+           overflow-wrap: anywhere;
+       } 
+
+       .responses-table tbody tr:hover {
+           background: var(--bg-secondary);
+       } 
+
+       .responses-table .answer-cell {
+           max-width: 300px;
+           word-break: break-word;
+       } 
+
+       .pagination {
+           display: flex;
+           justify-content: center;
+           align-items: center;
+           gap: 8px;
+           margin-top: 24px;
+           padding-top: 24px;
+           border-top: 1px solid var(--border-light);
+       } 
+
+       .pagination-button {
+           padding: 8px 16px;
+           border: 1px solid var(--border-color);
+           background: var(--bg-primary);
+           color: var(--text-primary);
+           border-radius: var(--radius-sm);
+           cursor: pointer;
+           font-size: 0.875rem;
+           transition: all 0.2s ease;
+       } 
+
+       .pagination-button:hover:not(:disabled) {
+           background: #85868e;
+           color: white;
+           border-color: var(--primary-color);
+       } 
+
+       .pagination-button:disabled {
+           opacity: 0.5;
+           cursor: not-allowed;
+       } 
+
+       .pagination-button.active {
+           background: #000000;
+           color: white;
+           border-color: var(--primary-color);
+       } 
+
+       .pagination-info {
+           font-size: 0.875rem;
+           color: var(--text-secondary);
+           margin: 0 16px;
+       } 
+
+       .filter-controls {
+           display: flex;
+           align-items: flex-end;
+           gap: 16px;
+           margin-bottom: 24px;
+           padding: 20px;
+           background: var(--bg-tertiary);
+           border-radius: var(--radius-md);
+           flex-wrap: wrap;
+       } 
+
+       .filter-group {
+           display: flex;
+           flex-direction: column;
+           gap: 8px;
+           flex: 1;
+           min-width: 200px;
+       } 
+
+       .filter-label {
+           font-size: 0.875rem;
+           font-weight: 600;
+           color: var(--text-primary);
+       } 
+
+       .filter-select {
+           padding: 10px 12px;
+           border: 1px solid var(--border-color);
+           border-radius: var(--radius-sm);
+           background: var(--bg-primary);
+           color: var(--text-primary);
+           font-size: 0.875rem;
+           font-family: 'Inter', sans-serif;
+           cursor: pointer;
+           transition: all 0.2s ease;
+       } 
+
+       .filter-select:hover {
+           border-color: #000000;
+       } 
+
+       .filter-select:focus {
+           outline: none;
+           border-color: #000000;
+           box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+       } 
+
+       .download-button {
+           padding: 10px 20px;
+           border: 1px solid #000000;
+           background: #000000;
+           color: white;
+           border-radius: var(--radius-sm);
+           font-size: 0.875rem;
+           font-weight: 600;
+           font-family: 'Inter', sans-serif;
+           cursor: pointer;
+           transition: all 0.2s ease;
+           white-space: nowrap;
+       } 
+
+       .download-button:hover {
+           background: #353333;
+           border-color: #353333;
+       } 
+
+      .trigger-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 40px;
+          height: 40px;
+          padding: 0;
+          border: 1px solid #000000;
+          background: #111111;
+          color: white;
+          border-radius: var(--radius-sm);
+          font-size: 1.05rem;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          flex-shrink: 0;
+      }
+      .trigger-btn:hover:not([disabled]) {
+          background: #353333;
+          border-color: #353333;
+      }
+      .trigger-btn[disabled] {
+          opacity: 0.5;
+          cursor: not-allowed;
+          background: #555555;
+      }
+
+     .sync-btn {
+         display: inline-flex;
+         align-items: center;
+         justify-content: center;
+         width: 40px;
+         height: 40px;
+         padding: 0;
+         border: 1px solid #000000;
+         background: #000000;
+         color: white;
+         border-radius: var(--radius-sm);
+         font-size: 1.05rem;
+         font-weight: 700;
+         cursor: pointer;
+         transition: all 0.2s ease;
+         flex-shrink: 0;
+     }
+     .sync-btn:hover:not([disabled]) {
+         background: #353333;
+         border-color: #353333;
+     }
+     .sync-btn[disabled] {
+         opacity: 0.5;
+         cursor: not-allowed;
+         background: #555555;
+     }
+
+      .trigger-section {
+           margin-bottom: 24px;
+           padding: 20px;
+           background: var(--bg-tertiary);
+           display: none;
+       }
+       .trigger-section.visible {
+           display: block;
+       }
+       .trigger-section .trigger-row {
+           display: flex;
+           align-items: center;
+           justify-content: flex-end;
+           gap: 12px;
+           flex-wrap: wrap;
+       }
+       .trigger-section .trigger-note {
+           margin-right: auto;
+           font-size: 0.875rem;
+           color: var(--text-primary);
+           font-weight: 600;
+       }
+       .trigger-section .trigger-confirm-btn {
+           padding: 10px 20px;
+           border: 1px solid #000000;
+           background: #000000;
+           color: white;
+           font-size: 0.875rem;
+           font-weight: 600;
+           cursor: pointer;
+       }
+       .trigger-section .trigger-confirm-btn:hover {
+           background: #353333;
+       }
+       .trigger-section .trigger-confirm-btn[disabled] {
+           opacity: 0.7;
+           cursor: not-allowed;
+       }
+       .trigger-loading {
+           display: none;
+           align-items: center;
+           gap: 10px;
+           margin-top: 12px;
+           padding: 12px 16px;
+           background: var(--bg-primary);
+           border: 1px solid var(--border-color);
+           border-radius: var(--radius-sm);
+           font-weight: 600;
+           color: var(--text-primary);
+       }
+       .trigger-loading.visible {
+           display: inline-flex;
+       }
+       .trigger-spinner {
+           width: 16px;
+           height: 16px;
+           border: 3px solid rgba(0,0,0,0.15);
+           border-top-color: #000000;
+           border-radius: 50%;
+           animation: triggerSpin 0.8s linear infinite;
+       }
+       @keyframes triggerSpin {
+           to { transform: rotate(360deg); }
+       }
+       .trigger-section .trigger-result {
+           margin-top: 12px;
+           padding: 12px 16px;
+           border-radius: var(--radius-sm);
+           font-weight: 600;
+       }
+       .trigger-section .trigger-result.ok {
+           background: #d4edda;
+           color: #155724;
+       }
+      .trigger-section .trigger-result.failed {
+          background: #f8d7da;
+          color: #721c24;
+      }
+
+      .sync-section {
+          margin-bottom: 24px;
+          padding: 20px;
+          background: var(--bg-tertiary);
+          display: none;
+      }
+      .sync-section.visible {
+          display: block;
+      }
+      .sync-section .sync-row {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 12px;
+          flex-wrap: wrap;
+      }
+      .sync-section .sync-note {
+          margin-right: auto;
+          font-size: 0.875rem;
+          color: var(--text-primary);
+          font-weight: 600;
+      }
+     .sync-section .sync-confirm-btn {
+         padding: 10px 20px;
+         border: 1px solid #000000;
+         background: #000000;
+         color: white;
+         font-size: 0.875rem;
+         font-weight: 600;
+         cursor: pointer;
+     }
+     .sync-section .sync-confirm-btn:hover {
+         background: #353333;
+     }
+      .sync-section .sync-confirm-btn[disabled] {
+          opacity: 0.7;
+          cursor: not-allowed;
+      }
+      .sync-loading {
+          display: none;
+          align-items: center;
+          gap: 10px;
+          margin-top: 12px;
+          padding: 12px 16px;
+          background: var(--bg-primary);
+          border: 1px solid var(--border-color);
+          border-radius: var(--radius-sm);
+          font-weight: 600;
+          color: var(--text-primary);
+      }
+      .sync-loading.visible {
+          display: inline-flex;
+      }
+     .sync-spinner {
+         width: 16px;
+         height: 16px;
+         border: 3px solid rgba(0, 0, 0, 0.15);
+         border-top-color: #000000;
+         border-radius: 50%;
+         animation: syncSpin 0.8s linear infinite;
+     }
+      @keyframes syncSpin {
+          to { transform: rotate(360deg); }
+      }
+      .sync-section .sync-result {
+          margin-top: 12px;
+          padding: 12px 16px;
+          border-radius: var(--radius-sm);
+          font-weight: 600;
+      }
+      .sync-section .sync-result.ok {
+          background: #d4edda;
+          color: #155724;
+      }
+      .sync-section .sync-result.failed {
+          background: #f8d7da;
+          color: #721c24;
+      }
+
+      .add-contact-btn {
+           display: inline-flex;
+           align-items: center;
+           justify-content: center;
+           width: 40px;
+           height: 40px;
+           padding: 0;
+           border: 1px solid #000000;
+           background: #64d0ea;
+           color: white;
+           border-radius: var(--radius-sm);
+           font-size: 1.25rem;
+           font-weight: 600;
+           cursor: pointer;
+           transition: all 0.2s ease;
+           flex-shrink: 0;
+       }
+      .add-contact-btn:hover:not([disabled]) {
+          background: #353333;
+          border-color: #353333;
+      }
+      .add-contact-btn[disabled] {
+          opacity: 0.5;
+          cursor: not-allowed;
+          background: #888888;
+      }
+      .add-contact-section {
+           margin-bottom: 24px;
+           padding: 20px;
+           background: var(--bg-tertiary);
+           display: none;
+       }
+       .add-contact-section.visible {
+           display: block;
+       }
+       .add-contact-section .contact-form-row {
+           display: flex;
+           align-items: flex-end;
+           gap: 12px;
+           flex-wrap: wrap;
+           justify-content: flex-end;
+       }
+       .add-contact-section .contact-form-group {
+           display: flex;
+           flex-direction: column;
+           gap: 8px;
+           min-width: auto;
+           width: 360px;
+       }
+       .add-contact-section .contact-form-group label {
+           font-size: 0.875rem;
+           font-weight: 600;
+           color: var(--text-primary);
+       }
+       .add-contact-section input[type="text"].contact-id-input {
+           padding: 10px 12px;
+           border: 1px solid var(--border-color);
+           background: var(--bg-primary);
+           color: var(--text-primary);
+           font-size: 0.875rem;
+           font-family: 'Inter', sans-serif;
+       }
+       .add-contact-section .contact-submit-btn {
+           padding: 10px 20px;
+           border: 1px solid #000000;
+           background: #000000;
+           color: white;
+           font-size: 0.875rem;
+           font-weight: 600;
+           cursor: pointer;
+       }
+       .add-contact-section .contact-submit-btn:hover {
+           background: #353333;
+       }
+       .add-contact-section .contact-add-success {
+           display: none;
+           padding: 12px 16px;
+           background: #d4edda;
+           color: #155724;
+           border-radius: var(--radius-sm);
+           font-weight: 600;
+       }
+       .add-contact-section.show-success .contact-form-row {
+           display: none;
+       }
+       .add-contact-section.show-success .contact-add-success {
+           display: block;
+       }
+       .add-contact-section .contact-add-error {
+           padding: 12px 16px;
+           background: #f8d7da;
+           color: #721c24;
+           border-radius: var(--radius-sm);
+           font-weight: 600;
+           margin-top: 8px;
+       }
+
+       @media (max-width: 768px) {
+           body {
+               padding: 10px;
+           } 
+
+           .survey-header {
+               padding: 30px 20px;
+           } 
+
+           .survey-content {
+               padding: 30px 20px;
+           } 
+
+           .survey-title {
+               font-size: 1.5rem;
+           } 
+
+           .analytics-card[style*="grid-column: span 2"] {
+               grid-column: span 1 !important;
+           } 
+
+           .analytics-card[style*="grid-column: span 2"]>div>div>div[style*="height: 300px"] {
+               height: 250px !important;
+           } 
+
+           .table-wrapper {
+               overflow-x: auto;
+               -webkit-overflow-scrolling: touch;
+           } 
+
+           .responses-table {
+               font-size: 0.75rem;
+               min-width: 800px;
+           } 
+
+           .responses-table th,
+           .responses-table td {
+               padding: 8px;
+           } 
+
+           .pagination {
+               flex-wrap: wrap;
+           } 
+
+           .pagination-button {
+               padding: 6px 12px;
+               font-size: 0.75rem;
+           } 
+
+           .filter-controls {
+               flex-direction: column;
+               align-items: stretch;
+           } 
+
+           .filter-group {
+               min-width: 100%;
+           } 
+
+           .download-button {
+               width: 100%;
+               margin-top: 8px;
+           }
+       }
+</style>
+</head>
+<body>
+<div class="dashboard-layout">
+<aside class="maker-sidebar sidebar" aria-label="Primary">
+  <div class="sidebar-logo">
+    <a href="%%=v(@HOME_URL)=%%"><img src="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" alt="MagMutual" style="filter: invert(1);"></a>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-section"><span class="nav-section-title">MENU</span></div>
+    <a class="nav-link" href="%%=IIF(NOT Empty(@jid), Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid), @BUILD_PAGE_SELF)=%%">
+      <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17h2v-5H3v5zm8 5h2V6h-2v16zM13 9h8V7h-8v2zM3 5v4h14V5H3zm8 14h10v-2H11v2zM13 17h8v-2h-8v2z"/></svg>
+      Manage build
+    </a>
+    <span class="nav-link active" role="presentation">
+      <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 11H7v6h2v-6zm4 0h-2v6h2v-6zm4 0h-2v6h2v-6zM5 20h14V4H5v16zm14 2H5c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v16c0 1.1-.9 2-2 2z"/></svg>
+      Performance
+    </span>
+  </nav>
+</aside>
+<main class="maker-main">
+<div class="maker-main-inner">
+<div class="performance-dashboard">
+   <div class="survey-container">
+      <div class="survey-content">
+          %%[ IF NOT Empty(@configError) THEN ]%%
+     
+          <div class="analytics-grid">
+              <div class="analytics-card" style="text-align: center; grid-column: 1 / -1; background: #f8d7da; border: 2px solid #721c24;">
+                  <div class="analytics-content">
+                      <div class="analytics-type" style="color: #721c24; font-size: 1.2rem; font-weight: 700;">⚠ Configuration Error</div>
+                  </div>
+                  <p style="color: #721c24; margin-top: 16px; font-weight: 600;">
+                      %%=v(@configError)=%%
+                  </p>
+                  <p style="color: #721c24; margin-top: 12px; font-size: 0.875rem;">
+                      Please check the SFMC_SS_DASHBOARD data extension and ensure all required fields are populated for this environment.
+                  </p>
+              </div>
+          </div>
+          %%[ ELSEIF @totalRecords > 0 THEN ]%%
+           <h1 style="
+    padding: 20px 0px 0px 24px;
+    /* margin: 24px; */
+">Build perfomance</h1>
+        <p style="
+    padding: 0px 10px 0px 24px;
+">See how your build perfomed, measure your metrics, and gaing insights into your audience</p>
+           <div class="chart-container">
+               <div class="chart-header">
+                   <div class="chart-number">☈</div>
+                   <div class="chart-content">
+                       <div class="chart-text">Engagement Trends</div>
+                       <div class="chart-type">Emails Sent Over Time</div>
+                   </div>
+               </div>
+               <div class="chart-wrapper">
+                   <canvas id="responseChart"></canvas>
+               </div>
+           </div>
+           <div class="chart-container">
+              <div class="chart-header">
+                  <div class="chart-number">☉</div>
+                  <div class="chart-content">
+                      <div class="chart-text">Opens & Clicks Over Time</div>
+                      <div class="chart-type">Opens, Clicks, Unsubscribes, and Unregistered Opens by Date</div>
+                  </div>
+              </div>
+               <div class="chart-wrapper">
+                   <canvas id="opensClicksChart"></canvas>
+               </div>
+           </div>
+           <div class="analytics-grid">
+               <div class="analytics-card" style="grid-column: span %%[ IF @stateCount > 3 THEN ]%%2%%[ ELSE ]%%1%%[ ENDIF ]%%;">
+                   <div class="analytics-header">
+                       <div class="analytics-number">🗁</div>
+                       <div class="analytics-content">
+                           <div class="analytics-text">Email Engagement</div>
+                           <div class="analytics-type">%%=v(@totalRecords)=%% Total Records</div>
+                       </div>
+                   </div>
+                  <div class="analytics-description">
+                      Opened: <strong>%%=v(@openedCount)=%%</strong> |
+                      Bounced: <strong>%%=v(@bouncedCount)=%%</strong> |
+                      Did Not Open: <strong>%%=v(@didNotOpenCount)=%%</strong> |
+                      Clicked: <strong>%%=v(@clickedCount)=%%</strong> |
+                      Unregistered Opens: <strong>%%=v(@unregisteredOpenedCount)=%%</strong>
+                  </div>
+                   <div style="margin-top: 20px;">
+                       <div style="position: relative; height: 250px;">
+                           <canvas id="combinedEngagementChart"></canvas>
+                       </div>
+                   </div>
+               </div>
+               <div class="analytics-card" style="grid-column: span %%[ IF @stateCount > 3 THEN ]%%2%%[ ELSE ]%%1%%[ ENDIF ]%%;">
+                   <div class="analytics-header">
+                       <div class="analytics-number">🗺</div>
+                       <div class="analytics-content">
+                           <div class="analytics-text">State Geographic Distribution</div>
+                           <div class="analytics-type">Email Engagement by State</div>
+                       </div>
+                   </div>
+                   <div class="chart-wrapper" style="position: relative; height: 250px;">
+                       <canvas id="stateChart"></canvas>
+                   </div>
+               </div>
+           </div>
+           <div class="chart-container">
+               <div class="chart-header">
+                   <div class="chart-number">🏞</div>
+                   <div class="chart-content">
+                       <div class="chart-text">Primary Specialty Distribution</div>
+                       <div class="chart-type">Email Engagement by Primary Specialty</div>
+                   </div>
+               </div>
+               <div class="chart-wrapper">
+                   <canvas id="specialtyChart"></canvas>
+               </div>
+           </div>
+           <div class="responses-section">
+               <div class="responses-header">
+                   <div class="chart-number">🖄</div>
+                   <div class="chart-content">
+                       <div class="responses-title">Individual Records</div>
+                       <div class="responses-subtitle">Contact Engagement Details</div>
+                   </div>
+               </div>
+               <div class="filter-controls">
+                   <div class="filter-group">
+                       <label for="filterEngagement" class="filter-label">Filter by Engagement:</label>
+                       <select id="filterEngagement" class="filter-select">
+                           <option value="">All Engagement Statuses</option>
+                           <option value="Opened">Opened</option>
+                           <option value="Bounced">Bounced</option>
+                           <option value="Did Not Open">Did Not Open</option>
+                           <option value="Clicked">Clicked</option>
+                         <option value="Unsubscribed">Unsubscribed</option>
+                       </select>
+                   </div>
+                   <div class="filter-group">
+                       <label for="filterState" class="filter-label">Filter by State:</label>
+                       <select id="filterState" class="filter-select">
+                           <option value="">All States</option>
+                       </select>
+                   </div>
+                   <div class="filter-group">
+                       <label for="filterSpecialty" class="filter-label">Filter by Specialty:</label>
+                       <select id="filterSpecialty" class="filter-select">
+                           <option value="">All Specialties</option>
+                       </select>
+                   </div>
+                   <div class="filter-group">
+                       <label for="filterDate" class="filter-label">Filter by Date:</label>
+                       <select id="filterDate" class="filter-select">
+                           <option value="">All Dates</option>
+                           <option value="today">Today</option>
+                       </select>
+                   </div>
+                  <button id="downloadBtn" class="download-button" onclick="downloadFilteredData()">
+                      Download
+                  </button>
+                   <button type="button" id="syncBtn" class="sync-btn" onclick="toggleSyncSection()" title="Sync automation" %%[ IF NOT Empty(@configError) OR Empty(@syncAutomationIdVar) THEN ]%%disabled style="opacity: 0.5; cursor: not-allowed;"%%[ ENDIF ]%%>↻</button>
+                   <button type="button" id="triggerBtn" class="trigger-btn" onclick="toggleTriggerSection()" title="Trigger automation" %%[ IF NOT Empty(@configError) THEN ]%%disabled style="opacity: 0.5; cursor: not-allowed;"%%[ ENDIF ]%%>⚡</button>
+                   <button type="button" id="addContactBtn" class="add-contact-btn" onclick="toggleAddContactSection()" title="Search Contact In %%=v(@BU)=%% Emails" %%[ IF NOT Empty(@configError) THEN ]%%disabled style="opacity: 0.5; cursor: not-allowed;"%%[ ENDIF ]%%>🔍</button>
+              </div>
+               <div id="triggerSection" class="trigger-section %%[ IF NOT Empty(@triggerAutomationStatus) THEN ]%% visible %%[ ENDIF ]%%">
+                   <form id="triggerForm" method="post" action="">
+                       <input type="hidden" name="do" value="triggerAutomation" />
+                       <input type="hidden" name="confirm" value="1" />
+                      <div class="trigger-row">
+                          <div class="trigger-note">
+                              Trigger automation: <strong>Push Advice : Server Side Automation</strong><br>
+                              <small style="font-size: 0.75rem; color: var(--text-secondary);">ID: %%=v(@triggerAutomationId)=%%</small>
+                          </div>
+                        <div class="trigger-note" style="font-size: 0.85rem; color: #721c24; background: #f8d7da; padding: 8px; border-radius: 4px;">
+                          <strong>⚠ WARNING:</strong> Clicking confirm will trigger the automation that sends Push Advice emails. New recommendations will be generated.
+                          </div>
+                          <button type="submit" class="trigger-confirm-btn" id="triggerConfirmBtn">Confirm Trigger</button>
+                      </div>
+                   </form>
+                   <div id="triggerLoading" class="trigger-loading" role="status" aria-live="polite" aria-busy="true">
+                       <span class="trigger-spinner"></span>
+                       <span>Triggering automation...</span>
+                   </div>
+                  %%[ IF NOT Empty(@triggerAutomationResult) THEN ]%%
+                    <div class="trigger-result %%[ IF @triggerAutomationStatus == "OK" THEN ]%%ok%%[ ELSE ]%%failed%%[ ENDIF ]%%">
+                      %%=v(@triggerAutomationResult)=%%
+                    </div>
+                  %%[ ENDIF ]%%
+              </div>
+              <div id="syncSection" class="sync-section %%[ IF NOT Empty(@syncAutomationStatus) THEN ]%% visible %%[ ENDIF ]%%">
+                  <form id="syncForm" method="post" action="">
+                      <input type="hidden" name="do" value="syncAutomation" />
+                      <input type="hidden" name="confirm" value="1" />
+                      <div class="sync-row">
+                          <div class="sync-note">
+                              Sync automation: <strong>Data Sync Process</strong><br>
+                              <small style="font-size: 0.75rem; color: var(--text-secondary);">ID: %%=v(@syncAutomationIdVar)=%%</small>
+                          </div>
+                        <div class="sync-note" style="font-size: 0.85rem; color: #0f5132; background: #d1e7dd; padding: 8px; border-radius: 4px;">
+                          <strong>ℹ INFO:</strong> Clicking confirm will trigger the data synchronization automation.
+                          </div>
+                          <button type="submit" class="sync-confirm-btn" id="syncConfirmBtn">Confirm Sync</button>
+                      </div>
+                  </form>
+                  <div id="syncLoading" class="sync-loading" role="status" aria-live="polite" aria-busy="true">
+                      <span class="sync-spinner"></span>
+                      <span>Syncing automation...</span>
+                  </div>
+                  %%[ IF NOT Empty(@syncAutomationResult) THEN ]%%
+                    <div class="sync-result %%[ IF @syncAutomationStatus == "OK" THEN ]%%ok%%[ ELSE ]%%failed%%[ ENDIF ]%%">
+                      %%=v(@syncAutomationResult)=%%
+                    </div>
+                  %%[ ENDIF ]%%
+              </div>
+              <div id="addContactSection" class="add-contact-section %%[ IF RequestParameter("added") == "1" THEN ]%% visible show-success %%[ ENDIF ]%%">
+                   <form id="addContactForm" method="get" action="">
+                       <input type="hidden" name="do" value="addContact" />
+                       <input type="hidden" name="returnUrl" id="addContactRedirectUrl" value="" />
+                       <div class="contact-form-row">
+                           <div class="contact-form-group">
+                               <label for="contactIdInput">Enter Contact Id</label>
+                               <input type="text" id="contactIdInput" name="contactId" class="contact-id-input" placeholder="Contact Id" required />
+                           </div>
+                           <button type="submit" class="contact-submit-btn">Search</button>
+                       </div>
+                   </form>
+                   <div class="contact-add-success flicker">Successfully added.</div>
+                   <div class="contact-add-error" style="display: none;">Error occurred. Please try again.</div>
+               </div>
+               <div id="filterscrollto" class="table-wrapper">
+                   <table class="responses-table">
+                       <thead>
+                           <tr>
+                               <th>Contact Id</th>
+                               <th>Email</th>
+                               <th>Last Sent</th>
+                               <th>Engagement</th>
+                               <th>Primary Specialty</th>
+                               <th>State</th>
+                               <th>Job ID</th>
+                               <th>Account Name</th>
+                               <th>First Name</th>
+                               <th>Last Name</th>
+                               <th>Campaign Type</th>
+                               <th>Articles</th>
+                               <th>History</th>
+                             <th>Last Email</th>
+                           </tr>
+                       </thead>
+                       <tbody id="responsesTableBody">
+                       </tbody>
+                   </table>
+               </div>
+               <div class="pagination" id="pagination"></div>
+           
+           </div>
+       
+           %%[ ELSE ]%%
+           <div class="analytics-grid">
+               <div class="analytics-card" style="text-align: center; grid-column: 1 / -1;">
+                   <div class="analytics-content">
+                       <div class="analytics-type">No Data Found/Draft Status</div>
+                   </div>
+                   <p style="color: var(--text-secondary); margin-top: 16px;">
+                       No engagement data found in the engagement data extension for journeyId %%=v(@jid)=%%.
+                   </p>
+               </div>
+           </div>
+           %%[ ENDIF ]%%
+       </div>
+   </div>
+   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+   <script>
+       function updateProgress() {
+           const progressFill = document.getElementById('progressFill');
+           if (progressFill) {
+               progressFill.style.width = '100%';
+           }
+       }
+       var redirectInput = document.getElementById('addContactRedirectUrl');
+       if (redirectInput) redirectInput.value = window.location.href;
+       if (window.location.search.indexOf('added=1') !== -1) {
+           var section = document.getElementById('filterscrollto');
+           if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+           if (window.history && window.history.replaceState) {
+               var params = new URLSearchParams(window.location.search);
+               params.delete('added');
+               var qs = params.toString();
+               window.history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''));
+           }
+       }
+
+       function createResponseChart() {
+           const ctx = document.getElementById('responseChart');
+           if (!ctx) return;
+           const dateData = '%%=v(@dateData)=%%';
+           const dateCounts = {};
+           if (dateData && dateData !== '') {
+               const dates = dateData.split(',').filter(date => date.trim() !== '');
+               dates.forEach(date => {
+                   const trimmedDate = date.trim();
+                   if (trimmedDate) {
+                       const parsedDate = parseCustomDate(trimmedDate);
+                       if (parsedDate && !isNaN(parsedDate.getTime())) {
+                           const dateOnly = parsedDate.toLocaleDateString('en-US', {
+                               year: 'numeric',
+                               month: 'short',
+                               day: 'numeric'
+                           });
+                           dateCounts[dateOnly] = (dateCounts[dateOnly] || 0) + 1;
+                       } else {
+                           const parts = trimmedDate.split(' ');
+                           if (parts.length >= 3) {
+                               const dateOnly = parts[0] + ' ' + parts[1] + ' ' + parts[2];
+                               dateCounts[dateOnly] = (dateCounts[dateOnly] || 0) + 1;
+                           }
+                       }
+                   }
+               });
+           }
+           const sortedDates = Object.keys(dateCounts).sort((a, b) => {
+               const dateA = parseCustomDate(a);
+               const dateB = parseCustomDate(b);
+               if (!dateA && !dateB) return a.localeCompare(b);
+               if (!dateA) return 1;
+               if (!dateB) return -1;
+               return dateA.getTime() - dateB.getTime();
+           });
+           const counts = sortedDates.map(date => dateCounts[date]);
+           const allValues = counts.filter(v => !isNaN(v));
+           const maxValue = allValues.length > 0 ? Math.max(...allValues) : 1;
+           const stepSize = Math.max(1, Math.ceil(maxValue / 10));
+           new Chart(ctx, {
+               type: 'line',
+               data: {
+                   labels: sortedDates,
+                   datasets: [{
+                       label: 'Emails Sent',
+                       data: counts,
+                       borderColor: '#000000',
+                       backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                       borderWidth: 3,
+                       fill: true,
+                       tension: 0.4,
+                       pointBackgroundColor: '#000000',
+                       pointBorderColor: '#ffffff',
+                       pointBorderWidth: 2,
+                       pointRadius: 6,
+                       pointHoverRadius: 8,
+                       pointHoverBackgroundColor: '#4f46e5',
+                       pointHoverBorderColor: '#ffffff',
+                       pointHoverBorderWidth: 3
+                   }]
+               },
+               options: {
+                   responsive: true,
+                   maintainAspectRatio: false,
+                   animation: {
+                       duration: 1500,
+                       easing: 'easeInOutQuart',
+                       delay: function (context) {
+                           return context.dataIndex * 50;
+                       }
+                   },
+                   plugins: {
+                       legend: {
+                           display: true,
+                           position: 'top',
+                           align: 'center',
+                           labels: {
+                               usePointStyle: true,
+                               pointStyle: 'circle',
+                               padding: 25,
+                               font: {
+                                   size: 13,
+                                   weight: '500',
+                                   family: "'Inter', sans-serif"
+                               },
+                               color: '#374151',
+                               generateLabels: function (chart) {
+                                   const original = Chart.defaults.plugins.legend.labels.generateLabels;
+                                   const labels = original.call(this, chart);
+                                   labels.forEach(label => {
+                                       label.text = label.text.charAt(0).toUpperCase() + label.text.slice(1);
+                                   });
+                                   return labels;
+                               }
+                           }
+                       },
+                       tooltip: {
+                           backgroundColor: 'rgba(17, 24, 39, 0.95)',
+                           titleColor: '#ffffff',
+                           bodyColor: '#ffffff',
+                           borderColor: '#6366f1',
+                           borderWidth: 2,
+                           cornerRadius: 0,
+                           padding: 16,
+                           titleFont: {
+                               size: 14,
+                               weight: '600',
+                               family: "'Inter', sans-serif"
+                           },
+                           bodyFont: {
+                               size: 13,
+                               weight: '500',
+                               family: "'Inter', sans-serif"
+                           },
+                           mode: 'index',
+                           intersect: false,
+                           displayColors: true,
+                           callbacks: {
+                               title: function (context) {
+                                   return '📅 ' + context[0].label;
+                               },
+                               label: function (context) {
+                                   return 'Emails Sent: ' + context.parsed.y;
+                               }
+                           }
+                       }
+                   },
+                   scales: {
+                       x: {
+                           grid: {
+                               display: true,
+                               color: 'rgba(229, 231, 235, 0.8)',
+                               borderColor: 'rgba(229, 231, 235, 0.8)',
+                               lineWidth: 1
+                           },
+                           border: {
+                               display: true,
+                               color: 'rgba(209, 213, 219, 0.8)',
+                               width: 2
+                           },
+                           ticks: {
+                               color: '#6b7280',
+                               font: {
+                                   size: 12,
+                                   weight: '500',
+                                   family: "'Inter', sans-serif"
+                               },
+                               maxRotation: 45,
+                               minRotation: 0,
+                               padding: 12,
+                               callback: function (value, index, ticks) {
+                                   const label = this.getLabelForValue(value);
+                                   return label.length > 15 ? label.substring(0, 15) + '...' : label;
+                               }
+                           }
+                       },
+                       y: {
+                           beginAtZero: true,
+                           grid: {
+                               display: true,
+                               color: 'rgba(229, 231, 235, 0.6)',
+                               borderColor: 'rgba(229, 231, 235, 0.8)',
+                               lineWidth: 1,
+                               drawBorder: true
+                           },
+                           border: {
+                               display: true,
+                               color: 'rgba(209, 213, 219, 0.8)',
+                               width: 2
+                           },
+                           ticks: {
+                               color: '#6b7280',
+                               font: {
+                                   size: 12,
+                                   weight: '500',
+                                   family: "'Inter', sans-serif"
+                               },
+                               stepSize: stepSize,
+                               padding: 12,
+                               callback: function (value) {
+                                   return value.toLocaleString();
+                               }
+                           }
+                       }
+                   },
+                   interaction: {
+                       intersect: false,
+                       mode: 'index'
+                   }
+               }
+           });
+       } 
+
+       function buildDateCounts(dateDataStr) {
+           const dateCounts = {};
+           if (!dateDataStr || dateDataStr === '') return dateCounts;
+           const dates = dateDataStr.split(',').filter(date => date.trim() !== '');
+           dates.forEach(date => {
+               const trimmedDate = date.trim();
+               if (trimmedDate) {
+                   const parsedDate = parseCustomDate(trimmedDate);
+                   if (parsedDate && !isNaN(parsedDate.getTime())) {
+                       const dateOnly = parsedDate.toLocaleDateString('en-US', {
+                           year: 'numeric',
+                           month: 'short',
+                           day: 'numeric'
+                       });
+                       dateCounts[dateOnly] = (dateCounts[dateOnly] || 0) + 1;
+                   } else {
+                       const parts = trimmedDate.split(' ');
+                       if (parts.length >= 3) {
+                           const dateOnly = parts[0] + ' ' + parts[1] + ' ' + parts[2];
+                           dateCounts[dateOnly] = (dateCounts[dateOnly] || 0) + 1;
+                       }
+                   }
+               }
+           });
+           return dateCounts;
+       } 
+
+      function createOpensClicksChart() {
+          const ctx = document.getElementById('opensClicksChart');
+          if (!ctx) return;
+          const openedDateData = '%%=v(@openedDateData)=%%';
+          const clickedDateData = '%%=v(@clickedDateData)=%%';
+          const unsubscribedDateData = '%%=v(@unsubscribedDateData)=%%';
+          const unregisteredOpenedDateData = '%%=v(@unregisteredOpenedDateData)=%%';
+          const openCounts = buildDateCounts(openedDateData);
+          const clickCounts = buildDateCounts(clickedDateData);
+          const unsubscribedCounts = buildDateCounts(unsubscribedDateData);
+          const unregisteredOpenCounts = buildDateCounts(unregisteredOpenedDateData);
+          const allDatesSet = {};
+          Object.keys(openCounts).forEach(d => { allDatesSet[d] = true; });
+          Object.keys(clickCounts).forEach(d => { allDatesSet[d] = true; });
+          Object.keys(unsubscribedCounts).forEach(d => { allDatesSet[d] = true; });
+          Object.keys(unregisteredOpenCounts).forEach(d => { allDatesSet[d] = true; });
+           const sortedDates = Object.keys(allDatesSet).sort((a, b) => {
+               const dateA = parseCustomDate(a);
+               const dateB = parseCustomDate(b);
+               if (!dateA && !dateB) return a.localeCompare(b);
+               if (!dateA) return 1;
+               if (!dateB) return -1;
+               return dateA.getTime() - dateB.getTime();
+           });
+          const opensData = sortedDates.map(d => openCounts[d] || 0);
+          const clicksData = sortedDates.map(d => clickCounts[d] || 0);
+          const unsubscribedData = sortedDates.map(d => unsubscribedCounts[d] || 0);
+          const unregisteredOpensData = sortedDates.map(d => unregisteredOpenCounts[d] || 0);
+          const allValues = opensData.concat(clicksData, unsubscribedData, unregisteredOpensData).filter(v => !isNaN(v));
+           const maxValue = allValues.length > 0 ? Math.max(...allValues) : 1;
+           const stepSize = Math.max(1, Math.ceil(maxValue / 10));
+           new Chart(ctx, {
+               type: 'line',
+               data: {
+                   labels: sortedDates,
+                   datasets: [
+                       {
+                           label: 'Opens',
+                           data: opensData,
+                           borderColor: '#10b981',
+                           backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                           borderWidth: 3,
+                           fill: true,
+                           tension: 0.4,
+                           pointBackgroundColor: '#10b981',
+                           pointBorderColor: '#ffffff',
+                           pointBorderWidth: 2,
+                           pointRadius: 6,
+                           pointHoverRadius: 8,
+                           pointHoverBackgroundColor: '#059669',
+                           pointHoverBorderColor: '#ffffff',
+                           pointHoverBorderWidth: 3
+                       },
+                       {
+                           label: 'Clicks',
+                           data: clicksData,
+                           borderColor: '#6366f1',
+                           backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                           borderWidth: 3,
+                           fill: true,
+                           tension: 0.4,
+                           pointBackgroundColor: '#6366f1',
+                           pointBorderColor: '#ffffff',
+                           pointBorderWidth: 2,
+                           pointRadius: 6,
+                           pointHoverRadius: 8,
+                           pointHoverBackgroundColor: '#4f46e5',
+                           pointHoverBorderColor: '#ffffff',
+                           pointHoverBorderWidth: 3
+                       },
+                      {
+                          label: 'Unsubscribed',
+                          data: unsubscribedData,
+                          borderColor: '#ef4444',
+                          backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                          borderWidth: 3,
+                          fill: true,
+                          tension: 0.4,
+                          pointBackgroundColor: '#ef4444',
+                          pointBorderColor: '#ffffff',
+                          pointBorderWidth: 2,
+                          pointRadius: 6,
+                          pointHoverRadius: 8,
+                          pointHoverBackgroundColor: '#dc2626',
+                          pointHoverBorderColor: '#ffffff',
+                          pointHoverBorderWidth: 3
+                      },
+                      {
+                          label: 'Unregistered Opens',
+                          data: unregisteredOpensData,
+                          borderColor: '#f59e0b',
+                          backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                          borderWidth: 3,
+                          fill: true,
+                          tension: 0.4,
+                          pointBackgroundColor: '#f59e0b',
+                          pointBorderColor: '#ffffff',
+                          pointBorderWidth: 2,
+                          pointRadius: 6,
+                          pointHoverRadius: 8,
+                          pointHoverBackgroundColor: '#d97706',
+                          pointHoverBorderColor: '#ffffff',
+                          pointHoverBorderWidth: 3
+                      }
+                  ]
+               },
+               options: {
+                   responsive: true,
+                   maintainAspectRatio: false,
+                   animation: {
+                       duration: 1500,
+                       easing: 'easeInOutQuart',
+                       delay: function (context) {
+                           return context.dataIndex * 50;
+                       }
+                   },
+                   plugins: {
+                       legend: {
+                           display: true,
+                           position: 'top',
+                           align: 'center',
+                           labels: {
+                               usePointStyle: true,
+                               pointStyle: 'circle',
+                               padding: 25,
+                               font: {
+                                   size: 13,
+                                   weight: '500',
+                                   family: "'Inter', sans-serif"
+                               },
+                               color: '#374151'
+                           }
+                       },
+                       tooltip: {
+                           backgroundColor: 'rgba(17, 24, 39, 0.95)',
+                           titleColor: '#ffffff',
+                           bodyColor: '#ffffff',
+                           borderColor: '#6366f1',
+                           borderWidth: 2,
+                           cornerRadius: 0,
+                           padding: 16,
+                           titleFont: {
+                               size: 14,
+                               weight: '600',
+                               family: "'Inter', sans-serif"
+                           },
+                           bodyFont: {
+                               size: 13,
+                               weight: '500',
+                               family: "'Inter', sans-serif"
+                           },
+                           mode: 'index',
+                           intersect: false,
+                           displayColors: true,
+                           callbacks: {
+                               title: function (context) {
+                                   return '📅 ' + context[0].label;
+                               },
+                               label: function (context) {
+                                   return context.dataset.label + ': ' + context.parsed.y;
+                               }
+                           }
+                       }
+                   },
+                   scales: {
+                       x: {
+                           grid: {
+                               display: true,
+                               color: 'rgba(229, 231, 235, 0.8)',
+                               borderColor: 'rgba(229, 231, 235, 0.8)',
+                               lineWidth: 1
+                           },
+                           border: {
+                               display: true,
+                               color: 'rgba(209, 213, 219, 0.8)',
+                               width: 2
+                           },
+                           ticks: {
+                               color: '#6b7280',
+                               font: {
+                                   size: 12,
+                                   weight: '500',
+                                   family: "'Inter', sans-serif"
+                               },
+                               maxRotation: 45,
+                               minRotation: 0,
+                               padding: 12,
+                               callback: function (value, index, ticks) {
+                                   const label = this.getLabelForValue(value);
+                                   return label.length > 15 ? label.substring(0, 15) + '...' : label;
+                               }
+                           }
+                       },
+                       y: {
+                           beginAtZero: true,
+                           grid: {
+                               display: true,
+                               color: 'rgba(229, 231, 235, 0.6)',
+                               borderColor: 'rgba(229, 231, 235, 0.8)',
+                               lineWidth: 1,
+                               drawBorder: true
+                           },
+                           border: {
+                               display: true,
+                               color: 'rgba(209, 213, 219, 0.8)',
+                               width: 2
+                           },
+                           ticks: {
+                               color: '#6b7280',
+                               font: {
+                                   size: 12,
+                                   weight: '500',
+                                   family: "'Inter', sans-serif"
+                               },
+                               stepSize: stepSize,
+                               padding: 12,
+                               callback: function (value) {
+                                   return value.toLocaleString();
+                               }
+                           }
+                       }
+                   },
+                   interaction: {
+                       intersect: false,
+                       mode: 'index'
+                   }
+               }
+           });
+       } 
+
+      function createCombinedEngagementChart() {
+          const ctx = document.getElementById('combinedEngagementChart');
+          if (!ctx) return;
+          const openedCount = parseInt('%%=v(@openedCount)=%%') || 0;
+          const bouncedCount = parseInt('%%=v(@bouncedCount)=%%') || 0;
+          const didNotOpenCount = parseInt('%%=v(@didNotOpenCount)=%%') || 0;
+          const clickedCount = parseInt('%%=v(@clickedCount)=%%') || 0;
+          const unregisteredOpenedCount = parseInt('%%=v(@unregisteredOpenedCount)=%%') || 0;
+          const labels = ['Opened', 'Bounced', 'Did Not Open', 'Clicked', 'Unregistered Opens'];
+          const data = [openedCount, bouncedCount, didNotOpenCount, clickedCount, unregisteredOpenedCount];
+          const backgroundColors = [
+              'rgba(16, 185, 129, 0.8)',
+              'rgba(239, 68, 68, 0.8)',
+              '#000000',
+              'rgba(99, 102, 241, 0.8)',
+              'rgba(245, 158, 11, 0.8)'
+          ];
+          const borderColors = [
+              '#10b981',
+              '#ef4444',
+              '#9ca3af',
+              '#6366f1',
+              '#f59e0b'
+          ];
+           new Chart(ctx, {
+               type: 'bar',
+               data: {
+                   labels: labels,
+                   datasets: [{
+                       label: 'Engagement Status',
+                       data: data,
+                       backgroundColor: backgroundColors,
+                       borderColor: borderColors,
+                       borderWidth: 1
+                   }]
+               },
+               options: {
+                   responsive: true,
+                   maintainAspectRatio: false,
+                   plugins: {
+                       legend: {
+                           display: true,
+                           position: 'top',
+                           labels: {
+                               color: '#6b7280',
+                               font: {
+                                   size: 12
+                               },
+                               usePointStyle: true,
+                               padding: 15
+                           }
+                       },
+                       tooltip: {
+                           backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                           titleColor: '#ffffff',
+                           bodyColor: '#ffffff',
+                           borderWidth: 1,
+                           cornerRadius: 8,
+                           displayColors: true,
+                           callbacks: {
+                               title: function (context) {
+                                   return context[0].label;
+                               },
+                               label: function (context) {
+                                   return 'Count: ' + context.parsed.y;
+                               }
+                           }
+                       }
+                   },
+                   scales: {
+                       x: {
+                           grid: {
+                               display: false
+                           },
+                           ticks: {
+                               color: '#6b7280',
+                               font: {
+                                   size: 11
+                               }
+                           }
+                       },
+                       y: {
+                           beginAtZero: true,
+                           grid: {
+                               color: 'rgba(0, 0, 0, 0.1)',
+                               borderColor: 'rgba(0, 0, 0, 0.1)'
+                           },
+                           ticks: {
+                               color: '#6b7280',
+                               font: {
+                                   size: 11
+                               },
+                               stepSize: 1
+                           }
+                       }
+                   }
+               }
+           });
+       } 
+
+       function createStateChart() {
+           const ctx = document.getElementById('stateChart');
+           if (!ctx) return; 
+
+           const stateLabels = '%%=v(@stateLabels)=%%';
+           const stateOpenedData = '%%=v(@stateOpenedData)=%%';
+           const stateDidNotOpenData = '%%=v(@stateDidNotOpenData)=%%';
+           const stateBouncedData = '%%=v(@stateBouncedData)=%%';
+           const stateClickedData = '%%=v(@stateClickedData)=%%';
+           const stateTotalData = '%%=v(@stateTotalData)=%%'; 
+
+           const labels = stateLabels ? stateLabels.split(',') : [];
+           const opened = stateOpenedData ? stateOpenedData.split(',').map(Number) : [];
+           const didNotOpen = stateDidNotOpenData ? stateDidNotOpenData.split(',').map(Number) : [];
+           const bounced = stateBouncedData ? stateBouncedData.split(',').map(Number) : [];
+           const clicked = stateClickedData ? stateClickedData.split(',').map(Number) : [];
+           const totals = stateTotalData ? stateTotalData.split(',').map(Number) : []; 
+
+           if (labels.length === 0) {
+               ctx.parentElement.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">No state data available</div>';
+               return;
+           } 
+
+           const proportionalOpened = opened.map((val, index) => {
+               const total = totals[index] || 1;
+               const sum = opened[index];
+               return sum > 0 ? sum : 0;
+           }); 
+
+           const proportionalDidNotOpen = didNotOpen.map((val, index) => {
+               const total = totals[index] || 1;
+               const sum = didNotOpen[index];
+               return sum > 0 ? sum : 0;
+           }); 
+
+           const proportionalBounced = bounced.map((val, index) => {
+               const total = totals[index] || 1;
+               const sum = bounced[index];
+               return sum > 0 ? sum : 0;
+           });  
+
+           const proportionalClicked = clicked.map((val, index) => {
+               const total = totals[index] || 1;
+               const sum = clicked[index];
+               return sum > 0 ? sum : 0;
+           }); 
+
+           new Chart(ctx, {
+               type: 'bar',
+               data: {
+                   labels: labels,
+                   datasets: [
+                       {
+                           label: 'Opened',
+                           data: proportionalOpened,
+                           backgroundColor: '#3fc699',
+                           borderWidth: 0
+                       },
+                       {
+                           label: 'Did Not Open',
+                           data: proportionalDidNotOpen,
+                           backgroundColor: '#000000',
+                           borderWidth: 0
+                       },
+                       {
+                           label: 'Bounced',
+                           data: proportionalBounced,
+                           backgroundColor: 'rgba(220, 38, 38, 0.8)',
+                           borderWidth: 0
+                       },
+                       {
+                           label: 'Clicked',
+                           data: proportionalClicked,
+                           backgroundColor: 'rgba(99, 102, 241, 0.8)',
+                           borderWidth: 0
+                       }
+                   ]
+               },
+               options: {
+                   responsive: true,
+                   maintainAspectRatio: false,
+                   plugins: {
+                       tooltip: {
+                           callbacks: {
+                               afterBody: function (context) {
+                                   const i = context[0].dataIndex;
+                                   if (context[0].datasetIndex === 0) {
+                                       return [
+                                           'Did Not Open: ' + didNotOpen[i].toLocaleString(),
+                                           'Bounced: ' + bounced[i].toLocaleString(),
+                                           'Clicked: ' + clicked[i].toLocaleString(),
+                                           'Total: ' + totals[i].toLocaleString()
+                                       ];
+                                   }
+                                   return [];
+                               }
+                           }
+                       }
+                   },
+                   scales: {
+                       x: {
+                           stacked: true
+                       },
+                       y: {
+                           stacked: true,
+                           beginAtZero: true,
+                           maxBarThickness: 60
+                       }
+                   }
+               }
+           });
+       } 
+
+       function createSpecialtyChart() {
+           const ctx = document.getElementById('specialtyChart');
+           if (!ctx) return;    
+
+           const specialtyLabels = '%%=v(@specialtyLabels)=%%';
+           const specialtyOpenedData = '%%=v(@specialtyOpenedData)=%%';
+           const specialtyDidNotOpenData = '%%=v(@specialtyDidNotOpenData)=%%';
+           const specialtyBouncedData = '%%=v(@specialtyBouncedData)=%%';
+           const specialtyClickedData = '%%=v(@specialtyClickedData)=%%';
+           const specialtyTotalData = '%%=v(@specialtyTotalData)=%%';    
+
+           const labels = specialtyLabels ? specialtyLabels.split(',') : [];
+           const opened = specialtyOpenedData ? specialtyOpenedData.split(',').map(Number) : [];
+           const didNotOpen = specialtyDidNotOpenData ? specialtyDidNotOpenData.split(',').map(Number) : [];
+           const bounced = specialtyBouncedData ? specialtyBouncedData.split(',').map(Number) : [];
+           const clicked = specialtyClickedData ? specialtyClickedData.split(',').map(Number) : [];
+           const totals = specialtyTotalData ? specialtyTotalData.split(',').map(Number) : [];    
+
+           if (labels.length === 0) {
+               ctx.parentElement.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">No specialty data available</div>';
+               return;
+           }    
+
+           const proportionalOpened = opened.map((val, index) => {
+               const total = totals[index] || 1;
+               const sum = opened[index];
+               return sum > 0 ? sum : 0;
+           });    
+
+           const proportionalDidNotOpen = didNotOpen.map((val, index) => {
+               const total = totals[index] || 1;
+               const sum = didNotOpen[index];
+               return sum > 0 ? sum : 0;
+           });    
+
+           const proportionalBounced = bounced.map((val, index) => {
+               const total = totals[index] || 1;
+               const sum = bounced[index];
+               return sum > 0 ? sum : 0;
+           });  
+
+           const proportionalClicked = clicked.map((val, index) => {
+               const total = totals[index] || 1;
+               const sum = clicked[index];
+               return sum > 0 ? sum : 0;
+           });    
+
+           new Chart(ctx, {
+               type: 'bar',
+               data: {
+                   labels: labels,
+                   datasets: [
+                       {
+                           label: 'Opened',
+                           data: proportionalOpened,
+                           backgroundColor: '#3fc699',
+                           borderWidth: 0
+                       },
+                       {
+                           label: 'Did Not Open',
+                           data: proportionalDidNotOpen,
+                           backgroundColor: '#000000',
+                           borderWidth: 0
+                       },
+                       {
+                           label: 'Bounced',
+                           data: proportionalBounced,
+                           backgroundColor: 'rgba(220, 38, 38, 0.8)',
+                           borderWidth: 0
+                       },
+                       {
+                           label: 'Clicked',
+                           data: proportionalClicked,
+                           backgroundColor: 'rgba(99, 102, 241, 0.8)',
+                           borderWidth: 0
+                       }
+                   ]
+               },
+               options: {
+                   responsive: true,
+                   maintainAspectRatio: false,
+                   plugins: {
+                       tooltip: {
+                           callbacks: {
+                               afterBody: function (context) {
+                                   const i = context[0].dataIndex;
+                                   if (context[0].datasetIndex === 0) {
+                                       return [
+                                           'Did Not Open: ' + didNotOpen[i].toLocaleString(),
+                                           'Bounced: ' + bounced[i].toLocaleString(),
+                                           'Clicked: ' + clicked[i].toLocaleString(),
+                                           'Total: ' + totals[i].toLocaleString()
+                                       ];
+                                   }
+                                   return [];
+                               }
+                           }
+                       }
+                   },
+                   scales: {
+                       x: {
+                           stacked: true
+                       },
+                       y: {
+                           stacked: true,
+                           beginAtZero: true,
+                           maxBarThickness: 60
+                       }
+                   }
+               }
+           });
+       } 
+
+       let allResponses = [];
+       let filteredResponses = [];
+       let currentPage = 1;
+       const rowsPerPage = 10; 
+
+       function parseCustomDate(dateString) {
+           if (!dateString || dateString === 'N/A') return null;
+           try {
+               const trimmed = dateString.trim();
+               const parts = trimmed.split(/\s+/);
+               if (parts.length >= 3) {
+                   const month = parts[0];
+                   let day = parts[1].replace(/,/g, '').replace(/[^0-9]/g, '');
+                   let year = parts[2].replace(/,/g, '').replace(/[^0-9]/g, '');
+                   let hour24 = 0;
+                   let minutes = 0;
+                   if (parts.length >= 4) {
+                       if (parts[3].includes(':') || parts[3].toUpperCase().includes('AM') || parts[3].toUpperCase().includes('PM')) {
+                           const timePart = parts[3];
+                           const upperTime = timePart.toUpperCase();
+                           const hasAM = upperTime.includes('AM');
+                           const hasPM = upperTime.includes('PM');
+                           const ampm = hasPM ? 'PM' : (hasAM ? 'AM' : '');
+                           const timeStr = timePart.replace(/AM|PM/gi, '').trim();
+                           const timeParts = timeStr.split(':').map(Number);
+                           if (timeParts.length >= 2 && !isNaN(timeParts[0]) && !isNaN(timeParts[1])) {
+                               hour24 = timeParts[0];
+                               minutes = timeParts[1] || 0;
+                               if (ampm === 'PM' && hour24 !== 12) hour24 = hour24 + 12;
+                               if (ampm === 'AM' && hour24 === 12) hour24 = 0;
+                           }
+                       } else if (parts.length >= 5 && (parts[4].toUpperCase().includes('AM') || parts[4].toUpperCase().includes('PM'))) {
+                           const timePart = parts[3] + ' ' + parts[4];
+                           const upperTime = timePart.toUpperCase();
+                           const hasAM = upperTime.includes('AM');
+                           const hasPM = upperTime.includes('PM');
+                           const ampm = hasPM ? 'PM' : (hasAM ? 'AM' : '');
+                           const timeStr = parts[3].replace(/AM|PM/gi, '').trim();
+                           const timeParts = timeStr.split(':').map(Number);
+                           if (timeParts.length >= 2 && !isNaN(timeParts[0]) && !isNaN(timeParts[1])) {
+                               hour24 = timeParts[0];
+                               minutes = timeParts[1] || 0;
+                               if (ampm === 'PM' && hour24 !== 12) hour24 = hour24 + 12;
+                               if (ampm === 'AM' && hour24 === 12) hour24 = 0;
+                           }
+                       }
+                   }
+                   const monthIndex = getMonthIndex(month);
+                   const dayNum = parseInt(day);
+                   const yearNum = parseInt(year);
+                   if (!isNaN(monthIndex) && !isNaN(dayNum) && dayNum > 0 && dayNum <= 31 && !isNaN(yearNum) && yearNum >= 1900 && yearNum <= 2100) {
+                       const dateObj = new Date(yearNum, monthIndex, dayNum, hour24, minutes, 0);
+                       if (!isNaN(dateObj.getTime())) {
+                           return dateObj;
+                       }
+                   }
+               }
+               return null;
+           } catch (e) {
+               return null;
+           }
+       }    
+
+       function getMonthIndex(monthAbbr) {
+           const months = {
+               'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5,
+               'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11
+           };
+           return months[monthAbbr] !== undefined ? months[monthAbbr] : 0;
+       }    
+
+       function parseResponsesData() {
+           const responsesData = '%%=v(@responsesData)=%%';
+           if (!responsesData || responsesData === '') {
+               return [];
+           }
+           const responseEntries = responsesData.split('|||').filter(entry => entry.trim() !== '');
+           const responses = responseEntries.map(entry => {
+               const parts = entry.split(':::');
+               return {
+                   contactId: parts[0] || 'N/A',
+                   email: parts[1] || 'N/A',
+                   date: parts[2] || 'N/A',
+                   engagement: (parts[3] && parts[3] !== 'N/A') ? parts[3].trim() : 'N/A',
+                   primarySpecialty: (parts[4] && parts[4] !== 'N/A') ? parts[4].trim() : '',
+                   state: (parts[5] && parts[5] !== 'N/A') ? parts[5].trim() : '',
+                   jobId: parts[6] && parts[6] !== 'N/A' ? parts[6] : '',
+                   accountName: parts[7] && parts[7] !== 'N/A' ? parts[7] : '',
+                   firstName: parts[8] && parts[8] !== 'N/A' ? parts[8] : '',
+                   lastName: parts[9] && parts[9] !== 'N/A' ? parts[9] : '',
+                   designation: parts[10] && parts[10] !== 'N/A' ? parts[10] : '',
+                   role: parts[11] && parts[11] !== 'N/A' ? parts[11] : '',
+                   mobile: parts[12] && parts[12] !== 'N/A' ? parts[12] : '',
+                   auth0UserId: parts[13] && parts[13] !== 'N/A' ? parts[13] : '',
+                   openDate: parts[14] && parts[14] !== 'N/A' ? parts[14] : '',
+                   viewEmailUrl: parts[15] && parts[15] !== 'N/A' ? parts[15] : '',
+                   emailHistory: parts[16] && parts[16] !== 'N/A' ? parts[16] : '',
+                   courseHistory: parts[17] && parts[17] !== 'N/A' ? parts[17] : ''
+               };
+           });
+           return responses.sort((a, b) => {
+               if (a.date === 'N/A' && b.date === 'N/A') return 0;
+               if (a.date === 'N/A') return 1;
+               if (b.date === 'N/A') return -1;
+               const dateA = parseCustomDate(a.date);
+               const dateB = parseCustomDate(b.date);
+               if (!dateA && !dateB) return 0;
+               if (!dateA) return 1;
+               if (!dateB) return -1;
+               return dateB.getTime() - dateA.getTime();
+           });
+       } 
+
+       function formatDate(dateString) {
+           if (!dateString || dateString === 'N/A') return 'N/A';
+           try {
+               const date = parseCustomDate(dateString);
+               if (!date) return dateString;
+               return date.toLocaleDateString('en-US', {
+                   year: 'numeric',
+                   month: 'short',
+                   day: 'numeric',
+                   hour: '2-digit',
+                   minute: '2-digit'
+               });
+           } catch (e) {
+               return dateString;
+           }
+       } 
+
+       function truncateText(text, maxLength) {
+           if (!text || text.trim() === '' || text === 'N/A') return '';
+           if (text.length <= maxLength) return text;
+           return text.substring(0, maxLength) + '...';
+       } 
+
+       function isToday(dateString) {
+           if (!dateString || dateString === 'N/A') return false;
+           try {
+               const date = parseCustomDate(dateString);
+               if (!date) return false;
+               const today = new Date();
+               return date.getDate() === today.getDate() &&
+                      date.getMonth() === today.getMonth() &&
+                      date.getFullYear() === today.getFullYear();
+           } catch (e) {
+               return false;
+           }
+       }
+
+       function applyFilters() {
+           const filterEngagementEl = document.getElementById('filterEngagement');
+           const filterStateEl = document.getElementById('filterState');
+           const filterSpecialtyEl = document.getElementById('filterSpecialty');
+           const filterDateEl = document.getElementById('filterDate');
+           
+           if (!filterEngagementEl || !filterStateEl || !filterSpecialtyEl || !filterDateEl) {
+               return;
+           }
+           
+           const filterEngagement = filterEngagementEl.value ? filterEngagementEl.value.trim() : '';
+           const filterState = filterStateEl.value ? filterStateEl.value.trim() : '';
+           const filterSpecialty = filterSpecialtyEl.value ? filterSpecialtyEl.value.trim() : '';
+           const filterDate = filterDateEl.value ? filterDateEl.value.trim() : '';
+           
+           filteredResponses = allResponses.filter(response => {
+               if (filterEngagement !== '') {
+                   const responseEngagement = (response.engagement || '').trim();
+                   if (responseEngagement === 'N/A' || responseEngagement !== filterEngagement) {
+                       return false;
+                   }
+               }
+               
+               if (filterState !== '') {
+                   const responseState = (response.state || '').trim();
+                   if (responseState === '' || responseState !== filterState) {
+                       return false;
+                   }
+               }
+               
+               if (filterSpecialty !== '') {
+                   const responseSpecialty = (response.primarySpecialty || '').trim();
+                   if (responseSpecialty === '' || responseSpecialty !== filterSpecialty) {
+                       return false;
+                   }
+               }
+               
+               if (filterDate === 'today') {
+                   if (!isToday(response.date)) {
+                       return false;
+                   }
+               }
+               
+               return true;
+           });
+           
+           currentPage = 1;
+           renderResponsesTable();
+           renderPagination();
+       } 
+
+       function populateFilters() {
+           const filterEngagement = document.getElementById('filterEngagement');
+           const filterState = document.getElementById('filterState');
+           const filterSpecialty = document.getElementById('filterSpecialty'); 
+
+           const allUniqueStates = [...new Set(allResponses.map(r => r.state).filter(s => s && s.trim() !== ''))].sort();
+           allUniqueStates.forEach(state => {
+               const option = document.createElement('option');
+               option.value = state;
+               option.textContent = state;
+               filterState.appendChild(option);
+           }); 
+
+           const allUniqueSpecialties = [...new Set(allResponses.map(r => r.primarySpecialty).filter(s => s && s.trim() !== ''))].sort();
+           allUniqueSpecialties.forEach(specialty => {
+               const option = document.createElement('option');
+               option.value = specialty;
+               option.textContent = specialty.length > 50 ? specialty.substring(0, 50) + '...' : specialty;
+               filterSpecialty.appendChild(option);
+           }); 
+
+           filterEngagement.addEventListener('change', applyFilters);
+           filterState.addEventListener('change', applyFilters);
+           filterSpecialty.addEventListener('change', applyFilters);
+           const filterDate = document.getElementById('filterDate');
+           filterDate.addEventListener('change', applyFilters);
+       } 
+
+      function toggleAddContactSection() {
+          const btn = document.getElementById('addContactBtn');
+          if (btn && btn.hasAttribute('disabled')) return;
+          const section = document.getElementById('addContactSection');
+          if (!section) return;
+          section.classList.toggle('visible');
+          if (section.classList.contains('show-success')) {
+              section.classList.remove('show-success');
+              const formRow = section.querySelector('.contact-form-row');
+              if (formRow) formRow.style.display = '';
+              const successEl = section.querySelector('.contact-add-success');
+              if (successEl) successEl.style.display = 'none';
+          }
+      }
+
+      function toggleTriggerSection() {
+          const btn = document.getElementById('triggerBtn');
+          if (btn && btn.hasAttribute('disabled')) return;
+          const section = document.getElementById('triggerSection');
+          if (!section) return;
+          section.classList.toggle('visible');
+      }
+
+      function showTriggerLoading() {
+          const loading = document.getElementById('triggerLoading');
+          if (loading) loading.classList.add('visible');
+          const btn = document.getElementById('triggerConfirmBtn');
+          if (btn) btn.setAttribute('disabled', 'disabled');
+      }
+
+      function toggleSyncSection() {
+          const btn = document.getElementById('syncBtn');
+          if (btn && btn.hasAttribute('disabled')) return;
+          const section = document.getElementById('syncSection');
+          if (!section) return;
+          section.classList.toggle('visible');
+      }
+
+      function showSyncLoading() {
+          const loading = document.getElementById('syncLoading');
+          if (loading) loading.classList.add('visible');
+          const btn = document.getElementById('syncConfirmBtn');
+          if (btn) btn.setAttribute('disabled', 'disabled');
+      }
+
+       function downloadFilteredData() {
+           const dataToDownload = filteredResponses.length > 0 ? filteredResponses : allResponses;
+           if (dataToDownload.length === 0) {
+               alert('No data to download');
+               return;
+           }
+           const headers = ['Contact_Id', 'Email', 'LastSent', 'Engagement', 'Primary_Specialty', 'Related_Account_Primary_State', 'JobID', 'Related_Account_Name', 'First_Name', 'Last_Name', 'Designation', 'Role', 'Mobile', 'Auth0UserId', 'Campaign', 'view_email_url', 'emailHistory', 'courseHistory'];
+           const csvRows = [headers.join(',')];
+           dataToDownload.forEach(response => {
+               const row = [
+                   `"${(response.contactId || '').replace(/"/g, '""')}"`,
+                   `"${(response.email || '').replace(/"/g, '""')}"`,
+                   `"${(response.date || '').replace(/"/g, '""')}"`,
+                   `"${(response.engagement || '').replace(/"/g, '""')}"`,
+                   `"${(response.primarySpecialty || '').replace(/"/g, '""')}"`,
+                   `"${(response.state || '').replace(/"/g, '""')}"`,
+                   `"${(response.jobId || '').replace(/"/g, '""')}"`,
+                   `"${(response.accountName || '').replace(/"/g, '""')}"`,
+                   `"${(response.firstName || '').replace(/"/g, '""')}"`,
+                   `"${(response.lastName || '').replace(/"/g, '""')}"`,
+                   `"${(response.designation || '').replace(/"/g, '""')}"`,
+                   `"${(response.role || '').replace(/"/g, '""')}"`,
+                   `"${(response.mobile || '').replace(/"/g, '""')}"`,
+                   `"${(response.auth0UserId || '').replace(/"/g, '""')}"`,
+                   `"${(response.openDate || '').replace(/"/g, '""')}"`,
+                   `"${(response.viewEmailUrl || '').replace(/"/g, '""')}"`,
+                   `"${(response.emailHistory || '').replace(/"/g, '""')}"`,
+                   `"${(response.courseHistory || '').replace(/"/g, '""')}"`
+               ];
+               csvRows.push(row.join(','));
+           });
+           const csvContent = csvRows.join('\n');
+           const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+           const link = document.createElement('a');
+           const url = URL.createObjectURL(blob);
+           link.setAttribute('href', url);
+           link.setAttribute('download', `Push_Advice_Email_Engagement_${new Date().toISOString().split('T')[0]}.csv`);
+           link.style.visibility = 'hidden';
+           document.body.appendChild(link);
+           link.click();
+           document.body.removeChild(link);
+       } 
+
+       function renderResponsesTable() {
+           const tbody = document.getElementById('responsesTableBody');
+           if (!tbody) return;
+           const dataToShow = filteredResponses.length > 0 ? filteredResponses : allResponses;
+           const startIndex = (currentPage - 1) * rowsPerPage;
+           const endIndex = startIndex + rowsPerPage;
+           const pageData = dataToShow.slice(startIndex, endIndex);
+           if (pageData.length === 0) {
+               tbody.innerHTML = '<tr><td colspan="12" style="text-align: center; padding: 24px; color: var(--text-secondary);">No records found</td></tr>';
+               return;
+           }
+           tbody.innerHTML = pageData.map(response => {
+               const formattedDate = formatDate(response.date);
+               const formattedOpenDate = formatDate(response.openDate);
+               const engagementDisplay = response.engagement && response.engagement.trim() !== '' ? response.engagement : '-';
+               const engagementClass = engagementDisplay.toLowerCase().replace(/\s+/g, '-');
+               const hasViewEmailUrl = response.viewEmailUrl && response.viewEmailUrl !== 'N/A' && response.viewEmailUrl.trim() !== '';
+             const hasEmailHistory = response.emailHistory && response.emailHistory !== 'N/A' && response.emailHistory.trim() !== '';
+             const hasCourseHistory = response.courseHistory && response.courseHistory !== 'N/A' && response.courseHistory.trim() !== '';
+               return `
+                    <tr style="${response.lastName === 'SMS' ? 'background: #000000;' : ''}">
+                    <td>${response.contactId}</td>
+                    <td>${response.email}</td>
+                    <td>${formattedDate}</td>
+                    <td><span class="engagement-badge engagement-${engagementClass}">${engagementDisplay}</span></td>
+                    <td>${response.primarySpecialty || '-'}</td>
+                    <td>${response.state || '-'}</td>
+                    <td>${response.jobId || '-'}</td>
+                    <td>${truncateText(response.accountName, 20)}</td>
+                    <td>${response.firstName || '-'}</td>
+                    <td>${response.lastName || '-'}</td>
+                    <td>${formattedOpenDate}</td>
+                   <td>
+  ${hasCourseHistory 
+    ? `<a href="#" onclick="window.open('${response.courseHistory}', '_blank'); return false;" style="
+        font-size: 50px;
+        color: black;
+        text-decoration: none;
+      ">📃</a>` 
+    : '-'}
+</td>
+
+                    <td>${hasEmailHistory ? `<button class="history-button" onclick="window.open('${response.emailHistory}', '_blank')">All Emails</button>` : '-'}</td>
+                     <td>${hasViewEmailUrl ? `<button class="open-button" onclick="window.open('${response.viewEmailUrl}', '_blank')">Preview</button>` : '-'}</td>
+                </tr>
+            `;
+           }).join('');
+       } 
+
+       function renderPagination() {
+           const paginationContainer = document.getElementById('pagination');
+           if (!paginationContainer) return;
+           const dataToShow = filteredResponses.length > 0 ? filteredResponses : allResponses;
+           const totalPages = Math.ceil(dataToShow.length / rowsPerPage);
+           if (totalPages <= 1) {
+               paginationContainer.innerHTML = `<div class="pagination-info">Showing ${dataToShow.length} of ${dataToShow.length} records</div>`;
+               return;
+           }
+           const startIndex = (currentPage - 1) * rowsPerPage + 1;
+           const endIndex = Math.min(currentPage * rowsPerPage, dataToShow.length);
+           let paginationHTML = '';
+           paginationHTML += `<button class="pagination-button" ${currentPage === 1 ? 'disabled' : ''} onclick="goToPage(${currentPage - 1})">Previous</button>`;
+           const maxVisiblePages = 5;
+           let startPage = Math.max(1, currentPage - Math.floor(maxVisiblePages / 2));
+           let endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
+           if (endPage - startPage < maxVisiblePages - 1) {
+               startPage = Math.max(1, endPage - maxVisiblePages + 1);
+           }
+           if (startPage > 1) {
+               paginationHTML += `<button class="pagination-button" onclick="goToPage(1)">1</button>`;
+               if (startPage > 2) {
+                   paginationHTML += `<span class="pagination-info">...</span>`;
+               }
+           }
+           for (let i = startPage; i <= endPage; i++) {
+               paginationHTML += `<button class="pagination-button ${i === currentPage ? 'active' : ''}" onclick="goToPage(${i})">${i}</button>`;
+           }
+           if (endPage < totalPages) {
+               if (endPage < totalPages - 1) {
+                   paginationHTML += `<span class="pagination-info">...</span>`;
+               }
+               paginationHTML += `<button class="pagination-button" onclick="goToPage(${totalPages})">${totalPages}</button>`;
+           }
+           paginationHTML += `<button class="pagination-button" ${currentPage === totalPages ? 'disabled' : ''} onclick="goToPage(${currentPage + 1})">Next</button>`;
+           paginationHTML += `<div class="pagination-info">Showing ${startIndex}-${endIndex} of ${dataToShow.length} records</div>`;
+           paginationContainer.innerHTML = paginationHTML;
+       } 
+
+       function goToPage(page) {
+           const dataToShow = filteredResponses.length > 0 ? filteredResponses : allResponses;
+           const totalPages = Math.ceil(dataToShow.length / rowsPerPage);
+           if (page < 1 || page > totalPages) return;
+           currentPage = page;
+           renderResponsesTable();
+           renderPagination();
+           window.scrollTo({ top: document.getElementById('downloadBtn').offsetTop - 200, behavior: 'smooth' });
+       } 
+
+       document.addEventListener('DOMContentLoaded', function () {
+           createResponseChart();
+           createOpensClicksChart();
+           createCombinedEngagementChart();
+           createStateChart();
+           createSpecialtyChart();
+           allResponses = parseResponsesData();
+           filteredResponses = [];
+           populateFilters();
+           renderResponsesTable();
+           renderPagination();
+
+           const triggerSection = document.getElementById('triggerSection');
+           if (triggerSection && triggerSection.querySelector('.trigger-result')) {
+               triggerSection.classList.add('visible');
+               triggerSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+           }
+
+          const triggerForm = document.getElementById('triggerForm');
+          if (triggerForm) {
+              triggerForm.addEventListener('submit', function () {
+                  showTriggerLoading();
+              });
+          }
+
+          const syncSection = document.getElementById('syncSection');
+          if (syncSection && syncSection.querySelector('.sync-result')) {
+              syncSection.classList.add('visible');
+              syncSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+
+          const syncForm = document.getElementById('syncForm');
+          if (syncForm) {
+              syncForm.addEventListener('submit', function () {
+                  showSyncLoading();
+              });
+          }
+      });
+   </script>
+<style>
+       .engagement-badge {
+           padding: 4px 8px;
+           border-radius: 4px;
+           font-size: 0.75rem;
+           font-weight: 600;
+           text-transform: uppercase;
+           display: inline-block;
+       } 
+
+       .engagement-opened {
+          background-color: rgb(63 198 153);
+          color: #ffffff;
+       } 
+     .engagement-unsubscribed {
+background-color: #ff0000;
+    color: #ffffff;
+       text-wrap-mode: nowrap;
+     }
+       .engagement-bounced {
+           background-color: rgba(239, 68, 68, 0.1);
+           color: #ef4444;
+       } 
+
+       .engagement-did-not-open {
+           background-color: #000000;
+           color: #ffffff;
+       }  
+
+       .engagement-clicked {
+           background-color: rgba(99, 102, 241, 0.1);
+           color: #6366f1;
+       }
+
+.history-button {
+
+    padding: 6px 12px;
+    border: 1px solid #454555;
+    background: #454555;
+    color: white;
+    border-radius: var(--radius-sm);
+    font-size: 0.875rem;
+    font-weight: 500;
+    font-family: 'Inter', sans-serif;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+     }
+
+       .open-button {
+           padding: 6px 12px;
+           border: 1px solid var(--primary-color);
+           background: var(--primary-color);
+           color: white;
+           border-radius: var(--radius-sm);
+           font-size: 0.875rem;
+           font-weight: 500;
+           font-family: 'Inter', sans-serif;
+           cursor: pointer;
+           transition: all 0.2s ease;
+           white-space: nowrap;
+       }  
+
+       .open-button:hover {
+           background: var(--primary-dark);
+           border-color: var(--primary-dark);
+       }
+</style>
+</div>
+</div>
+<footer class="maker-main-footer">
+ <span>Self Service</span>
+ <span>© 2026 All rights reserved | MagMutual</span>
+</footer>
+</main>
+</div>
+</body>
+</html>
+
+
+
