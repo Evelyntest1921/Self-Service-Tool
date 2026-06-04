@@ -832,39 +832,23 @@ ENDIF
 
 
          /* Breadcrumb Navigation */
-     .breadcrumb-section {
-       /* background: var(--bg-primary); */
-    /* border-radius: var(--radius-md); */
-    padding: 16px 4px;
-    margin-bottom: 24px;
-    /* box-shadow: var(--shadow-sm); */
-     /* border: 1px solid var(--border-color); */
+.breadcrumb-section { padding: 4px 0 20px; }
+.breadcrumb-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 14px;
+}
 
 
-
-
-     }
-
-
-
-
-     .breadcrumb-nav {
-       display: flex;
-       align-items: center;
-       font-size: 14px;
-     }
-
-
-
-
-     .breadcrumb-link {
-       display: flex;
-       align-items: center;
-       color: var(--primary-color);
-       text-decoration: none;
-       font-weight: 500;
-       transition: color 0.2s ease;
-     }
+.breadcrumb-link {
+  display: inline-flex;
+  align-items: center;
+  color: var(--primary-color);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 16px;
+}
 
 
 
@@ -995,8 +979,8 @@ ENDIF
       <div class="breadcrumb-section">
         <nav class="breadcrumb-nav" aria-label="Breadcrumb">
           <a href="%%=v(@hubUrl)=%%" class="breadcrumb-link">
-            <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
-            Back
+             <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+          Back
           </a>
           <span class="breadcrumb-separator" aria-hidden="true">/</span>
           <span class="breadcrumb-current">%%=v(@builderPageLabel)=%%</span>
