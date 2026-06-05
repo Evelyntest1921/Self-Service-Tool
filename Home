@@ -316,17 +316,6 @@
   Platform.Load("Core", "1.1");
   
   var DE_EXTERNAL_KEY = "Bd_journey_analytics";
-  var ANALYTICS_ROW_FIELDS = [
-    "journeyId",
-    "journeyName",
-    "journeyType",
-    "emailName",
-    "emailId",
-    "updateDate",
-    "JourneyStatus",
-    "journeyStatus",
-    "sentCount"
-  ];
   var BROWSE_PAGE_SIZE = 50;
   var BUILD_PAGE_SIZE = 20;
   var MAX_DE_FETCH = 500;
@@ -672,6 +661,24 @@
     return rows;
   }
 
+  function mergeLookupRows(target, seen, col, val) {
+    var chunk = [];
+    var i, jid, row;
+    try {
+      chunk = coerceRows(Platform.Function.LookupRows(DE_EXTERNAL_KEY, col, val));
+    } catch (lookupEx) {
+      return;
+    }
+    for (i = 0; i < chunk.length; i++) {
+      row = chunk[i];
+      jid = journeyIdFromRow(row);
+      if (jid && !seen[jid.toLowerCase()]) {
+        seen[jid.toLowerCase()] = true;
+        target.push(row);
+      }
+    }
+  }
+
   function retrieveAnalyticsRows() {
     var rows = [];
     var types = [
@@ -679,41 +686,17 @@
       "Journey + Automation",
       "One Sender",
       "Campaign Journey",
-      "Existing Journey"
+      "Existing Journey",
+      "Create an Email",
+      "Automation"
     ];
     var seen = {};
-    var ti, i, t, chunk, jid;
-    try {
-      rows = coerceDeRows(DataExtension.Init(DE_EXTERNAL_KEY).Rows.Retrieve());
-      if (rows.length) {
-        return rows;
-      }
-    } catch (deInitEx) {}
-    try {
-      rows = coerceDeRows(
-        (new Script.Util.WSProxy()).retrieve(
-          "DataExtensionObject[" + DE_EXTERNAL_KEY + "]",
-          ANALYTICS_ROW_FIELDS,
-          { Property: "journeyId", SimpleOperator: "isNotNull" }
-        )
-      );
-      if (rows.length) {
-        return rows;
-      }
-    } catch (wsProxyEx) {}
+    var ti;
     for (ti = 0; ti < types.length; ti++) {
-      t = types[ti];
-      try {
-        chunk = coerceRows(Platform.Function.LookupRows(DE_EXTERNAL_KEY, "journeyType", t));
-        for (i = 0; i < chunk.length; i++) {
-          jid = journeyIdFromRow(chunk[i]);
-          if (jid && !seen[jid.toLowerCase()]) {
-            seen[jid.toLowerCase()] = true;
-            rows.push(chunk[i]);
-          }
-        }
-      } catch (lookupEx) {}
+      mergeLookupRows(rows, seen, "journeyType", types[ti]);
     }
+    mergeLookupRows(rows, seen, "emailId", "N/A");
+    mergeLookupRows(rows, seen, "deId", "N/A");
     return rows;
   }
 
@@ -740,9 +723,6 @@
     try {
       total = Platform.Function.DataExtensionRowCount(DE_EXTERNAL_KEY);
     } catch (e0) {}
-    if (!total) {
-      total = retrieveAnalyticsRows().length;
-    }
     return total > 0 ? total : 0;
   }
 
