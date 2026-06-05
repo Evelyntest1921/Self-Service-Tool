@@ -8,7 +8,7 @@
   VAR @specLabelsOut, @specOpenOut, @specDnoOut, @specBncOut, @specClkOut, @specTotOut
   VAR @monthLabelsOut, @monthOpensOut, @monthClicksOut, @monthUnsubOut, @monthBouncedOut, @monthOpenSum, @monthClickSum, @monthUnsubSum, @monthBounceSum, @monthLabel, @monthStartVal
   VAR @specRowUnsub
-  VAR @homeDo, @browseJourneys, @browseMode, @jaBrowseMarkup, @jaBrowsePagination, @jaBrowseError, @addBuildMessage, @addBuildError, @addedBuild, @browsePage, @jaBrowseHint
+  VAR @homeDo, @browseJourneys, @browseMode, @jaBrowseMarkup, @jaBrowsePagination, @jaBrowseError, @addBuildMessage, @addBuildError, @addedBuild, @browsePage, @jaBrowseHint, @buildsPage, @jaBuildsPagination
   VAR @addJourneyId, @addJourneyName
   VAR @authRow, @authStatus, @authUrl, @authPayload, @authResponse, @authResponseHeader, @tokenPattern, @accountId, @clientId, @clientSecret, @subdomain, @accessToken
   SET @sendLogChartJson = ""
@@ -26,9 +26,11 @@
   SET @browseMode = "0"
   SET @jaBrowseMarkup = ""
   SET @jaBrowsePagination = ""
+  SET @jaBuildsPagination = ""
   SET @jaBrowseError = ""
   SET @jaBrowseHint = ""
   SET @browsePage = "1"
+  SET @buildsPage = "1"
   SET @addBuildMessage = ""
   SET @addBuildError = ""
   SET @accessToken = ""
@@ -92,6 +94,10 @@
   SET @browsePage = Trim(RequestParameter("browsePage"))
   IF Empty(@browsePage) THEN
     SET @browsePage = "1"
+  ENDIF
+  SET @buildsPage = Trim(RequestParameter("buildsPage"))
+  IF Empty(@buildsPage) THEN
+    SET @buildsPage = "1"
   ENDIF
   SET @addedBuild = RequestParameter("added")
   IF @addedBuild == "1" THEN
@@ -311,7 +317,8 @@
   
   var DE_EXTERNAL_KEY = "Bd_journey_analytics";
   var DE_RETRIEVE_KEY = String(DE_EXTERNAL_KEY).toLowerCase();
-  var MAX_GRID = 48;
+  var BUILD_PAGE_SIZE = 20;
+  var MAX_DE_FETCH = 500;
   var BROWSE_PAGE_SIZE = 50;
   var BUILD_DETAIL_URL = Platform.Variable.GetValue("@buildDetailUrl") || "";
   
@@ -322,30 +329,177 @@
       .replace(/</g, "&lt;")
       .replace(/"/g, "&quot;");
   }
-  
-  function msFromRow(r) {
-    var names = ["updateDate", "UpdateDate", "createDate", "CreateDate", "updatedDate", "UpdatedDate"];
-    var i, ud;
-    for (i = 0; i < names.length; i++) {
-      ud = r[names[i]];
-      if (ud !== null && ud !== undefined && ud !== "") break;
+
+  function wrapTitle(s, size) {
+    var text, i, chunk, parts;
+    size = size || 30;
+    text = String(s == null ? "" : s);
+    if (!text) return "";
+    parts = [];
+    for (i = 0; i < text.length; i += size) {
+      chunk = text.substring(i, i + size);
+      parts.push(esc(chunk));
     }
-    if (ud === null || ud === undefined || ud === "") return 0;
-    try {
-      if (typeof ud === "object" && ud.getTime) return ud.getTime();
-      var p = Platform.Function.ParseDate(String(ud));
-      if (p && p.getTime) return p.getTime();
-    } catch (e2) {}
-    return 0;
+    return parts.join("<br>");
+  }
+  
+  function resolveJourneyProgress(statusRaw) {
+    var status, label;
+    status = String(statusRaw == null ? "" : statusRaw).replace(/^\s+|\s+$/g, "").toLowerCase();
+    if (status === "draft") {
+      return {
+        label: "Draft",
+        width: "25%",
+        fillClass: "progress-fill--draft",
+        labelClass: "progress-percentage--draft"
+      };
+    }
+    if (status === "running") {
+      return {
+        label: "Running",
+        width: "100%",
+        fillClass: "progress-fill--running",
+        labelClass: "progress-percentage--running"
+      };
+    }
+    if (status === "stopped") {
+      return {
+        label: "Stopped",
+        width: "100%",
+        fillClass: "progress-fill--stopped",
+        labelClass: "progress-percentage--stopped"
+      };
+    }
+    if (status) {
+      label = String(statusRaw).replace(/^\s+|\s+$/g, "");
+      return {
+        label: label,
+        width: "35%",
+        fillClass: "progress-fill--ready",
+        labelClass: "progress-percentage--ready"
+      };
+    }
+    return {
+      label: "Ready",
+      width: "35%",
+      fillClass: "progress-fill--ready",
+      labelClass: "progress-percentage--ready"
+    };
   }
 
-  function journeyIdFromRow(r) {
-    if (r["journeyId"] != null) return String(r["journeyId"]);
-    if (r["JourneyId"] != null) return String(r["JourneyId"]);
-    if (r["JourneyID"] != null) return String(r["JourneyID"]);
+  function fieldFromRow(r, names) {
+    var i, n, v;
+    if (r == null) return "";
+    for (i = 0; i < names.length; i++) {
+      n = names[i];
+      v = null;
+      try {
+        v = Platform.Function.Field(r, n);
+      } catch (fe0) {}
+      if (v === null || v === undefined || v === "") {
+        v = r[n];
+      }
+      if (v !== null && v !== undefined && v !== "") return v;
+    }
     return "";
   }
+
+  function formatRowDate(r) {
+    var udx = fieldFromRow(r, ["updateDate", "UpdateDate", "createDate", "CreateDate", "updatedDate", "UpdatedDate"]);
+    if (udx === null || udx === undefined || udx === "") return "";
+    try {
+      return Platform.Function.FormatDate(udx, "yyyy-MM-dd HH:mm");
+    } catch (e3) {
+      return String(udx);
+    }
+  }
+
+  function loadRecentBuildRows(fetchLimit) {
+    var sorts = ["updateDate DESC", "UpdateDate DESC"];
+    var keys = [DE_EXTERNAL_KEY, DE_RETRIEVE_KEY];
+    var ki, si, orderedRows, rowCount, limit;
+    limit = fetchLimit > 0 ? fetchLimit : BUILD_PAGE_SIZE;
+    for (ki = 0; ki < keys.length; ki++) {
+      for (si = 0; si < sorts.length; si++) {
+        try {
+          orderedRows = Platform.Function.LookupOrderedRows(keys[ki], limit, sorts[si]);
+          rowCount = Platform.Function.RowCount(orderedRows);
+          if (rowCount > 0) {
+            return { rows: orderedRows, count: rowCount };
+          }
+        } catch (loe) {}
+      }
+    }
+    return { rows: null, count: 0 };
+  }
+
+  function getDeRowCount() {
+    var total = 0;
+    try {
+      total = Platform.Function.DataExtensionRowCount(DE_EXTERNAL_KEY);
+    } catch (e0) {}
+    if (!total) {
+      try {
+        total = Platform.Function.DataExtensionRowCount(DE_RETRIEVE_KEY);
+      } catch (e1) {}
+    }
+    return total > 0 ? total : 0;
+  }
+
+  function hubUrlWithBuildsPage(hubUrl, page) {
+    var base = String(hubUrl || "");
+    if (!base) {
+      return "?buildsPage=" + page;
+    }
+    if (base.indexOf("?") >= 0) {
+      return base + "&buildsPage=" + page;
+    }
+    return base + "?buildsPage=" + page;
+  }
+
+  function renderBuildsPagination(hubUrl, page, totalPages, totalCount) {
+    if (totalPages <= 1) {
+      return "";
+    }
+    var parts = [
+      '<div class="browse-pagination">' +
+        '<div class="browse-pagination-inner">'
+    ];
+    if (page > 1) {
+      parts.push(
+        '<a href="' +
+          esc(hubUrlWithBuildsPage(hubUrl, page - 1)) +
+          '" class="filter-btn">Previous</a>'
+      );
+    } else {
+      parts.push('<span class="filter-btn browse-page-disabled">Previous</span>');
+    }
+    parts.push(
+      '<span class="browse-page-label">Page ' +
+        page +
+        " of " +
+        totalPages +
+        " (" +
+        totalCount +
+        " builds)</span>"
+    );
+    if (page < totalPages) {
+      parts.push(
+        '<a href="' +
+          esc(hubUrlWithBuildsPage(hubUrl, page + 1)) +
+          '" class="filter-btn">Next</a>'
+      );
+    } else {
+      parts.push('<span class="filter-btn browse-page-disabled">Next</span>');
+    }
+    parts.push("</div></div>");
+    return parts.join("");
+  }
   
+  function journeyIdFromRow(r) {
+    return String(fieldFromRow(r, ["journeyId", "JourneyId", "JourneyID"]));
+  }
+
   function setV(key, val) {
     var s = val == null ? "" : String(val);
     try {
@@ -375,53 +529,54 @@
   }
   
   try {
-    var rows = [];
-    var deObj = null;
-    try {
-      deObj = DataExtension.Init(DE_RETRIEVE_KEY);
-      rows = coerceRows(deObj.Rows.Retrieve());
-    } catch (ie0) {
+    var hubUrl = Platform.Variable.GetValue("@hubUrl") || "";
+    var buildsPage = parseBrowsePage(getAmpVar("buildsPage"));
+    if (!buildsPage || buildsPage === 1) {
       try {
-        deObj = DataExtension.Init(DE_EXTERNAL_KEY);
-        rows = coerceRows(deObj.Rows.Retrieve());
-      } catch (ie1) {}
+        buildsPage = parseBrowsePage(Request.GetQueryStringParameter("buildsPage"));
+      } catch (buildsPageEx) {}
     }
-  
-    if (!rows.length) {
+    var totalInDe = getDeRowCount();
+    var fetchLimit = totalInDe > 0 ? (totalInDe > MAX_DE_FETCH ? MAX_DE_FETCH : totalInDe) : MAX_DE_FETCH;
+    var recentLoad = loadRecentBuildRows(fetchLimit);
+    var orderedRows = recentLoad.rows;
+    var rowCount = recentLoad.count;
+    var totalPages = rowCount > 0 ? Math.ceil(rowCount / BUILD_PAGE_SIZE) : 1;
+    if (buildsPage > totalPages) {
+      buildsPage = totalPages;
+    }
+    if (buildsPage < 1) {
+      buildsPage = 1;
+    }
+    setV("buildsPage", String(buildsPage));
+
+    if (!rowCount) {
       setV("recentBuildsOk", "true");
       setV("jaEmpty", "1");
       setV("jaRecentBuildsMarkup", "");
       setV("jaBuildsLoadError", "");
+      setV("jaBuildsPagination", "");
     } else {
-      rows.sort(function (a, b) {
-        var diff = msFromRow(b) - msFromRow(a);
-        if (diff !== 0) return diff;
-        return journeyIdFromRow(b).localeCompare(journeyIdFromRow(a));
-      });
-  
-      var nGrid = rows.length > MAX_GRID ? MAX_GRID : rows.length;
-      var gx, r, nm, jidv, tp, emn, emid, cr;
+      var startRow = (buildsPage - 1) * BUILD_PAGE_SIZE + 1;
+      var endRow = buildsPage * BUILD_PAGE_SIZE;
+      if (endRow > rowCount) {
+        endRow = rowCount;
+      }
+      var gx, r, nm, jidv, tp, cr, js, prog;
       var parts = [];
-      for (gx = 0; gx < nGrid; gx++) {
-        r = rows[gx];
-        nm =
-          r["journeyName"] ||
-          r["JourneyName"] ||
-          r["emailName"] ||
-          r["EmailName"] ||
-          "Untitled journey";
-        jidv =
-          r["journeyId"] != null ? String(r["journeyId"]) :
-          r["JourneyId"] != null ? String(r["JourneyId"]) :
-          r["JourneyID"] != null ? String(r["JourneyID"]) : "";
-        tp = r["journeyType"] != null ? String(r["journeyType"]) : "";
-        emn = r["emailName"] != null ? String(r["emailName"]) : "";
-        emid = r["emailId"] != null ? String(r["emailId"]) : "";
-        try {
-          var udx = r["updateDate"] != null ? r["updateDate"] : r["UpdateDate"];
-          cr = udx ? Platform.Function.FormatDate(udx, "yyyy-MM-dd HH:mm") : "";
-        } catch (e3) {
-          cr = "";
+      for (gx = startRow; gx <= endRow; gx++) {
+        r = Platform.Function.Row(orderedRows, gx);
+        nm = fieldFromRow(r, ["journeyName", "JourneyName", "emailName", "EmailName"]);
+        if (!nm) nm = "Untitled journey";
+        jidv = String(fieldFromRow(r, ["journeyId", "JourneyId", "JourneyID"]));
+        tp = String(fieldFromRow(r, ["journeyType", "JourneyType"]));
+        cr = formatRowDate(r);
+        js = String(fieldFromRow(r, ["JourneyStatus", "journeyStatus"]));
+        prog = resolveJourneyProgress(js);
+        var sentRaw = fieldFromRow(r, ["sentCount", "SentCount"]);
+        var sentHtml = "";
+        if (sentRaw !== null && sentRaw !== undefined && String(sentRaw).replace(/^\s+|\s+$/g, "") !== "") {
+          sentHtml = '<span class="progress-sent-count">' + esc(String(sentRaw)) + " sent</span>";
         }
         var detailHref =
           jidv !== ""
@@ -436,7 +591,7 @@
             "</div>" +
             "</div>" +
             '<h3 class="survey-title">' +
-            esc(String(nm).length > 40 ? String(nm).substring(0, 40) + "..." : String(nm)) +
+            wrapTitle(nm, 30) +
             "</h3>" +
             '<div class="survey-meta">' +
             '<span class="survey-id">ID: ' + esc(jidv) + '</span>' +
@@ -444,10 +599,19 @@
             "</div>" +
             '<div class="survey-progress">' +
             '<div class="progress-info">' +
-            '<span class="progress-percentage">Ready '  + "</span>" +
+            '<span class="progress-percentage ' +
+            prog.labelClass +
+            '">' +
+            esc(prog.label) +
+            "</span>" +
+            sentHtml +
             "</div>" +
             '<div class="progress-bar">' +
-            '<div class="progress-fill" style="width:35%;">' +
+            '<div class="progress-fill ' +
+            prog.fillClass +
+            '" style="width:' +
+            prog.width +
+            ';">' +
             "</div>" +
             "</div>" +
             "</div>" +
@@ -466,6 +630,7 @@
       setV("jaEmpty", "0");
       setV("recentBuildsOk", "true");
       setV("jaBuildsLoadError", "");
+      setV("jaBuildsPagination", renderBuildsPagination(hubUrl, buildsPage, totalPages, rowCount));
     }
   } catch (e) {
     var errMsg = "Could not read recent builds.";
@@ -477,6 +642,7 @@
     setV("recentBuildsOk", "false");
     setV("jaEmpty", "1");
     setV("jaRecentBuildsMarkup", "");
+    setV("jaBuildsPagination", "");
   }
 
   function getAmpVar(name) {
@@ -669,9 +835,7 @@
         item.modifiedDate || item.lastPublishedDate || item.createdDate || ""
       );
       exists = jid && existing[jid.toLowerCase()];
-      title = esc(
-        String(jname).length > 40 ? String(jname).substring(0, 40) + "..." : String(jname)
-      );
+      title = wrapTitle(jname, 30);
       statusLabel = esc(jstatus.length > 28 ? jstatus.substring(0, 28) + "…" : jstatus);
       if (exists) {
         actionHtml =
@@ -1373,6 +1537,8 @@
 
       %%[ IF @browseMode == "1" AND NOT Empty(@jaBrowsePagination) THEN ]%%
       %%=TreatAsContent(@jaBrowsePagination)=%%
+      %%[ ELSEIF @browseMode != "1" AND NOT Empty(@jaBuildsPagination) THEN ]%%
+      %%=TreatAsContent(@jaBuildsPagination)=%%
       %%[ ENDIF ]%%
   
       <!-- Reports Section (Hidden by default) -->
@@ -2511,6 +2677,8 @@
     margin-bottom: 12px;
     line-height: 1.3;
     text-transform: capitalize;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
   
   .survey-meta {
@@ -2538,6 +2706,29 @@
     font-weight: 600;
     color: var(--primary-color);
   }
+
+  .progress-percentage--draft {
+    color: #6b7280;
+  }
+
+  .progress-percentage--running {
+    color: #059669;
+  }
+
+  .progress-percentage--stopped {
+    color: #d97706;
+  }
+
+  .progress-percentage--ready {
+    color: var(--primary-color);
+  }
+
+  .progress-sent-count {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--gray-500);
+    margin-left: auto;
+  }
   
   .progress-bar {
     height: 6px;
@@ -2548,9 +2739,30 @@
   
   .progress-fill {
     height: 100%;
-    background: linear-gradient(135deg, #000000fa 0%, #4be11a 100%);
     border-radius: 3px;
-    transition: width 0.3s ease;
+    transition: width 0.3s ease, background 0.3s ease;
+  }
+
+  .progress-fill--draft {
+    background: #9ca3af;
+  }
+
+  .progress-fill--running {
+    background: #10b981;
+    animation: progress-running-pulse 2s ease-in-out infinite;
+  }
+
+  .progress-fill--stopped {
+    background: #f59e0b;
+  }
+
+  .progress-fill--ready {
+    background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%);
+  }
+
+  @keyframes progress-running-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.72; }
   }
   
   .survey-actions {
