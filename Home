@@ -465,28 +465,66 @@
     }
   }
 
-  function dateSortKeyFromRow(r) {
-    var ud = fieldFromRow(r, ["updateDate", "UpdateDate"]);
-    if (ud === null || ud === undefined || ud === "") return "0";
+  function safeSortStr(v) {
+    if (v === null || v === undefined) return "";
     try {
-      return String(Platform.Function.FormatDate(ud, "yyyyMMddHHmmss"));
+      return String(v);
+    } catch (safeEx) {
+      return "";
+    }
+  }
+
+  function dateSortNumFromRow(r) {
+    var ud, key, digits, n;
+    ud = fieldFromRow(r, ["updateDate", "UpdateDate"]);
+    if (ud === null || ud === undefined || ud === "") return 0;
+    key = "";
+    try {
+      key = safeSortStr(Platform.Function.FormatDate(ud, "yyyyMMddHHmmss"));
     } catch (e0) {}
-    try {
-      return String(Platform.Function.Format(ud, "yyyyMMddHHmmss"));
-    } catch (e1) {}
-    return String(ud);
+    if (!key) {
+      try {
+        key = safeSortStr(Platform.Function.Format(ud, "yyyyMMddHHmmss"));
+      } catch (e1) {}
+    }
+    if (!key) {
+      key = safeSortStr(ud);
+    }
+    digits = key.replace(/\D/g, "");
+    n = parseInt(digits, 10);
+    return isNaN(n) ? 0 : n;
   }
 
   function compareRowsByUpdateDate(a, b) {
-    var ka = dateSortKeyFromRow(a);
-    var kb = dateSortKeyFromRow(b);
-    if (ka > kb) return -1;
-    if (ka < kb) return 1;
-    var ida = journeyIdFromRow(a);
-    var idb = journeyIdFromRow(b);
-    if (ida > idb) return -1;
-    if (ida < idb) return 1;
-    return 0;
+    var da, db, ida, idb;
+    try {
+      da = dateSortNumFromRow(a);
+      db = dateSortNumFromRow(b);
+      if (da > db) return -1;
+      if (da < db) return 1;
+      ida = safeSortStr(journeyIdFromRow(a));
+      idb = safeSortStr(journeyIdFromRow(b));
+      if (ida > idb) return -1;
+      if (ida < idb) return 1;
+      return 0;
+    } catch (cmpEx) {
+      return 0;
+    }
+  }
+
+  function sortRowsByUpdateDate(rows) {
+    var i, j, tmp, cmp;
+    for (i = 0; i < rows.length; i++) {
+      for (j = i + 1; j < rows.length; j++) {
+        cmp = compareRowsByUpdateDate(rows[j], rows[i]);
+        if (cmp < 0) {
+          tmp = rows[i];
+          rows[i] = rows[j];
+          rows[j] = tmp;
+        }
+      }
+    }
+    return rows;
   }
 
   function loadRecentBuildRows(fetchLimit) {
@@ -502,7 +540,7 @@
     if (!rows.length) {
       return { rows: [], count: 0 };
     }
-    rows.sort(compareRowsByUpdateDate);
+    sortRowsByUpdateDate(rows);
     if (rows.length > limit) {
       rows = rows.slice(0, limit);
     }
@@ -1195,7 +1233,9 @@
       rows.sort(function (a, b) {
         var ai = parseInt(fieldValSendLog(a, ["MonthIndex", "monthIndex"]), 10) || 0;
         var bi = parseInt(fieldValSendLog(b, ["MonthIndex", "monthIndex"]), 10) || 0;
-        return ai - bi;
+        if (ai < bi) return -1;
+        if (ai > bi) return 1;
+        return 0;
       });
       var i, label, resp, respNum;
       for (i = 0; i < rows.length; i++) {
