@@ -1,13 +1,28 @@
 %%[ 
 VAR @errorFlag, @dataExists, @testCount
+VAR @navRows, @navRow, @hubUrl, @surveyHomeUrl, @surveyStageUrl, @surveyAnalyticsUrl, @surveyTakeUrl
 SET @errorFlag = "false"
 SET @dataExists = "true"
 SET @redirect = requestparameter("redirect")
+SET @hubUrl = ""
+SET @surveyHomeUrl = ""
+SET @surveyStageUrl = ""
+SET @surveyAnalyticsUrl = ""
+SET @surveyTakeUrl = ""
+SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
+IF RowCount(@navRows) > 0 THEN
+  SET @navRow = Row(@navRows,1)
+  SET @hubUrl = Field(@navRow,"ss_home")
+  SET @surveyHomeUrl = Field(@navRow,"ss_survey_home")
+  SET @surveyStageUrl = Field(@navRow,"ss_survey_stage")
+  IF Empty(@surveyStageUrl) THEN SET @surveyStageUrl = Field(@navRow,"ss_survey_page") ENDIF
+  SET @surveyAnalyticsUrl = Field(@navRow,"ss_survey_analytics")
+  SET @surveyTakeUrl = Field(@navRow,"ss_survey_take")
+ENDIF
 
-/* Test data extension access using the new SP Data Extensions */
-IF @redirect == "true" THEN
-  Redirect("https://cloud.go.magmutual.com/survey-home")
-  ENDIF
+IF @redirect == "true" AND NOT Empty(@surveyHomeUrl) THEN
+  Redirect(@surveyHomeUrl)
+ENDIF
   SET @testCount = LookupRows("SST_SP_Surveys_Master_DE", "SurveyStatus", "Active")
   SET @testCount = RowCount(@testCount)
   IF @testCount > 0 THEN
@@ -29,7 +44,7 @@ IF @redirect == "true" THEN
       <div class="nav-section">
         <span class="nav-section-title">OVERVIEW</span>
       </div>
-      <a class="nav-link active" href="https://cloud.go.magmutual.com/survey-home">
+      <a class="nav-link active" href="%%=v(@surveyHomeUrl)=%%">
         <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
           <path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/>
         </svg>
@@ -95,7 +110,7 @@ IF @redirect == "true" THEN
         <div class="hero-badge">SURVEY ANALYTICS</div>
         <h1>Enhance Your Insights with<br>MagMutual Survey Analytics</h1>
         <p>Comprehensive survey management and real-time analytics to drive better decision making</p>
-        <button class="hero-cta" onclick="location.href='https://cloud.go.magmutual.com/survey-staging'">
+        <button class="hero-cta" onclick="location.href='%%=v(@surveyStageUrl)=%%'">
           Create New Survey
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
             <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/>
@@ -596,8 +611,7 @@ IF @redirect == "true" THEN
           </div>
         </div>
         <div class="survey-actions">
-          <!-- UPDATE THIS URL TO POINT TO YOUR SURVEY ANALYTICS CLOUDPAGE -->
-          <a href="https://cloud.go.magmutual.com/survey-analytics?surveyid=%%=v(@id)=%%" class="btn-secondary">View Analytics</a>
+          <a href="%%=Concat(@surveyAnalyticsUrl, "?surveyid=", @id)=%%" class="btn-secondary">View Analytics</a>
           <button class="btn-icon" title="More options">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
               <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
