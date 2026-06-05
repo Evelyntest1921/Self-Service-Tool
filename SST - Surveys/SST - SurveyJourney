@@ -635,8 +635,8 @@ function applyTextSettings(payload, textContent) {
    }
  }
 }
-function deepStripCreateFields(obj, keepTemplateId) {
- var stripKeys, out, key, childKeepId, i;
+function deepStripCreateFields(obj, preserveThisId) {
+ var stripKeys, out, key, childPreserveId, i;
  if (obj === null || obj === undefined) return obj;
  if (typeof obj !== "object") return obj;
  if (typeof obj.length === "number") {
@@ -652,13 +652,35 @@ function deepStripCreateFields(obj, keepTemplateId) {
    if (!obj.hasOwnProperty(key)) continue;
    if (stripKeys.indexOf(key) >= 0) continue;
    if (key === "id") {
-    if (keepTemplateId) out[key] = obj[key];
+    if (preserveThisId) out[key] = obj[key];
     continue;
    }
-   childKeepId = keepTemplateId && key === "template";
-   out[key] = deepStripCreateFields(obj[key], childKeepId);
+   childPreserveId = key === "assetType" || key === "template";
+   out[key] = deepStripCreateFields(obj[key], childPreserveId);
  }
  return out;
+}
+function buildHtml208FallbackPayload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent) {
+ var htmlContent = "";
+ if (sourceAsset && sourceAsset.views && sourceAsset.views.html && sourceAsset.views.html.content) {
+   htmlContent = sourceAsset.views.html.content;
+ }
+ if (!htmlContent && sourceAsset && sourceAsset.content) {
+   htmlContent = sourceAsset.content;
+ }
+ var payload = {
+   name: targetName,
+   assetType: { id: 208, name: "htmlemail" },
+   channels: { email: true, web: false },
+   views: {
+     subjectline: { content: subjectlineContent || "Campaign Event" },
+     preheader: { content: preheaderContent || "" },
+     html: { content: htmlContent },
+     text: {}
+   }
+ };
+ applyTextSettings(payload, textContent);
+ return payload;
 }
 function slotPlaceholderMap(emailSlots) {
  var placeholders = {};
@@ -678,6 +700,19 @@ function buildDirectClonePayload(sourceAsset, targetName, subjectlineContent, pr
  payload.views.preheader = { content: preheaderContent || "" };
  applyTextSettings(payload, textContent);
  return deepStripCreateFields(payload, false);
+}
+function debugPayloadSummary(debugPayload) {
+ if (!debugPayload || typeof debugPayload !== "object") return null;
+ return {
+   assetType: debugPayload.assetType || null,
+   category: debugPayload.category || null,
+   channels: debugPayload.channels || null,
+   subjectlineLength: (debugPayload.views && debugPayload.views.subjectline) ? safeLength(debugPayload.views.subjectline.content) : 0,
+   preheaderLength: (debugPayload.views && debugPayload.views.preheader) ? safeLength(debugPayload.views.preheader.content) : 0,
+   textLength: (debugPayload.views && debugPayload.views.text) ? safeLength(debugPayload.views.text.content) : 0,
+   html: summarizeHtmlView(debugPayload.views ? debugPayload.views.html : null),
+   emailOptions: summarizeEmailOptions(debugPayload.data)
+ };
 }
 function appendPostAttempts(targetList, basePayload) {
  var noCategoryPayload;
@@ -818,6 +853,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
            appendPostAttempts(postAttempts, buildCloned207Payload(template, emailName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, htmlSlots));
          }
        }
+       appendPostAttempts(postAttempts, buildHtml208FallbackPayload(template, emailName, subjectlineContent, preheaderContent, textContent));
        payload = postAttempts.length ? postAttempts[0] : null;
        if (!payload) {
          step3bResult = " Step 3b SKIP - Email not duplicated: Could not build clone payload for template-based email." + debugPrefix;
@@ -837,7 +873,8 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
      } else {
        step3bResult = " Step 3b SKIP - Email not duplicated: Unsupported source asset type " + assetTypeId + "." + debugPrefix;
      }
-     if (payload && !step3bResult.match(/views\.html\.template is missing|Unsupported source asset type/)) {
+     if ((payload || postAttempts.length) && !step3bResult.match(/views\.html\.template is missing|Unsupported source asset type|Could not build clone payload/)) {
+       var debugPayload = payload || postAttempts[0];
        var debugObj = {
          source: {
            assetTypeId: assetTypeId,
@@ -852,16 +889,8 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
              slotKeys: objectKeys(resolvedTemplateAsset.slots)
            } : null
          },
-         outgoing: {
-           assetType: payload.assetType || null,
-           category: payload.category || null,
-           channels: payload.channels || null,
-           subjectlineLength: (payload.views && payload.views.subjectline) ? safeLength(payload.views.subjectline.content) : 0,
-           preheaderLength: (payload.views && payload.views.preheader) ? safeLength(payload.views.preheader.content) : 0,
-           textLength: (payload.views && payload.views.text) ? safeLength(payload.views.text.content) : 0,
-           html: summarizeHtmlView(payload.views ? payload.views.html : null),
-           emailOptions: summarizeEmailOptions(payload.data)
-         }
+         outgoing: debugPayloadSummary(debugPayload),
+         attemptCount: postAttempts.length
        };
        payloadDebug = truncateString(Platform.Function.Stringify(debugObj), 2500);
        var assetUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets";
@@ -921,7 +950,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
            step3bResult = " Step 3b SKIP - Email duplicated but new ID was not returned." + debugPrefix + " Response: " + assetResponse + " Debug: " + payloadDebug;
          }
        } else {
-         step3bResult = " Step 3b SKIP - Email not duplicated: HTTP " + assetStatus + " - " + (assetResponse || "No response body.") + debugPrefix + " Debug: " + payloadDebug;
+         step3bResult = " Step 3b SKIP - Email not duplicated: HTTP " + assetStatus + " - " + (assetResponse || "No response body.") + " Attempts: " + postAttempts.length + "." + debugPrefix + " Debug: " + payloadDebug;
        }
      }
    } else {
