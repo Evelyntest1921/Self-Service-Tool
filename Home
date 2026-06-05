@@ -387,6 +387,28 @@
     };
   }
 
+  function fieldFromPropertyList(props, names) {
+    var pi, i, pname, v;
+    if (!props || typeof props.length !== "number") {
+      return "";
+    }
+    for (pi = 0; pi < props.length; pi++) {
+      pname = props[pi].Name != null ? props[pi].Name : props[pi].name;
+      if (!pname) {
+        continue;
+      }
+      for (i = 0; i < names.length; i++) {
+        if (String(pname).toLowerCase() === String(names[i]).toLowerCase()) {
+          v = props[pi].Value != null ? props[pi].Value : props[pi].value;
+          if (v !== null && v !== undefined && v !== "") {
+            return v;
+          }
+        }
+      }
+    }
+    return "";
+  }
+
   function fieldFromRow(r, names) {
     var i, n, v;
     if (r == null) return "";
@@ -401,21 +423,59 @@
       }
       if (v !== null && v !== undefined && v !== "") return v;
     }
+    v = fieldFromPropertyList(r.Properties, names);
+    if (v !== "") return v;
+    v = fieldFromPropertyList(r.Property, names);
+    if (v !== "") return v;
     return "";
   }
 
   function formatRowDate(r) {
     var udx = fieldFromRow(r, ["updateDate", "UpdateDate", "createDate", "CreateDate", "updatedDate", "UpdatedDate"]);
+    var ms, dt;
     if (udx === null || udx === undefined || udx === "") return "";
+    ms = parseDateToMs(udx);
+    if (ms > 0) {
+      dt = new Date(ms);
+      if (dt && dt.getTime) {
+        try {
+          return Platform.Function.FormatDate(dt, "M/d/yyyy h:mm:ss a");
+        } catch (fmtEx) {}
+      }
+    }
     try {
-      return Platform.Function.FormatDate(udx, "yyyy-MM-dd HH:mm");
+      return Platform.Function.FormatDate(udx, "M/d/yyyy h:mm:ss a");
     } catch (e3) {
       return String(udx);
     }
   }
 
+  function parseUsDateToMs(s) {
+    var text = String(s == null ? "" : s).replace(/^\s+|\s+$/g, "");
+    var m = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/i);
+    var month, day, year, hour, min, sec, ampm, dt;
+    if (!m) {
+      return 0;
+    }
+    month = parseInt(m[1], 10) - 1;
+    day = parseInt(m[2], 10);
+    year = parseInt(m[3], 10);
+    hour = parseInt(m[4], 10);
+    min = parseInt(m[5], 10);
+    sec = m[6] ? parseInt(m[6], 10) : 0;
+    ampm = String(m[7]).toUpperCase();
+    if (ampm === "PM" && hour < 12) {
+      hour += 12;
+    }
+    if (ampm === "AM" && hour === 12) {
+      hour = 0;
+    }
+    dt = new Date(year, month, day, hour, min, sec);
+    return dt && dt.getTime ? dt.getTime() : 0;
+  }
+
   function parseDateToMs(ud) {
-    var s, p, n;
+    var s, p, n, fmts, fi;
     if (ud === null || ud === undefined || ud === "") {
       return 0;
     }
@@ -434,37 +494,40 @@
         return n;
       }
     }
+    fmts = [
+      "M/d/yyyy h:mm:ss a",
+      "M/d/yyyy h:mm a",
+      "MM/dd/yyyy h:mm:ss a",
+      "MM/dd/yyyy h:mm a",
+      "yyyy-MM-dd HH:mm:ss",
+      "yyyy-MM-dd HH:mm",
+      "yyyy-MM-dd'T'HH:mm:ss",
+      "yyyy-MM-dd'T'HH:mm:ssZ"
+    ];
+    for (fi = 0; fi < fmts.length; fi++) {
+      try {
+        p = Platform.Function.ParseDate(s, fmts[fi]);
+        if (p && p.getTime) {
+          return p.getTime();
+        }
+      } catch (fmtEx) {}
+    }
     try {
       p = Platform.Function.ParseDate(s);
       if (p && p.getTime) {
         return p.getTime();
       }
     } catch (e1) {}
-    try {
-      p = Platform.Function.ParseDate(s, "yyyy-MM-dd HH:mm:ss");
-      if (p && p.getTime) {
-        return p.getTime();
-      }
-    } catch (e2) {}
-    try {
-      p = Platform.Function.ParseDate(s, "yyyy-MM-dd HH:mm");
-      if (p && p.getTime) {
-        return p.getTime();
-      }
-    } catch (e3) {}
-    return 0;
+    return parseUsDateToMs(s);
   }
 
   function msFromRow(r) {
     var names = ["updateDate", "UpdateDate", "createDate", "CreateDate", "updatedDate", "UpdatedDate"];
-    var i, ud;
-    for (i = 0; i < names.length; i++) {
-      ud = fieldFromRow(r, [names[i]]);
-      if (ud !== null && ud !== undefined && ud !== "") {
-        break;
-      }
+    var ms = parseDateToMs(fieldFromRow(r, names));
+    if (ms > 0) {
+      return ms;
     }
-    return parseDateToMs(ud);
+    return parseDateToMs(formatRowDate(r));
   }
 
   function coerceDeRows(raw) {
