@@ -414,23 +414,54 @@
     }
   }
 
-  function loadRecentBuildRows(fetchLimit) {
-    var sorts = ["updateDate DESC", "UpdateDate DESC"];
-    var keys = [DE_EXTERNAL_KEY, DE_RETRIEVE_KEY];
-    var ki, si, orderedRows, rowCount, limit;
-    limit = fetchLimit > 0 ? fetchLimit : BUILD_PAGE_SIZE;
-    for (ki = 0; ki < keys.length; ki++) {
-      for (si = 0; si < sorts.length; si++) {
-        try {
-          orderedRows = Platform.Function.LookupOrderedRows(keys[ki], limit, sorts[si]);
-          rowCount = Platform.Function.RowCount(orderedRows);
-          if (rowCount > 0) {
-            return { rows: orderedRows, count: rowCount };
-          }
-        } catch (loe) {}
+  function msFromRow(r) {
+    var names = ["updateDate", "UpdateDate", "createDate", "CreateDate", "updatedDate", "UpdatedDate"];
+    var i, ud;
+    for (i = 0; i < names.length; i++) {
+      ud = fieldFromRow(r, [names[i]]);
+      if (ud !== null && ud !== undefined && ud !== "") {
+        break;
       }
     }
-    return { rows: null, count: 0 };
+    if (ud === null || ud === undefined || ud === "") {
+      return 0;
+    }
+    try {
+      if (typeof ud === "object" && ud.getTime) {
+        return ud.getTime();
+      }
+      var p = Platform.Function.ParseDate(String(ud));
+      if (p && p.getTime) {
+        return p.getTime();
+      }
+    } catch (e2) {}
+    return 0;
+  }
+
+  function loadRecentBuildRows(fetchLimit) {
+    var rows = [];
+    var limit = fetchLimit > 0 ? fetchLimit : MAX_DE_FETCH;
+    try {
+      rows = coerceRows(DataExtension.Init(DE_RETRIEVE_KEY).Rows.Retrieve());
+    } catch (ie0) {
+      try {
+        rows = coerceRows(DataExtension.Init(DE_EXTERNAL_KEY).Rows.Retrieve());
+      } catch (ie1) {}
+    }
+    if (!rows.length) {
+      return { rows: [], count: 0 };
+    }
+    rows.sort(function (a, b) {
+      var diff = msFromRow(b) - msFromRow(a);
+      if (diff !== 0) {
+        return diff;
+      }
+      return journeyIdFromRow(b).localeCompare(journeyIdFromRow(a));
+    });
+    if (rows.length > limit) {
+      rows = rows.slice(0, limit);
+    }
+    return { rows: rows, count: rows.length };
   }
 
   function getDeRowCount() {
@@ -442,6 +473,9 @@
       try {
         total = Platform.Function.DataExtensionRowCount(DE_RETRIEVE_KEY);
       } catch (e1) {}
+    }
+    if (!total) {
+      total = loadRecentBuildRows(MAX_DE_FETCH).count;
     }
     return total > 0 ? total : 0;
   }
@@ -557,15 +591,15 @@
       setV("jaBuildsLoadError", "");
       setV("jaBuildsPagination", "");
     } else {
-      var startRow = (buildsPage - 1) * BUILD_PAGE_SIZE + 1;
-      var endRow = buildsPage * BUILD_PAGE_SIZE;
-      if (endRow > rowCount) {
-        endRow = rowCount;
+      var startIdx = (buildsPage - 1) * BUILD_PAGE_SIZE;
+      var endIdx = buildsPage * BUILD_PAGE_SIZE;
+      if (endIdx > rowCount) {
+        endIdx = rowCount;
       }
       var gx, r, nm, jidv, tp, cr, js, prog;
       var parts = [];
-      for (gx = startRow; gx <= endRow; gx++) {
-        r = Platform.Function.Row(orderedRows, gx);
+      for (gx = startIdx; gx < endIdx; gx++) {
+        r = orderedRows[gx];
         nm = fieldFromRow(r, ["journeyName", "JourneyName", "emailName", "EmailName"]);
         if (!nm) nm = "Untitled journey";
         jidv = String(fieldFromRow(r, ["journeyId", "JourneyId", "JourneyID"]));
