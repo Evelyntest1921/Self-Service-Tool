@@ -455,12 +455,12 @@
     var udx = fieldFromRow(r, ["updateDate", "UpdateDate"]);
     if (udx === null || udx === undefined || udx === "") return "";
     try {
-      return Platform.Function.FormatDate(udx, "yyyy-MM-dd HH:mm");
+      return Platform.Function.Format(udx, "yyyy-MM-dd HH:mm");
     } catch (e3) {
       try {
-        return Platform.Function.Format(udx, "yyyy-MM-dd HH:mm");
+        return Platform.Function.FormatDate(udx, "yyyy-MM-dd HH:mm");
       } catch (e4) {
-        return String(udx);
+        return safeSortStr(udx);
       }
     }
   }
@@ -474,39 +474,62 @@
     }
   }
 
-  function dateSortNumFromRow(r) {
-    var ud, key, digits, n;
-    ud = fieldFromRow(r, ["updateDate", "UpdateDate"]);
-    if (ud === null || ud === undefined || ud === "") return 0;
-    key = "";
+  function digitsFromDateText(text) {
+    var i, ch, out;
+    out = "";
+    text = safeSortStr(text);
+    for (i = 0; i < text.length; i++) {
+      ch = text.charAt(i);
+      if (ch >= "0" && ch <= "9") {
+        out += ch;
+      }
+    }
+    if (out.length >= 14) {
+      return out.substring(0, 14);
+    }
+    if (out.length >= 8) {
+      return out + "000000".substring(0, 14 - out.length);
+    }
+    return "";
+  }
+
+  function dateSortKeyFromField(ud) {
+    var formatted, key;
+    if (ud === null || ud === undefined || ud === "") return "00000000000000";
     try {
-      key = safeSortStr(Platform.Function.FormatDate(ud, "yyyyMMddHHmmss"));
+      formatted = safeSortStr(Platform.Function.Format(ud, "yyyy-MM-dd HH:mm:ss"));
+      key = digitsFromDateText(formatted);
+      if (key) return key;
     } catch (e0) {}
-    if (!key) {
-      try {
-        key = safeSortStr(Platform.Function.Format(ud, "yyyyMMddHHmmss"));
-      } catch (e1) {}
+    try {
+      formatted = safeSortStr(Platform.Function.FormatDate(ud, "yyyy-MM-dd HH:mm:ss"));
+      key = digitsFromDateText(formatted);
+      if (key) return key;
+    } catch (e1) {}
+    formatted = safeSortStr(ud);
+    if (formatted.indexOf("-") >= 0) {
+      key = digitsFromDateText(formatted);
+      if (key) return key;
     }
-    if (!key) {
-      key = safeSortStr(ud);
-    }
-    digits = key.replace(/\D/g, "");
-    n = parseInt(digits, 10);
-    return isNaN(n) ? 0 : n;
+    return "00000000000000";
+  }
+
+  function dateSortKeyFromRow(r) {
+    return dateSortKeyFromField(fieldFromRow(r, ["updateDate", "UpdateDate"]));
   }
 
   function sortRowsByUpdateDate(rows) {
-    var i, j, tmp, di, dj, idi, idj;
+    var i, j, tmp, ki, kj, idi, idj;
     for (i = 0; i < rows.length; i++) {
       for (j = i + 1; j < rows.length; j++) {
         try {
-          di = dateSortNumFromRow(rows[i]);
-          dj = dateSortNumFromRow(rows[j]);
-          if (dj > di) {
+          ki = dateSortKeyFromRow(rows[i]);
+          kj = dateSortKeyFromRow(rows[j]);
+          if (kj > ki) {
             tmp = rows[i];
             rows[i] = rows[j];
             rows[j] = tmp;
-          } else if (dj === di) {
+          } else if (kj === ki) {
             idi = safeSortStr(journeyIdFromRow(rows[i]));
             idj = safeSortStr(journeyIdFromRow(rows[j]));
             if (idj > idi) {
