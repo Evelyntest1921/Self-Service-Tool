@@ -74,6 +74,86 @@ ELSE
  SET @journeyName = Concat(@campaignNameSafe,"_Auto_Created_",@dateStr)
  SET @emailName = Concat(@eventName,"_Email")
 ENDIF
+
+VAR @surveyName, @surveyDescription, @surveyId, @surveySaved
+SET @surveyName = Trim(RequestParameter("surveyName"))
+SET @surveyDescription = RequestParameter("surveyDescription")
+SET @surveyId = ""
+SET @surveySaved = "false"
+IF NOT Empty(@createRequested) AND NOT EMPTY(@surveyName) THEN
+  SET @surveyId = Concat("SURV_", Format(Now(), "yyyyMMdd_HHmmss"))
+  UPSERTDE(
+    "SST_SP_Surveys_Master_DE", 1, "SurveyID", @surveyId,
+    "SurveyName", @surveyName,
+    "SurveyStatus", "Active",
+    "SurveyCreatedDate", NOW()
+  )
+  SET @surveySaved = "true"
+  VAR @questionCount, @i, @questionText, @questionType, @options, @required, @questionId
+  SET @questionCount = RequestParameter("questionCount")
+  IF NOT EMPTY(@questionCount) THEN
+    FOR @i = 1 TO @questionCount DO
+      SET @questionText = RequestParameter(Concat("question", @i))
+      SET @questionType = RequestParameter(Concat("questionType", @i))
+      SET @required = RequestParameter(Concat("required", @i))
+      SET @questionId = Concat("Q", @surveyId, "_", @i)
+      SET @options = ""
+      IF @questionType == "likert" THEN
+        SET @options = "Strongly Agree|Agree|Neutral|Disagree|Strongly Disagree"
+      ELSEIF @questionType == "rating" THEN
+        SET @options = "Excellent|Good|Fair|Poor"
+      ELSEIF @questionType == "yesno" THEN
+        SET @options = "Yes|No"
+      ELSEIF @questionType == "text" THEN
+        SET @options = "Text Input"
+      ELSEIF @questionType == "multiple" THEN
+        VAR @optionCount, @j, @optionText
+        SET @optionCount = RequestParameter(Concat("optionCount", @i))
+        IF NOT EMPTY(@optionCount) THEN
+          FOR @j = 1 TO @optionCount DO
+            SET @optionText = RequestParameter(Concat("option", @i, "_", @j))
+            IF NOT EMPTY(@optionText) THEN
+              IF @j == 1 THEN
+                SET @options = @optionText
+              ELSE
+                SET @options = Concat(@options, "|", @optionText)
+              ENDIF
+            ENDIF
+          NEXT @j
+        ENDIF
+      ENDIF
+      IF @required == "true" THEN
+        SET @required = "Yes"
+      ELSE
+        SET @required = "No"
+      ENDIF
+      IF NOT EMPTY(@questionText) THEN
+        UPSERTDE(
+          "SST_SP_Survey_Questions_DE", 1, "QuestionID", @questionId,
+          "SurveyID", @surveyId,
+          "QuestionNumber", @i,
+          "QuestionText", @questionText,
+          "QuestionType", @questionType,
+          "Options", @options,
+          "Required", @required,
+          "OrderIndex", @i
+        )
+      ENDIF
+    NEXT @i
+  ENDIF
+  IF Empty(@emailSubjectLine) THEN SET @emailSubjectLine = @surveyName ENDIF
+  SET @surveyNameSafe = Replace(@surveyName,'"','')
+  SET @surveyNameSafe = Replace(@surveyNameSafe," | ","_")
+  SET @surveyNameSafe = Replace(@surveyNameSafe," ","_")
+  SET @surveyNameSafe = Replace(@surveyNameSafe,"|","_")
+  SET @dateStr = Concat(Format(Now(),"yyyy"),"_",Format(Now(),"MM"),"_",Format(Now(),"dd"))
+  IF @createEmailOnly == "1" THEN
+    SET @eventName = Concat(@surveyNameSafe,"_Survey_",@dateStr)
+    SET @emailName = Concat(@eventName,"_Email")
+  ELSEIF NOT Empty(@journeyName) THEN
+    SET @emailName = Concat(@surveyNameSafe,"_Survey_Email")
+  ENDIF
+ENDIF
 SET @authOk = "false"
 SET @step3bResult = ""
 IF @showForm != "true" THEN
@@ -1250,6 +1330,12 @@ ENDIF
 :root {
  --primary-color: #6366f1;
  --primary-dark: #4f46e5;
+ --secondary-color: #10b981;
+ --text-muted: #9ca3af;
+ --bg-tertiary: #f3f4f6;
+ --border-light: #f3f4f6;
+ --radius-sm: 0.375rem;
+ --radius-lg: 0.75rem;
  --text-primary: #111827;
  --text-secondary: #6b7280;
  --bg-primary: #ffffff;
@@ -1594,6 +1680,414 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   z-index: 1;
 }
 @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    /* Form Container */
+    .form-container {
+          background: var(--bg-primary);
+    border-radius: 12px;
+    padding: 32px;
+    /* box-shadow: var(--shadow-md); */
+    margin-bottom: 32px;
+    border: 1px solid #e5e7eb;
+      margin-top: 20px;
+    }
+
+
+
+
+    .form-section {
+      margin-bottom: 32px;
+    }
+
+
+
+
+    .form-section h3 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 16px;
+      color: var(--text-primary);
+    }
+
+
+
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+
+
+
+    .form-label {
+      display: block;
+      font-weight: 500;
+      color: var(--text-primary);
+      margin-bottom: 8px;
+    }
+
+
+
+
+    .form-input,
+    .form-select,
+    .form-textarea {
+      width: 100%;
+      padding: 12px 16px;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      font-size: 14px;
+      transition: all 0.2s ease;
+      background: var(--bg-primary);
+    }
+
+
+
+
+    .form-input:focus,
+    .form-select:focus,
+    .form-textarea:focus {
+      outline: none;
+      border-color: var(--primary-color);
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+    }
+
+
+
+
+    .form-textarea {
+      resize: vertical;
+      min-height: 100px;
+    }
+
+
+
+
+    /* Question Builder */
+    .question-builder {
+      background: var(--bg-secondary);
+      border-radius: var(--radius-md);
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+
+
+
+    .question-type-selector {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+
+
+
+    .question-type-card {
+      background: var(--bg-primary);
+      border: 2px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 20px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-align: center;
+    }
+
+
+
+
+    .question-type-card:hover {
+      border-color: var(--primary-color);
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-md);
+    }
+
+
+
+
+    .question-type-card.selected {
+      border-color: var(--primary-color);
+      background: rgba(99, 102, 241, 0.05);
+    }
+
+
+
+
+    .question-type-icon {
+      font-size: 24px;
+      margin-bottom: 8px;
+    }
+
+
+
+
+    .question-type-title {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+
+
+
+    .question-type-desc {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+
+
+
+    /* Questions List */
+    .questions-list {
+      margin-top: 24px;
+    }
+
+
+
+
+    .question-item {
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 20px;
+      margin-bottom: 16px;
+      position: relative;
+    }
+
+
+
+
+         .question-item .question-header {
+       display: flex;
+       justify-content: space-between;
+       align-items: center;
+       margin-bottom: 16px;
+     }
+
+
+
+
+    .question-item .question-number {
+      background: var(--primary-color);
+      color: white;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+
+
+
+    .question-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+
+
+
+    .btn-remove {
+      background: #ef4444;
+      color: white;
+      border: none;
+      padding: 6px 12px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-size: 12px;
+      transition: background 0.2s ease;
+    }
+
+
+
+
+    .btn-remove:hover {
+      background: #dc2626;
+    }
+
+
+
+
+         /* Options for different question types */
+     .question-options {
+       margin-top: 16px;
+     }
+
+
+
+
+     .option-item {
+       display: flex;
+       align-items: center;
+       margin-bottom: 12px;
+       background: var(--bg-secondary);
+       padding: 12px;
+       border-radius: var(--radius-md);
+       border: 1px solid var(--border-light);
+     }
+
+
+
+
+     .option-label {
+       font-weight: 500;
+       color: var(--text-primary);
+       margin-right: 12px;
+       min-width: 120px;
+       font-size: 14px;
+     }
+
+
+
+
+     .option-input {
+       flex: 1;
+       margin-right: 8px;
+       background: white;
+       border: 1px solid var(--border-color);
+       border-radius: var(--radius-sm);
+       padding: 8px 12px;
+       font-size: 14px;
+     }
+
+
+
+
+     .option-input:focus {
+       outline: none;
+       border-color: var(--primary-color);
+       box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1);
+     }
+
+
+
+
+     .question-type-select {
+       background: white;
+       border: 1px solid var(--border-color);
+       border-radius: var(--radius-md);
+       padding: 10px 12px;
+       font-size: 14px;
+       font-weight: 500;
+       color: var(--text-primary);
+       cursor: pointer;
+       transition: all 0.2s ease;
+     }
+
+
+
+
+     .question-type-select:focus {
+       outline: none;
+       border-color: var(--primary-color);
+       box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+     }
+
+
+
+
+    .btn-remove-option {
+      background: #ef4444;
+      color: white;
+      border: none;
+      padding: 4px 8px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-size: 10px;
+    }
+
+
+
+
+    .btn-add-option {
+      background: var(--secondary-color);
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-size: 12px;
+      margin-top: 8px;
+    }
+
+
+
+
+    /* Buttons */
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: var(--radius-md);
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-size: 14px;
+    }
+
+
+
+
+    .btn-primary {
+      background: var(--primary-color);
+      color: white;
+    }
+
+
+
+
+    .btn-primary:hover {
+      background: var(--primary-dark);
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-md);
+    }
+
+
+
+
+    .btn-secondary {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+    }
+
+
+
+
+    .btn-secondary:hover {
+      background: var(--border-color);
+    }
+
+
+
+
+    .btn-add-question {
+      background: #4d4d4d;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      font-weight: 600;
+      margin-top: 16px;
+      transition: all 0.2s ease;
+    }
+
+
+
+
+    .btn-add-question:hover {
+      background: #000000;
+      transform: translateY(-1px);
+    }
+
+
+
+
+
 .sender-settings-panel {
   margin-top: 8px;
   border: 1px solid var(--border-color);
@@ -1656,7 +2150,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 <div class="dashboard-layout">
   <aside class="maker-sidebar sidebar" aria-label="Primary">
     <div class="sidebar-logo">
-      <a href="%%=v(@hubUrl)=%%"><img src="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" alt="MagMutual" style="filter: invert(1);"></a>
+      <a href="%%=IIF(NOT Empty(@surveyHomeUrl), @surveyHomeUrl, @hubUrl)=%%"><img src="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" alt="MagMutual" style="filter: invert(1);"></a>
     </div>
     <nav class="sidebar-nav">
       <div class="nav-section"><span class="nav-section-title">MENU</span></div>
@@ -1670,7 +2164,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
     <div class="maker-main-inner">
     <div class="breadcrumb-section">
       <nav class="breadcrumb-nav" aria-label="Breadcrumb">
-        <a href="%%=v(@hubUrl)=%%" class="breadcrumb-link">
+        <a href="%%=IIF(NOT Empty(@surveyHomeUrl), @surveyHomeUrl, @hubUrl)=%%" class="breadcrumb-link">
           <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
           Back
         </a>
@@ -1688,12 +2182,39 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 17h2v-5H3v5zm8 5h2V6h-2v16zM13 9h8V7h-8v2zM3 5v4h14V5H3zm8 14h10v-2H11v2zM13 17h8v-2h-8v2z"/></svg>
       </div>
       <div class="maker-page-heading-text">
-        <h1 class="maker-page-title">Create survey journey</h1>
+        <h1 class="maker-page-title">Create survey</h1>
       </div>
     </div>
-    <p class="maker-page-subtitle">Enter a Salesforce Campaign ID to create a survey journey and email. Leave Campaign ID blank to create only the email asset (no journey).</p>
+    <p class="maker-page-subtitle">Build your survey, then optionally attach a campaign-triggered journey and email.</p>
     <div class="maker-form-shell">
-   <form method="post" action="">
+   <form method="post" action="" id="surveyForm">
+     <div class="form-container">
+       <div class="form-section">
+         <h3>Survey Information</h3>
+         <div class="form-group">
+           <label class="form-label">Survey Title *</label>
+           <input type="text" class="form-input" name="surveyName" placeholder="Enter survey title" required>
+         </div>
+         <div class="form-group">
+           <label class="form-label">Description</label>
+           <textarea class="form-textarea" name="surveyDescription" placeholder="Describe the purpose and goals of this survey"></textarea>
+         </div>
+       </div>
+     </div>
+     <div class="form-container">
+       <div class="form-section">
+         <h3>Question Builder</h3>
+         <div class="question-builder">
+           <h4 style="margin-bottom: 16px;">Build Your Survey Questions</h4>
+           <p style="color: var(--text-secondary); margin-bottom: 24px;">Add questions below. Each question has its own type selector for easy customization.</p>
+         </div>
+         <div class="questions-list" id="questionsList"></div>
+         <button type="button" class="btn-add-question" onclick="addQuestion()">
+           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="margin-right: 8px;"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+           Add Question
+         </button>
+       </div>
+     </div>
      <div class="question-card">
        <div class="question-header">
          <div class="question-number">1</div>
@@ -1744,7 +2265,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
          <input type="hidden" name="emailId" value="%%=v(@defaultEmailId)=%%">
 %%[ ENDIF ]%%
          <button type="submit" class="submit-button" id="submitBtn">
-           <span id="btnText"> Create </span>
+           <span id="btnText">Create Survey</span>
            <span id="btnSpinner" class="spinner" style="display:none"></span>
          </button>
        </div>
@@ -1770,7 +2291,7 @@ Review the technical log below, adjust your inputs if needed, and try again.
 %%[ ELSEIF @createEmailOnly == "1" THEN ]%%
 Your email asset is in Content Builder. Use the link below when you are ready to edit or send tests.
 %%[ ELSE ]%%
-Your journey and email are in Marketing Cloud. Open them below or return to the builder to start another run.
+Your survey is saved%%=IIF(@surveySaved == "true", Concat(" (", @surveyId, ")"), "")=%%. Your journey and email are in Marketing Cloud. Open them below or return to the builder to start another run.
 %%[ ENDIF ]%%
     </p>
     <div class="maker-form-shell">
@@ -1782,6 +2303,8 @@ Your journey and email are in Marketing Cloud. Open them below or return to the 
           <dt>Journey</dt>
           <dd>%%=IIF(NOT Empty(@journeyName), @journeyName, "—")=%%</dd>
 %%[ ENDIF ]%%
+          <dt>Survey ID</dt>
+          <dd>%%=IIF(NOT Empty(@surveyId), @surveyId, "—")=%%</dd>
           <dt>Email name</dt>
           <dd>%%=IIF(NOT Empty(@emailName), @emailName, "—")=%%</dd>
         </dl>
@@ -1812,12 +2335,399 @@ Your journey and email are in Marketing Cloud. Open them below or return to the 
 </div>
 <script>
 (function(){
+    let questionCounter = 0;
+    let selectedQuestionType = '';
+
+         // Add question function
+     function addQuestion() {
+       questionCounter++;
+       const questionHtml = createQuestionHTML(questionCounter, 'likert'); // Default to likert
+       
+       const questionsList = document.getElementById('questionsList');
+       questionsList.insertAdjacentHTML('beforeend', questionHtml);
+     }
+         // Create question HTML based on type
+     function createQuestionHTML(number, type, existingText = '', existingOptions = '') {
+       const baseHtml = `
+         <div class="question-item" data-question="${number}">
+           <div class="question-header">
+             <div class="question-number">${number}</div>
+             <div class="question-actions">
+               <button type="button" class="btn-remove" onclick="removeQuestion(${number})">Remove</button>
+             </div>
+           </div>
+           <div class="form-group">
+             <label class="form-label">Question ${number}</label>
+             <input type="text" class="form-input" name="question${number}" placeholder="Enter your question here" value="${existingText}" required>
+           </div>
+           <div class="form-group">
+             <label class="form-label">Question Type</label>
+             <select class="form-select question-type-select" onchange="updateQuestionType(${number}, this.value)">
+               <option value="likert" ${type === 'likert' ? 'selected' : ''}>Likert Scale</option>
+               <option value="rating" ${type === 'rating' ? 'selected' : ''}>Rating Scale</option>
+               <option value="yesno" ${type === 'yesno' ? 'selected' : ''}>Yes/No</option>
+               <option value="text" ${type === 'text' ? 'selected' : ''}>Text Input</option>
+               <option value="multiple" ${type === 'multiple' ? 'selected' : ''}>Multiple Choice</option>
+             </select>
+             <input type="hidden" name="questionType${number}" value="${type}">
+             <input type="hidden" name="required${number}" value="true">
+           </div>
+       `;
+
+
+
+
+      let optionsHtml = '';
+     
+             switch(type) {
+         case 'likert':
+           optionsHtml = `
+             <div class="question-options">
+               <div class="option-item">
+                 <div class="option-label">Strongly Disagree</div>
+                 <input type="text" class="option-input" name="option${number}_1" value="Strongly Disagree" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">Disagree</div>
+                 <input type="text" class="option-input" name="option${number}_2" value="Disagree" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">Neutral</div>
+                 <input type="text" class="option-input" name="option${number}_3" value="Neutral" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">Agree</div>
+                 <input type="text" class="option-input" name="option${number}_4" value="Agree" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">Strongly Agree</div>
+                 <input type="text" class="option-input" name="option${number}_5" value="Strongly Agree" readonly>
+               </div>
+             </div>
+           `;
+           break;
+           
+         case 'rating':
+           optionsHtml = `
+             <div class="question-options">
+               <div class="option-item">
+                 <div class="option-label">⭐ Poor</div>
+                 <input type="text" class="option-input" name="option${number}_1" value="Poor" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">⭐⭐ Fair</div>
+                 <input type="text" class="option-input" name="option${number}_2" value="Fair" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">⭐⭐⭐ Good</div>
+                 <input type="text" class="option-input" name="option${number}_3" value="Good" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">⭐⭐⭐⭐ Very Good</div>
+                 <input type="text" class="option-input" name="option${number}_4" value="Very Good" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">⭐⭐⭐⭐⭐ Excellent</div>
+                 <input type="text" class="option-input" name="option${number}_5" value="Excellent" readonly>
+               </div>
+             </div>
+           `;
+           break;
+           
+         case 'yesno':
+           optionsHtml = `
+             <div class="question-options">
+               <div class="option-item">
+                 <div class="option-label">✅ Yes</div>
+                 <input type="text" class="option-input" name="option${number}_1" value="Yes" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">❌ No</div>
+                 <input type="text" class="option-input" name="option${number}_2" value="No" readonly>
+               </div>
+             </div>
+           `;
+           break;
+           
+         case 'text':
+           optionsHtml = `
+             <div class="question-options">
+               <div class="option-item">
+                 <div class="option-label">📝 Text Response</div>
+                 <textarea class="form-textarea" name="option${number}_1" placeholder="This will be a text area for open-ended responses" readonly></textarea>
+               </div>
+             </div>
+           `;
+           break;
+         
+                 case 'multiple':
+           let multipleOptionsHtml = `<div class="question-options" id="options${number}">`;
+           
+           if (existingOptions) {
+             const options = existingOptions.split('|');
+             options.forEach((option, index) => {
+               multipleOptionsHtml += `
+                 <div class="option-item">
+                   <div class="option-label">📋 Option ${index + 1}</div>
+                   <input type="text" class="option-input" name="option${number}_${index + 1}" placeholder="Enter option text" value="${option}" required>
+                   <button type="button" class="btn-remove-option" onclick="removeOption(${number}, ${index + 1})">×</button>
+                 </div>
+               `;
+             });
+           } else {
+             multipleOptionsHtml += `
+               <div class="option-item">
+                 <div class="option-label">📋 Option 1</div>
+                 <input type="text" class="option-input" name="option${number}_1" placeholder="Enter option text" required>
+                 <button type="button" class="btn-remove-option" onclick="removeOption(${number}, 1)">×</button>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">📋 Option 2</div>
+                 <input type="text" class="option-input" name="option${number}_2" placeholder="Enter option text" required>
+                 <button type="button" class="btn-remove-option" onclick="removeOption(${number}, 2)">×</button>
+               </div>
+             `;
+           }
+           
+           multipleOptionsHtml += `</div><button type="button" class="btn-add-option" onclick="addOption(${number})">Add Option</button>`;
+           optionsHtml = multipleOptionsHtml;
+           break;
+      }
+
+
+
+
+      return baseHtml + optionsHtml + '</div>';
+    }
+
+
+
+
+    // Remove question
+    function removeQuestion(number) {
+      const question = document.querySelector(`[data-question="${number}"]`);
+      if (question) {
+        question.remove();
+        renumberQuestions();
+      }
+    }
+
+
+
+
+    // Renumber questions after removal
+    function renumberQuestions() {
+      const questions = document.querySelectorAll('.question-item');
+      questions.forEach((question, index) => {
+        const number = index + 1;
+        question.dataset.question = number;
+        question.querySelector('.question-number').textContent = number;
+        question.querySelector('input[name^="question"]').name = `question${number}`;
+      });
+      questionCounter = questions.length;
+    }
+
+
+
+
+         // Update question type and refresh options
+     function updateQuestionType(questionNumber, newType) {
+       const questionItem = document.querySelector(`[data-question="${questionNumber}"]`);
+       const questionText = questionItem.querySelector(`input[name="question${questionNumber}"]`).value;
+       
+       // Update hidden input
+       questionItem.querySelector(`input[name="questionType${questionNumber}"]`).value = newType;
+       
+       // Remove existing options
+       const existingOptions = questionItem.querySelector('.question-options');
+       if (existingOptions) {
+         existingOptions.remove();
+       }
+       
+       // Add new options based on type
+       const optionsHtml = createOptionsHTML(questionNumber, newType);
+       questionItem.insertAdjacentHTML('beforeend', optionsHtml);
+     }
+     
+     // Create options HTML based on type
+     function createOptionsHTML(number, type) {
+       switch(type) {
+         case 'likert':
+           return `
+             <div class="question-options">
+               <div class="option-item">
+                 <div class="option-label">Strongly Disagree</div>
+                 <input type="text" class="option-input" name="option${number}_1" value="Strongly Disagree" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">Disagree</div>
+                 <input type="text" class="option-input" name="option${number}_2" value="Disagree" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">Neutral</div>
+                 <input type="text" class="option-input" name="option${number}_3" value="Neutral" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">Agree</div>
+                 <input type="text" class="option-input" name="option${number}_4" value="Agree" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">Strongly Agree</div>
+                 <input type="text" class="option-input" name="option${number}_5" value="Strongly Agree" readonly>
+               </div>
+             </div>
+           `;
+           
+         case 'rating':
+           return `
+             <div class="question-options">
+               <div class="option-item">
+                 <div class="option-label">⭐ Poor</div>
+                 <input type="text" class="option-input" name="option${number}_1" value="Poor" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">⭐⭐ Fair</div>
+                 <input type="text" class="option-input" name="option${number}_2" value="Fair" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">⭐⭐⭐ Good</div>
+                 <input type="text" class="option-input" name="option${number}_3" value="Good" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">⭐⭐⭐⭐ Very Good</div>
+                 <input type="text" class="option-input" name="option${number}_4" value="Very Good" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">⭐⭐⭐⭐⭐ Excellent</div>
+                 <input type="text" class="option-input" name="option${number}_5" value="Excellent" readonly>
+               </div>
+             </div>
+           `;
+           
+         case 'yesno':
+           return `
+             <div class="question-options">
+               <div class="option-item">
+                 <div class="option-label">✅ Yes</div>
+                 <input type="text" class="option-input" name="option${number}_1" value="Yes" readonly>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">❌ No</div>
+                 <input type="text" class="option-input" name="option${number}_2" value="No" readonly>
+               </div>
+             </div>
+           `;
+           
+         case 'text':
+           return `
+             <div class="question-options">
+               <div class="option-item">
+                 <div class="option-label">📝 Text Response</div>
+                 <textarea class="form-textarea" name="option${number}_1" placeholder="This will be a text area for open-ended responses" readonly></textarea>
+               </div>
+             </div>
+           `;
+           
+         case 'multiple':
+           return `
+             <div class="question-options" id="options${number}">
+               <div class="option-item">
+                 <div class="option-label">📋 Option 1</div>
+                 <input type="text" class="option-input" name="option${number}_1" placeholder="Enter option text" required>
+                 <button type="button" class="btn-remove-option" onclick="removeOption(${number}, 1)">×</button>
+               </div>
+               <div class="option-item">
+                 <div class="option-label">📋 Option 2</div>
+                 <input type="text" class="option-input" name="option${number}_2" placeholder="Enter option text" required>
+                 <button type="button" class="btn-remove-option" onclick="removeOption(${number}, 2)">×</button>
+               </div>
+             </div>
+             <button type="button" class="btn-add-option" onclick="addOption(${number})">Add Option</button>
+           `;
+           
+         default:
+           return '';
+       }
+     }
+
+
+
+
+     // Add option for multiple choice
+     function addOption(questionNumber) {
+       const optionsContainer = document.getElementById(`options${questionNumber}`);
+       const optionCount = optionsContainer.children.length + 1;
+       
+       const optionHtml = `
+         <div class="option-item">
+           <div class="option-label">📋 Option ${optionCount}</div>
+           <input type="text" class="option-input" name="option${questionNumber}_${optionCount}" placeholder="Enter option text" required>
+           <button type="button" class="btn-remove-option" onclick="removeOption(${questionNumber}, ${optionCount})">×</button>
+         </div>
+       `;
+       
+       optionsContainer.insertAdjacentHTML('beforeend', optionHtml);
+     }
+
+
+
+
+    // Remove option
+    function removeOption(questionNumber, optionNumber) {
+      const option = document.querySelector(`input[name="option${questionNumber}_${optionNumber}"]`).parentElement;
+      if (option) {
+        option.remove();
+      }
+    }
+
+
+
+
+    // Preview survey
+    function previewSurvey() {
+      // This would open a preview modal or navigate to preview page
+      alert('Preview functionality would show how the survey will look to respondents');
+    }
+
+
+
+
+
+ document.addEventListener('DOMContentLoaded', function() {
+   if (!document.querySelector('.question-item')) {
+     addQuestion();
+   }
+ });
+
  var form = document.querySelector('form[method="post"]');
  if (form && form.querySelector('#submitBtn')) {
    var btn = document.getElementById('submitBtn');
    var btnText = document.getElementById('btnText');
    var btnSpinner = document.getElementById('btnSpinner');
-   form.addEventListener('submit', function() {
+   form.addEventListener('submit', function(e) {
+     var questions = document.querySelectorAll('.question-item');
+     if (questions.length === 0) {
+       e.preventDefault();
+       alert('Please add at least one question to your survey');
+       return;
+     }
+     var questionCountInput = document.createElement('input');
+     questionCountInput.type = 'hidden';
+     questionCountInput.name = 'questionCount';
+     questionCountInput.value = questions.length;
+     form.appendChild(questionCountInput);
+     questions.forEach(function(question, index) {
+       var questionNumber = index + 1;
+       var typeInput = question.querySelector('input[name="questionType' + questionNumber + '"]');
+       if (typeInput && typeInput.value === 'multiple') {
+         var options = question.querySelectorAll('.option-input');
+         var optionCountInput = document.createElement('input');
+         optionCountInput.type = 'hidden';
+         optionCountInput.name = 'optionCount' + questionNumber;
+         optionCountInput.value = options.length;
+         form.appendChild(optionCountInput);
+       }
+     });
      btn.disabled = true;
      if (btnText) btnText.textContent = 'Creating...';
      if (btnSpinner) btnSpinner.style.display = 'inline-block';
