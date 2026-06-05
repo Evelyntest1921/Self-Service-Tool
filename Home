@@ -500,12 +500,41 @@
     return dt && dt.getTime ? safeMs(dt.getTime()) : 0;
   }
 
+  function parseSqlDateTimeToMs(s) {
+    var text = String(s == null ? "" : s).replace(/^\s+|\s+$/g, "");
+    var m = text.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?$/);
+    var year, month, day, hour, min, sec, dt;
+    if (!m) {
+      return 0;
+    }
+    year = parseInt(m[1], 10);
+    month = parseInt(m[2], 10) - 1;
+    day = parseInt(m[3], 10);
+    hour = parseInt(m[4], 10);
+    min = parseInt(m[5], 10);
+    sec = parseInt(m[6], 10);
+    dt = new Date(year, month, day, hour, min, sec);
+    return dt && dt.getTime ? safeMs(dt.getTime()) : 0;
+  }
+
   function safeMs(val) {
     var n = Number(val);
     if (isNaN(n) || !isFinite(n)) {
       return 0;
     }
     return n;
+  }
+
+  function normalizeEpochMs(ms) {
+    ms = safeMs(ms);
+    if (ms > 0 && ms < 1e12) {
+      return ms * 1000;
+    }
+    return ms;
+  }
+
+  function isPlausibleMs(ms) {
+    return safeMs(ms) >= 1e12;
   }
 
   function compareSortDesc(left, right) {
@@ -519,32 +548,40 @@
   }
 
   function parseDateToMs(ud) {
-    var s, p, n, fmts, fi, ms;
+    var s, p, n, fmts, fi, ms, sqlMs;
     if (ud === null || ud === undefined || ud === "") {
       return 0;
     }
     try {
       if (typeof ud === "object" && ud.getTime) {
-        return safeMs(ud.getTime());
+        ms = normalizeEpochMs(ud.getTime());
+        if (isPlausibleMs(ms)) {
+          return ms;
+        }
       }
     } catch (e0) {}
     s = String(ud).replace(/^\s+|\s+$/g, "");
     if (!s) {
       return 0;
     }
-    if (/^\d+$/.test(s)) {
+    sqlMs = parseSqlDateTimeToMs(s);
+    if (sqlMs > 0) {
+      return sqlMs;
+    }
+    if (/^\d{10,13}$/.test(s)) {
       n = parseInt(s, 10);
       if (!isNaN(n)) {
-        return n;
+        return normalizeEpochMs(n);
       }
     }
     fmts = [
+      "yyyy-MM-dd HH:mm:ss.SSS",
+      "yyyy-MM-dd HH:mm:ss",
+      "yyyy-MM-dd HH:mm",
       "M/d/yyyy h:mm:ss a",
       "M/d/yyyy h:mm a",
       "MM/dd/yyyy h:mm:ss a",
       "MM/dd/yyyy h:mm a",
-      "yyyy-MM-dd HH:mm:ss",
-      "yyyy-MM-dd HH:mm",
       "yyyy-MM-dd'T'HH:mm:ss",
       "yyyy-MM-dd'T'HH:mm:ssZ"
     ];
@@ -552,7 +589,7 @@
       try {
         p = Platform.Function.ParseDate(s, fmts[fi]);
         if (p && p.getTime) {
-          ms = safeMs(p.getTime());
+          ms = normalizeEpochMs(p.getTime());
           if (ms > 0) {
             return ms;
           }
@@ -562,13 +599,17 @@
     try {
       p = Platform.Function.ParseDate(s);
       if (p && p.getTime) {
-        ms = safeMs(p.getTime());
+        ms = normalizeEpochMs(p.getTime());
         if (ms > 0) {
           return ms;
         }
       }
     } catch (e1) {}
-    return safeMs(parseUsDateToMs(s));
+    ms = parseUsDateToMs(s);
+    if (ms > 0) {
+      return ms;
+    }
+    return 0;
   }
 
   function msFromRow(r) {
