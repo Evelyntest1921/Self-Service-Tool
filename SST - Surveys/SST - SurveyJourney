@@ -8,11 +8,13 @@ SET @senderProfileId = Trim(RequestParameter("senderProfileId"))
 SET @sendClassificationId = Trim(RequestParameter("sendClassificationId"))
 SET @addTaskActivity = IIF(RequestParameter("addTaskActivity") == "1","1","0")
 SET @hubUrl = ""
+SET @buildDetailUrl = ""
 SET @surveyHomeUrl = ""
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
  SET @navRow = Row(@navRows,1)
  SET @hubUrl = Field(@navRow,"ss_home")
+ SET @buildDetailUrl = Field(@navRow,"ss_edit")
 ENDIF
 SET @surveyUrlRows = LookupRows("SST_SP_Survey_Url_DE","user","admin")
 IF RowCount(@surveyUrlRows) > 0 THEN
@@ -1320,6 +1322,17 @@ IF @showForm == "false" AND @deleteRequested != "1" AND IndexOf(@resultText,"FAI
   "updateDate", Now()
  )
 ENDIF
+IF Empty(@journeyId) AND IndexOf(@resultText,"Journey ID:") > 0 THEN
+ SET @journeyId = RegExMatch(@resultText,"Journey ID: ([^ ]+)",1)
+ENDIF
+SET @resultJourneyId = @journeyId
+IF Empty(@resultJourneyId) AND NOT Empty(@analyticsJourneyId) THEN
+ SET @resultJourneyId = @analyticsJourneyId
+ENDIF
+SET @resultJourneyIsGuid = "false"
+IF NOT Empty(@resultJourneyId) AND Substring(@resultJourneyId,1,6) != "email:" THEN
+ SET @resultJourneyIsGuid = "true"
+ENDIF
 ]%%
 <!DOCTYPE html>
 <html lang="en">
@@ -2340,8 +2353,11 @@ Your survey is saved%%=IIF(@surveySaved == "true", Concat(" (", @surveyId, ")"),
           <dd>%%=IIF(NOT Empty(@emailName), @emailName, "—")=%%</dd>
         </dl>
         <div class="maker-result-actions">
-%%[ IF @createEmailOnly != "1" AND NOT Empty(@journeyId) THEN ]%%
-          <a href="https://mc.s13.exacttarget.com/cloud/#app/Journey%20Builder/%23%%=v(@journeyId)=%%/1" target="_blank" rel="noopener noreferrer" class="maker-btn maker-btn--primary">Open journey</a>
+%%[ IF @resultJourneyIsGuid == "true" THEN ]%%
+          <a href="https://mc.s13.exacttarget.com/cloud/#app/Journey%20Builder/%23%%=v(@resultJourneyId)=%%/1" target="_blank" rel="noopener noreferrer" class="maker-btn maker-btn--primary">Open journey</a>
+%%[ ENDIF ]%%
+%%[ IF NOT Empty(@buildDetailUrl) AND NOT Empty(@resultJourneyId) THEN ]%%
+          <a href="%%=Concat(@buildDetailUrl,"?journeyId=",@resultJourneyId)=%%" class="maker-btn maker-btn--secondary">Edit journey</a>
 %%[ ENDIF ]%%
           <a href="https://mc.s13.exacttarget.com/cloud/#app/Content%20Builder/" target="_blank" rel="noopener noreferrer" class="maker-btn maker-btn--secondary">Open Content Builder</a>
         </div>
