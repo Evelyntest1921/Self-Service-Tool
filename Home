@@ -9,6 +9,8 @@
   VAR @monthLabelsOut, @monthOpensOut, @monthClicksOut, @monthUnsubOut, @monthBouncedOut, @monthOpenSum, @monthClickSum, @monthUnsubSum, @monthBounceSum, @monthLabel, @monthStartVal
   VAR @specRowUnsub
   VAR @homeDo, @browseJourneys, @browseMode, @jaBrowseMarkup, @jaBrowsePagination, @jaBrowseError, @addBuildMessage, @addBuildError, @addedBuild, @browsePage, @jaBrowseHint, @buildsPage, @jaBuildsPagination
+  VAR @rbRows, @rbTotal, @rbTotalPages, @rbPage, @rbPageSize, @rbStart, @rbEnd, @rbPageSep, @rbI, @rbRow, @rbJid, @rbName, @rbType, @rbTypeDisp, @rbUpd
+  VAR @rbStatus, @rbStatusLower, @rbSent, @rbProgLabel, @rbProgWidth, @rbProgFillClass, @rbProgLabelClass, @rbPageCheck
   VAR @addJourneyId, @addJourneyName
   VAR @authRow, @authStatus, @authUrl, @authPayload, @authResponse, @authResponseHeader, @tokenPattern, @accountId, @clientId, @clientSecret, @subdomain, @accessToken
   SET @sendLogChartJson = ""
@@ -104,6 +106,30 @@
   SET @buildsPage = Trim(RequestParameter("buildsPage"))
   IF Empty(@buildsPage) THEN
     SET @buildsPage = "1"
+  ENDIF
+  IF @browseMode != "1" THEN
+    SET @rbRows = LookupOrderedRows("Bd_journey_analytics", 500, "updateDate DESC")
+    SET @rbTotal = RowCount(@rbRows)
+    SET @rbPageSize = 20
+    SET @rbPage = @buildsPage
+    IF Empty(@rbPage) THEN SET @rbPage = 1 ENDIF
+    IF @rbPage < 1 THEN SET @rbPage = 1 ENDIF
+    SET @rbTotalPages = 1
+    IF @rbTotal > 0 THEN
+      SET @rbTotalPages = Divide(@rbTotal, @rbPageSize)
+      SET @rbPageCheck = Multiply(@rbTotalPages, @rbPageSize)
+      IF @rbPageCheck < @rbTotal THEN SET @rbTotalPages = Add(@rbTotalPages, 1) ENDIF
+    ENDIF
+    IF @rbPage > @rbTotalPages THEN SET @rbPage = @rbTotalPages ENDIF
+    SET @rbStart = Add(Multiply(Subtract(@rbPage, 1), @rbPageSize), 1)
+    SET @rbEnd = Multiply(@rbPage, @rbPageSize)
+    IF @rbEnd > @rbTotal THEN SET @rbEnd = @rbTotal ENDIF
+    SET @rbPageSep = IIF(IndexOf(@hubUrl, "?") > 0, "&", "?")
+    IF @rbTotal == 0 THEN
+      SET @jaEmpty = "1"
+    ELSE
+      SET @jaEmpty = "0"
+    ENDIF
   ENDIF
   SET @addedBuild = RequestParameter("added")
   IF @addedBuild == "1" THEN
@@ -1292,31 +1318,6 @@
         %%=TreatAsContent(@jaBrowseMarkup)=%%
         %%[ ENDIF ]%%
         %%[ ELSE ]%%
-        %%[
-          VAR @rbRows, @rbPageSize, @rbI, @rbRow, @rbJid, @rbName, @rbType, @rbTypeDisp, @rbUpd, @rbDateDisp
-          VAR @rbStatus, @rbStatusLower, @rbSent, @rbProgLabel, @rbProgWidth, @rbProgFillClass, @rbProgLabelClass
-          SET @rbRows = LookupOrderedRows("Bd_journey_analytics", 500, "updateDate DESC")
-          SET @rbTotal = RowCount(@rbRows)
-          SET @rbPageSize = 20
-          SET @rbPage = @buildsPage
-          IF Empty(@rbPage) THEN SET @rbPage = 1 ENDIF
-          IF @rbPage < 1 THEN SET @rbPage = 1 ENDIF
-          SET @rbTotalPages = 1
-          IF @rbTotal > 0 THEN
-            SET @rbTotalPages = Divide(@rbTotal, @rbPageSize)
-            IF Mod(@rbTotal, @rbPageSize) > 0 THEN SET @rbTotalPages = Add(@rbTotalPages, 1) ENDIF
-          ENDIF
-          IF @rbPage > @rbTotalPages THEN SET @rbPage = @rbTotalPages ENDIF
-          SET @rbStart = Add(Multiply(Subtract(@rbPage, 1), @rbPageSize), 1)
-          SET @rbEnd = Multiply(@rbPage, @rbPageSize)
-          IF @rbEnd > @rbTotal THEN SET @rbEnd = @rbTotal ENDIF
-          SET @rbPageSep = IIF(IndexOf(@hubUrl, "?") > 0, "&", "?")
-          IF @rbTotal == 0 THEN
-            SET @jaEmpty = "1"
-          ELSE
-            SET @jaEmpty = "0"
-          ENDIF
-        ]%%
         %%[ IF @rbTotal == 0 THEN ]%%
         <div class="no-surveys-message">
           <div class="empty-state">
@@ -1338,13 +1339,11 @@
           IF Empty(@rbName) THEN SET @rbName = "Untitled journey" ENDIF
           SET @rbType = Field(@rbRow, "journeyType")
           IF Length(@rbType) > 28 THEN
-            SET @rbTypeDisp = Concat(Substring(@rbType, 1, 28), "…")
+            SET @rbTypeDisp = Concat(Substring(@rbType, 1, 28), "...")
           ELSE
             SET @rbTypeDisp = @rbType
           ENDIF
           SET @rbUpd = Field(@rbRow, "updateDate")
-          SET @rbDateDisp = ""
-          IF NOT Empty(@rbUpd) THEN SET @rbDateDisp = Format(@rbUpd, "MMMM d, yyyy h:mm tt") ENDIF
           SET @rbStatus = Field(@rbRow, "JourneyStatus")
           IF Empty(@rbStatus) THEN SET @rbStatus = Field(@rbRow, "journeyStatus") ENDIF
           SET @rbStatusLower = Lowercase(Trim(@rbStatus))
@@ -1378,7 +1377,7 @@
           <h3 class="survey-title">%%=v(@rbName)=%%</h3>
           <div class="survey-meta">
             <span class="survey-id">ID: %%=v(@rbJid)=%%</span>
-            <span class="survey-date">%%=v(@rbDateDisp)=%%</span>
+            <span class="survey-date">%%=v(@rbUpd)=%%</span>
           </div>
           <div class="survey-progress">
             <div class="progress-info">
