@@ -430,24 +430,50 @@
     return "";
   }
 
+  function pad2(n) {
+    return n < 10 ? "0" + n : String(n);
+  }
+
+  function formatUsDateFromMs(ms) {
+    var dt, month, day, year, hour, min, sec, ampm, h12;
+    dt = new Date(ms);
+    if (!dt || !dt.getTime || isNaN(dt.getTime())) {
+      return "";
+    }
+    month = dt.getMonth() + 1;
+    day = dt.getDate();
+    year = dt.getFullYear();
+    hour = dt.getHours();
+    min = dt.getMinutes();
+    sec = dt.getSeconds();
+    ampm = hour >= 12 ? "PM" : "AM";
+    h12 = hour % 12;
+    if (h12 === 0) {
+      h12 = 12;
+    }
+    return month + "/" + day + "/" + year + " " + h12 + ":" + pad2(min) + ":" + pad2(sec) + " " + ampm;
+  }
+
   function formatRowDate(r) {
     var udx = fieldFromRow(r, ["updateDate", "UpdateDate", "createDate", "CreateDate", "updatedDate", "UpdatedDate"]);
-    var ms, dt;
-    if (udx === null || udx === undefined || udx === "") return "";
+    var ms, formatted;
+    if (udx === null || udx === undefined || udx === "") {
+      return "";
+    }
     ms = parseDateToMs(udx);
     if (ms > 0) {
-      dt = new Date(ms);
-      if (dt && dt.getTime) {
-        try {
-          return Platform.Function.FormatDate(dt, "M/d/yyyy h:mm:ss a");
-        } catch (fmtEx) {}
+      formatted = formatUsDateFromMs(ms);
+      if (formatted) {
+        return formatted;
       }
     }
     try {
-      return Platform.Function.FormatDate(udx, "M/d/yyyy h:mm:ss a");
-    } catch (e3) {
-      return String(udx);
-    }
+      formatted = Platform.Function.FormatDate(udx, "M/d/yyyy h:mm:ss a");
+      if (formatted !== null && formatted !== undefined && String(formatted) !== "") {
+        return String(formatted);
+      }
+    } catch (e3) {}
+    return String(udx);
   }
 
   function parseUsDateToMs(s) {
@@ -523,11 +549,7 @@
 
   function msFromRow(r) {
     var names = ["updateDate", "UpdateDate", "createDate", "CreateDate", "updatedDate", "UpdatedDate"];
-    var ms = parseDateToMs(fieldFromRow(r, names));
-    if (ms > 0) {
-      return ms;
-    }
-    return parseDateToMs(formatRowDate(r));
+    return parseDateToMs(fieldFromRow(r, names));
   }
 
   function coerceDeRows(raw) {
@@ -560,7 +582,15 @@
       return { rows: [], totalSorted: 0 };
     }
     rows.sort(function (a, b) {
-      var diff = msFromRow(b) - msFromRow(a);
+      var ams = 0;
+      var bms = 0;
+      try {
+        ams = msFromRow(a);
+      } catch (sortExA) {}
+      try {
+        bms = msFromRow(b);
+      } catch (sortExB) {}
+      var diff = bms - ams;
       if (diff !== 0) {
         return diff;
       }
@@ -710,7 +740,11 @@
         if (!nm) nm = "Untitled journey";
         jidv = String(fieldFromRow(r, ["journeyId", "JourneyId", "JourneyID"]));
         tp = String(fieldFromRow(r, ["journeyType", "JourneyType"]));
-        cr = formatRowDate(r);
+        try {
+          cr = formatRowDate(r);
+        } catch (dateEx) {
+          cr = "";
+        }
         js = String(fieldFromRow(r, ["JourneyStatus", "journeyStatus"]));
         prog = resolveJourneyProgress(js);
         var sentRaw = fieldFromRow(r, ["sentCount", "SentCount"]);
@@ -773,6 +807,7 @@
     var errMsg = "Could not read recent builds.";
     try {
       errMsg = e.message != null && e.message !== "" ? String(e.message) : String(e);
+      errMsg = errMsg.replace(/\r/g, "").replace(/\n/g, " ");
       if (errMsg.length > 400) errMsg = errMsg.substring(0, 400);
     } catch (err2) {}
     setV("jaBuildsLoadError", errMsg);
@@ -1609,7 +1644,7 @@
         <div class="no-surveys-message" style="grid-column: 1 / -1; margin-bottom: 0;">
           <div class="empty-state" style="padding: 16px 20px;">
             <p style="margin: 0; font-size: 14px;">Recent builds could not be loaded from the log. Showing sample journeys below.</p>
-            <p style="margin: 8px 0 0; font-size: 12px; opacity: 0.85;">%%=Replace(Replace(@jaBuildsLoadError,"\n"," "),"\r","")=%%</p>
+            <p style="margin: 8px 0 0; font-size: 12px; opacity: 0.85;">%%=v(@jaBuildsLoadError)=%%</p>
           </div>
         </div>
         %%[ ENDIF ]%%
