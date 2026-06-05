@@ -1,0 +1,4711 @@
+%%[
+VAR @surveyId, @errorFlag, @deleteAction, @deleteSuccess, @deleteError
+SET @surveyId = RequestParameter("surveyid")
+SET @errorFlag = "false"
+SET @deleteAction = RequestParameter("deleteAction")
+SET @deleteSuccess = "false"
+SET @deleteError = ""
+
+
+
+
+/* Handle delete action */
+IF @deleteAction == "delete" THEN
+TRY
+/* Delete survey responses using DeleteData */
+DeleteData("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId)
+
+
+/* Delete survey questions using DeleteData */
+DeleteData("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId)
+
+
+/* Delete survey from master DE using DeleteData */
+DeleteData("SST_SP_Surveys_Master_DE", "SurveyID", @surveyId)
+
+
+SET @deleteSuccess = "true"
+CATCH
+SET @deleteError = "An error occurred while deleting the survey. Please try again."
+ENDIF
+ENDIF
+]%%
+
+
+
+
+
+
+
+
+<!-- Modern Survey Analytics Detail Page -->
+<!DOCTYPE html>
+<html lang="en">
+
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MagMutual Surveys - Analytics</title>
+
+
+    <div class="dashboard-layout">
+        <!-- Modern Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-logo">
+                <img style="filter: invert(1);"
+                    src="https://dev.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&amp;w=640&amp;q=75"
+                    alt="MagMutual">
+            </div>
+            <nav class="sidebar-nav">
+                <div class="nav-section">
+                    <span class="nav-section-title">OVERVIEW</span>
+                </div>
+                <!-- UPDATE THIS URL TO POINT TO YOUR LANDING PAGE CLOUDPAGE -->
+                <a class="nav-link" href="https://cloud.go.magmutual.com/survey-home">
+                    <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z" />
+                    </svg>
+                    <span>Dashboard</span>
+                </a>
+                <a class="nav-link active" href="#" onclick="showSurveyAnalytics(); return false;">
+                    <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                        <path
+                            d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z" />
+                    </svg>
+                    <span>Survey Analytics</span>
+                </a>
+                <a class="nav-link" href="#" onclick="showReports(); return false;">
+                    <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                        <path
+                            d="M9 11H7v6h2v-6zm4 0h-2v6h2v-6zm4 0h-2v6h2v-6zM5 20h14V4H5v16zm14 2H5c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v16c0 1.1-.9 2-2 2z" />
+                    </svg>
+                    <span>Reports</span>
+                </a>
+                <a class="nav-link" href="#" onclick="showResponses(); return false;">
+                    <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                        <path
+                            d="M20 6h-2.18c.11-.31.18-.65.18-1a2.996 2.996 0 0 0-5.5-1.65l-.5.67-.5-.68C10.96 2.54 10 2 10 2 10 2 9 3 8.18 4H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-5-2c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zM9 4c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1z" />
+                    </svg>
+                    <span>Responses</span>
+                </a>
+               
+            </nav>
+
+
+            <div class="sidebar-footer">
+                <div class="sidebar-user">
+                    <div class="user-avatar">S</div>
+                    <div class="user-info">
+                        <div class="user-name">Survey Admin</div>
+                        <div class="user-email">admin@magmutual.com</div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+
+
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Survey Header with Breadcrumb -->
+            <div class="survey-header">
+                <div class="breadcrumb">
+                    <!-- UPDATE THIS URL TO POINT TO YOUR LANDING PAGE CLOUDPAGE -->
+                    <a href="https://cloud.go.magmutual.com/survey-home" class="breadcrumb-link">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"
+                            style="margin-right: 5px; vertical-align: text-bottom;">
+                            <path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z" />
+                        </svg>
+                        Dashboard
+                    </a>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" />
+                    </svg>
+                    <span class="breadcrumb-current">Survey Analytics</span>
+                </div>
+
+
+                %%[ IF @deleteSuccess == "true" THEN ]%%
+                <div class="alert alert-success">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+                    </svg>
+                    Survey has been successfully deleted. Redirecting to dashboard...
+                </div>
+                <script>
+                    setTimeout(function () {
+                        window.location.href = 'https://cloud.go.magmutual.com/survey-home';
+                    }, 2000);
+                </script>
+                %%[ ELSEIF NOT EMPTY(@deleteError) THEN ]%%
+                <div class="alert alert-error">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                        <path
+                            d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
+                    </svg>
+                    %%=v(@deleteError)=%%
+                </div>
+                %%[ ENDIF ]%%
+
+
+                %%[
+                VAR @responses, @count, @surveyName, @surveyStatus
+
+
+                /* Get responses from new SP_Survey_Responses_DE */
+                SET @responses = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId)
+                SET @count = RowCount(@responses)
+
+
+
+
+
+
+
+
+                /* Get survey name and status from SP_Surveys_Master_DE */
+                SET @surveyName = Lookup("SST_SP_Surveys_Master_DE", "SurveyName", "SurveyID", @surveyId)
+                SET @surveyStatus = Lookup("SST_SP_Surveys_Master_DE", "SurveyStatus", "SurveyID", @surveyId)
+
+
+
+                /* Fallback if survey not found in master DE */
+                IF EMPTY(@surveyName) THEN
+                SET @surveyName = Concat("Survey ", @surveyId)
+                ENDIF
+
+
+                IF EMPTY(@surveyStatus) THEN
+                SET @surveyStatus = "Unknown"
+                ENDIF
+                ]%%
+
+
+                <div class="survey-title-section">
+                    <div class="survey-title-row">
+                        <h1>%%=v(@surveyName)=%%</h1>
+                        <div class="survey-actions-header">
+
+
+                            <!-- UPDATE THIS URL TO POINT TO YOUR SURVEY CREATOR CLOUDPAGE -->
+                            <a href="https://cloud.go.magmutual.com/take-survey?id=%%=v(@surveyId)=%%"
+                                class="btn-preview" target="_blank">
+                                📑
+                                Preview
+                            </a>
+                            <a href="https://cloud.go.magmutual.com/survey-staging?mode=edit&surveyid=%%=v(@surveyId)=%%"
+                                class="btn-edit">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                    <path
+                                        d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+                                </svg>
+                                Edit Survey
+                            </a>
+                            <div class="dropdown">
+                                <button class="btn-dropdown" onclick="toggleDropdown()">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                        <path
+                                            d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
+                                    </svg>
+                                </button>
+                                <div class="dropdown-menu" id="dropdownMenu">
+                                    <form method="POST" action="%%=RequestParameter('PAGEURL')=%%"
+                                        onsubmit="return confirmDelete()">
+                                        <input type="hidden" name="deleteAction" value="delete">
+                                        <input type="hidden" name="surveyid" value="%%=v(@surveyId)=%%">
+                                        <button type="submit" class="dropdown-item delete-item">
+                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                                <path
+                                                    d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+                                            </svg>
+                                            Delete Survey
+                                        </button>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="survey-meta-info">
+                        <span class="survey-badge">Survey ID: %%=v(@surveyId)=%%</span>
+                        <span class="survey-status-badge status-%%=v(@surveyStatus)=%%">%%=v(@surveyStatus)=%%</span>
+                        <span class="response-count">%%=v(@count)=%% Total Responses</span>
+                        <span class="last-updated">Last updated: %%=Format(Now(), "MMM dd, yyyy")=%%</span>
+                    </div>
+                </div>
+            </div>
+
+
+
+
+            <!-- Survey Overview Metrics -->
+            %%[
+            VAR @uniqueContacts, @openedCount, @completedCount
+
+
+            /* Count unique contacts */
+            SET @uniqueContacts = 0
+            SET @contactSet = ""
+            SET @responsesNoOpens = Subtract(@count, @uniqueContacts)
+
+
+            FOR @i = 1 TO @count DO
+            SET @row = Row(@responses, @i)
+            SET @contact = Field(@row, "Contact")
+            IF NOT EMPTY(@contact) AND IndexOf(@contactSet, @contact) == 0 THEN
+            SET @contactSet = Concat(@contactSet, "|", @contact)
+            SET @uniqueContacts = Add(@uniqueContacts, 1)
+            ENDIF
+            NEXT
+
+
+            /* Count survey opens */
+            SET @openedCount = 0
+            
+            
+            FOR @i = 1 TO @count DO
+            SET @row = Row(@responses, @i)
+            SET @questionId = Field(@row, "QuestionID")
+            IF @questionId == "SURVEY_OPEN" THEN
+            SET @openedCount = Add(@openedCount, 1)
+            ENDIF
+            NEXT
+
+
+            /* Count completed surveys */
+            
+            SET @completedCount = 0
+            FOR @i = 1 TO @count DO
+            SET @row = Row(@responses, @i)
+            SET @status = Field(@row, "Status")
+            IF @status == "Completed" THEN
+            SET @completedCount = Add(@completedCount, 1)
+            SET @completedCount = @openedCount
+            ENDIF
+            NEXT
+            ]%%
+
+
+
+
+            <!-- Survey Analytics Section (Default View) -->
+            <div id="surveyAnalyticsSection">
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-icon sent">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+                            </svg>
+                        </div>
+                        <div class="metric-content">
+                            <div class="metric-value">%%=v(@uniqueContacts)=%%</div>
+                            <div class="metric-label">Unique Respondents</div>
+                            <div class="metric-trend">Based on response data</div>
+                        </div>
+                    </div>
+
+
+                    <div class="metric-card">
+                        <div class="metric-icon opened">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                                <path
+                                    d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
+                            </svg>
+                        </div>
+                        <div class="metric-content">
+                            <div class="metric-value">%%=v(@openedCount)=%%</div>
+                            <div class="metric-label">Survey Opens</div>
+                            <div class="metric-trend">Tracked automatically</div>
+                        </div>
+                    </div>
+
+
+                    <div class="metric-card">
+                        <div class="metric-icon completed">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                                <path
+                                    d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
+                            </svg>
+                        </div>
+                        <div class="metric-content">
+                            <div class="metric-value">%%=v(@completedCount)=%%</div>
+                            <div class="metric-label">Completed Surveys</div>
+                            <div class="metric-trend">Based on status field</div>
+                        </div>
+                    </div>
+
+
+                    <div class="metric-card">
+                        <div class="metric-icon responses">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                                <path
+                                    d="M20 6h-2.18c.11-.31.18-.65.18-1a2.996 2.996 0 0 0-5.5-1.65l-.5.67-.5-.68C10.96 2.54 10 2 10 2 10 2 9 3 8.18 4H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z" />
+                            </svg>
+                        </div>
+                        <div class="metric-content">
+                            <div class="metric-value">%%=v(@count)=%%</div>
+                            <div class="metric-label">Total Responses</div>
+                            <div class="metric-trend">All question responses</div>
+                        </div>
+                    </div>
+                </div>
+
+
+
+
+
+
+
+
+
+
+                <!-- Question Analysis Section -->
+                %%[ IF @count > 0 THEN ]%%
+                <div class="questions-section">
+                    <div class="section-header">
+                        <h2>Question Analysis</h2>
+                        <div class="view-toggle">
+                            <button class="toggle-btn active" data-view="chart">Chart View</button>
+                            <button class="toggle-btn" data-view="table">Table View</button>
+                        </div>
+                    </div>
+
+
+                    %%[
+                    /* Get questions from SP_Survey_Questions_DE */
+                    VAR @questions, @questionCount
+                    SET @questions = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId)
+                    SET @questionCount = RowCount(@questions)
+
+
+                    /* Debug: Check if questions exist */
+                    IF @questionCount == 0 THEN
+                    SET @debugMessage = "No questions found in SP_Survey_Questions_DE for SurveyID: " + @surveyId
+                    ELSE
+                    SET @debugMessage = "Found " + @questionCount + " questions"
+                    ENDIF
+                    ]%%
+
+
+                    %%[ IF @questionCount > 0 THEN ]%%
+
+
+                    <!-- Debug Info 
+      <div style="background: #f0f0f0; padding: 10px; margin: 10px 0; border-radius: 5px; font-family: monospace; font-size: 12px;">
+        <strong>Debug Info:</strong><br>
+        Survey ID: %%=v(@surveyId)=%%<br>
+        Questions Found: %%=v(@questionCount)=%%<br>
+        Responses Found: %%=v(@count)=%%<br>
+        Debug Message: %%=v(@debugMessage)=%%<br>
+        <br>
+        <strong>Questions in SP_Survey_Questions_DE:</strong><br>
+        %%[ FOR @i = 1 TO @questionCount DO
+          SET @debugRow = Row(@questions, @i)
+          SET @debugText = Field(@debugRow, "QuestionText")
+          SET @debugId = Field(@debugRow, "QuestionID")
+        ]%%
+        %%=v(@i)=%%. %%=v(@debugText)=%% (ID: %%=v(@debugId)=%%)<br>
+        %%[ NEXT @i ]%%
+      </div> 
+-->
+
+
+                    %%[ FOR @q = 1 TO @questionCount DO
+                    SET @questionRow = Row(@questions, @q)
+                    SET @questionText = Field(@questionRow, "QuestionText")
+                    SET @questionId = Field(@questionRow, "QuestionID")
+                    SET @questionType = Field(@questionRow, "QuestionType")
+
+
+                    /* Count responses for this question */
+                    VAR @responseCount, @yesCount, @noCount, @textResponses, @otherResponses
+                    SET @responseCount = 0
+                    SET @yesCount = 0
+                    SET @noCount = 0
+                    SET @textResponses = ""
+                    SET @otherResponses = ""
+
+
+                    FOR @i = 1 TO @count DO
+                    SET @responseRow = Row(@responses, @i)
+                    SET @responseQuestionID = Field(@responseRow, "QuestionID")
+                    SET @response = Field(@responseRow, "Response")
+
+
+                    IF @responseQuestionID == @questionId AND NOT EMPTY(@response) THEN
+                    SET @responseCount = Add(@responseCount, 1)
+
+
+                    /* Count by response type */
+                    IF @response == "Yes" THEN
+                    SET @yesCount = Add(@yesCount, 1)
+                    ELSEIF @response == "No" THEN
+                    SET @noCount = Add(@noCount, 1)
+                    ELSE
+                    /* Store text responses for text-type questions */
+                    IF @questionType == "text" THEN
+                    SET @textResponses = Concat(@textResponses, "|", @response)
+                    ELSE
+                    /* Store other responses for multiple choice questions */
+                    SET @otherResponses = Concat(@otherResponses, "|", @response)
+                    ENDIF
+                    ENDIF
+                    ENDIF
+                    NEXT
+                    ]%%
+
+
+                    <div class="question-card">
+                        <div class="question-header">
+                            <span class="question-number">%%=Format(@q, "00")=%%</span>
+                            <div class="question-content">
+                                <!-- <h3>%%=v(@questionText)=%%</h3> -->
+                                <h3>
+                                    %%=v(@questionText)=%%
+                                </h3>
+                                <!-- Debug: Question Text = "%%=v(@questionText)=%%" -->
+                            </div>
+                        </div>
+
+
+                        <div class="question-stats">
+                            <div class="stat-summary">
+                                <div class="stat-item">
+                                    <span class="stat-label">Total Responses</span>
+                                    <span class="stat-value">%%=v(@responseCount)=%%</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Response Rate</span>
+                                    <span class="stat-value">%%=IIF(@uniqueContacts > 0,
+                                        FormatNumber(Multiply(Divide(@responseCount, @uniqueContacts), 100), 0),
+                                        0)=%%%</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Question Type</span>
+                                    <span class="stat-value">
+                                        <span
+                                            class="question-type-badge type-%%=v(@questionType)=%%">%%=v(@questionType)=%%</span>
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+
+                        %%[ IF @responseCount > 0 THEN ]%%
+                        <div class="answer-bars">
+                            %%[ IF @questionType == "yesno" AND (@yesCount > 0 OR @noCount > 0) THEN ]%%
+                            <!-- Yes/No Questions -->
+                            %%[ IF @yesCount > 0 THEN ]%%
+                            <div class="answer-option">
+                                <div class="option-info">
+                                    <span class="option-label">Yes</span>
+                                    <span class="option-stats">%%=v(@yesCount)=%% responses
+                                        (%%=FormatNumber(Multiply(Divide(@yesCount, @responseCount), 100), 0)=%%)</span>
+                                </div>
+                                <div class="progress-bar-modern">
+                                    <div class="progress-fill-modern yes"
+                                        style="width: %%=FormatNumber(Multiply(Divide(@yesCount, @responseCount), 100), 0)=%%%;">
+                                    </div>
+                                </div>
+                            </div>
+                            %%[ ENDIF ]%%
+
+
+                            %%[ IF @noCount > 0 THEN ]%%
+                            <div class="answer-option">
+                                <div class="option-info">
+                                    <span class="option-label">No</span>
+                                    <span class="option-stats">%%=v(@noCount)=%% responses
+                                        (%%=FormatNumber(Multiply(Divide(@noCount, @responseCount), 100), 0)=%%)</span>
+                                </div>
+                                <div class="progress-bar-modern">
+                                    <div class="progress-fill-modern no"
+                                        style="width: %%=FormatNumber(Multiply(Divide(@noCount, @responseCount), 100), 0)=%%%;">
+                                    </div>
+                                </div>
+                            </div>
+                            %%[ ENDIF ]%%
+
+
+                            %%[ ELSEIF @questionType == "text" THEN ]%%
+                            <!-- Text Questions - Show actual responses -->
+                            <div class="text-responses-section">
+                                <h4>Text Responses (%%=v(@responseCount)=%%)</h4>
+                                %%[ IF NOT EMPTY(@textResponses) THEN
+                                VAR @textArray, @textCount, @k
+                                SET @textArray = BuildRowSetFromString(@textResponses, "|")
+                                SET @textCount = RowCount(@textArray)
+
+
+                                /* Render first 5 responses lazily */
+                                FOR @k = 1 TO @textCount DO
+                                IF @k <= 5 THEN SET @textResponse=Field(Row(@textArray, @k), 1) IF NOT
+                                    EMPTY(@textResponse) THEN ]%% <div class="text-response-item">
+                                    <div class="text-response-content">
+                                        <span class="text-response-text">"%%=v(@textResponse)=%%"</span>
+                                    </div>
+                            </div>
+                            %%[ ENDIF
+                            ENDIF
+                            NEXT @k ]%%
+
+
+                            <!-- Hidden raw data for modal population -->
+                            <span id="text-raw-%%=v(@questionId)=%%" class="text-responses-raw"
+                                style="display:none;">%%=v(@textResponses)=%%</span>
+
+
+                            %%[ IF @textCount > 5 THEN ]%%
+                            <div style="margin-top:12px;">
+                                <button class="btn-secondary"
+                                    onclick="openTextResponsesModal('%%=v(@questionId)=%%', %%=v(@textCount)=%%)">View
+                                    all responses (%%=v(@textCount)=%%)</button>
+                            </div>
+                            %%[ ENDIF ]%%
+
+
+                            %%[ ELSE ]%%
+                            <div class="text-response-item">
+                                <div class="text-response-content">
+                                    <span class="text-response-text">No text responses recorded</span>
+                                </div>
+                            </div>
+                            %%[ ENDIF ]%%
+                        </div>
+
+
+                        %%[ ELSEIF @questionType == "likert" OR @questionType == "rating" OR @questionType ==
+                        "multiple" THEN ]%%
+                        <!-- Multiple Choice Questions - Aggregate by defined options -->
+                        %%[
+                        /* Fetch defined options for this question */
+                        VAR @optString, @optRows, @optCount, @o
+                        SET @optString = Lookup("SST_SP_Survey_Questions_DE", "Options", "QuestionID", @questionId)
+
+
+                        IF NOT EMPTY(@optString) THEN
+                        SET @optRows = BuildRowSetFromString(@optString, "|")
+                        SET @optCount = RowCount(@optRows)
+                        ELSE
+                        SET @optCount = 0
+                        ENDIF
+                        ]%%
+
+
+                        %%[ IF @optCount > 0 THEN ]%%
+                        %%[
+                        VAR @maxCount, @o2, @optVal2, @optResponses2, @ri2
+                        SET @maxCount = 0
+                        FOR @o2 = 1 TO @optCount DO
+                        SET @optVal2 = Field(Row(@optRows, @o2), 1)
+                        SET @optResponses2 = 0
+                        FOR @ri2 = 1 TO @count DO
+                        SET @row = Row(@responses, @ri2)
+                        IF Field(@row, "QuestionID") == @questionId THEN
+                        IF Field(@row, "Response") == @optVal2 THEN
+                        SET @optResponses2 = Add(@optResponses2, 1)
+                        ENDIF
+                        ENDIF
+                        NEXT @ri2
+                        IF @optResponses2 > @maxCount THEN
+                        SET @maxCount = @optResponses2
+                        ENDIF
+                        NEXT @o2
+                        ]%%
+                        %%[ FOR @o = 1 TO @optCount DO
+                        VAR @optVal, @optResponses
+                        SET @optVal = Field(Row(@optRows, @o), 1)
+                        SET @optResponses = 0
+
+
+                        /* Count matches in responses for this option */
+                        VAR @ri
+                        FOR @ri = 1 TO @count DO
+                        SET @row = Row(@responses, @ri)
+                        IF Field(@row, "QuestionID") == @questionId THEN
+                        IF Field(@row, "Response") == @optVal THEN
+                        SET @optResponses = Add(@optResponses, 1)
+                        ENDIF
+                        ENDIF
+                        NEXT @ri
+
+
+                        /* Render only options that have at least one response */
+                        IF @optResponses > 0 THEN
+                        SET @barClass = IIF(@optResponses == @maxCount, "yes", "multiple-choice")
+                        ]%%
+                        <div class="answer-option">
+                            <div class="option-info">
+                                <span class="option-label">%%=v(@optVal)=%%</span>
+                                <span class="option-stats">%%=v(@optResponses)=%% responses
+                                    (%%=FormatNumber(Multiply(Divide(@optResponses, @responseCount), 100),
+                                    0)=%%)</span>
+                            </div>
+                            <div class="progress-bar-modern">
+                                <div class="progress-fill-modern %%=v(@barClass)=%%"
+                                    style="width: %%=FormatNumber(Multiply(Divide(@optResponses, @responseCount), 100), 0)=%%%;">
+                                </div>
+                            </div>
+                        </div>
+                        %%[ ENDIF ]%%
+                        %%[ NEXT @o ]%%
+                        %%[ ELSE ]%%
+                        <!-- No defined options; show total only -->
+                        <div class="answer-option">
+                            <div class="option-info">
+                                <span class="option-label">Responses Received</span>
+                                <span class="option-stats">%%=v(@responseCount)=%% total responses</span>
+                            </div>
+                            <div class="progress-bar-modern">
+                                <div class="progress-fill-modern" style="width: 100%;"></div>
+                            </div>
+                        </div>
+                        %%[ ENDIF ]%%
+
+
+                        %%[ ELSE ]%%
+                        <!-- Fallback for unknown question types -->
+                        <div class="answer-option">
+                            <div class="option-info">
+                                <span class="option-label">Responses Received</span>
+                                <span class="option-stats">%%=v(@responseCount)=%% total responses</span>
+                            </div>
+                            <div class="progress-bar-modern">
+                                <div class="progress-fill-modern" style="width: 100%;"></div>
+                            </div>
+                        </div>
+                        %%[ ENDIF ]%%
+                    </div>
+                    %%[ ELSE ]%%
+                    <div class="no-responses-note">
+                        <p>No responses recorded for this question yet.</p>
+                    </div>
+                    %%[ ENDIF ]%%
+                </div>
+
+
+                %%[ NEXT @q ]%%
+
+
+                %%[ ELSE ]%%
+                <div class="no-responses">
+                    <div class="empty-state">
+                        <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="1">
+                            <path
+                                d="M20 6h-2.18c.11-.31.18-.65.18-1a2.996 2.996 0 0 0-5.5-1.65l-.5.67-.5-.68C10.96 2.54 10 2 10 2 10 2 9 3 8.18 4H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z" />
+                        </svg>
+                        <h3>No questions found</h3>
+                        <p>No question responses have been recorded yet.</p>
+                    </div>
+                </div>
+                %%[ ENDIF ]%%
+            </div>
+            %%[ ENDIF ]%%
+    </div> <!-- End of surveyAnalyticsSection -->
+
+
+
+
+    <!-- Reports Section (Hidden by default) -->
+    <div id="reportsSection" style="display: none;">
+        <div class="section-header">
+            <h2>Reports & Analytics</h2>
+            <div class="activity-filters">
+                <button class="activity-filter active" onclick="filterActivity('12months')" data-period="12months">12
+                    months</button>
+                <button class="activity-filter" onclick="filterActivity('3months')" data-period="3months">3
+                    months</button>
+                <button class="activity-filter" onclick="filterActivity('30days')" data-period="30days">30
+                    days</button>
+            </div>
+        </div>
+
+
+        <!-- Activity Metrics for Reports -->
+        <div class="activity-metrics">
+            <div class="activity-metric-card">
+                <div class="metric-icon-small surveys">👣</div>
+                <div class="metric-details">
+                    <div class="metric-number" id="reports-metric-surveys">%%=v(@openedCount)=%%</div>
+                    <div class="metric-label">Survey Opens</div>
+                    <div class="metric-trend positive" id="reports-metric-surveys-trend">Total survey opens
+                    </div>
+                </div>
+            </div>
+
+
+            <div class="activity-metric-card">
+                <div class="metric-icon-small responses">📝</div>
+                <div class="metric-details">
+                    <div class="metric-number" id="reports-metric-responses">%%=v(@count)=%%</div>
+                    <div class="metric-label">Responses Collected</div>
+                    <div class="metric-trend positive" id="reports-metric-responses-trend">Total responses</div>
+                </div>
+            </div>
+
+
+            <div class="activity-metric-card">
+                <div class="metric-icon-small engagement">⚡</div>
+                <div class="metric-details">
+                    <div class="metric-number">%%=IIF(@uniqueContacts > 0,
+                        FormatNumber(Multiply(Divide(@completedCount, @uniqueContacts), 100), 0), 0)=%%%</div>
+                    <div class="metric-label">Completion Rate</div>
+                    <div class="metric-trend neutral">Based on responses</div>
+                </div>
+            </div>
+
+
+            <div class="activity-metric-card">
+                <div class="metric-icon-small time">⏱️</div>
+                <div class="metric-details">
+                    <div class="metric-number">%%=v(@questionCount)=%%</div>
+                    <div class="metric-label">Total Questions</div>
+                    <div class="metric-trend positive">Questions in survey</div>
+                </div>
+            </div>
+        </div>
+
+
+        <!-- Chart for Reports -->
+        <div class="activity-chart-container">
+            <div class="chart-header">
+                <h3>Survey Response Trends</h3>
+                <div class="chart-legend">
+                    <div class="legend-item">
+                        <div class="legend-color responses"></div>
+                        <span>Responses Received</span>
+                    </div>
+                    <div class="chart-info">
+                        <span style="font-size: 12px; color: #6b7280;">Showing response trends for this
+                            survey</span>
+                    </div>
+                </div>
+            </div>
+            <div class="chart-wrapper">
+                <canvas id="reportsChart" width="400" height="200"></canvas>
+                <div id="chartFallback" style="display: none; text-align: center; padding: 40px; color: #6b7280;">
+                    <div style="font-size: 48px; margin-bottom: 16px;">📊</div>
+                    <h3>Chart Loading...</h3>
+                    <p>If the chart doesn't appear, please refresh the page.</p>
+                </div>
+            </div>
+
+
+            <!-- Chart.js CDN -->
+            <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+
+
+            <!-- Chart data from actual responses -->
+            <div id="chartData" style="display: none;">
+                %%[
+                /* Generate real chart data from actual responses */
+                VAR @chartLabels, @chartData, @responseDates
+                SET @chartLabels = ""
+                SET @chartData = ""
+                SET @responseDates = ""
+
+
+                /* Collect all response dates from actual responses */
+                FOR @i = 1 TO @count DO
+                SET @row = Row(@responses, @i)
+                SET @responseDate = Field(@row, "LastUpdated")
+                SET @questionId = Field(@row, "QuestionID")
+
+
+                /* Skip survey open tracking and collect actual response dates */
+                IF @questionId != "SURVEY_OPEN" AND NOT EMPTY(@responseDate) THEN
+                IF EMPTY(@responseDates) THEN
+                SET @responseDates = @responseDate
+                ELSE
+                SET @responseDates = Concat(@responseDates, "|", @responseDate)
+                ENDIF
+                ENDIF
+                NEXT
+                ]%%
+                <span id="totalResponses">%%=v(@count)=%%</span>
+                <span id="completedResponses">%%=v(@completedCount)=%%</span>
+                <span id="responseDates">%%=v(@responseDates)=%%</span>
+            </div>
+        </div>
+    </div>
+
+
+
+
+    <!-- Course Analytics Section -->
+    %%[ IF @count > 0 THEN ]%%
+    <div id="responsesSection" class="responses-section" style="display: none;">
+        %%[
+        /* Process course-level analytics */
+        VAR @courseData, @courseNames, @courseStats, @courseCount, @i, @j, @currentCourse, @courseResponses, @courseCompleted, @uniqueContacts, @courseContacts
+        
+        /* Get unique course names from responses */
+        SET @courseNames = ""
+        FOR @i = 1 TO @count DO
+        SET @row = Row(@responses, @i)
+        SET @courseName = Field(@row, "CourseName")
+        SET @questionId = Field(@row, "QuestionID")
+        
+        /* Skip survey open tracking and empty course names */
+        IF @questionId != "SURVEY_OPEN" AND NOT EMPTY(@courseName) THEN
+        IF IndexOf(@courseNames, @courseName) == 0 THEN
+        IF EMPTY(@courseNames) THEN
+        SET @courseNames = @courseName
+        ELSE
+        SET @courseNames = Concat(@courseNames, "|", @courseName)
+        ENDIF
+        ENDIF
+        ENDIF
+        NEXT @i
+        
+        /* Count courses */
+        IF NOT EMPTY(@courseNames) THEN
+        SET @courseData = BuildRowSetFromString(@courseNames, "|")
+        SET @courseCount = RowCount(@courseData)
+        ELSE
+        SET @courseCount = 0
+        ENDIF
+        ]%%
+        
+        <!-- Course Response Chart -->
+        %%[ IF @courseCount > 0 THEN ]%%
+        <div class="course-chart-section">
+            <div class="section-header">
+                <h2>Course Response Overview</h2>
+                <p class="section-subtitle">Total responses by course</p>
+            </div>
+            
+            <div class="chart-container">
+                <canvas id="courseChart" width="400" height="200"></canvas>
+                <div id="courseChartFallback" style="display: none; text-align: center; padding: 40px; color: #6b7280;">
+                    <div style="font-size: 48px; margin-bottom: 16px;">📊</div>
+                    <h3>Chart Loading...</h3>
+                    <p>If the chart doesn't appear, please refresh the page.</p>
+                </div>
+            </div>
+
+            <!-- Chart data from course analytics -->
+            <div id="courseChartData" style="display: none;">
+                %%[
+                /* Generate chart data for course responses */
+                VAR @chartLabels, @chartData, @chartColors, @k
+                SET @chartLabels = ""
+                SET @chartData = ""
+                SET @chartColors = ""
+                
+                /* Sort courses by response count (descending) */
+                FOR @k = 1 TO @courseCount DO
+                SET @currentCourse = Field(Row(@courseData, @k), 1)
+                SET @courseResponses = 0
+                
+                /* Count responses for this course */
+                FOR @j = 1 TO @count DO
+                SET @row = Row(@responses, @j)
+                SET @courseName = Field(@row, "CourseName")
+                SET @questionId = Field(@row, "QuestionID")
+                
+                IF @courseName == @currentCourse AND @questionId != "SURVEY_OPEN" THEN
+                SET @courseResponses = Add(@courseResponses, 1)
+                ENDIF
+                NEXT @j
+                
+                /* Build chart data */
+                IF EMPTY(@chartLabels) THEN
+                SET @chartLabels = @currentCourse
+                SET @chartData = @courseResponses
+                ELSE
+                SET @chartLabels = Concat(@chartLabels, "|", @currentCourse)
+                SET @chartData = Concat(@chartData, "|", @courseResponses)
+                ENDIF
+                NEXT @k
+                ]%%
+                <span id="courseChartLabels">%%=v(@chartLabels)=%%</span>
+                <span id="courseChartValues">%%=v(@chartData)=%%</span>
+            </div>
+        </div>
+
+        <!-- Course Analytics Cards -->
+        <div class="course-analytics-section">
+            <div class="section-header">
+                <h2>Course Analytics</h2>
+                <p class="section-subtitle">Response metrics by course</p>
+            </div>
+            
+            <div class="course-cards-grid">
+                %%[
+                /* Ensure questions are loaded for completion checks */
+                VAR @questions
+                SET @questions = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId)
+                SET @questionCount = RowCount(@questions)
+
+                FOR @i = 1 TO @courseCount DO
+                SET @currentCourse = Field(Row(@courseData, @i), 1)
+                SET @courseResponses = 0
+                SET @courseCompleted = 0
+                SET @courseContacts = ""
+                
+                /* Calculate metrics for this course */
+                FOR @j = 1 TO @count DO
+                SET @row = Row(@responses, @j)
+                SET @courseName = Field(@row, "CourseName")
+                SET @contact = Field(@row, "Contact")
+                SET @questionId = Field(@row, "QuestionID")
+                SET @status = Field(@row, "Status")
+                
+                IF @courseName == @currentCourse AND @questionId != "SURVEY_OPEN" THEN
+                SET @courseResponses = Add(@courseResponses, 1)
+                
+                /* Track unique contacts */
+                IF IndexOf(@courseContacts, @contact) == 0 THEN
+                IF EMPTY(@courseContacts) THEN
+                SET @courseContacts = @contact
+                ELSE
+                SET @courseContacts = Concat(@courseContacts, "|", @contact)
+                ENDIF
+                ENDIF
+                
+                /* Count completed responses */
+                IF @status == "Completed" THEN
+                SET @courseCompleted = Add(@courseCompleted, 1)
+                ENDIF
+                ENDIF
+                NEXT @j
+                
+                /* Count unique contacts */
+                IF NOT EMPTY(@courseContacts) THEN
+                SET @uniqueContacts = RowCount(BuildRowSetFromString(@courseContacts, "|"))
+                ELSE
+                SET @uniqueContacts = 0
+                ENDIF
+                
+                /* Calculate completion rate as aggregate: courseResponses / (questionCount * uniqueContacts) */
+                VAR @completionRate, @percentRaw
+                IF @uniqueContacts > 0 AND @questionCount > 0 THEN
+                  SET @percentRaw = Multiply(Divide(@courseResponses, Multiply(@questionCount, @uniqueContacts)), 100)
+                  IF @percentRaw > 100 THEN
+                    SET @percentRaw = 100
+                  ENDIF
+                  IF @percentRaw < 0 THEN
+                    SET @percentRaw = 0
+                  ENDIF
+                  SET @completionRate = FormatNumber(@percentRaw, 0)
+                ELSE
+                  SET @completionRate = 0
+                ENDIF
+                ]%%
+                
+                <div class="course-card" onclick="filterByCourse('%%=v(@currentCourse)=%%')">
+                    <div class="course-card-header">
+                        <div class="course-title-section">
+                            <svg class="course-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 2L2 7L12 12L22 7L12 2Z"/>
+                                <path d="M2 17L12 22L22 17"/>
+                                <path d="M2 12L12 17L22 12"/>
+                            </svg>
+                            <h3 class="course-name">%%=v(@currentCourse)=%%</h3>
+                        </div>
+                        <div class="course-status-indicator"></div>
+                    </div>
+                    <div class="course-metrics-horizontal">
+                        <div class="metric-item">
+                            <span class="metric-value">%%=v(@courseResponses)=%%</span>
+                            <span class="metric-label">Total Responses</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-value">%%=v(@uniqueContacts)=%%</span>
+                            <span class="metric-label">Unique Respondents</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-value">%%=v(@completionRate)=%%%</span>
+                            <span class="metric-label">Completion Rate</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-value">%%=v(@courseCompleted)=%%</span>
+                            <span class="metric-label">Completed</span>
+                        </div>
+                    </div>
+                </div>
+                %%[ NEXT @i ]%%
+            </div>
+        </div>
+        %%[ ENDIF ]%%
+
+    <!-- Detailed Responses Table -->
+        <div class="section-header">
+            <h2>Detailed Survey Responses</h2>
+            <div class="table-actions">
+                <div class="search-section">
+                    <input class="search-input" type="text" placeholder="Search responses...">
+                    <button class="btn-download" onclick="downloadResponsesCSV()" title="Download CSV">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
+                        </svg>
+                        Download CSV
+                    </button>
+                </div>
+                <button class="btn-secondary" onclick="clearCourseFilter()" id="clearFilterBtn" style="display: none;">
+                    Show All Courses
+                </button>
+            </div>
+        </div>
+
+
+        <div class="table-container">
+            <table class="modern-table">
+                <thead>
+                    <tr>
+                        <th>Contact</th>
+                        <th>Name</th>
+                        <th>Course Name</th>
+                        <th>Question</th>
+                        <th>Response</th>
+                        <th>Question Type</th>
+                        <th>Status</th>
+                        <th>Last Updated</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    %%[
+                    FOR @i = 1 TO @count DO
+                    SET @row = Row(@responses, @i)
+                    SET @Contact = Field(@row, "Contact")
+                    SET @CourseName = Field(@row, "CourseName")
+                    SET @QuestionID = Field(@row, "QuestionID")
+                    SET @Response = Field(@row, "Response")
+                    SET @Status = Field(@row, "Status")
+                    SET @LastUpdated = Field(@row, "LastUpdated")
+                    
+                    /* Get contact name from ent.Contact_Salesforce_1 */
+                    VAR @contactName
+                    SET @contactName = Lookup("ENT.Contact_Salesforce_1", "Name", "Id", @Contact)
+                    IF EMPTY(@contactName) THEN
+                    SET @contactName = "N/A"
+                    ENDIF
+
+
+                    /* Skip survey open tracking entries */
+                    IF @QuestionID != "SURVEY_OPEN" THEN
+                    /* Get question details from questions table */
+                    VAR @questionDetails
+                    SET @questionDetails = LookupRows("SST_SP_Survey_Questions_DE", "QuestionID", @QuestionID)
+                    IF RowCount(@questionDetails) > 0 THEN
+                    SET @QuestionText = Field(Row(@questionDetails, 1), "QuestionText")
+                    SET @QuestionType = Field(Row(@questionDetails, 1), "QuestionType")
+                    ELSE
+                    SET @QuestionText = "Question not found"
+                    SET @QuestionType = "Unknown"
+                    ENDIF
+                    ]%%
+                    <tr data-last-updated="%%=Format(@LastUpdated, "MMM dd, yyyy HH:mm")=%%">
+                        <td><strong>%%=v(@Contact)=%%</strong></td>
+                        <td>%%=v(@contactName)=%%</td>
+                        <td class="course-name-cell">%%=IIF(EMPTY(@CourseName), "N/A", @CourseName)=%%</td>
+                        <td>%%=v(@QuestionText)=%%</td>
+                        <td class="response-cell">%%=v(@Response)=%%</td>
+                        <td><span class="type-badge">%%=v(@QuestionType)=%%</span></td>
+                        <td><span class="status-badge status-%%=v(@Status)=%%">%%=v(@Status)=%%</span></td>
+                        <td>%%=Format(@LastUpdated, "MMM dd, yyyy HH:mm")=%%</td>
+                    </tr>
+                    %%[ ENDIF ]%%
+                    %%[ NEXT @i ]%%
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination Controls -->
+        <div class="pagination-container">
+            <div class="pagination-info">
+                <span id="paginationInfo">Showing 1-20 of <span id="totalRows">0</span> responses</span>
+            </div>
+            <div class="pagination-controls">
+                <button class="pagination-btn" id="prevBtn" onclick="changePage(-1)" disabled>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/>
+                    </svg>
+                    Previous
+                </button>
+                <div class="pagination-pages" id="paginationPages">
+                    <!-- Page numbers will be generated by JavaScript -->
+                </div>
+                <button class="pagination-btn" id="nextBtn" onclick="changePage(1)" disabled>
+                    Next
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+
+        <!-- Pagination will be added back once basic functionality is working -->
+    </div>
+    %%[ ELSE ]%%
+    <div class="no-responses">
+        <div class="empty-state">
+            <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                <path
+                    d="M20 6h-2.18c.11-.31.18-.65.18-1a2.996 2.996 0 0 0-5.5-1.65l-.5.67-.5-.68C10.96 2.54 10 2 10 2 10 2 9 3 8.18 4H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z" />
+            </svg>
+            <h3>No responses yet</h3>
+            <p>Once people start responding to this survey, their answers will appear here with detailed
+                analytics.</p>
+        </div>
+    </div>
+    %%[ ENDIF ]%%
+    </main>
+    </div>
+
+
+
+
+    <style>
+        /* Modern Design System */
+        :root {
+            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --primary-color: #6366f1;
+            --primary-dark: #4f46e5;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --info-color: #3b82f6;
+            --danger-color: #ef4444;
+            --gray-50: #f9fafb;
+            --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb;
+            --gray-300: #d1d5db;
+            --gray-400: #9ca3af;
+            --gray-500: #6b7280;
+            --gray-600: #4b5563;
+            --gray-700: #374151;
+            --gray-800: #1f2937;
+            --gray-900: #111827;
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+
+
+
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+
+
+
+
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--gray-50);
+            color: var(--gray-900);
+            line-height: 1.6;
+        }
+
+
+
+
+        /* Layout */
+        .dashboard-layout {
+            display: flex;
+            min-height: 100vh;
+        }
+
+
+
+
+        /* Sidebar */
+        .sidebar {
+            width: 280px;
+            background: white;
+            border-right: 1px solid var(--gray-200);
+            display: flex;
+            flex-direction: column;
+            padding: 32px 0;
+            box-shadow: var(--shadow-sm);
+        }
+
+
+
+
+        .sidebar-logo {
+            padding: 0 20px;
+            margin-bottom: 40px;
+        }
+
+
+
+
+        .nav-section-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--gray-400);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 0 32px;
+            margin-bottom: 16px;
+        }
+
+
+
+
+        .sidebar-nav {
+            flex: 1;
+        }
+
+
+
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 32px;
+            color: var(--gray-600);
+            text-decoration: none;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            border-right: 3px solid transparent;
+        }
+
+
+
+
+        .nav-link:hover {
+            background: var(--gray-50);
+            color: var(--gray-900);
+        }
+
+
+
+
+        .nav-link.active {
+            background: linear-gradient(90deg, rgb(119 120 196 / 10%) 0%, rgb(2 3 22 / 5%) 100%);
+            color: #000000;
+            border-right-color: #2c2c31;
+        }
+
+
+
+
+        .nav-icon {
+            width: 20px;
+            height: 20px;
+            opacity: 0.7;
+        }
+
+
+
+
+        .nav-link.active .nav-icon {
+            opacity: 1;
+        }
+
+
+
+
+        .sidebar-footer {
+            padding: 0 32px;
+            border-top: 1px solid var(--gray-200);
+            padding-top: 24px;
+        }
+
+
+
+
+        .sidebar-user {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+
+
+
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            background: var(--primary-gradient);
+            color: white;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 16px;
+        }
+
+
+
+
+        .user-name {
+            font-weight: 600;
+            color: var(--gray-900);
+            font-size: 14px;
+        }
+
+
+
+
+        .user-email {
+            color: var(--gray-500);
+            font-size: 12px;
+        }
+
+
+
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            padding: 40px;
+            overflow-y: auto;
+            background: var(--gray-50);
+        }
+
+
+
+
+        /* Survey Header */
+        .survey-header {
+            margin-bottom: 32px;
+        }
+
+
+
+
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+
+
+
+
+        .breadcrumb-link {
+            color: var(--gray-500);
+            text-decoration: none;
+            transition: color 0.2s ease;
+        }
+
+
+
+
+        .breadcrumb-link:hover {
+            color: var(--primary-color);
+        }
+
+
+
+
+        .breadcrumb-current {
+            color: var(--gray-900);
+            font-weight: 500;
+        }
+
+
+
+
+        .survey-title-section {
+            background: white;
+            border-radius: 12px;
+            padding: 50px 32px;
+            border: 1px solid var(--gray-200);
+        }
+
+
+
+
+        .survey-title-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+
+
+
+        .survey-title-section h1 {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--gray-900);
+            margin: 0;
+            flex: 1;
+        }
+
+
+
+
+        .survey-actions-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+
+
+
+        .btn-export {
+            background: var(--primary-color);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: none;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+
+
+
+
+        .btn-export:hover {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+        }
+
+
+
+
+        .btn-edit {
+            background: #040710;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: none;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            text-decoration: none;
+        }
+
+
+        .btn-preview {
+            background: #ffffff;
+            border: 1px solid gray;
+            color: black;
+
+
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            text-decoration: none;
+        }
+
+
+        .btn-preview:hover {
+            background: #2563eb;
+            transform: translateY(-1px);
+            color: white;
+            text-decoration: none;
+        }
+
+
+        .btn-edit:hover {
+            background: #2563eb;
+            transform: translateY(-1px);
+            color: white;
+            text-decoration: none;
+        }
+
+
+
+
+        .btn-dropdown {
+            background: var(--gray-100);
+            color: var(--gray-700);
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid var(--gray-200);
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+        }
+
+
+
+
+        .btn-dropdown:hover {
+            background: var(--gray-200);
+            border-color: var(--gray-300);
+        }
+
+
+
+
+        .dropdown {
+            position: relative;
+            display: inline-block;
+        }
+
+
+
+
+        .dropdown-menu {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 100%;
+            background: white;
+            border: 1px solid var(--gray-200);
+            border-radius: 8px;
+            box-shadow: var(--shadow-lg);
+            min-width: 180px;
+            z-index: 1000;
+            margin-top: 4px;
+        }
+
+
+
+
+        .dropdown-menu.show {
+            display: block;
+        }
+
+
+
+
+        .dropdown-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            padding: 12px 16px;
+            border: none;
+            background: none;
+            color: var(--gray-700);
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+            text-align: left;
+        }
+
+
+
+
+        .dropdown-item:hover {
+            background: var(--gray-50);
+        }
+
+
+
+
+        .dropdown-item.delete-item {
+            color: var(--danger-color);
+        }
+
+
+
+
+        .dropdown-item.delete-item:hover {
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+
+
+
+        .btn-delete {
+            background: var(--danger-color);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: none;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+
+
+
+
+        .btn-delete:hover {
+            background: #dc2626;
+            transform: translateY(-1px);
+        }
+
+
+
+
+        .alert {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 500;
+        }
+
+
+
+
+        .alert-success {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success-color);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+
+
+
+
+        .alert-error {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger-color);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+
+
+
+
+        .btn-secondary {
+            background: var(--gray-100);
+            color: var(--gray-700);
+            padding: 10px 20px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+
+
+
+
+        .btn-secondary:hover {
+            background: var(--gray-200);
+        }
+
+
+
+
+        .survey-meta-info {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+
+
+
+        .survey-badge {
+            background: var(--gray-100);
+            color: var(--gray-600);
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+
+
+
+        .survey-status-badge {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: capitalize;
+        }
+
+
+
+
+        .survey-status-badge.status-Active {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success-color);
+        }
+
+
+
+
+        .survey-status-badge.status-Inactive {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger-color);
+        }
+
+
+
+
+        .survey-status-badge.status-Draft {
+            background: rgba(245, 158, 11, 0.1);
+            color: var(--warning-color);
+        }
+
+
+
+
+        .survey-status-badge.status-Unknown {
+            background: rgba(107, 114, 128, 0.1);
+            color: var(--gray-500);
+        }
+
+
+
+
+        .response-count {
+            color: var(--primary-color);
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+
+
+
+        .last-updated {
+            color: var(--gray-500);
+            font-size: 14px;
+        }
+
+
+
+
+        /* Metrics Grid */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 24px;
+            margin-bottom: 40px;
+        }
+
+
+
+
+        .metric-card {
+            background: white;
+            border-radius: 12px;
+            padding: 10px 24px;
+            border: 1px solid var(--gray-200);
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            transition: all 0.2s ease;
+        }
+
+
+
+
+        .metric-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+
+
+
+        .metric-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+
+
+
+        .metric-icon.sent {
+            /* background: rgba(59, 130, 246, 0.1); */
+            color: #000000;
+            /* border: 1px solid #e5e7eb; */
+        }
+
+
+
+
+        .metric-icon.opened {
+            /*  background: rgba(245, 158, 11, 0.1); */
+            /* border: 1px solid #e5e7eb;*/
+            color: var(--warning-color);
+        }
+
+
+
+
+        .metric-icon.completed {
+            /*  background: rgba(16, 185, 129, 0.1); */
+            /* border: 1px solid #e5e7eb;*/
+            color: var(--success-color);
+        }
+
+
+
+
+        .metric-icon.responses {
+            /*   background: rgba(99, 102, 241, 0.1); */
+            /* border: 1px solid #e5e7eb;*/
+            color: var(--primary-color);
+        }
+
+
+
+
+        .metric-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--gray-900);
+            line-height: 1;
+            margin-bottom: 4px;
+        }
+
+
+
+
+        .metric-label {
+            font-size: 14px;
+            color: var(--gray-600);
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+
+
+
+        .metric-trend {
+            font-size: 12px;
+            color: var(--gray-500);
+        }
+
+
+
+
+        /* Insights Summary */
+        .insights-summary {
+            margin-bottom: 40px;
+        }
+
+
+
+
+        .insights-summary h2 {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--gray-900);
+            margin-bottom: 20px;
+        }
+
+
+
+
+        .insights-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+
+
+
+        .insight-card {
+            background: white;
+            border-radius: 12px;
+            padding: 10px 20px;
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--gray-200);
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+
+
+
+        .insight-icon {
+            font-size: 24px;
+        }
+
+
+
+
+        .insight-content h4 {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--gray-900);
+            margin-bottom: 4px;
+        }
+
+
+
+
+        .insight-content p {
+            font-size: 14px;
+            color: var(--gray-600);
+            margin: 0;
+        }
+
+
+
+
+        /* Questions Section */
+        .questions-section {
+            margin-bottom: 40px;
+        }
+
+
+
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 32px;
+        }
+
+
+
+
+        .section-header h2 {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--gray-900);
+        }
+
+
+
+
+        .view-toggle {
+            display: flex;
+            background: var(--gray-100);
+            border-radius: 8px;
+            padding: 4px;
+        }
+
+
+
+
+        .toggle-btn {
+            background: transparent;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 14px;
+            color: var(--gray-600);
+        }
+
+
+
+
+        .toggle-btn.active,
+        .toggle-btn:hover {
+            background: white;
+            color: var(--gray-900);
+            box-shadow: var(--shadow-sm);
+        }
+
+
+
+
+        .question-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px 32px;
+            border: 1px solid var(--gray-200);
+            margin-bottom: 24px;
+            transition: all 0.2s ease;
+        }
+
+
+
+
+        .question-card:hover {
+            box-shadow: var(--shadow-md);
+        }
+
+
+
+
+        .question-header {
+            display: flex;
+            align-items: flex-start;
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+
+
+
+
+        .question-number {
+            background: #040710;
+            color: white;
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+
+
+
+
+        .question-content {
+            flex: 1;
+        }
+
+
+
+
+        .question-content h3 {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--gray-900);
+            line-height: 1.4;
+            margin: 0 0 8px 0;
+        }
+
+
+
+
+        .question-type {
+            font-size: 12px;
+            color: var(--gray-500);
+            background: var(--gray-100);
+            padding: 4px 8px;
+            border-radius: 12px;
+            display: inline-block;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+
+
+
+        .question-stats {
+            background: var(--gray-50);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 24px;
+        }
+
+
+
+
+        .stat-summary {
+            display: flex;
+            gap: 32px;
+            flex-wrap: wrap;
+        }
+
+
+
+
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+
+
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--gray-500);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+
+
+
+        .stat-value {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--gray-900);
+        }
+
+
+
+
+        .answer-bars {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+
+
+
+        .answer-option {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+
+
+
+        .option-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+
+
+
+        .option-label {
+            font-weight: 500;
+            color: var(--gray-700);
+            font-size: 14px;
+        }
+
+
+
+
+        .option-stats {
+            font-size: 14px;
+            color: var(--gray-500);
+            font-weight: 500;
+        }
+
+
+
+
+        .progress-bar-modern {
+            height: 10px;
+            background: var(--gray-200);
+            border-radius: 5px;
+            overflow: hidden;
+        }
+
+
+
+
+        .progress-fill-modern {
+            height: 100%;
+            border-radius: 5px;
+            transition: width 0.5s ease;
+        }
+
+
+
+
+        .progress-fill-modern.yes {
+            background: var(--success-color);
+        }
+
+
+        .progress-fill-modern.no {
+            background: var(--danger-color);
+        }
+
+
+        .progress-fill-modern.multiple-choice {
+            background: var(--primary-color);
+        }
+
+
+        /* Text Response Styling */
+        .text-responses-section {
+            margin-top: 16px;
+        }
+
+
+        .text-responses-section h4 {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--gray-700);
+            margin-bottom: 16px;
+        }
+
+
+        .text-response-item {
+            background: var(--gray-50);
+            border: 1px solid var(--gray-200);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+
+
+        .text-response-content {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+
+
+        .text-response-text {
+            font-size: 14px;
+            color: var(--gray-800);
+            line-height: 1.5;
+            font-style: italic;
+            flex: 1;
+        }
+
+
+        /* Multiple Choice Response Styling */
+        .answer-option .option-label {
+            font-weight: 600;
+            color: var(--gray-800);
+        }
+
+
+        .answer-option .option-stats {
+            color: var(--gray-600);
+            font-size: 13px;
+        }
+
+
+        /* Question Type Badge Styling */
+        .question-type-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+
+        .question-type-badge.type-yesno {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success-color);
+        }
+
+
+        .question-type-badge.type-text {
+            background: rgba(59, 130, 246, 0.1);
+            color: var(--info-color);
+        }
+
+
+        .question-type-badge.type-likert {
+            background: rgba(245, 158, 11, 0.1);
+            color: var(--warning-color);
+        }
+
+
+        .question-type-badge.type-rating {
+            background: rgba(139, 92, 246, 0.1);
+            color: #8b5cf6;
+        }
+
+
+        .question-type-badge.type-multiple {
+            background: rgba(99, 102, 241, 0.1);
+            color: var(--primary-color);
+        }
+
+
+        .no-responses-note {
+            border-radius: 12px;
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+
+
+
+        .no-responses-note p {
+            color: var(--gray-600);
+            font-size: 14px;
+            margin: 0;
+        }
+
+
+
+
+        /* Responses Section */
+        .responses-section {
+            margin-top: 40px;
+        }
+
+
+
+
+        .responses-section .section-header {
+            margin-bottom: 24px;
+        }
+
+
+
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 32px;
+        }
+
+
+
+
+        .section-header h2 {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--gray-900);
+        }
+
+
+
+
+        .table-actions {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+
+
+
+        .search-section {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+
+
+
+        .search-input {
+            padding: 10px 16px;
+            border: 1px solid var(--gray-300);
+            border-radius: 8px;
+            font-size: 14px;
+            width: 250px;
+            outline: none;
+            transition: all 0.2s ease;
+        }
+
+
+
+
+        .search-input:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        }
+
+        .btn-download {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 16px;
+            background: var(--success-color);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+
+        .btn-download:hover {
+            background: #059669;
+            transform: translateY(-1px);
+        }
+
+        .btn-download svg {
+            width: 16px;
+            height: 16px;
+        }
+
+
+
+
+        .table-container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--gray-200);
+            overflow: hidden;
+        }
+
+
+
+
+        .modern-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+
+
+
+        .modern-table th {
+            background: var(--gray-50);
+            color: var(--gray-700);
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 16px 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--gray-200);
+            white-space: nowrap;
+        }
+
+
+
+
+        .modern-table td {
+            padding: 16px 12px;
+            border-bottom: 1px solid var(--gray-100);
+            font-size: 14px;
+            color: var(--gray-700);
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+
+
+
+        .response-cell {
+            max-width: 300px;
+            white-space: normal;
+            word-wrap: break-word;
+            line-height: 1.4;
+        }
+
+        .course-name-cell {
+            max-width: 200px;
+            font-weight: 500;
+            color: var(--gray-800);
+        }
+
+        /* Course Chart Section */
+        .course-chart-section {
+            margin-bottom: 40px;
+        }
+
+        .chart-container {
+            background: white;
+            border-radius: 12px;
+            padding: 24px 24px 40px 24px;
+            border: 1px solid var(--gray-200);
+            box-shadow: var(--shadow-sm);
+            margin-top: 24px;
+        }
+
+        /* Course Analytics Section */
+        .course-analytics-section {
+            margin-bottom: 40px;
+        }
+
+        .section-subtitle {
+            color: var(--gray-600);
+            font-size: 14px;
+            margin: 0;
+            font-weight: 400;
+        }
+
+        .course-cards-grid {
+            display: flex;
+            gap: 20px;
+            margin-top: 24px;
+            overflow-x: auto;
+            padding-bottom: 10px;
+            scrollbar-width: thin;
+            scrollbar-color: var(--gray-300) transparent;
+        }
+
+        .course-cards-grid::-webkit-scrollbar {
+            height: 6px;
+        }
+
+        .course-cards-grid::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .course-cards-grid::-webkit-scrollbar-thumb {
+            background-color: var(--gray-300);
+            border-radius: 3px;
+        }
+
+        .course-cards-grid::-webkit-scrollbar-thumb:hover {
+            background-color: var(--gray-400);
+        }
+
+        .course-card {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            border: 1px solid var(--gray-200);
+            box-shadow: var(--shadow-sm);
+            transition: all 0.2s ease;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+            flex: 0 0 auto;
+            min-width: 280px;
+            width: auto;
+        }
+
+        .course-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+            border-color: var(--primary-color);
+        }
+
+        .course-card.active {
+            border-color: var(--primary-color);
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(99, 102, 241, 0.02) 100%);
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.15);
+        }
+
+        .course-card.active .course-name {
+            color: var(--primary-color);
+        }
+
+        .course-card.active .metric-value {
+            color: var(--primary-color);
+        }
+
+        .course-card-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            min-height: 32px;
+        }
+
+        .course-title-section {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 1;
+            min-height: 32px;
+        }
+
+        .course-icon {
+            color: var(--primary-color);
+            opacity: 0.8;
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+        }
+
+        .course-name {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--gray-900);
+            margin: 0;
+            line-height: 1.2;
+        }
+
+        .course-status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success-color);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .course-metrics-horizontal {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+        }
+
+        .metric-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            padding: 8px;
+        }
+
+        .metric-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #000000;
+            line-height: 1;
+            margin-bottom: 4px;
+        }
+
+        .metric-label {
+            font-size: 12px;
+            color: #6b7280;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            .course-card {
+                min-width: 260px;
+                padding: 20px;
+            }
+            
+            .course-metrics-horizontal {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 12px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .course-card {
+                min-width: 240px;
+                padding: 16px;
+            }
+            
+            .course-metrics-horizontal {
+                grid-template-columns: 1fr;
+                gap: 12px;
+            }
+            
+            .course-name {
+                font-size: 16px;
+            }
+        }
+
+        /* Pagination Styles */
+        .pagination-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 20px 0;
+            margin-top: 20px;
+            border-top: 1px solid var(--gray-200);
+        }
+
+        .pagination-info {
+            color: var(--gray-600);
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .pagination-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .pagination-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 16px;
+            border: 1px solid var(--gray-300);
+            background: white;
+            color: var(--gray-700);
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .pagination-btn:hover:not(:disabled) {
+            background: var(--gray-50);
+            border-color: var(--gray-400);
+        }
+
+        .pagination-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .pagination-pages {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .page-number {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border: 1px solid var(--gray-300);
+            background: white;
+            color: var(--gray-700);
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .page-number:hover {
+            background: var(--gray-50);
+            border-color: var(--gray-400);
+        }
+
+        .page-number.active {
+            background: var(--primary-color);
+            color: white;
+            border-color: var(--primary-color);
+        }
+
+        .page-number.active:hover {
+            background: var(--primary-dark);
+        }
+
+        .page-ellipsis {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            color: var(--gray-500);
+            font-size: 14px;
+        }
+
+        /* Responsive pagination */
+        @media (max-width: 768px) {
+            .pagination-container {
+                flex-direction: column;
+                gap: 16px;
+                align-items: stretch;
+            }
+
+            .pagination-controls {
+                justify-content: center;
+            }
+
+            .pagination-pages {
+                gap: 2px;
+            }
+
+            .page-number {
+                width: 32px;
+                height: 32px;
+                font-size: 13px;
+            }
+        }
+
+
+
+
+        .type-badge {
+            background: var(--gray-100);
+            color: var(--gray-700);
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+
+
+
+        .modern-table tbody tr:hover {
+            background: var(--gray-50);
+        }
+
+
+
+
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: capitalize;
+        }
+
+
+
+
+        .status-Active {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success-color);
+        }
+
+
+
+
+        .status-Completed {
+            background: rgba(59, 130, 246, 0.1);
+            color: var(--info-color);
+        }
+
+
+
+
+        .status-Draft {
+            background: rgba(245, 158, 11, 0.1);
+            color: var(--warning-color);
+        }
+
+
+
+
+        /* No Responses State */
+        .no-responses {
+            background: white;
+            border-radius: 16px;
+            padding: 60px 40px;
+            text-align: center;
+            border: 1px solid var(--gray-200);
+        }
+
+
+
+
+        .empty-state svg {
+            color: var(--gray-400);
+            margin-bottom: 24px;
+        }
+
+
+
+
+        .empty-state h3 {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--gray-900);
+            margin-bottom: 12px;
+        }
+
+
+
+
+        .empty-state p {
+            color: var(--gray-600);
+            max-width: 400px;
+            margin: 0 auto;
+        }
+
+
+
+
+        /* Responsive Design */
+        @media (max-width: 1024px) {
+            .main-content {
+                padding: 24px;
+            }
+
+
+            .survey-title-row {
+                flex-direction: column;
+                gap: 16px;
+                align-items: flex-start;
+            }
+
+
+            .metrics-grid {
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            }
+
+
+            .insights-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+
+
+
+        @media (max-width: 768px) {
+            .dashboard-layout {
+                flex-direction: column;
+            }
+
+
+            .sidebar {
+                width: 100%;
+                flex-direction: row;
+                padding: 16px 0;
+                overflow-x: auto;
+            }
+
+
+            .sidebar-logo {
+                padding: 0 16px;
+                margin-bottom: 0;
+            }
+
+
+            .sidebar-nav {
+                display: flex;
+                gap: 8px;
+                padding: 0 16px;
+            }
+
+
+            .nav-link {
+                white-space: nowrap;
+                padding: 8px 16px;
+                border-radius: 8px;
+                border-right: none;
+            }
+
+
+            .sidebar-footer {
+                padding: 0 16px;
+                margin-left: auto;
+            }
+
+
+            .main-content {
+                padding: 16px;
+            }
+
+
+            .survey-title-section h1 {
+                font-size: 24px;
+            }
+
+
+            .modern-table {
+                font-size: 12px;
+            }
+
+
+            .modern-table th,
+            .modern-table td {
+                padding: 12px 8px;
+            }
+
+
+            .table-actions {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 12px;
+            }
+
+
+            .search-input {
+                width: 100%;
+            }
+        }
+
+
+
+
+        /* Pagination Styles */
+        .pagination-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 0;
+            border-top: 1px solid var(--gray-200);
+            margin-top: 20px;
+        }
+
+
+
+
+        .pagination-info {
+            font-size: 14px;
+            color: var(--gray-600);
+            font-weight: 500;
+        }
+
+
+
+
+        .pagination-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+
+
+
+        .pagination-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 12px;
+            border: 1px solid var(--gray-300);
+            border-radius: 6px;
+            background: white;
+            color: var(--gray-700);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            min-width: 40px;
+            justify-content: center;
+        }
+
+
+
+
+        .pagination-btn:hover {
+            background: var(--gray-50);
+            border-color: var(--gray-400);
+            color: var(--gray-900);
+            text-decoration: none;
+        }
+
+
+
+
+        .pagination-btn.active {
+            background: var(--primary-color);
+            color: white;
+            border-color: var(--primary-color);
+        }
+
+
+
+
+        .pagination-btn.active:hover {
+            background: var(--primary-dark);
+            border-color: var(--primary-dark);
+        }
+
+
+
+
+        .pagination-btn svg {
+            width: 16px;
+            height: 16px;
+        }
+
+
+
+
+        @media (max-width: 768px) {
+            .pagination-container {
+                flex-direction: column;
+                gap: 16px;
+                align-items: stretch;
+            }
+
+
+            .pagination-controls {
+                justify-content: center;
+                flex-wrap: wrap;
+            }
+
+
+            .pagination-btn {
+                padding: 6px 10px;
+                font-size: 13px;
+            }
+        }
+
+
+
+
+        /* Reports Section Styles */
+        .activity-filters {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 24px;
+        }
+
+
+
+
+        .activity-filter {
+            padding: 8px 16px;
+            border: 1px solid var(--gray-300);
+            border-radius: 6px;
+            background: white;
+            color: var(--gray-700);
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+
+
+
+        .activity-filter:hover {
+            background: var(--gray-50);
+            border-color: var(--gray-400);
+        }
+
+
+
+
+        .activity-filter.active {
+            background: var(--primary-color);
+            color: white;
+            border-color: var(--primary-color);
+        }
+
+
+
+
+        .activity-metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 32px;
+        }
+
+
+
+
+        .activity-metric-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid var(--gray-200);
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+
+
+
+        .metric-icon-small {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+
+
+
+
+        .metric-details {
+            flex: 1;
+        }
+
+
+
+
+        .metric-number {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--gray-900);
+            line-height: 1;
+            margin-bottom: 4px;
+        }
+
+
+
+
+        .metric-label {
+            font-size: 14px;
+            color: var(--gray-600);
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+
+
+
+        .metric-trend {
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+
+
+
+        .metric-trend.positive {
+            color: var(--success-color);
+        }
+
+
+
+
+        .metric-trend.neutral {
+            color: var(--gray-500);
+        }
+
+
+
+
+        .activity-chart-container {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            border: 1px solid var(--gray-200);
+        }
+
+
+
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+
+
+
+        .chart-header h3 {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--gray-900);
+            margin: 0;
+        }
+
+
+
+
+        .chart-legend {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+
+
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            color: var(--gray-600);
+        }
+
+
+
+
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+        }
+
+
+
+
+        .legend-color.responses {
+            background: var(--primary-color);
+        }
+
+
+
+
+        .chart-wrapper {
+            position: relative;
+            height: 400px;
+            width: 100%;
+        }
+
+
+
+
+        #reportsChart {
+            width: 100% !important;
+            height: 100% !important;
+        }
+    </style>
+
+
+
+
+    <script>
+        // Modal styles
+        const modalStyles = document.createElement('style');
+        modalStyles.textContent = `
+          .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 2000; }
+          .modal-overlay.show { display: flex; }
+          .modal-dialog { background: #fff; width: min(900px, 92vw); max-height: 85vh; border-radius: 12px; box-shadow: var(--shadow-xl); display: flex; flex-direction: column; }
+          .modal-header { padding: 16px 20px; border-bottom: 1px solid var(--gray-200); display: flex; align-items: center; justify-content: space-between; }
+          .modal-header h3 { margin: 0; font-size: 18px; font-weight: 600; }
+          .modal-close { background: transparent; border: none; font-size: 22px; cursor: pointer; line-height: 1; }
+          .modal-toolbar { padding: 12px 20px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--gray-200); }
+          .modal-counter { color: var(--gray-600); font-size: 13px; }
+          .modal-list { padding: 16px 20px; overflow: auto; flex: 1; display: grid; gap: 12px; }
+          .modal-footer { padding: 12px 20px; border-top: 1px solid var(--gray-200); display: flex; gap: 8px; justify-content: flex-end; }
+        `;
+        document.head.appendChild(modalStyles);
+        // Modal for viewing all text responses
+        function openTextResponsesModal(questionId, totalCount) {
+            const rawEl = document.getElementById('text-raw-' + questionId);
+            const raw = rawEl ? rawEl.textContent : '';
+            const responses = raw ? raw.split('|').filter(r => r && r.trim()) : [];
+
+
+            ensureModal();
+            const modal = document.getElementById('textResponsesModal');
+            const list = document.getElementById('textModalList');
+            const search = document.getElementById('textModalSearch');
+            const counter = document.getElementById('textModalCounter');
+
+
+            // state
+            modal.dataset.questionId = questionId;
+            modal.dataset.loaded = '0';
+            modal.dataset.pageSize = '20';
+            modal.dataset.all = JSON.stringify(responses);
+
+
+            // reset
+            list.innerHTML = '';
+            search.value = '';
+            counter.textContent = totalCount + ' responses';
+
+
+            // initial render
+            loadMoreTextModalItems();
+
+
+            modal.classList.add('show');
+            document.body.style.overflow = 'hidden';
+        }
+
+
+        function closeTextResponsesModal() {
+            const modal = document.getElementById('textResponsesModal');
+            if (!modal) return;
+            modal.classList.remove('show');
+            document.body.style.overflow = '';
+        }
+
+
+        function ensureModal() {
+            if (document.getElementById('textResponsesModal')) return;
+            const modal = document.createElement('div');
+            modal.id = 'textResponsesModal';
+            modal.className = 'modal-overlay';
+            modal.innerHTML = `
+                <div class="modal-dialog">
+                    <div class="modal-header">
+                        <h3>All Text Responses</h3>
+                        <button class="modal-close" onclick="closeTextResponsesModal()">×</button>
+                    </div>
+                    <div class="modal-toolbar">
+                        <input id="textModalSearch" type="text" class="search-input" placeholder="Search responses..." oninput="filterTextModalItems()" />
+                        <span id="textModalCounter" class="modal-counter"></span>
+                    </div>
+                    <div id="textModalList" class="modal-list"></div>
+                    <div class="modal-footer">
+                        <button class="btn-secondary" onclick="loadMoreTextModalItems()">Load more</button>
+                        <button class="btn-edit" onclick="closeTextResponsesModal()">Close</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(modal);
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) closeTextResponsesModal();
+            });
+        }
+
+
+        function filterTextModalItems() {
+            const modal = document.getElementById('textResponsesModal');
+            if (!modal) return;
+            const search = document.getElementById('textModalSearch').value.toLowerCase();
+            const all = JSON.parse(modal.dataset.all || '[]');
+            const list = document.getElementById('textModalList');
+            const counter = document.getElementById('textModalCounter');
+
+
+            const filtered = search ? all.filter(t => (t || '').toLowerCase().includes(search)) : all;
+            counter.textContent = filtered.length + ' responses';
+            list.innerHTML = '';
+
+
+            // reset loaded state for filtered set
+            modal.dataset.loaded = '0';
+            modal.dataset.filtered = JSON.stringify(filtered);
+            loadMoreTextModalItems();
+        }
+
+
+        function loadMoreTextModalItems() {
+            const modal = document.getElementById('textResponsesModal');
+            if (!modal) return;
+            const pageSize = parseInt(modal.dataset.pageSize || '20', 10);
+            const already = parseInt(modal.dataset.loaded || '0', 10);
+            const list = document.getElementById('textModalList');
+
+
+            const filtered = modal.dataset.filtered ? JSON.parse(modal.dataset.filtered) : JSON.parse(modal.dataset.all || '[]');
+            const next = filtered.slice(already, already + pageSize);
+
+
+            next.forEach(txt => {
+                if (!txt || !txt.trim()) return;
+                const item = document.createElement('div');
+                item.className = 'text-response-item';
+                item.innerHTML = `<div class="text-response-content"><span class="text-response-text">"${escapeHtml(txt)}"</span></div>`;
+                list.appendChild(item);
+            });
+
+
+            modal.dataset.loaded = String(already + next.length);
+        }
+
+
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+        function confirmDelete() {
+            var surveyName = '%%=v(@surveyName)=%%';
+            return confirm('Are you sure you want to delete "' + surveyName + '"? This action cannot be undone and will permanently remove all survey data, questions, and responses.');
+        }
+
+
+
+
+        function toggleDropdown() {
+            var dropdown = document.getElementById('dropdownMenu');
+            dropdown.classList.toggle('show');
+        }
+
+
+
+
+        // Close dropdown when clicking outside
+        window.onclick = function (event) {
+            var dropdown = document.getElementById('dropdownMenu');
+            var dropdownButton = event.target.closest('.btn-dropdown');
+
+
+            if (!dropdownButton) {
+                if (dropdown.classList.contains('show')) {
+                    dropdown.classList.remove('show');
+                }
+            }
+        }
+
+
+
+
+        // Navigation Functions
+        function showSurveyAnalytics() {
+            // Hide all sections first
+            hideAllSections();
+
+
+            // Show survey analytics section (comprehensive view)
+            document.getElementById('surveyAnalyticsSection').style.display = 'block';
+
+
+            // Update breadcrumb
+            updateBreadcrumb('Survey Analytics');
+
+
+            // Update navigation active state
+            updateNavigationActive('showSurveyAnalytics');
+
+
+            // Scroll to top
+            window.scrollTo(0, 0);
+        }
+
+
+
+
+        function showReports() {
+            // Hide all sections first
+            hideAllSections();
+
+
+            // Show reports section
+            document.getElementById('reportsSection').style.display = 'block';
+
+
+            // Update breadcrumb
+            updateBreadcrumb('Reports');
+
+
+            // Update navigation active state
+            updateNavigationActive('showReports');
+
+
+            // Initialize reports chart with a small delay to ensure Chart.js is loaded
+            setTimeout(() => {
+                initializeReportsChart();
+            }, 100);
+
+
+            // Scroll to top
+            window.scrollTo(0, 0);
+        }
+
+
+
+
+        function showResponses() {
+            // Hide all sections first
+            hideAllSections();
+
+
+            // Show responses section
+            document.getElementById('responsesSection').style.display = 'block';
+
+
+            // Update breadcrumb
+            updateBreadcrumb('Responses');
+
+
+            // Update navigation active state
+            updateNavigationActive('showResponses');
+
+            // Initialize pagination after a short delay to ensure DOM is ready
+            setTimeout(() => {
+                initializePagination();
+                initializeCourseChart();
+            }, 100);
+
+            // Scroll to top
+            window.scrollTo(0, 0);
+        }
+
+
+
+
+        // Hide all sections helper function
+        function hideAllSections() {
+            document.getElementById('surveyAnalyticsSection').style.display = 'none';
+            document.getElementById('reportsSection').style.display = 'none';
+            document.getElementById('responsesSection').style.display = 'none';
+        }
+
+
+
+
+        // Update breadcrumb
+        function updateBreadcrumb(currentPage) {
+            var breadcrumbCurrent = document.querySelector('.breadcrumb-current');
+            if (breadcrumbCurrent) {
+                breadcrumbCurrent.textContent = currentPage;
+            }
+        }
+
+
+
+
+        // Update navigation active state
+        function updateNavigationActive(functionName) {
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.remove('active');
+            });
+
+
+            // Find the link with the matching onclick function
+            var activeLink = document.querySelector('.nav-link[onclick*="' + functionName + '"]');
+            if (activeLink) {
+                activeLink.classList.add('active');
+            }
+        }
+
+
+
+
+        // Initialize reports chart
+        function initializeReportsChart() {
+            console.log('Initializing reports chart...');
+
+
+            const canvas = document.getElementById('reportsChart');
+            if (!canvas) {
+                console.error('Canvas element not found');
+                return;
+            }
+
+
+            // Check if Chart.js is loaded and available
+            if (typeof Chart === 'undefined' || !Chart.prototype || !Chart.prototype.constructor) {
+                console.error('Chart.js not properly loaded');
+                document.getElementById('chartFallback').style.display = 'block';
+                canvas.style.display = 'none';
+                return;
+            }
+
+
+            // Get chart data from AMPscript variables
+            const surveyId = '%%=v(@surveyId)=%%';
+            const totalResponses = parseInt('%%=v(@count)=%%', 10);
+            const completedCount = parseInt('%%=v(@completedCount)=%%', 10);
+            const openedCount = parseInt('%%=v(@openedCount)=%%', 10);
+
+
+            console.log('Survey data:', { surveyId, totalResponses, completedCount, openedCount });
+
+
+            // Generate chart data from response timestamps
+            const chartData = generateChartData();
+            console.log('Generated chart data:', chartData);
+
+
+            // Create Chart.js chart
+            createChartJSChart(canvas, chartData);
+        }
+
+
+
+
+        // Generate chart data from actual response timestamps
+        function generateChartData() {
+            console.log('Generating chart data from real responses...');
+
+
+            // Get response data from AMPscript
+            const totalResponsesElement = document.getElementById('totalResponses');
+            const completedResponsesElement = document.getElementById('completedResponses');
+            const responseDatesElement = document.getElementById('responseDates');
+
+
+            const totalResponses = totalResponsesElement ? parseInt(totalResponsesElement.textContent) || 0 : 0;
+            const completedResponses = completedResponsesElement ? parseInt(completedResponsesElement.textContent) || 0 : 0;
+            const responseDates = responseDatesElement ? responseDatesElement.textContent : '';
+
+
+            console.log('Response data:', { totalResponses, completedResponses, responseDates });
+
+
+            // Parse actual response dates
+            const actualDates = responseDates ? responseDates.split('|').filter(date => date.trim()) : [];
+            console.log('Actual response dates:', actualDates);
+
+
+            // Generate chart data based on actual response dates
+            const now = new Date();
+            const labels = [];
+            const data = [];
+
+
+            // Generate last 6 months of data
+            for (let i = 5; i >= 0; i--) {
+                const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                const monthLabel = date.toLocaleDateString('en-US', { month: 'short' });
+                labels.push(monthLabel);
+
+
+                // Count actual responses in this month
+                let monthCount = 0;
+                actualDates.forEach(responseDate => {
+                    try {
+                        const responseDateTime = new Date(responseDate);
+                        if (responseDateTime.getMonth() === date.getMonth() &&
+                            responseDateTime.getFullYear() === date.getFullYear()) {
+                            monthCount++;
+                        }
+                    } catch (e) {
+                        console.warn('Invalid date format:', responseDate);
+                    }
+                });
+
+
+                data.push(monthCount);
+            }
+
+
+            const result = { labels, data };
+            console.log('Real chart data:', result);
+            return result;
+        }
+
+
+
+
+        // Create Chart.js chart
+        function createChartJSChart(canvas, chartData) {
+            console.log('Creating Chart.js chart with data:', chartData);
+
+
+            const { labels, data } = chartData;
+
+
+            // Validate data
+            if (!labels || !data || labels.length === 0 || data.length === 0) {
+                console.error('Invalid chart data:', { labels, data });
+                return;
+            }
+
+
+            // Check if Chart.js is available
+            if (typeof Chart === 'undefined') {
+                console.error('Chart.js is not available');
+                document.getElementById('chartFallback').style.display = 'block';
+                canvas.style.display = 'none';
+                return;
+            }
+
+
+            // Destroy existing chart if it exists and has destroy method
+            if (window.reportsChart && typeof window.reportsChart.destroy === 'function') {
+                try {
+                    window.reportsChart.destroy();
+                } catch (error) {
+                    console.warn('Error destroying existing chart:', error);
+                }
+            }
+
+
+            try {
+                // Create new Chart.js chart
+                window.reportsChart = new Chart(canvas, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Responses',
+                            data: data,
+                            borderColor: '#6366f1',
+                            backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                            borderWidth: 3,
+                            pointBackgroundColor: '#6366f1',
+                            pointBorderColor: '#ffffff',
+                            pointBorderWidth: 2,
+                            pointRadius: 6,
+                            pointHoverRadius: 8,
+                            tension: 0.4,
+                            fill: true
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: false
+                            },
+                            tooltip: {
+                                backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                                titleColor: '#ffffff',
+                                bodyColor: '#ffffff',
+                                borderColor: '#6366f1',
+                                borderWidth: 1,
+                                cornerRadius: 8,
+                                displayColors: false,
+                                callbacks: {
+                                    title: function (context) {
+                                        return context[0].label;
+                                    },
+                                    label: function (context) {
+                                        return context.parsed.y + ' responses';
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                grid: {
+                                    color: '#e5e7eb',
+                                    drawBorder: false
+                                },
+                                ticks: {
+                                    color: '#6b7280',
+                                    font: {
+                                        size: 12,
+                                        weight: '500'
+                                    }
+                                }
+                            },
+                            y: {
+                                beginAtZero: true,
+                                grid: {
+                                    color: '#e5e7eb',
+                                    drawBorder: false
+                                },
+                                ticks: {
+                                    color: '#6b7280',
+                                    font: {
+                                        size: 12,
+                                        weight: '500'
+                                    },
+                                    callback: function (value) {
+                                        return value + ' responses';
+                                    }
+                                }
+                            }
+                        },
+                        interaction: {
+                            intersect: false,
+                            mode: 'index'
+                        },
+                        elements: {
+                            point: {
+                                hoverBackgroundColor: '#4f46e5'
+                            }
+                        }
+                    }
+                });
+
+
+                console.log('Chart created successfully');
+            } catch (error) {
+                console.error('Error creating chart:', error);
+                // Fallback to simple chart if Chart.js fails
+                createFallbackChart(canvas, chartData);
+            }
+        }
+
+
+
+
+        // Fallback chart creation without Chart.js
+        function createFallbackChart(canvas, chartData) {
+            console.log('Creating fallback chart...');
+
+
+            const { labels, data } = chartData;
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+
+
+            // Clear canvas
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, width, height);
+
+
+            // Draw simple bar chart
+            const barWidth = width / labels.length * 0.8;
+            const barSpacing = width / labels.length * 0.2;
+            const maxValue = Math.max(...data, 1);
+
+
+            // Draw bars
+            labels.forEach((label, index) => {
+                const barHeight = (data[index] / maxValue) * (height - 60);
+                const x = barSpacing + index * (barWidth + barSpacing);
+                const y = height - 40 - barHeight;
+
+
+                // Draw bar
+                ctx.fillStyle = '#6366f1';
+                ctx.fillRect(x, y, barWidth, barHeight);
+
+
+                // Draw label
+                ctx.fillStyle = '#6b7280';
+                ctx.font = '12px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(label, x + barWidth / 2, height - 10);
+
+
+                // Draw value
+                ctx.fillText(data[index], x + barWidth / 2, y - 5);
+            });
+
+
+            // Draw title
+            ctx.fillStyle = '#111827';
+            ctx.font = 'bold 16px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('Survey Response Trends', width / 2, 20);
+        }
+
+
+
+
+        // Filter activity function for reports
+        function filterActivity(period) {
+            // Update active filter button
+            document.querySelectorAll('.activity-filter').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+
+            // Update chart based on selected period
+            updateChartForPeriod(period);
+        }
+
+
+
+
+        // Update chart based on selected time period
+        function updateChartForPeriod(period) {
+            const canvas = document.getElementById('reportsChart');
+            if (!canvas) return;
+
+
+            // Generate data for the selected period
+            let chartData;
+            switch (period) {
+                case '30days':
+                    chartData = generateChartDataForPeriod(30);
+                    break;
+                case '3months':
+                    chartData = generateChartDataForPeriod(90);
+                    break;
+                case '12months':
+                    chartData = generateChartDataForPeriod(365); // Generate 12 months of data
+                    break;
+                default:
+                    chartData = generateChartData(); // Use existing 6-month data
+                    break;
+            }
+
+
+            // Try Chart.js first, fallback to simple chart
+            if (typeof Chart !== 'undefined' && Chart.prototype && Chart.prototype.constructor) {
+                createChartJSChart(canvas, chartData);
+            } else {
+                createFallbackChart(canvas, chartData);
+            }
+        }
+
+
+
+
+        // Generate chart data for specific period using real response dates
+        function generateChartDataForPeriod(days) {
+            console.log('Generating chart data for period:', days, 'days');
+
+
+            // Get actual response dates from AMPscript
+            const responseDatesElement = document.getElementById('responseDates');
+            const responseDates = responseDatesElement ? responseDatesElement.textContent : '';
+            const actualDates = responseDates ? responseDates.split('|').filter(date => date.trim()) : [];
+
+
+            console.log('Actual response dates for period:', actualDates);
+
+
+            const now = new Date();
+            const labels = [];
+            const data = [];
+
+
+            // Generate data points based on period
+            let dataPoints;
+            if (days <= 30) {
+                dataPoints = 7; // Weekly for 30 days
+            } else if (days <= 90) {
+                dataPoints = 12; // Daily for 90 days
+            } else if (days <= 365) {
+                dataPoints = 12; // Monthly for 12 months
+            } else {
+                dataPoints = 6; // Default
+            }
+
+
+            for (let i = dataPoints - 1; i >= 0; i--) {
+                const date = new Date(now.getTime() - (i * (days / dataPoints) * 24 * 60 * 60 * 1000));
+
+
+                // Format labels based on period
+                let label;
+                if (days <= 30) {
+                    label = date.toLocaleDateString('en-US', { weekday: 'short' });
+                } else if (days <= 90) {
+                    label = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                } else {
+                    label = date.toLocaleDateString('en-US', { month: 'short' });
+                }
+                labels.push(label);
+
+
+                // Count actual responses in this time period
+                let periodCount = 0;
+                actualDates.forEach(responseDate => {
+                    try {
+                        const responseDateTime = new Date(responseDate);
+                        const timeDiff = now.getTime() - responseDateTime.getTime();
+                        const daysDiff = timeDiff / (1000 * 60 * 60 * 24);
+
+
+                        // Check if response falls within this period
+                        if (daysDiff <= days) {
+                            // For weekly view (30 days), group by week
+                            if (days <= 30) {
+                                const weekStart = new Date(date.getTime() - (7 * 24 * 60 * 60 * 1000));
+                                const weekEnd = date;
+                                if (responseDateTime >= weekStart && responseDateTime <= weekEnd) {
+                                    periodCount++;
+                                }
+                            }
+                            // For monthly view (365 days), group by month
+                            else if (days <= 365) {
+                                if (responseDateTime.getMonth() === date.getMonth() &&
+                                    responseDateTime.getFullYear() === date.getFullYear()) {
+                                    periodCount++;
+                                }
+                            }
+                            // For daily view (90 days), group by day
+                            else {
+                                const dayStart = new Date(date.getTime() - (24 * 60 * 60 * 1000));
+                                const dayEnd = date;
+                                if (responseDateTime >= dayStart && responseDateTime <= dayEnd) {
+                                    periodCount++;
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('Invalid date format:', responseDate);
+                    }
+                });
+
+
+                data.push(periodCount);
+            }
+
+
+            const result = { labels, data };
+            console.log('Real period chart data:', result);
+            return result;
+        }
+
+
+
+
+        // Course filtering functionality
+        function filterByCourse(courseName) {
+            const table = document.querySelector('.modern-table tbody');
+            const rows = Array.from(table.querySelectorAll('tr'));
+            const searchInput = document.querySelector('.search-input');
+            const clearFilterBtn = document.getElementById('clearFilterBtn');
+            
+            // Clear any existing search
+            if (searchInput) {
+                searchInput.value = '';
+            }
+            
+            // Store the current filter for pagination
+            window.currentCourseFilter = courseName;
+            
+            // Filter rows based on course name and update total rows
+            const visibleRows = rows.filter(row => {
+                const courseCell = row.querySelector('.course-name-cell');
+                if (courseCell) {
+                    const cellCourseName = courseCell.textContent.trim();
+                    return courseName === 'All' || cellCourseName === courseName;
+                }
+                return false;
+            });
+            
+            // Update total rows for pagination
+            totalRows = visibleRows.length;
+            
+            // Update active course card
+            document.querySelectorAll('.course-card').forEach(card => {
+                card.classList.remove('active');
+            });
+            
+            // Find and highlight the clicked course card
+            const clickedCard = event.currentTarget;
+            clickedCard.classList.add('active');
+            
+            // Show clear filter button
+            if (clearFilterBtn) {
+                clearFilterBtn.style.display = 'block';
+            }
+            
+            // Reset to first page and update pagination
+            currentPage = 1;
+            updatePaginationInfo();
+            updatePaginationControls();
+            showPage(1);
+            
+            // Scroll to table
+            document.querySelector('.table-container').scrollIntoView({ 
+                behavior: 'smooth', 
+                block: 'start' 
+            });
+        }
+
+        // Clear course filter
+        function clearCourseFilter() {
+            const table = document.querySelector('.modern-table tbody');
+            const rows = Array.from(table.querySelectorAll('tr'));
+            const clearFilterBtn = document.getElementById('clearFilterBtn');
+            
+            // Clear the course filter
+            window.currentCourseFilter = 'All';
+            
+            // Update total rows for pagination
+            totalRows = rows.length;
+            
+            // Remove active state from all cards
+            document.querySelectorAll('.course-card').forEach(card => {
+                card.classList.remove('active');
+            });
+            
+            // Hide clear filter button
+            if (clearFilterBtn) {
+                clearFilterBtn.style.display = 'none';
+            }
+            
+            // Reset to first page and update pagination
+            currentPage = 1;
+            updatePaginationInfo();
+            updatePaginationControls();
+            showPage(1);
+        }
+
+        // Pagination variables
+        let currentPage = 1;
+        const rowsPerPage = 20;
+        let totalRows = 0;
+        let filteredRows = [];
+        
+        // Initialize course filter
+        window.currentCourseFilter = 'All';
+
+        // CSV Export functionality
+        function downloadResponsesCSV() {
+            const table = document.querySelector('.modern-table tbody');
+            if (!table) {
+                console.error('Table not found');
+                return;
+            }
+
+            const rows = Array.from(table.querySelectorAll('tr'));
+            const searchInput = document.querySelector('.search-input');
+            const searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
+            const currentFilter = window.currentCourseFilter || 'All';
+
+            // Get visible rows based on current filters
+            const visibleRows = rows.filter(row => {
+                // Apply course filter
+                let passesCourseFilter = true;
+                if (currentFilter !== 'All') {
+                    const courseCell = row.querySelector('.course-name-cell');
+                    if (courseCell) {
+                        const cellCourseName = courseCell.textContent.trim();
+                        passesCourseFilter = cellCourseName === currentFilter;
+                    } else {
+                        passesCourseFilter = false;
+                    }
+                }
+
+                // Apply search filter
+                let passesSearchFilter = true;
+                if (searchTerm) {
+                    const text = row.textContent.toLowerCase();
+                    passesSearchFilter = text.includes(searchTerm);
+                }
+
+                return passesCourseFilter && passesSearchFilter;
+            });
+
+            if (visibleRows.length === 0) {
+                alert('No data to export');
+                return;
+            }
+
+            // Create CSV content
+            let csvContent = 'Contact,Name,Course Name,Question,Response,Question Type,Status,Last Updated\n';
+
+            visibleRows.forEach(row => {
+                const cells = row.querySelectorAll('td');
+                if (cells.length >= 8) {
+                    const contact = escapeCSV(cells[0].textContent.trim());
+                    const name = escapeCSV(cells[1].textContent.trim());
+                    const courseName = escapeCSV(cells[2].textContent.trim());
+                    const question = escapeCSV(cells[3].textContent.trim());
+                    const response = escapeCSV(cells[4].textContent.trim());
+                    const questionType = escapeCSV(cells[5].textContent.trim());
+                    const status = escapeCSV(cells[6].textContent.trim());
+                    const lastUpdated = escapeCSV(cells[7].textContent.trim());
+
+                    csvContent += `${contact},${name},${courseName},${question},${response},${questionType},${status},${lastUpdated}\n`;
+                }
+            });
+
+            // Create and download file
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            
+            // Generate filename based on current filters
+            let filename = 'survey_responses';
+            if (currentFilter !== 'All') {
+                filename += '_' + currentFilter.replace(/[^a-zA-Z0-9]/g, '_');
+            }
+            if (searchTerm) {
+                filename += '_filtered';
+            }
+            filename += '.csv';
+
+            link.setAttribute('href', url);
+            link.setAttribute('download', filename);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        // Helper function to escape CSV values
+        function escapeCSV(value) {
+            if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+                return '"' + value.replace(/"/g, '""') + '"';
+            }
+            return value;
+        }
+
+        // Initialize course chart
+        function initializeCourseChart() {
+            console.log('Initializing course chart...');
+            
+            const canvas = document.getElementById('courseChart');
+            if (!canvas) {
+                console.error('Course chart canvas element not found');
+                return;
+            }
+
+            // Check if Chart.js is loaded and available
+            if (typeof Chart === 'undefined' || !Chart.prototype || !Chart.prototype.constructor) {
+                console.error('Chart.js not properly loaded');
+                document.getElementById('courseChartFallback').style.display = 'block';
+                canvas.style.display = 'none';
+                return;
+            }
+
+            // Get chart data from AMPscript variables
+            const labelsElement = document.getElementById('courseChartLabels');
+            const valuesElement = document.getElementById('courseChartValues');
+            
+            if (!labelsElement || !valuesElement) {
+                console.error('Course chart data elements not found');
+                return;
+            }
+
+            const labels = labelsElement.textContent.split('|').filter(label => label.trim());
+            const values = valuesElement.textContent.split('|').map(val => parseInt(val.trim()) || 0);
+
+            console.log('Course chart data:', { labels, values });
+
+            // Sort data by values (descending) to show most filled out courses first
+            const sortedData = labels.map((label, index) => ({
+                label: label,
+                value: values[index]
+            })).sort((a, b) => b.value - a.value);
+
+            const sortedLabels = sortedData.map(item => item.label);
+            const sortedValues = sortedData.map(item => item.value);
+
+            // Create Chart.js chart
+            createCourseChart(canvas, sortedLabels, sortedValues);
+        }
+
+        // Create course chart
+        function createCourseChart(canvas, labels, data) {
+            console.log('Creating course chart with data:', { labels, data });
+
+            // Validate data
+            if (!labels || !data || labels.length === 0 || data.length === 0) {
+                console.error('Invalid course chart data:', { labels, data });
+                return;
+            }
+
+            // Check if Chart.js is available
+            if (typeof Chart === 'undefined') {
+                console.error('Chart.js is not available');
+                document.getElementById('courseChartFallback').style.display = 'block';
+                canvas.style.display = 'none';
+                return;
+            }
+
+            // Destroy existing chart if it exists
+            if (window.courseChart && typeof window.courseChart.destroy === 'function') {
+                try {
+                    window.courseChart.destroy();
+                } catch (error) {
+                    console.warn('Error destroying existing course chart:', error);
+                }
+            }
+
+            try {
+                // Create new Chart.js chart
+                window.courseChart = new Chart(canvas, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Total Responses',
+                            data: data,
+                            backgroundColor: [
+                                'rgba(99, 102, 241, 0.8)',
+                                'rgba(16, 185, 129, 0.8)',
+                                'rgba(245, 158, 11, 0.8)',
+                                'rgba(239, 68, 68, 0.8)',
+                                'rgba(139, 92, 246, 0.8)',
+                                'rgba(59, 130, 246, 0.8)',
+                                'rgba(236, 72, 153, 0.8)',
+                                'rgba(34, 197, 94, 0.8)'
+                            ],
+                            borderColor: [
+                                'rgba(99, 102, 241, 1)',
+                                'rgba(16, 185, 129, 1)',
+                                'rgba(245, 158, 11, 1)',
+                                'rgba(239, 68, 68, 1)',
+                                'rgba(139, 92, 246, 1)',
+                                'rgba(59, 130, 246, 1)',
+                                'rgba(236, 72, 153, 1)',
+                                'rgba(34, 197, 94, 1)'
+                            ],
+                            borderWidth: 2,
+                            borderRadius: 0,
+                            borderSkipped: false,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: false
+                            },
+                            tooltip: {
+                                backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                                titleColor: 'white',
+                                bodyColor: 'white',
+                                borderColor: 'rgba(255, 255, 255, 0.1)',
+                                borderWidth: 1,
+                                cornerRadius: 8,
+                                displayColors: false,
+                                callbacks: {
+                                    title: function(context) {
+                                        return context[0].label;
+                                    },
+                                    label: function(context) {
+                                        return 'Total Responses: ' + context.parsed.y;
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                grid: {
+                                    color: 'rgba(0, 0, 0, 0.1)',
+                                    drawBorder: false
+                                },
+                                ticks: {
+                                    color: '#6b7280',
+                                    font: {
+                                        size: 12
+                                    }
+                                }
+                            },
+                            x: {
+                                grid: {
+                                    display: false
+                                },
+                                ticks: {
+                                    color: '#6b7280',
+                                    font: {
+                                        size: 11
+                                    },
+                                    maxRotation: 45,
+                                    minRotation: 0,
+                                    maxTicksLimit: 8,
+                                    callback: function(value, index, values) {
+                                        const label = this.getLabelForValue(value);
+                                        if (label.length > 15) {
+                                            return label.substring(0, 15) + '...';
+                                        }
+                                        return label;
+                                    }
+                                }
+                            }
+                        },
+                        animation: {
+                            duration: 1000,
+                            easing: 'easeInOutQuart'
+                        }
+                    }
+                });
+
+                console.log('Course chart created successfully');
+            } catch (error) {
+                console.error('Error creating course chart:', error);
+                document.getElementById('courseChartFallback').style.display = 'block';
+                canvas.style.display = 'none';
+            }
+        }
+
+        // Helper: robust timestamp parser for formats like "YYYY-MM-DD HH:mm:ss.SSS"
+        function parseTimestamp(value) {
+            if (!value) return 0;
+            const s = String(value).trim();
+            // First try ISO-like parse
+            let t = Date.parse(s.replace(' ', 'T'));
+            if (!isNaN(t)) return t;
+            // Manual parse: YYYY-MM-DD[ T]HH:mm:ss(.ms)?
+            const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(\.(\d{1,3}))?$/);
+            if (m) {
+                const year = parseInt(m[1], 10);
+                const month = parseInt(m[2], 10) - 1;
+                const day = parseInt(m[3], 10);
+                const hour = parseInt(m[4], 10);
+                const minute = parseInt(m[5], 10);
+                const second = parseInt(m[6], 10);
+                const ms = m[8] ? parseInt(m[8].padEnd(3, '0'), 10) : 0;
+                return new Date(year, month, day, hour, minute, second, ms).getTime();
+            }
+            // Manual parse: MMM dd, yyyy HH:mm[:ss]
+            const m2 = s.match(/^([A-Za-z]{3})\s(\d{1,2}),\s(\d{4})\s(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+            if (m2) {
+                const monthMap = { Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5, Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11 };
+                const monAbbr = m2[1];
+                const month = monthMap[monAbbr] ?? 0;
+                const day = parseInt(m2[2], 10);
+                const year = parseInt(m2[3], 10);
+                const hour = parseInt(m2[4], 10);
+                const minute = parseInt(m2[5], 10);
+                const second = m2[6] ? parseInt(m2[6], 10) : 0;
+                return new Date(year, month, day, hour, minute, second, 0).getTime();
+            }
+            return 0;
+        }
+
+        // Initialize pagination
+        function initializePagination() {
+            const table = document.querySelector('.modern-table tbody');
+            if (table) {
+                const allRows = Array.from(table.querySelectorAll('tr'));
+                // Sort rows by data-last-updated (descending)
+                const sortedRows = allRows.slice().sort((a, b) => {
+                    const aTime = parseTimestamp(a.dataset.lastUpdated);
+                    const bTime = parseTimestamp(b.dataset.lastUpdated);
+                    return bTime - aTime;
+                });
+
+                // Re-append rows in sorted order
+                sortedRows.forEach(row => table.appendChild(row));
+
+                totalRows = sortedRows.length;
+                filteredRows = sortedRows;
+                
+                updatePaginationInfo();
+                updatePaginationControls();
+                showPage(1);
+            }
+        }
+
+        // Show specific page
+        function showPage(page) {
+            const table = document.querySelector('.modern-table tbody');
+            if (!table) return;
+
+            const rows = Array.from(table.querySelectorAll('tr'));
+            
+            // Get the current course filter
+            const currentFilter = window.currentCourseFilter || 'All';
+            
+            // Filter rows based on current course filter
+            const visibleRows = rows.filter(row => {
+                if (currentFilter === 'All') {
+                    return true;
+                }
+                const courseCell = row.querySelector('.course-name-cell');
+                if (courseCell) {
+                    const cellCourseName = courseCell.textContent.trim();
+                    return cellCourseName === currentFilter;
+                }
+                return false;
+            });
+
+            const startIndex = (page - 1) * rowsPerPage;
+            const endIndex = startIndex + rowsPerPage;
+
+            // Hide all rows first
+            rows.forEach(row => {
+                row.style.display = 'none';
+            });
+
+            // Show rows for current page from filtered results
+            for (let i = startIndex; i < endIndex && i < visibleRows.length; i++) {
+                if (visibleRows[i]) {
+                    visibleRows[i].style.display = '';
+                }
+            }
+
+            currentPage = page;
+            updatePaginationInfo();
+            updatePaginationControls();
+        }
+
+        // Update pagination info
+        function updatePaginationInfo() {
+            const paginationInfo = document.getElementById('paginationInfo');
+            const totalRowsElement = document.getElementById('totalRows');
+            
+            if (paginationInfo && totalRowsElement) {
+                const startRow = (currentPage - 1) * rowsPerPage + 1;
+                const endRow = Math.min(currentPage * rowsPerPage, totalRows);
+                
+                totalRowsElement.textContent = totalRows;
+                paginationInfo.textContent = `Showing ${startRow}-${endRow} of ${totalRows} responses`;
+            }
+        }
+
+        // Update pagination controls
+        function updatePaginationControls() {
+            const prevBtn = document.getElementById('prevBtn');
+            const nextBtn = document.getElementById('nextBtn');
+            const paginationPages = document.getElementById('paginationPages');
+            
+            if (!prevBtn || !nextBtn || !paginationPages) return;
+
+            // Update Previous/Next buttons
+            prevBtn.disabled = currentPage === 1;
+            nextBtn.disabled = currentPage >= Math.ceil(totalRows / rowsPerPage);
+
+            // Generate page numbers
+            const totalPages = Math.ceil(totalRows / rowsPerPage);
+            let pageNumbers = '';
+
+            if (totalPages <= 7) {
+                // Show all pages if 7 or fewer
+                for (let i = 1; i <= totalPages; i++) {
+                    pageNumbers += `<span class="page-number ${i === currentPage ? 'active' : ''}" onclick="goToPage(${i})">${i}</span>`;
+                }
+            } else {
+                // Show first page
+                pageNumbers += `<span class="page-number ${1 === currentPage ? 'active' : ''}" onclick="goToPage(1)">1</span>`;
+                
+                if (currentPage > 4) {
+                    pageNumbers += '<span class="page-ellipsis">...</span>';
+                }
+                
+                // Show pages around current page
+                const startPage = Math.max(2, currentPage - 1);
+                const endPage = Math.min(totalPages - 1, currentPage + 1);
+                
+                for (let i = startPage; i <= endPage; i++) {
+                    pageNumbers += `<span class="page-number ${i === currentPage ? 'active' : ''}" onclick="goToPage(${i})">${i}</span>`;
+                }
+                
+                if (currentPage < totalPages - 3) {
+                    pageNumbers += '<span class="page-ellipsis">...</span>';
+                }
+                
+                // Show last page
+                if (totalPages > 1) {
+                    pageNumbers += `<span class="page-number ${totalPages === currentPage ? 'active' : ''}" onclick="goToPage(${totalPages})">${totalPages}</span>`;
+                }
+            }
+
+            paginationPages.innerHTML = pageNumbers;
+        }
+
+        // Go to specific page
+        function goToPage(page) {
+            const totalPages = Math.ceil(totalRows / rowsPerPage);
+            if (page >= 1 && page <= totalPages) {
+                showPage(page);
+            }
+        }
+
+        // Change page (Previous/Next)
+        function changePage(direction) {
+            const totalPages = Math.ceil(totalRows / rowsPerPage);
+            const newPage = currentPage + direction;
+            
+            if (newPage >= 1 && newPage <= totalPages) {
+                showPage(newPage);
+            }
+        }
+
+        // Enhanced search functionality
+        function initializeSearch() {
+            const searchInput = document.querySelector('.search-input');
+            if (searchInput) {
+                searchInput.addEventListener('input', function() {
+                    const searchTerm = this.value.toLowerCase();
+                    const table = document.querySelector('.modern-table tbody');
+                    const rows = Array.from(table.querySelectorAll('tr'));
+                    
+                    // Get the current course filter
+                    const currentFilter = window.currentCourseFilter || 'All';
+                    
+                    // Filter rows based on both search term and course filter
+                    const visibleRows = rows.filter(row => {
+                        // First apply course filter
+                        let passesCourseFilter = true;
+                        if (currentFilter !== 'All') {
+                            const courseCell = row.querySelector('.course-name-cell');
+                            if (courseCell) {
+                                const cellCourseName = courseCell.textContent.trim();
+                                passesCourseFilter = cellCourseName === currentFilter;
+                            } else {
+                                passesCourseFilter = false;
+                            }
+                        }
+                        
+                        // Then apply search filter
+                        const text = row.textContent.toLowerCase();
+                        const passesSearchFilter = text.includes(searchTerm);
+                        
+                        return passesCourseFilter && passesSearchFilter;
+                    });
+                    
+                    // Update total rows for pagination
+                    totalRows = visibleRows.length;
+                    
+                    // Reset to first page and update pagination
+                    currentPage = 1;
+                    updatePaginationInfo();
+                    updatePaginationControls();
+                    showPage(1);
+                });
+            }
+        }
+
+        // Initialize page based on URL parameters
+        document.addEventListener('DOMContentLoaded', function () {
+            const urlParams = new URLSearchParams(window.location.search);
+            const view = urlParams.get('view');
+
+            if (view === 'reports') {
+                showReports();
+            } else if (view === 'responses') {
+                showResponses();
+            } else {
+                // Default to survey analytics view
+                showSurveyAnalytics();
+            }
+            
+            // Initialize search functionality
+            initializeSearch();
+        });
+    </script>
+
+
