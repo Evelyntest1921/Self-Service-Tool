@@ -635,114 +635,12 @@ function applyTextSettings(payload, textContent) {
    }
  }
 }
-function deepStripCreateFields(obj, preserveThisId) {
- var stripKeys, out, key, childPreserveId, i;
- if (obj === null || obj === undefined) return obj;
- if (typeof obj !== "object") return obj;
- if (typeof obj.length === "number") {
-   var arr = [];
-   for (i = 0; i < obj.length; i++) {
-     arr.push(deepStripCreateFields(obj[i], false));
-   }
-   return arr;
- }
- stripKeys = ["customerKey","objectID","modifiedDate","createdDate","createdBy","modifiedBy","legacyData","owner","status","modelVersion","parentId","sharingProperties","localAssets"];
- out = {};
- for (key in obj) {
-   if (!obj.hasOwnProperty(key)) continue;
-   if (stripKeys.indexOf(key) >= 0) continue;
-   if (key === "id") {
-    if (preserveThisId) out[key] = obj[key];
-    continue;
-   }
-   childPreserveId = key === "assetType" || key === "template";
-   out[key] = deepStripCreateFields(obj[key], childPreserveId);
- }
- return out;
-}
-function buildHtml208FallbackPayload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent) {
- var htmlContent = "";
- if (sourceAsset && sourceAsset.views && sourceAsset.views.html && sourceAsset.views.html.content) {
-   htmlContent = sourceAsset.views.html.content;
- }
- if (!htmlContent && sourceAsset && sourceAsset.content) {
-   htmlContent = sourceAsset.content;
- }
- var payload = {
-   name: targetName,
-   assetType: { id: 208, name: "htmlemail" },
-   channels: { email: true, web: false },
-   views: {
-     subjectline: { content: subjectlineContent || "Campaign Event" },
-     preheader: { content: preheaderContent || "" },
-     html: { content: htmlContent },
-     text: {}
-   }
- };
- applyTextSettings(payload, textContent);
- return payload;
-}
-function slotPlaceholderMap(emailSlots) {
- var placeholders = {};
- var keys = objectKeys(emailSlots || {});
- var i;
- for (i = 0; i < keys.length; i++) {
-   placeholders[keys[i]] = {};
- }
- return placeholders;
-}
-function buildDirectClonePayload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent) {
- var payload = buildBasePayload(sourceAsset, targetName, 207);
- if (!payload.views || typeof payload.views !== "object") {
-   payload.views = cloneObject(sourceAsset.views || {});
- }
- payload.views.subjectline = { content: subjectlineContent || "Campaign Event" };
- payload.views.preheader = { content: preheaderContent || "" };
- applyTextSettings(payload, textContent);
- return deepStripCreateFields(payload, false);
-}
-function debugPayloadSummary(debugPayload) {
- if (!debugPayload || typeof debugPayload !== "object") return null;
- return {
-   assetType: debugPayload.assetType || null,
-   category: debugPayload.category || null,
-   channels: debugPayload.channels || null,
-   subjectlineLength: (debugPayload.views && debugPayload.views.subjectline) ? safeLength(debugPayload.views.subjectline.content) : 0,
-   preheaderLength: (debugPayload.views && debugPayload.views.preheader) ? safeLength(debugPayload.views.preheader.content) : 0,
-   textLength: (debugPayload.views && debugPayload.views.text) ? safeLength(debugPayload.views.text.content) : 0,
-   html: summarizeHtmlView(debugPayload.views ? debugPayload.views.html : null),
-   emailOptions: summarizeEmailOptions(debugPayload.data)
- };
-}
-function appendPostAttempts(targetList, basePayload) {
- var noCategoryPayload;
- if (!basePayload) return;
- targetList.push(basePayload);
- noCategoryPayload = cloneObject(basePayload);
- if (noCategoryPayload && noCategoryPayload.category) {
-   delete noCategoryPayload.category;
-   targetList.push(noCategoryPayload);
- }
-}
 function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, sourceSlots) {
  var templateSource = resolvedTemplateAsset || sourceTemplate;
  var templateContent = (templateSource && templateSource.content) ? templateSource.content : "";
- if (!templateContent && templateSource && templateSource.views && templateSource.views.html && templateSource.views.html.content) {
-   templateContent = templateSource.views.html.content;
- }
+ var templateSlots = (templateSource && templateSource.slots && typeof templateSource.slots === "object") ? cloneObject(templateSource.slots) : {};
  var sourceHtmlContent = (sourceAsset && sourceAsset.views && sourceAsset.views.html && sourceAsset.views.html.content) ? sourceAsset.views.html.content : (sourceAsset.content || templateContent);
  var emailSlots = (sourceSlots && typeof sourceSlots === "object") ? cloneObject(sourceSlots) : {};
- var templateRef = cloneObject(sourceTemplate) || {};
- if (!templateRef.assetType) {
-   templateRef.assetType = { id: 4, name: "template" };
- }
- if (!templateRef.id && sourceTemplate && sourceTemplate.id) {
-   templateRef.id = parseInt(sourceTemplate.id, 10);
- }
- templateRef.slots = slotPlaceholderMap(emailSlots);
- if (!templateRef.content && templateContent) {
-   templateRef.content = templateContent;
- }
  var payload = {
    name: targetName,
    assetType: { id: 207, name: "htmlemail" },
@@ -753,7 +651,12 @@ function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preh
      html: {
        content: sourceHtmlContent,
        slots: emailSlots,
-       template: deepStripCreateFields(templateRef, true)
+       template: {
+         id: parseInt(sourceTemplate.id, 10),
+         assetType: { id: 4, name: "template" },
+         content: templateContent,
+         slots: templateSlots
+       }
      },
      text: {}
    },
@@ -818,7 +721,6 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
      var assetTypeId = (template.assetType && template.assetType.id) ? parseInt(template.assetType.id, 10) : 207;
      var slotKeys = objectKeys(htmlSlots);
      var payload = null;
-     var postAttempts = [];
      var resolvedTemplateAsset = null;
      var debugPrefix = " Source assetType: " + assetTypeId + ". Has template ref: " + (sourceTemplate ? "yes" : "no") + ". Slot keys: " + (slotKeys.length ? slotKeys.join(",") : "none") + ".";
      var payloadDebug = "";
@@ -845,18 +747,16 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          payload.category = { id: template.category.id };
        }
      } else if (assetTypeId === 207) {
-       appendPostAttempts(postAttempts, buildDirectClonePayload(template, emailName, subjectlineContent, preheaderContent, textContent));
        if (sourceTemplate) {
          var fetchedTemplate = fetchAssetById(sourceTemplate.id, subdomain, accessToken);
          if (fetchedTemplate.ok && fetchedTemplate.asset) {
            resolvedTemplateAsset = fetchedTemplate.asset;
-           appendPostAttempts(postAttempts, buildCloned207Payload(template, emailName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, htmlSlots));
+           payload = buildCloned207Payload(template, emailName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, htmlSlots);
+         } else {
+           step3bResult = " Step 3b SKIP - Email not duplicated: Template asset fetch failed for template ID " + sourceTemplate.id + " with HTTP " + fetchedTemplate.statusCode + " - " + (fetchedTemplate.responseText || "No response body.") + debugPrefix;
          }
-       }
-       appendPostAttempts(postAttempts, buildHtml208FallbackPayload(template, emailName, subjectlineContent, preheaderContent, textContent));
-       payload = postAttempts.length ? postAttempts[0] : null;
-       if (!payload) {
-         step3bResult = " Step 3b SKIP - Email not duplicated: Could not build clone payload for template-based email." + debugPrefix;
+       } else {
+         step3bResult = " Step 3b SKIP - Email not duplicated: Source asset is template-based email but views.html.template is missing." + debugPrefix;
        }
      } else if (assetTypeId === 208) {
        payload = buildBasePayload(template, emailName, 208);
@@ -873,8 +773,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
      } else {
        step3bResult = " Step 3b SKIP - Email not duplicated: Unsupported source asset type " + assetTypeId + "." + debugPrefix;
      }
-     if ((payload || postAttempts.length) && !step3bResult.match(/views\.html\.template is missing|Unsupported source asset type|Could not build clone payload/)) {
-       var debugPayload = payload || postAttempts[0];
+     if (payload && !step3bResult.match(/views\.html\.template is missing|Unsupported source asset type/)) {
        var debugObj = {
          source: {
            assetTypeId: assetTypeId,
@@ -889,41 +788,30 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
              slotKeys: objectKeys(resolvedTemplateAsset.slots)
            } : null
          },
-         outgoing: debugPayloadSummary(debugPayload),
-         attemptCount: postAttempts.length
+         outgoing: {
+           assetType: payload.assetType || null,
+           category: payload.category || null,
+           channels: payload.channels || null,
+           subjectlineLength: (payload.views && payload.views.subjectline) ? safeLength(payload.views.subjectline.content) : 0,
+           preheaderLength: (payload.views && payload.views.preheader) ? safeLength(payload.views.preheader.content) : 0,
+           textLength: (payload.views && payload.views.text) ? safeLength(payload.views.text.content) : 0,
+           html: summarizeHtmlView(payload.views ? payload.views.html : null),
+           emailOptions: summarizeEmailOptions(payload.data)
+         }
        };
        payloadDebug = truncateString(Platform.Function.Stringify(debugObj), 2500);
        var assetUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets";
-       if (!postAttempts.length && payload) {
-         postAttempts.push(payload);
-       }
-       var assetStatus = 0;
-       var assetResponse = "";
-       var attemptIdx = 0;
-       var winningAttempt = 0;
-       for (attemptIdx = 0; attemptIdx < postAttempts.length; attemptIdx++) {
-         var attemptPayload = postAttempts[attemptIdx];
-         if (!attemptPayload) continue;
-         var postReq = new Script.Util.HttpRequest(assetUrl);
-         postReq.emptyContentHandling = 0;
-         postReq.retries = 2;
-         postReq.continueOnError = true;
-         postReq.setHeader("Authorization", "Bearer " + accessToken);
-         postReq.method = "POST";
-         postReq.contentType = "application/json";
-         postReq.postData = Platform.Function.Stringify(attemptPayload);
-         var postResp = postReq.send();
-         assetStatus = postResp.statusCode;
-         assetResponse = postResp.content ? String(postResp.content) : "";
-         if (assetStatus == 200 || assetStatus == 201) {
-           payload = attemptPayload;
-           winningAttempt = attemptIdx + 1;
-           break;
-         }
-         if (assetStatus != 400) {
-           break;
-         }
-       }
+       var postReq = new Script.Util.HttpRequest(assetUrl);
+       postReq.emptyContentHandling = 0;
+       postReq.retries = 2;
+       postReq.continueOnError = true;
+       postReq.setHeader("Authorization", "Bearer " + accessToken);
+       postReq.method = "POST";
+       postReq.contentType = "application/json";
+       postReq.postData = Platform.Function.Stringify(payload);
+       var postResp = postReq.send();
+       var assetStatus = postResp.statusCode;
+       var assetResponse = postResp.content ? String(postResp.content) : "";
        if ((assetStatus == 200 || assetStatus == 201) && assetResponse) {
          var idMatch = assetResponse.match(/"id"\s*:\s*"?([^",}\s]+)"?/);
          if (idMatch) {
@@ -942,7 +830,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
              }
            }
            if (journeyEmailId) {
-             step3bResult = " Step 3b OK - Email duplicated." + (winningAttempt > 0 ? " Attempt " + winningAttempt + "." : "");
+             step3bResult = " Step 3b OK - Email duplicated.";
            } else {
              step3bResult = " Step 3b SKIP - Email duplicated but legacy email ID was not available for Journey Builder.";
            }
@@ -950,7 +838,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
            step3bResult = " Step 3b SKIP - Email duplicated but new ID was not returned." + debugPrefix + " Response: " + assetResponse + " Debug: " + payloadDebug;
          }
        } else {
-         step3bResult = " Step 3b SKIP - Email not duplicated: HTTP " + assetStatus + " - " + (assetResponse || "No response body.") + " Attempts: " + postAttempts.length + "." + debugPrefix + " Debug: " + payloadDebug;
+         step3bResult = " Step 3b SKIP - Email not duplicated: HTTP " + assetStatus + " - " + (assetResponse || "No response body.") + debugPrefix + " Debug: " + payloadDebug;
        }
      }
    } else {
