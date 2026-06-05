@@ -1,7 +1,6 @@
 %%[
 VAR @errorFlag, @dataExists, @testCount, @mode, @surveyId, @editSurveyName, @editSurveyStatus, @editQuestions
 VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow, @hubUrl, @surveyHomeUrl, @surveyStageUrl, @surveyAnalyticsUrl, @surveyTakeUrl, @builderPageLabel
-VAR @campaignId, @senderProfileId, @sendClassificationId, @senderProfileConfigOk, @senderProfileOptionsHtml, @sendClassificationConfigOk, @sendClassificationOptionsHtml
 SET @errorFlag = "false"
 SET @dataExists = "true"
 SET @mode = RequestParameter("mode")
@@ -28,11 +27,6 @@ SET @builderPageLabel = "Create Survey"
 IF @mode == "edit" THEN
   SET @builderPageLabel = "Edit Survey"
 ENDIF
-SET @campaignId = Trim(RequestParameter("campaignId"))
-SET @senderProfileId = Trim(RequestParameter("senderProfileId"))
-SET @sendClassificationId = Trim(RequestParameter("sendClassificationId"))
-SET @senderProfileConfigOk = "false"
-SET @sendClassificationConfigOk = "false"
 
 
 
@@ -109,7 +103,7 @@ ENDIF
 
 
 /* Handle form submission */
-VAR @submitted, @surveyName, @surveyDescription
+VAR @submitted, @surveyName, @surveyDescription, @targetAudience
 SET @submitted = RequestParameter("submitted")
 
 
@@ -118,9 +112,7 @@ SET @submitted = RequestParameter("submitted")
 IF @submitted == "true" THEN
   SET @surveyName = RequestParameter("surveyName")
   SET @surveyDescription = RequestParameter("surveyDescription")
-  SET @campaignId = Trim(RequestParameter("campaignId"))
-  SET @senderProfileId = Trim(RequestParameter("senderProfileId"))
-  SET @sendClassificationId = Trim(RequestParameter("sendClassificationId"))
+  SET @targetAudience = RequestParameter("targetAudience")
  
   /* Use existing SurveyID for edit mode, generate new one for create mode */
   IF @mode == "edit" AND NOT EMPTY(@surveyId) THEN
@@ -217,197 +209,9 @@ IF @submitted == "true" THEN
   ENDIF
 ENDIF
 ]%%
-<script runat="server">
-Platform.Load("core","1");
-var senderProfileIdReq = Platform.Variable.GetValue("@senderProfileId") || "";
-var senderProfileConfigOk = "false";
-var senderProfileOptionsHtml = "";
-var defaultSenderProfileId = "";
 
-function escSenderOpt(s) {
-  if (s === null || s === undefined) return "";
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;");
-}
 
-function senderProfileIdFromRow(row) {
-  if (!row) return "";
-  if (row.ObjectID) {
-    var oid = String(row.ObjectID).replace(/^\s+|\s+$/g, "");
-    if (oid) return oid;
-  }
-  if (row.CustomerKey) {
-    var ck = String(row.CustomerKey).replace(/^\s+|\s+$/g, "");
-    if (ck) return ck;
-  }
-  return "";
-}
 
-function senderProfileLabelFromRow(row) {
-  if (!row) return "";
-  var name = row.Name ? String(row.Name).replace(/^\s+|\s+$/g, "") : "";
-  var fromName = row.FromName ? String(row.FromName).replace(/^\s+|\s+$/g, "") : "";
-  var fromAddress = row.FromAddress ? String(row.FromAddress).replace(/^\s+|\s+$/g, "") : "";
-  if (name) return name;
-  if (fromName && fromAddress) return fromName + " <" + fromAddress + ">";
-  if (fromName) return fromName;
-  if (fromAddress) return fromAddress;
-  return senderProfileIdFromRow(row);
-}
-
-function normalizeWsResults(results) {
-  var out = [];
-  if (!results) return out;
-  if (typeof results.length === "number") {
-    var i;
-    for (i = 0; i < results.length; i++) out.push(results[i]);
-    return out;
-  }
-  if (results.CustomerKey || results.ObjectID || results.Name) out.push(results);
-  return out;
-}
-
-function retrieveAllSenderProfiles() {
-  var prox = new Script.Util.WSProxy();
-  var props = ["Name", "FromName", "FromAddress", "CustomerKey", "ObjectID"];
-  var filter = {
-    Property: "CustomerKey",
-    SimpleOperator: "like",
-    Value: "%"
-  };
-  var rows = [];
-  var resp = prox.retrieve("SenderProfile", props, filter);
-  while (resp) {
-    rows = rows.concat(normalizeWsResults(resp.Results));
-    if (resp.HasMoreResults) {
-      resp = prox.retrieveMore();
-    } else {
-      break;
-    }
-  }
-  return rows;
-}
-
-try {
-  var senderRows = retrieveAllSenderProfiles();
-  senderRows.sort(function (a, b) {
-    return senderProfileLabelFromRow(a).localeCompare(senderProfileLabelFromRow(b));
-  });
-  var si;
-  for (si = 0; si < senderRows.length; si++) {
-    var spId = senderProfileIdFromRow(senderRows[si]);
-    if (!spId) continue;
-    if (!defaultSenderProfileId) defaultSenderProfileId = spId;
-    senderProfileConfigOk = "true";
-  }
-  var selectedSenderProfileId = senderProfileIdReq || defaultSenderProfileId;
-  for (si = 0; si < senderRows.length; si++) {
-    var spIdOpt = senderProfileIdFromRow(senderRows[si]);
-    if (!spIdOpt) continue;
-    var spLabel = senderProfileLabelFromRow(senderRows[si]);
-    var selectedAttr = spIdOpt === selectedSenderProfileId ? " selected" : "";
-    senderProfileOptionsHtml +=
-      '<option value="' +
-      escSenderOpt(spIdOpt) +
-      '"' +
-      selectedAttr +
-      ">" +
-      escSenderOpt(spLabel) +
-      "</option>";
-  }
-  Platform.Variable.SetValue("@senderProfileId", selectedSenderProfileId);
-} catch (senderLoadErr) {
-  senderProfileConfigOk = "false";
-  senderProfileOptionsHtml = "";
-}
-
-Platform.Variable.SetValue("@senderProfileConfigOk", senderProfileConfigOk);
-Platform.Variable.SetValue("@senderProfileOptionsHtml", senderProfileOptionsHtml);
-
-var sendClassificationIdReq = Platform.Variable.GetValue("@sendClassificationId") || "";
-var sendClassificationConfigOk = "false";
-var sendClassificationOptionsHtml = "";
-var defaultSendClassificationId = "";
-
-function sendClassificationIdFromRow(row) {
-  if (!row) return "";
-  if (row.ObjectID) {
-    var scOid = String(row.ObjectID).replace(/^\s+|\s+$/g, "");
-    if (scOid) return scOid;
-  }
-  if (row.CustomerKey) {
-    var scCk = String(row.CustomerKey).replace(/^\s+|\s+$/g, "");
-    if (scCk) return scCk;
-  }
-  return "";
-}
-
-function sendClassificationLabelFromRow(row) {
-  if (!row) return "";
-  var scName = row.Name ? String(row.Name).replace(/^\s+|\s+$/g, "") : "";
-  var scType = row.SendClassificationType
-    ? String(row.SendClassificationType).replace(/^\s+|\s+$/g, "")
-    : "";
-  if (scName && scType) return scName + " (" + scType + ")";
-  if (scName) return scName;
-  if (row.CustomerKey) return String(row.CustomerKey).replace(/^\s+|\s+$/g, "");
-  return sendClassificationIdFromRow(row);
-}
-
-function retrieveAllSendClassifications() {
-  var prox = new Script.Util.WSProxy();
-  var props = ["Name", "CustomerKey", "ObjectID", "SendClassificationType"];
-  var rows = [];
-  var resp = prox.retrieve("SendClassification", props);
-  while (resp) {
-    rows = rows.concat(normalizeWsResults(resp.Results));
-    if (resp.HasMoreResults) {
-      resp = prox.retrieveMore();
-    } else {
-      break;
-    }
-  }
-  return rows;
-}
-
-try {
-  var scRows = retrieveAllSendClassifications();
-  scRows.sort(function (a, b) {
-    return sendClassificationLabelFromRow(a).localeCompare(sendClassificationLabelFromRow(b));
-  });
-  var sci;
-  for (sci = 0; sci < scRows.length; sci++) {
-    var scId = sendClassificationIdFromRow(scRows[sci]);
-    if (!scId) continue;
-    if (!defaultSendClassificationId) defaultSendClassificationId = scId;
-    sendClassificationConfigOk = "true";
-  }
-  var selectedSendClassificationId = sendClassificationIdReq || defaultSendClassificationId;
-  for (sci = 0; sci < scRows.length; sci++) {
-    var scIdOpt = sendClassificationIdFromRow(scRows[sci]);
-    if (!scIdOpt) continue;
-    var scLabel = sendClassificationLabelFromRow(scRows[sci]);
-    var scSelectedAttr = scIdOpt === selectedSendClassificationId ? " selected" : "";
-    sendClassificationOptionsHtml +=
-      '<option value="' +
-      escSenderOpt(scIdOpt) +
-      '"' +
-      scSelectedAttr +
-      ">" +
-      escSenderOpt(scLabel) +
-      "</option>";
-  }
-  Platform.Variable.SetValue("@sendClassificationId", selectedSendClassificationId);
-} catch (scLoadErr) {
-  sendClassificationConfigOk = "false";
-  sendClassificationOptionsHtml = "";
-}
-
-Platform.Variable.SetValue("@sendClassificationConfigOk", sendClassificationConfigOk);
-Platform.Variable.SetValue("@sendClassificationOptionsHtml", sendClassificationOptionsHtml);
-</script>
 
 <!DOCTYPE html>
 <html lang="en">
@@ -688,66 +492,6 @@ Platform.Variable.SetValue("@sendClassificationOptionsHtml", sendClassificationO
       outline: none;
       border-color: var(--primary-color);
       box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
-    }
-
-    .sender-settings-panel {
-      border: 1px solid var(--border-color);
-      border-radius: var(--radius-md);
-      overflow: hidden;
-      background: var(--bg-primary);
-    }
-
-    .sender-settings-toggle {
-      width: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 12px 16px;
-      border: 0;
-      background: var(--bg-tertiary);
-      font: inherit;
-      font-weight: 600;
-      font-size: 14px;
-      color: var(--text-primary);
-      cursor: pointer;
-      text-align: left;
-    }
-
-    .sender-settings-toggle:hover {
-      background: var(--gray-200);
-    }
-
-    .sender-settings-chevron {
-      flex-shrink: 0;
-      transition: transform 0.2s ease;
-    }
-
-    .sender-settings-panel.is-open .sender-settings-chevron {
-      transform: rotate(180deg);
-    }
-
-    .sender-settings-body {
-      display: none;
-      padding: 16px;
-      border-top: 1px solid var(--border-color);
-    }
-
-    .sender-settings-panel.is-open .sender-settings-body {
-      display: block;
-    }
-
-    .sender-settings-body .form-group:last-child {
-      margin-bottom: 0;
-    }
-
-    .form-alert {
-      padding: 12px 16px;
-      border-radius: var(--radius-md);
-      border: 1px solid #fecaca;
-      background: #fef2f2;
-      color: #b91c1c;
-      font-size: 14px;
     }
 
 
@@ -1279,38 +1023,8 @@ Platform.Variable.SetValue("@sendClassificationOptionsHtml", sendClassificationO
               <textarea class="form-textarea" name="surveyDescription" placeholder="Describe the purpose and goals of this survey"></textarea>
             </div>
             <div class="form-group">
-              <label class="form-label">Campaign ID</label>
-              <input type="text" class="form-input" name="campaignId" value="%%=v(@campaignId)=%%" placeholder="Paste Salesforce Campaign ID (e.g. 701WL00000pFzUEYA0)">
-            </div>
-            <div class="form-group">
-              <div class="sender-settings-panel" id="senderSettingsPanel">
-                <button type="button" class="sender-settings-toggle" id="senderSettingsToggle" aria-expanded="false" aria-controls="senderSettingsBody">
-                  <span>Sender settings</span>
-                  <svg class="sender-settings-chevron" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/></svg>
-                </button>
-                <div class="sender-settings-body" id="senderSettingsBody">
-                  <div class="form-group">
-                    <label class="form-label">Sender profile</label>
-%%[ IF @senderProfileConfigOk == "true" THEN ]%%
-                    <select id="senderProfileId" class="form-select" name="senderProfileId">
-                      %%=TreatAsContent(@senderProfileOptionsHtml)=%%
-                    </select>
-%%[ ELSE ]%%
-                    <div class="form-alert" role="alert">Could not load sender profiles from Marketing Cloud.</div>
-%%[ ENDIF ]%%
-                  </div>
-                  <div class="form-group">
-                    <label class="form-label">Send classification</label>
-%%[ IF @sendClassificationConfigOk == "true" THEN ]%%
-                    <select id="sendClassificationId" class="form-select" name="sendClassificationId">
-                      %%=TreatAsContent(@sendClassificationOptionsHtml)=%%
-                    </select>
-%%[ ELSE ]%%
-                    <div class="form-alert" role="alert">Could not load send classifications from Marketing Cloud.</div>
-%%[ ENDIF ]%%
-                  </div>
-                </div>
-              </div>
+              <label class="form-label">Target Audience</label>
+              <input type="text" class="form-input" name="targetAudience" placeholder="e.g., Healthcare professionals, Risk managers">
             </div>
           </div>
         </div>
@@ -1784,15 +1498,6 @@ Platform.Variable.SetValue("@sendClassificationOptionsHtml", sendClassificationO
 
 
 
-
-    var senderPanel = document.getElementById('senderSettingsPanel');
-    var senderToggle = document.getElementById('senderSettingsToggle');
-    if (senderPanel && senderToggle) {
-      senderToggle.addEventListener('click', function() {
-        var isOpen = senderPanel.classList.toggle('is-open');
-        senderToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-      });
-    }
 
     // Form validation and submission
     document.getElementById('surveyForm').addEventListener('submit', function(e) {
