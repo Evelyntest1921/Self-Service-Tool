@@ -635,19 +635,6 @@ function applyTextSettings(payload, textContent) {
    }
  }
 }
-function filterSlotsByKeys(slots, allowedKeys) {
- var filtered = {};
- var i, key;
- if (!slots || typeof slots !== "object") return filtered;
- if (!allowedKeys || !allowedKeys.length) return cloneObject(slots) || {};
- for (i = 0; i < allowedKeys.length; i++) {
-   key = allowedKeys[i];
-   if (slots[key] !== null && slots[key] !== undefined) {
-     filtered[key] = cloneObject(slots[key]);
-   }
- }
- return filtered;
-}
 function resolveTemplateSlots(templateSource, sourceTemplate) {
  if (templateSource && templateSource.views && templateSource.views.html && templateSource.views.html.slots && typeof templateSource.views.html.slots === "object") {
    return cloneObject(templateSource.views.html.slots);
@@ -660,40 +647,17 @@ function resolveTemplateSlots(templateSource, sourceTemplate) {
  }
  return {};
 }
-function findClosestSlotKey(orphanKey, templateKeys) {
- var i, tk, prefixLen;
- if (!orphanKey || !templateKeys || !templateKeys.length) return "";
- for (i = 0; i < templateKeys.length; i++) {
-   tk = templateKeys[i];
-   prefixLen = orphanKey.length < tk.length ? orphanKey.length : tk.length;
-   if (prefixLen > 6 && orphanKey.substring(0, prefixLen - 1) === tk.substring(0, prefixLen - 1)) {
-     return tk;
+function mergeSlotMaps(baseSlots, extraSlots) {
+ var merged = cloneObject(baseSlots) || {};
+ var extraKeys = objectKeys(extraSlots || {});
+ var i, key;
+ for (i = 0; i < extraKeys.length; i++) {
+   key = extraKeys[i];
+   if (extraSlots[key] !== null && extraSlots[key] !== undefined) {
+     merged[key] = cloneObject(extraSlots[key]);
    }
  }
- return "";
-}
-function slotHasContent(slotValue) {
- if (!slotValue || typeof slotValue !== "object") return false;
- if (slotValue.content && String(slotValue.content).replace(/\s+/g, "").length > 0) return true;
- if (slotValue.blocks && typeof slotValue.blocks === "object" && objectKeys(slotValue.blocks).length > 0) return true;
- return false;
-}
-function sanitizeEmailSlotsForTemplate(emailSlots, templateSlotKeys) {
- var sanitized = filterSlotsByKeys(emailSlots, templateSlotKeys);
- var emailKeys = objectKeys(emailSlots);
- var i, key, closest;
- for (i = 0; i < emailKeys.length; i++) {
-   key = emailKeys[i];
-   if (templateSlotKeys.indexOf(key) >= 0) continue;
-   closest = findClosestSlotKey(key, templateSlotKeys);
-   if (closest && slotHasContent(emailSlots[key]) && !slotHasContent(sanitized[closest])) {
-     sanitized[closest] = cloneObject(emailSlots[key]);
-   }
- }
- if (!objectKeys(sanitized).length && emailSlots && typeof emailSlots === "object") {
-   return cloneObject(emailSlots);
- }
- return sanitized;
+ return merged;
 }
 function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, sourceSlots) {
  var templateSource = resolvedTemplateAsset || sourceTemplate;
@@ -703,8 +667,9 @@ function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preh
    templateContent = templateSource.views.html.content;
  }
  var sourceHtmlContent = (sourceAsset && sourceAsset.views && sourceAsset.views.html && sourceAsset.views.html.content) ? sourceAsset.views.html.content : (sourceAsset.content || templateContent);
- var templateSlotKeys = objectKeys(templateSlots);
- var emailSlots = sanitizeEmailSlotsForTemplate(sourceSlots, templateSlotKeys);
+ var emailSlots = (sourceSlots && typeof sourceSlots === "object") ? cloneObject(sourceSlots) : {};
+ templateSlots = mergeSlotMaps(templateSlots, sourceTemplate && sourceTemplate.slots ? sourceTemplate.slots : {});
+ templateSlots = mergeSlotMaps(templateSlots, emailSlots);
  var payload = {
    name: targetName,
    assetType: { id: 207, name: "htmlemail" },
