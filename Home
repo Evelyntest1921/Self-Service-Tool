@@ -35,10 +35,16 @@
   SET @addBuildError = ""
   SET @accessToken = ""
   SET @subdomain = ""
-  SET @recentBuildsOk = "false"
+  SET @recentBuildsOk = "true"
   SET @jaBuildsLoadError = ""
   SET @jaEmpty = "1"
   SET @jaRecentBuildsMarkup = ""
+  SET @rbTotal = 0
+  SET @rbTotalPages = 1
+  SET @rbPage = 1
+  SET @rbStart = 1
+  SET @rbEnd = 0
+  SET @rbPageSep = "?"
   SET @redirect = requestparameter("redirect")
   SET @allJourneysTotal = DataExtensionRowCount("Bd_journey_analytics")
   SET @quickSends = LookupRows("Bd_journey_analytics", "journeyType", "Quick Send")
@@ -317,8 +323,6 @@
   
   var DE_EXTERNAL_KEY = "Bd_journey_analytics";
   var DE_RETRIEVE_KEY = String(DE_EXTERNAL_KEY).toLowerCase();
-  var BUILD_PAGE_SIZE = 20;
-  var MAX_DE_FETCH = 500;
   var BROWSE_PAGE_SIZE = 50;
   var BUILD_DETAIL_URL = Platform.Variable.GetValue("@buildDetailUrl") || "";
   
@@ -430,58 +434,6 @@
     return "";
   }
 
-  function dateFieldFromRow(r) {
-    return fieldFromRow(r, ["updateDate", "UpdateDate", "createDate", "CreateDate", "updatedDate", "UpdatedDate"]);
-  }
-
-  function formatRowDate(r) {
-    var udx = dateFieldFromRow(r);
-    var formatted;
-    if (udx === null || udx === undefined || udx === "") {
-      return "";
-    }
-    try {
-      formatted = Platform.Function.FormatDate(udx, "MMMM d, yyyy h:mm tt");
-      if (formatted !== null && formatted !== undefined && String(formatted) !== "") {
-        return String(formatted);
-      }
-    } catch (e0) {}
-    try {
-      formatted = Platform.Function.FormatDate(udx, "MM/dd/yyyy h:mm:ss tt");
-      if (formatted !== null && formatted !== undefined && String(formatted) !== "") {
-        return String(formatted);
-      }
-    } catch (e1) {}
-    return String(udx);
-  }
-
-  function dateSortKeyFromRow(r) {
-    var udx = dateFieldFromRow(r);
-    try {
-      if (udx !== null && udx !== undefined && udx !== "") {
-        return String(Platform.Function.FormatDate(udx, "yyyyMMddHHmmss"));
-      }
-    } catch (e0) {}
-    return "00000000000000";
-  }
-
-  function rowAt(rows, zeroIdx, isRowset) {
-    if (isRowset) {
-      return Platform.Function.Row(rows, zeroIdx + 1);
-    }
-    return rows[zeroIdx];
-  }
-
-  function compareSortDesc(left, right) {
-    if (left > right) {
-      return -1;
-    }
-    if (left < right) {
-      return 1;
-    }
-    return 0;
-  }
-
   function coerceDeRows(raw) {
     if (raw == null) {
       return [];
@@ -499,111 +451,6 @@
     return coerceRows(r);
   }
 
-  function loadRecentBuildRows() {
-    var keys = [DE_EXTERNAL_KEY, DE_RETRIEVE_KEY];
-    var sorts = ["updateDate DESC", "UpdateDate DESC"];
-    var ki, si, orderedRows, rowCount, rows;
-    for (ki = 0; ki < keys.length; ki++) {
-      for (si = 0; si < sorts.length; si++) {
-        try {
-          orderedRows = Platform.Function.LookupOrderedRows(keys[ki], MAX_DE_FETCH, sorts[si]);
-          rowCount = Platform.Function.RowCount(orderedRows);
-          if (rowCount > 0) {
-            return { rows: orderedRows, totalSorted: rowCount, isRowset: true };
-          }
-        } catch (loe) {}
-      }
-    }
-    rows = [];
-    try {
-      rows = coerceDeRows(DataExtension.Init(DE_RETRIEVE_KEY).Rows.Retrieve());
-    } catch (ie0) {
-      try {
-        rows = coerceDeRows(DataExtension.Init(DE_EXTERNAL_KEY).Rows.Retrieve());
-      } catch (ie1) {}
-    }
-    if (!rows.length) {
-      return { rows: [], totalSorted: 0, isRowset: false };
-    }
-    rows.sort(function (a, b) {
-      var cmp = compareSortDesc(dateSortKeyFromRow(b), dateSortKeyFromRow(a));
-      if (cmp !== 0) {
-        return cmp;
-      }
-      return compareSortDesc(String(journeyIdFromRow(b)), String(journeyIdFromRow(a)));
-    });
-    if (rows.length > MAX_DE_FETCH) {
-      rows = rows.slice(0, MAX_DE_FETCH);
-    }
-    return { rows: rows, totalSorted: rows.length, isRowset: false };
-  }
-
-  function getDeRowCount() {
-    var total = 0;
-    try {
-      total = Platform.Function.DataExtensionRowCount(DE_EXTERNAL_KEY);
-    } catch (e0) {}
-    if (!total) {
-      try {
-        total = Platform.Function.DataExtensionRowCount(DE_RETRIEVE_KEY);
-      } catch (e1) {}
-    }
-    if (!total) {
-      total = loadRecentBuildRows().totalSorted;
-    }
-    return total > 0 ? total : 0;
-  }
-
-  function hubUrlWithBuildsPage(hubUrl, page) {
-    var base = String(hubUrl || "");
-    if (!base) {
-      return "?buildsPage=" + page;
-    }
-    if (base.indexOf("?") >= 0) {
-      return base + "&buildsPage=" + page;
-    }
-    return base + "?buildsPage=" + page;
-  }
-
-  function renderBuildsPagination(hubUrl, page, totalPages, totalCount) {
-    if (totalPages <= 1) {
-      return "";
-    }
-    var parts = [
-      '<div class="browse-pagination">' +
-        '<div class="browse-pagination-inner">'
-    ];
-    if (page > 1) {
-      parts.push(
-        '<a href="' +
-          esc(hubUrlWithBuildsPage(hubUrl, page - 1)) +
-          '" class="filter-btn">Previous</a>'
-      );
-    } else {
-      parts.push('<span class="filter-btn browse-page-disabled">Previous</span>');
-    }
-    parts.push(
-      '<span class="browse-page-label">Page ' +
-        page +
-        " of " +
-        totalPages +
-        " (" +
-        totalCount +
-        " builds)</span>"
-    );
-    if (page < totalPages) {
-      parts.push(
-        '<a href="' +
-          esc(hubUrlWithBuildsPage(hubUrl, page + 1)) +
-          '" class="filter-btn">Next</a>'
-      );
-    } else {
-      parts.push('<span class="filter-btn browse-page-disabled">Next</span>');
-    }
-    parts.push("</div></div>");
-    return parts.join("");
-  }
-  
   function journeyIdFromRow(r) {
     return String(fieldFromRow(r, ["journeyId", "JourneyId", "JourneyID"]));
   }
@@ -636,124 +483,6 @@
     return out;
   }
   
-  try {
-    var hubUrl = Platform.Variable.GetValue("@hubUrl") || "";
-    var buildsPage = parseBrowsePage(getAmpVar("buildsPage"));
-    if (!buildsPage || buildsPage === 1) {
-      try {
-        buildsPage = parseBrowsePage(Request.GetQueryStringParameter("buildsPage"));
-      } catch (buildsPageEx) {}
-    }
-    var recentLoad = loadRecentBuildRows();
-    var orderedRows = recentLoad.rows;
-    var rowCount = recentLoad.totalSorted;
-    var buildsUseRowset = recentLoad.isRowset === true;
-    var totalPages = rowCount > 0 ? Math.ceil(rowCount / BUILD_PAGE_SIZE) : 1;
-    if (buildsPage > totalPages) {
-      buildsPage = totalPages;
-    }
-    if (buildsPage < 1) {
-      buildsPage = 1;
-    }
-    setV("buildsPage", String(buildsPage));
-
-    if (!rowCount) {
-      setV("recentBuildsOk", "true");
-      setV("jaEmpty", "1");
-      setV("jaRecentBuildsMarkup", "");
-      setV("jaBuildsLoadError", "");
-      setV("jaBuildsPagination", "");
-    } else {
-      var startIdx = (buildsPage - 1) * BUILD_PAGE_SIZE;
-      var endIdx = buildsPage * BUILD_PAGE_SIZE;
-      if (endIdx > rowCount) {
-        endIdx = rowCount;
-      }
-      var gx, r, nm, jidv, tp, cr, js, prog;
-      var parts = [];
-      for (gx = startIdx; gx < endIdx; gx++) {
-        r = rowAt(orderedRows, gx, buildsUseRowset);
-        nm = fieldFromRow(r, ["journeyName", "JourneyName", "emailName", "EmailName"]);
-        if (!nm) nm = "Untitled journey";
-        jidv = String(fieldFromRow(r, ["journeyId", "JourneyId", "JourneyID"]));
-        tp = String(fieldFromRow(r, ["journeyType", "JourneyType"]));
-        try {
-          cr = formatRowDate(r);
-        } catch (dateEx) {
-          cr = "";
-        }
-        js = String(fieldFromRow(r, ["JourneyStatus", "journeyStatus"]));
-        prog = resolveJourneyProgress(js);
-        var sentRaw = fieldFromRow(r, ["sentCount", "SentCount"]);
-        var sentHtml = "";
-        if (sentRaw !== null && sentRaw !== undefined && String(sentRaw).replace(/^\s+|\s+$/g, "") !== "") {
-          sentHtml = '<span class="progress-sent-count">' + esc(String(sentRaw)) + " sent</span>";
-        }
-        var detailHref =
-          jidv !== ""
-            ? BUILD_DETAIL_URL + "?journeyId=" + encodeURIComponent(jidv)
-            : BUILD_DETAIL_URL;
-        parts.push(
-          '<div class="survey-card">' +
-            '<div class="survey-header">' +
-            '<div class="survey-icon">🗄</div>' +
-            '<div class="survey-status status-Active">' +
-            esc(tp.length > 28 ? tp.substring(0, 28) + "…" : tp) +
-            "</div>" +
-            "</div>" +
-            '<h3 class="survey-title">' +
-            wrapTitle(nm, 30) +
-            "</h3>" +
-            '<div class="survey-meta">' +
-            '<span class="survey-id">ID: ' + esc(jidv) + '</span>' +
-            '<span class="survey-date">' + esc(cr) + "</span>" +
-            "</div>" +
-            '<div class="survey-progress">' +
-            '<div class="progress-info">' +
-            '<span class="progress-percentage ' +
-            prog.labelClass +
-            '">' +
-            esc(prog.label) +
-            "</span>" +
-            sentHtml +
-            "</div>" +
-            '<div class="progress-bar">' +
-            '<div class="progress-fill ' +
-            prog.fillClass +
-            '" style="width:' +
-            prog.width +
-            ';">' +
-            "</div>" +
-            "</div>" +
-            "</div>" +
-            '<div class="survey-actions">' +
-            '<a href="' +
-            detailHref +
-            '" class="btn-secondary">Manage build</a>' +
-            "</div>" +
-            "</div>"
-        );
-      }
-      setV("jaRecentBuildsMarkup", parts.join(""));
-      setV("jaEmpty", "0");
-      setV("recentBuildsOk", "true");
-      setV("jaBuildsLoadError", "");
-      setV("jaBuildsPagination", renderBuildsPagination(hubUrl, buildsPage, totalPages, rowCount));
-    }
-  } catch (e) {
-    var errMsg = "Could not read recent builds.";
-    try {
-      errMsg = e.message != null && e.message !== "" ? String(e.message) : String(e);
-      errMsg = errMsg.replace(/\r/g, "").replace(/\n/g, " ");
-      if (errMsg.length > 400) errMsg = errMsg.substring(0, 400);
-    } catch (err2) {}
-    setV("jaBuildsLoadError", errMsg);
-    setV("recentBuildsOk", "false");
-    setV("jaEmpty", "1");
-    setV("jaRecentBuildsMarkup", "");
-    setV("jaBuildsPagination", "");
-  }
-
   function getAmpVar(name) {
     var v = "";
     try {
@@ -1562,7 +1291,33 @@
         %%[ ELSE ]%%
         %%=TreatAsContent(@jaBrowseMarkup)=%%
         %%[ ENDIF ]%%
-        %%[ ELSEIF @recentBuildsOk == "true" AND @jaEmpty == "1" THEN ]%%
+        %%[ ELSE ]%%
+        %%[
+          VAR @rbRows, @rbPageSize, @rbI, @rbRow, @rbJid, @rbName, @rbType, @rbTypeDisp, @rbUpd, @rbDateDisp
+          VAR @rbStatus, @rbStatusLower, @rbSent, @rbProgLabel, @rbProgWidth, @rbProgFillClass, @rbProgLabelClass
+          SET @rbRows = LookupOrderedRows("Bd_journey_analytics", 500, "updateDate DESC")
+          SET @rbTotal = RowCount(@rbRows)
+          SET @rbPageSize = 20
+          SET @rbPage = @buildsPage
+          IF Empty(@rbPage) THEN SET @rbPage = 1 ENDIF
+          IF @rbPage < 1 THEN SET @rbPage = 1 ENDIF
+          SET @rbTotalPages = 1
+          IF @rbTotal > 0 THEN
+            SET @rbTotalPages = Divide(@rbTotal, @rbPageSize)
+            IF Mod(@rbTotal, @rbPageSize) > 0 THEN SET @rbTotalPages = Add(@rbTotalPages, 1) ENDIF
+          ENDIF
+          IF @rbPage > @rbTotalPages THEN SET @rbPage = @rbTotalPages ENDIF
+          SET @rbStart = Add(Multiply(Subtract(@rbPage, 1), @rbPageSize), 1)
+          SET @rbEnd = Multiply(@rbPage, @rbPageSize)
+          IF @rbEnd > @rbTotal THEN SET @rbEnd = @rbTotal ENDIF
+          SET @rbPageSep = IIF(IndexOf(@hubUrl, "?") > 0, "&", "?")
+          IF @rbTotal == 0 THEN
+            SET @jaEmpty = "1"
+          ELSE
+            SET @jaEmpty = "0"
+          ENDIF
+        ]%%
+        %%[ IF @rbTotal == 0 THEN ]%%
         <div class="no-surveys-message">
           <div class="empty-state">
             <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
@@ -1571,79 +1326,99 @@
             </svg>
             <h3>No builds yet</h3>
             <p>You haven't built anything yet.</p>
-           
           </div>
         </div>
-        %%[ ELSEIF @recentBuildsOk == "true" THEN ]%%
-        %%=TreatAsContent(@jaRecentBuildsMarkup)=%%
         %%[ ELSE ]%%
-        %%[ IF NOT Empty(@jaBuildsLoadError) THEN ]%%
-        <div class="no-surveys-message" style="grid-column: 1 / -1; margin-bottom: 0;">
-          <div class="empty-state" style="padding: 16px 20px;">
-            <p style="margin: 0; font-size: 14px;">Recent builds could not be loaded from the log. Showing sample journeys below.</p>
-            <p style="margin: 8px 0 0; font-size: 12px; opacity: 0.85;">%%=v(@jaBuildsLoadError)=%%</p>
-          </div>
-        </div>
-        %%[ ENDIF ]%%
+        %%[ FOR @rbI = @rbStart TO @rbEnd DO ]%%
         %%[
-          VAR @rowCount, @i, @name, @id, @status, @created, @responseCount
-          SET @rowCount = 3
-          FOR @i = 1 TO @rowCount DO
-            IF @i == 1 THEN
-              SET @name = "Q3 renewal nurture"
-              SET @id = "DEMO-J001"
-              SET @status = "Active"
-              SET @created = "2024-01-15"
-              SET @responseCount = 47
-            ELSEIF @i == 2 THEN
-              SET @name = "Onboarding drip v2"
-              SET @id = "DEMO-J002"
-              SET @status = "Completed"
-              SET @created = "2024-01-10"
-              SET @responseCount = 89
-            ELSE
-              SET @name = "Webinar follow-up"
-              SET @id = "DEMO-J003"
-              SET @status = "Draft"
-              SET @created = "2024-01-05"
-              SET @responseCount = 11
-            ENDIF
-            IF Length(@name) > 20 THEN
-              SET @name = Concat(Substring(@name,1,20),"...")
-            ENDIF
+          SET @rbRow = Row(@rbRows, @rbI)
+          SET @rbJid = Field(@rbRow, "journeyId")
+          SET @rbName = Field(@rbRow, "journeyName")
+          IF Empty(@rbName) THEN SET @rbName = Field(@rbRow, "emailName") ENDIF
+          IF Empty(@rbName) THEN SET @rbName = "Untitled journey" ENDIF
+          SET @rbType = Field(@rbRow, "journeyType")
+          IF Length(@rbType) > 28 THEN
+            SET @rbTypeDisp = Concat(Substring(@rbType, 1, 28), "…")
+          ELSE
+            SET @rbTypeDisp = @rbType
+          ENDIF
+          SET @rbUpd = Field(@rbRow, "updateDate")
+          SET @rbDateDisp = ""
+          IF NOT Empty(@rbUpd) THEN SET @rbDateDisp = Format(@rbUpd, "MMMM d, yyyy h:mm tt") ENDIF
+          SET @rbStatus = Field(@rbRow, "JourneyStatus")
+          IF Empty(@rbStatus) THEN SET @rbStatus = Field(@rbRow, "journeyStatus") ENDIF
+          SET @rbStatusLower = Lowercase(Trim(@rbStatus))
+          SET @rbProgLabel = "Ready"
+          SET @rbProgWidth = "35%"
+          SET @rbProgFillClass = "progress-fill--ready"
+          SET @rbProgLabelClass = "progress-percentage--ready"
+          IF @rbStatusLower == "draft" THEN
+            SET @rbProgLabel = "Draft"
+            SET @rbProgWidth = "25%"
+            SET @rbProgFillClass = "progress-fill--draft"
+            SET @rbProgLabelClass = "progress-percentage--draft"
+          ELSEIF @rbStatusLower == "running" THEN
+            SET @rbProgLabel = "Running"
+            SET @rbProgWidth = "100%"
+            SET @rbProgFillClass = "progress-fill--running"
+            SET @rbProgLabelClass = "progress-percentage--running"
+          ELSEIF @rbStatusLower == "stopped" THEN
+            SET @rbProgLabel = "Stopped"
+            SET @rbProgWidth = "100%"
+            SET @rbProgFillClass = "progress-fill--stopped"
+            SET @rbProgLabelClass = "progress-percentage--stopped"
+          ENDIF
+          SET @rbSent = Field(@rbRow, "sentCount")
         ]%%
         <div class="survey-card">
           <div class="survey-header">
             <div class="survey-icon">🗄</div>
-            <div class="survey-status status-%%=v(@status)=%%">%%=v(@status)=%%</div>
+            <div class="survey-status status-Active">%%=v(@rbTypeDisp)=%%</div>
           </div>
-          <h3 class="survey-title">%%=v(@name)=%%</h3>
+          <h3 class="survey-title">%%=v(@rbName)=%%</h3>
           <div class="survey-meta">
-            <span class="survey-id">ID: %%=v(@id)=%%</span>
-            <span class="survey-date">%%=v(@created)=%%</span>
+            <span class="survey-id">ID: %%=v(@rbJid)=%%</span>
+            <span class="survey-date">%%=v(@rbDateDisp)=%%</span>
           </div>
           <div class="survey-progress">
             <div class="progress-info">
-              <span>%%=v(@responseCount)=%% entry signals</span>
-              <span class="progress-percentage">%%=IIF(@responseCount > 0, FormatNumber(Multiply(Divide(@responseCount, 100), 100), 0), 0)=%%/100</span>
+              <span class="progress-percentage %%=v(@rbProgLabelClass)=%%">%%=v(@rbProgLabel)=%%</span>
+              %%[ IF NOT Empty(@rbSent) THEN ]%%
+              <span class="progress-sent-count">%%=v(@rbSent)=%% sent</span>
+              %%[ ENDIF ]%%
             </div>
             <div class="progress-bar">
-              <div class="progress-fill" style="width: %%=IIF(@responseCount > 0, FormatNumber(Multiply(Divide(@responseCount, 100), 100), 0), 0)=%%%;"></div>
+              <div class="progress-fill %%=v(@rbProgFillClass)=%%" style="width:%%=v(@rbProgWidth)=%%;"></div>
             </div>
           </div>
           <div class="survey-actions">
-            <a href="%%=v(@hubUrl)=%%" class="btn-secondary">Open builder</a>
+            <a href="%%=Concat(@buildDetailUrl, "?journeyId=", @rbJid)=%%" class="btn-secondary">Manage build</a>
           </div>
         </div>
-        %%[ NEXT @i ]%%
+        %%[ NEXT @rbI ]%%
+        %%[ ENDIF ]%%
         %%[ ENDIF ]%%
       </div>
 
       <div id="buildsPaginationSection">
       %%[ IF @browseMode == "1" AND NOT Empty(@jaBrowsePagination) THEN ]%%
       %%=TreatAsContent(@jaBrowsePagination)=%%
-      %%[ ELSEIF @browseMode != "1" AND NOT Empty(@jaBuildsPagination) THEN ]%%
-      %%=TreatAsContent(@jaBuildsPagination)=%%
+      %%[ ELSEIF @browseMode != "1" AND @rbTotalPages > 1 THEN ]%%
+      <div class="browse-pagination">
+        <div class="browse-pagination-inner">
+          %%[ IF @rbPage > 1 THEN ]%%
+          <a href="%%=Concat(@hubUrl, @rbPageSep, "buildsPage=", Subtract(@rbPage, 1))=%%" class="filter-btn">Previous</a>
+          %%[ ELSE ]%%
+          <span class="filter-btn browse-page-disabled">Previous</span>
+          %%[ ENDIF ]%%
+          <span class="browse-page-label">Page %%=v(@rbPage)=%% of %%=v(@rbTotalPages)=%% (%%=v(@rbTotal)=%% builds)</span>
+          %%[ IF @rbPage < @rbTotalPages THEN ]%%
+          <a href="%%=Concat(@hubUrl, @rbPageSep, "buildsPage=", Add(@rbPage, 1))=%%" class="filter-btn">Next</a>
+          %%[ ELSE ]%%
+          <span class="filter-btn browse-page-disabled">Next</span>
+          %%[ ENDIF ]%%
+        </div>
+      </div>
       %%[ ENDIF ]%%
       </div>
   
@@ -2800,11 +2575,26 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 12px;
+    gap: 16px;
     margin-bottom: 16px;
     font-size: 12px;
     color: var(--gray-500);
     text-transform: uppercase;
+  }
+
+  .survey-id {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1 1 auto;
+  }
+
+  .survey-date {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    text-align: right;
+    text-transform: none;
   }
   
   .survey-progress {
