@@ -497,17 +497,35 @@
       hour = 0;
     }
     dt = new Date(year, month, day, hour, min, sec);
-    return dt && dt.getTime ? dt.getTime() : 0;
+    return dt && dt.getTime ? safeMs(dt.getTime()) : 0;
+  }
+
+  function safeMs(val) {
+    var n = Number(val);
+    if (isNaN(n) || !isFinite(n)) {
+      return 0;
+    }
+    return n;
+  }
+
+  function compareSortDesc(left, right) {
+    if (left > right) {
+      return -1;
+    }
+    if (left < right) {
+      return 1;
+    }
+    return 0;
   }
 
   function parseDateToMs(ud) {
-    var s, p, n, fmts, fi;
+    var s, p, n, fmts, fi, ms;
     if (ud === null || ud === undefined || ud === "") {
       return 0;
     }
     try {
       if (typeof ud === "object" && ud.getTime) {
-        return ud.getTime();
+        return safeMs(ud.getTime());
       }
     } catch (e0) {}
     s = String(ud).replace(/^\s+|\s+$/g, "");
@@ -534,17 +552,23 @@
       try {
         p = Platform.Function.ParseDate(s, fmts[fi]);
         if (p && p.getTime) {
-          return p.getTime();
+          ms = safeMs(p.getTime());
+          if (ms > 0) {
+            return ms;
+          }
         }
       } catch (fmtEx) {}
     }
     try {
       p = Platform.Function.ParseDate(s);
       if (p && p.getTime) {
-        return p.getTime();
+        ms = safeMs(p.getTime());
+        if (ms > 0) {
+          return ms;
+        }
       }
     } catch (e1) {}
-    return parseUsDateToMs(s);
+    return safeMs(parseUsDateToMs(s));
   }
 
   function msFromRow(r) {
@@ -584,17 +608,28 @@
     rows.sort(function (a, b) {
       var ams = 0;
       var bms = 0;
+      var idA = "";
+      var idB = "";
       try {
-        ams = msFromRow(a);
-      } catch (sortExA) {}
-      try {
-        bms = msFromRow(b);
-      } catch (sortExB) {}
-      var diff = bms - ams;
-      if (diff !== 0) {
-        return diff;
+        ams = safeMs(msFromRow(a));
+      } catch (sortExA) {
+        ams = 0;
       }
-      return journeyIdFromRow(b).localeCompare(journeyIdFromRow(a));
+      try {
+        bms = safeMs(msFromRow(b));
+      } catch (sortExB) {
+        bms = 0;
+      }
+      if (bms !== ams) {
+        return bms > ams ? -1 : 1;
+      }
+      try {
+        idA = journeyIdFromRow(a);
+        idB = journeyIdFromRow(b);
+      } catch (sortExC) {
+        return 0;
+      }
+      return compareSortDesc(String(idB), String(idA));
     });
     if (rows.length > MAX_DE_FETCH) {
       rows = rows.slice(0, MAX_DE_FETCH);
