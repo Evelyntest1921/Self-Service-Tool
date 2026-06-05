@@ -316,7 +316,17 @@
   Platform.Load("Core", "1.1");
   
   var DE_EXTERNAL_KEY = "Bd_journey_analytics";
-  var DE_RETRIEVE_KEY = String(DE_EXTERNAL_KEY).toLowerCase();
+  var ANALYTICS_ROW_FIELDS = [
+    "journeyId",
+    "journeyName",
+    "journeyType",
+    "emailName",
+    "emailId",
+    "updateDate",
+    "JourneyStatus",
+    "journeyStatus",
+    "sentCount"
+  ];
   var BROWSE_PAGE_SIZE = 50;
   var BUILD_PAGE_SIZE = 20;
   var MAX_DE_FETCH = 500;
@@ -662,16 +672,55 @@
     return rows;
   }
 
+  function retrieveAnalyticsRows() {
+    var rows = [];
+    var types = [
+      "Quick Send",
+      "Journey + Automation",
+      "One Sender",
+      "Campaign Journey",
+      "Existing Journey"
+    ];
+    var seen = {};
+    var ti, i, t, chunk, jid;
+    try {
+      rows = coerceDeRows(DataExtension.Init(DE_EXTERNAL_KEY).Rows.Retrieve());
+      if (rows.length) {
+        return rows;
+      }
+    } catch (deInitEx) {}
+    try {
+      rows = coerceDeRows(
+        (new Script.Util.WSProxy()).retrieve(
+          "DataExtensionObject[" + DE_EXTERNAL_KEY + "]",
+          ANALYTICS_ROW_FIELDS,
+          { Property: "journeyId", SimpleOperator: "isNotNull" }
+        )
+      );
+      if (rows.length) {
+        return rows;
+      }
+    } catch (wsProxyEx) {}
+    for (ti = 0; ti < types.length; ti++) {
+      t = types[ti];
+      try {
+        chunk = coerceRows(Platform.Function.LookupRows(DE_EXTERNAL_KEY, "journeyType", t));
+        for (i = 0; i < chunk.length; i++) {
+          jid = journeyIdFromRow(chunk[i]);
+          if (jid && !seen[jid.toLowerCase()]) {
+            seen[jid.toLowerCase()] = true;
+            rows.push(chunk[i]);
+          }
+        }
+      } catch (lookupEx) {}
+    }
+    return rows;
+  }
+
   function loadRecentBuildRows(fetchLimit) {
     var rows = [];
     var limit = fetchLimit > 0 ? fetchLimit : MAX_DE_FETCH;
-    try {
-      rows = coerceDeRows(DataExtension.Init(DE_RETRIEVE_KEY).Rows.Retrieve());
-    } catch (ie0) {
-      try {
-        rows = coerceDeRows(DataExtension.Init(DE_EXTERNAL_KEY).Rows.Retrieve());
-      } catch (ie1) {}
-    }
+    rows = retrieveAnalyticsRows();
     if (!rows.length) {
       return { rows: [], count: 0 };
     }
@@ -684,16 +733,15 @@
 
   function getDeRowCount() {
     var total = 0;
+    total = parseInt(getAmpVar("allJourneysTotal"), 10);
+    if (!isNaN(total) && total > 0) {
+      return total;
+    }
     try {
       total = Platform.Function.DataExtensionRowCount(DE_EXTERNAL_KEY);
     } catch (e0) {}
     if (!total) {
-      try {
-        total = Platform.Function.DataExtensionRowCount(DE_RETRIEVE_KEY);
-      } catch (e1) {}
-    }
-    if (!total) {
-      total = loadRecentBuildRows(MAX_DE_FETCH).count;
+      total = retrieveAnalyticsRows().length;
     }
     return total > 0 ? total : 0;
   }
@@ -1040,17 +1088,7 @@
 
   function loadExistingJourneyIds() {
     var map = {};
-    var rows = [];
-    var deObj = null;
-    try {
-      deObj = DataExtension.Init(DE_RETRIEVE_KEY);
-      rows = coerceRows(deObj.Rows.Retrieve());
-    } catch (ie0) {
-      try {
-        deObj = DataExtension.Init(DE_EXTERNAL_KEY);
-        rows = coerceRows(deObj.Rows.Retrieve());
-      } catch (ie1) {}
-    }
+    var rows = retrieveAnalyticsRows();
     var i, id;
     for (i = 0; i < rows.length; i++) {
       id = journeyIdFromRow(rows[i]);
