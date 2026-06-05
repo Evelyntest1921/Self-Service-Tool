@@ -2256,7 +2256,7 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
          <div class="question-text">Question Builder</div>
        </div>
        <div class="questions-list" id="questionsList"></div>
-       <button type="button" class="btn-add-question" onclick="addQuestion()">
+       <button type="button" class="btn-add-question" id="addQuestionBtn">
          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="margin-right: 8px;"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
          Add Question
        </button>
@@ -2335,7 +2335,6 @@ Your survey is saved%%=IIF(@surveySaved == "true", Concat(" (", @surveyId, ")"),
   </main>
 </div>
 <script>
-(function(){
     let questionCounter = 0;
     let selectedQuestionType = '';
 
@@ -2514,14 +2513,37 @@ Your survey is saved%%=IIF(@surveySaved == "true", Concat(" (", @surveyId, ")"),
 
 
 
-    // Renumber questions after removal
     function renumberQuestions() {
       const questions = document.querySelectorAll('.question-item');
       questions.forEach((question, index) => {
         const number = index + 1;
-        question.dataset.question = number;
-        question.querySelector('.question-item-number').textContent = number;
-        question.querySelector('input[name^="question"]').name = `question${number}`;
+        const oldNumber = question.dataset.question;
+        question.dataset.question = String(number);
+        const numEl = question.querySelector('.question-item-number');
+        if (numEl) numEl.textContent = number;
+        const qInput = question.querySelector('input[name^="question"]');
+        if (qInput) {
+          qInput.name = 'question' + number;
+          qInput.placeholder = 'Question ' + number;
+        }
+        const typeInput = question.querySelector('input[name^="questionType"]');
+        if (typeInput) typeInput.name = 'questionType' + number;
+        const reqInput = question.querySelector('input[name^="required"]');
+        if (reqInput) reqInput.name = 'required' + number;
+        const typeSelect = question.querySelector('.question-type-select');
+        if (typeSelect) typeSelect.setAttribute('onchange', 'updateQuestionType(' + number + ', this.value)');
+        const removeBtn = question.querySelector('.btn-remove');
+        if (removeBtn) removeBtn.setAttribute('onclick', 'removeQuestion(' + number + ')');
+        question.querySelectorAll('[name^="option"]').forEach(function(el) {
+          el.name = el.name.replace('option' + oldNumber + '_', 'option' + number + '_');
+        });
+        const optionsBox = question.querySelector('[id^="options"]');
+        if (optionsBox) optionsBox.id = 'options' + number;
+        const addOptBtn = question.querySelector('.btn-add-option');
+        if (addOptBtn) addOptBtn.setAttribute('onclick', 'addOption(' + number + ')');
+        question.querySelectorAll('.btn-remove-option').forEach(function(btn, optIdx) {
+          btn.setAttribute('onclick', 'removeOption(' + number + ', ' + (optIdx + 1) + ')');
+        });
       });
       questionCounter = questions.length;
     }
@@ -2531,21 +2553,15 @@ Your survey is saved%%=IIF(@surveySaved == "true", Concat(" (", @surveyId, ")"),
 
          // Update question type and refresh options
      function updateQuestionType(questionNumber, newType) {
-       const questionItem = document.querySelector(`[data-question="${questionNumber}"]`);
-       const questionText = questionItem.querySelector(`input[name="question${questionNumber}"]`).value;
-       
-       // Update hidden input
-       questionItem.querySelector(`input[name="questionType${questionNumber}"]`).value = newType;
-       
-       // Remove existing options
+       const questionItem = document.querySelector('[data-question="' + questionNumber + '"]');
+       if (!questionItem) return;
+       const typeHidden = questionItem.querySelector('input[name^="questionType"]');
+       if (typeHidden) typeHidden.value = newType;
        const existingOptions = questionItem.querySelector('.question-options');
-       if (existingOptions) {
-         existingOptions.remove();
-       }
-       
-       // Add new options based on type
-       const optionsHtml = createOptionsHTML(questionNumber, newType);
-       questionItem.insertAdjacentHTML('beforeend', optionsHtml);
+       if (existingOptions) existingOptions.remove();
+       const existingAddOption = questionItem.querySelector('.btn-add-option');
+       if (existingAddOption) existingAddOption.remove();
+       questionItem.insertAdjacentHTML('beforeend', createOptionsHTML(questionNumber, newType));
      }
      
      // Create options HTML based on type
@@ -2693,12 +2709,12 @@ Your survey is saved%%=IIF(@surveySaved == "true", Concat(" (", @surveyId, ")"),
 
 
  document.addEventListener('DOMContentLoaded', function() {
-   if (!document.querySelector('.question-item')) {
-     addQuestion();
-   }
+   var addBtn = document.getElementById('addQuestionBtn');
+   if (addBtn) addBtn.addEventListener('click', addQuestion);
+   if (!document.querySelector('.question-item')) addQuestion();
  });
 
- var form = document.querySelector('form[method="post"]');
+ var form = document.getElementById('surveyForm') || document.querySelector('form[method="post"]');
  if (form && form.querySelector('#submitBtn')) {
    var btn = document.getElementById('submitBtn');
    var btnText = document.getElementById('btnText');
@@ -2717,7 +2733,7 @@ Your survey is saved%%=IIF(@surveySaved == "true", Concat(" (", @surveyId, ")"),
      form.appendChild(questionCountInput);
      questions.forEach(function(question, index) {
        var questionNumber = index + 1;
-       var typeInput = question.querySelector('input[name="questionType' + questionNumber + '"]');
+       var typeInput = question.querySelector('input[name^="questionType"]');
        if (typeInput && typeInput.value === 'multiple') {
          var options = question.querySelectorAll('.option-input');
          var optionCountInput = document.createElement('input');
@@ -2748,7 +2764,6 @@ Your survey is saved%%=IIF(@surveySaved == "true", Concat(" (", @surveyId, ")"),
      senderToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
    });
  }
-})();
 </script>
 </body>
 </html>
