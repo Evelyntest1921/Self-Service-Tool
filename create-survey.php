@@ -989,6 +989,7 @@ ENDIF
    <span class="h3" style="font-size: 24px;
     font-weight: 700;
     color: var(--gray-900); padding-bottom: 20px">%%=v(@builderPageLabel)=%%</span>
+        <p class="sub">Quickly create marketing cloud surveys.</p>
       <!-- Survey Creation Form -->
       <form method="POST" action="%%=RequestParameter('PAGEURL')=%%" id="surveyForm">
         <input type="hidden" name="submitted" value="true">
