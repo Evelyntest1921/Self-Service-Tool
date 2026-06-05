@@ -648,26 +648,63 @@ function filterSlotsByKeys(slots, allowedKeys) {
  }
  return filtered;
 }
-function buildMinimalTemplateRef(sourceTemplate) {
- var templateId = parseInt(sourceTemplate.id, 10);
- var ref = { assetType: { id: 4, name: "template" } };
- if (!isNaN(templateId)) {
-   ref.id = templateId;
+function resolveTemplateSlots(templateSource, sourceTemplate) {
+ if (templateSource && templateSource.views && templateSource.views.html && templateSource.views.html.slots && typeof templateSource.views.html.slots === "object") {
+   return cloneObject(templateSource.views.html.slots);
  }
- return ref;
+ if (templateSource && templateSource.slots && typeof templateSource.slots === "object") {
+   return cloneObject(templateSource.slots);
+ }
+ if (sourceTemplate && sourceTemplate.slots && typeof sourceTemplate.slots === "object") {
+   return cloneObject(sourceTemplate.slots);
+ }
+ return {};
+}
+function findClosestSlotKey(orphanKey, templateKeys) {
+ var i, tk, prefixLen;
+ if (!orphanKey || !templateKeys || !templateKeys.length) return "";
+ for (i = 0; i < templateKeys.length; i++) {
+   tk = templateKeys[i];
+   prefixLen = orphanKey.length < tk.length ? orphanKey.length : tk.length;
+   if (prefixLen > 6 && orphanKey.substring(0, prefixLen - 1) === tk.substring(0, prefixLen - 1)) {
+     return tk;
+   }
+ }
+ return "";
+}
+function slotHasContent(slotValue) {
+ if (!slotValue || typeof slotValue !== "object") return false;
+ if (slotValue.content && String(slotValue.content).replace(/\s+/g, "").length > 0) return true;
+ if (slotValue.blocks && typeof slotValue.blocks === "object" && objectKeys(slotValue.blocks).length > 0) return true;
+ return false;
+}
+function sanitizeEmailSlotsForTemplate(emailSlots, templateSlotKeys) {
+ var sanitized = filterSlotsByKeys(emailSlots, templateSlotKeys);
+ var emailKeys = objectKeys(emailSlots);
+ var i, key, closest;
+ for (i = 0; i < emailKeys.length; i++) {
+   key = emailKeys[i];
+   if (templateSlotKeys.indexOf(key) >= 0) continue;
+   closest = findClosestSlotKey(key, templateSlotKeys);
+   if (closest && slotHasContent(emailSlots[key]) && !slotHasContent(sanitized[closest])) {
+     sanitized[closest] = cloneObject(emailSlots[key]);
+   }
+ }
+ if (!objectKeys(sanitized).length && emailSlots && typeof emailSlots === "object") {
+   return cloneObject(emailSlots);
+ }
+ return sanitized;
 }
 function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, sourceSlots) {
  var templateSource = resolvedTemplateAsset || sourceTemplate;
- var templateSlots = (templateSource && templateSource.slots && typeof templateSource.slots === "object") ? cloneObject(templateSource.slots) : {};
- if (!objectKeys(templateSlots).length && sourceTemplate && sourceTemplate.slots && typeof sourceTemplate.slots === "object") {
-   templateSlots = cloneObject(sourceTemplate.slots);
- }
+ var templateSlots = resolveTemplateSlots(templateSource, sourceTemplate);
  var templateContent = (templateSource && templateSource.content) ? templateSource.content : "";
- var sourceHtmlContent = (sourceAsset && sourceAsset.views && sourceAsset.views.html && sourceAsset.views.html.content) ? sourceAsset.views.html.content : (sourceAsset.content || templateContent);
- var emailSlots = filterSlotsByKeys(sourceSlots, objectKeys(templateSlots));
- if (!objectKeys(emailSlots).length && sourceSlots && typeof sourceSlots === "object") {
-   emailSlots = cloneObject(sourceSlots);
+ if (!templateContent && templateSource && templateSource.views && templateSource.views.html && templateSource.views.html.content) {
+   templateContent = templateSource.views.html.content;
  }
+ var sourceHtmlContent = (sourceAsset && sourceAsset.views && sourceAsset.views.html && sourceAsset.views.html.content) ? sourceAsset.views.html.content : (sourceAsset.content || templateContent);
+ var templateSlotKeys = objectKeys(templateSlots);
+ var emailSlots = sanitizeEmailSlotsForTemplate(sourceSlots, templateSlotKeys);
  var payload = {
    name: targetName,
    assetType: { id: 207, name: "htmlemail" },
@@ -678,7 +715,12 @@ function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preh
      html: {
        content: sourceHtmlContent,
        slots: emailSlots,
-       template: buildMinimalTemplateRef(sourceTemplate)
+       template: {
+         id: parseInt(sourceTemplate.id, 10),
+         assetType: { id: 4, name: "template" },
+         content: templateContent,
+         slots: templateSlots
+       }
      },
      text: {}
    },
@@ -829,14 +871,6 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          if (noCategoryPayload && noCategoryPayload.category) {
            delete noCategoryPayload.category;
            postAttempts.push(noCategoryPayload);
-         }
-         var slotsOnlyPayload = cloneObject(payload);
-         if (slotsOnlyPayload) {
-           if (slotsOnlyPayload.category) delete slotsOnlyPayload.category;
-           if (slotsOnlyPayload.views && slotsOnlyPayload.views.html) {
-             delete slotsOnlyPayload.views.html.content;
-           }
-           postAttempts.push(slotsOnlyPayload);
          }
        }
        var assetStatus = 0;
