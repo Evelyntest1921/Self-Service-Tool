@@ -635,12 +635,51 @@ function applyTextSettings(payload, textContent) {
    }
  }
 }
+function extractSlotKeysFromHtml(htmlContent) {
+ var keys = [];
+ var seen = {};
+ var str = htmlContent ? String(htmlContent) : "";
+ var pattern = "data-key=\"";
+ var pos = 0;
+ var start, end, key;
+ while (pos < str.length && keys.length < 30) {
+   start = str.indexOf(pattern, pos);
+   if (start < 0) break;
+   start += pattern.length;
+   end = str.indexOf("\"", start);
+   if (end < 0) break;
+   key = str.substring(start, end);
+   if (key && !seen[key]) {
+     seen[key] = true;
+     keys.push(key);
+   }
+   pos = end + 1;
+ }
+ return keys;
+}
+function alignSlotsToHtmlKeys(slotMap, htmlContent) {
+ var keys = extractSlotKeysFromHtml(htmlContent);
+ var aligned = {};
+ var i, key;
+ if (!keys.length) {
+   return (slotMap && typeof slotMap === "object") ? cloneObject(slotMap) : {};
+ }
+ for (i = 0; i < keys.length; i++) {
+   key = keys[i];
+   if (slotMap && slotMap[key] !== null && slotMap[key] !== undefined) {
+     aligned[key] = cloneObject(slotMap[key]);
+   } else {
+     aligned[key] = {};
+   }
+ }
+ return aligned;
+}
 function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, sourceSlots) {
  var templateSource = resolvedTemplateAsset || sourceTemplate;
  var templateContent = (templateSource && templateSource.content) ? templateSource.content : "";
- var templateSlots = (templateSource && templateSource.slots && typeof templateSource.slots === "object") ? cloneObject(templateSource.slots) : {};
  var sourceHtmlContent = (sourceAsset && sourceAsset.views && sourceAsset.views.html && sourceAsset.views.html.content) ? sourceAsset.views.html.content : (sourceAsset.content || templateContent);
- var emailSlots = (sourceSlots && typeof sourceSlots === "object") ? cloneObject(sourceSlots) : {};
+ var emailSlots = alignSlotsToHtmlKeys(sourceSlots, sourceHtmlContent);
+ var templateSlots = alignSlotsToHtmlKeys(templateSource.slots, templateContent || sourceHtmlContent);
  var payload = {
    name: targetName,
    assetType: { id: 207, name: "htmlemail" },
