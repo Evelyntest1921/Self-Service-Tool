@@ -635,41 +635,79 @@ function applyTextSettings(payload, textContent) {
    }
  }
 }
-function resolveTemplateSlots(templateSource, sourceTemplate) {
- if (templateSource && templateSource.views && templateSource.views.html && templateSource.views.html.slots && typeof templateSource.views.html.slots === "object") {
-   return cloneObject(templateSource.views.html.slots);
- }
- if (templateSource && templateSource.slots && typeof templateSource.slots === "object") {
-   return cloneObject(templateSource.slots);
- }
- if (sourceTemplate && sourceTemplate.slots && typeof sourceTemplate.slots === "object") {
-   return cloneObject(sourceTemplate.slots);
- }
- return {};
-}
-function mergeSlotMaps(baseSlots, extraSlots) {
- var merged = cloneObject(baseSlots) || {};
- var extraKeys = objectKeys(extraSlots || {});
- var i, key;
- for (i = 0; i < extraKeys.length; i++) {
-   key = extraKeys[i];
-   if (extraSlots[key] !== null && extraSlots[key] !== undefined) {
-     merged[key] = cloneObject(extraSlots[key]);
+function deepStripCreateFields(obj, keepTemplateId) {
+ var stripKeys, out, key, childKeepId, i;
+ if (obj === null || obj === undefined) return obj;
+ if (typeof obj !== "object") return obj;
+ if (typeof obj.length === "number") {
+   var arr = [];
+   for (i = 0; i < obj.length; i++) {
+     arr.push(deepStripCreateFields(obj[i], false));
    }
+   return arr;
  }
- return merged;
+ stripKeys = ["customerKey","objectID","modifiedDate","createdDate","createdBy","modifiedBy","legacyData","owner","status","modelVersion","parentId","sharingProperties","localAssets"];
+ out = {};
+ for (key in obj) {
+   if (!obj.hasOwnProperty(key)) continue;
+   if (stripKeys.indexOf(key) >= 0) continue;
+   if (key === "id") {
+    if (keepTemplateId) out[key] = obj[key];
+    continue;
+   }
+   childKeepId = keepTemplateId && key === "template";
+   out[key] = deepStripCreateFields(obj[key], childKeepId);
+ }
+ return out;
+}
+function slotPlaceholderMap(emailSlots) {
+ var placeholders = {};
+ var keys = objectKeys(emailSlots || {});
+ var i;
+ for (i = 0; i < keys.length; i++) {
+   placeholders[keys[i]] = {};
+ }
+ return placeholders;
+}
+function buildDirectClonePayload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent) {
+ var payload = buildBasePayload(sourceAsset, targetName, 207);
+ if (!payload.views || typeof payload.views !== "object") {
+   payload.views = cloneObject(sourceAsset.views || {});
+ }
+ payload.views.subjectline = { content: subjectlineContent || "Campaign Event" };
+ payload.views.preheader = { content: preheaderContent || "" };
+ applyTextSettings(payload, textContent);
+ return deepStripCreateFields(payload, false);
+}
+function appendPostAttempts(targetList, basePayload) {
+ var noCategoryPayload;
+ if (!basePayload) return;
+ targetList.push(basePayload);
+ noCategoryPayload = cloneObject(basePayload);
+ if (noCategoryPayload && noCategoryPayload.category) {
+   delete noCategoryPayload.category;
+   targetList.push(noCategoryPayload);
+ }
 }
 function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, sourceSlots) {
  var templateSource = resolvedTemplateAsset || sourceTemplate;
- var templateSlots = resolveTemplateSlots(templateSource, sourceTemplate);
  var templateContent = (templateSource && templateSource.content) ? templateSource.content : "";
  if (!templateContent && templateSource && templateSource.views && templateSource.views.html && templateSource.views.html.content) {
    templateContent = templateSource.views.html.content;
  }
  var sourceHtmlContent = (sourceAsset && sourceAsset.views && sourceAsset.views.html && sourceAsset.views.html.content) ? sourceAsset.views.html.content : (sourceAsset.content || templateContent);
  var emailSlots = (sourceSlots && typeof sourceSlots === "object") ? cloneObject(sourceSlots) : {};
- templateSlots = mergeSlotMaps(templateSlots, sourceTemplate && sourceTemplate.slots ? sourceTemplate.slots : {});
- templateSlots = mergeSlotMaps(templateSlots, emailSlots);
+ var templateRef = cloneObject(sourceTemplate) || {};
+ if (!templateRef.assetType) {
+   templateRef.assetType = { id: 4, name: "template" };
+ }
+ if (!templateRef.id && sourceTemplate && sourceTemplate.id) {
+   templateRef.id = parseInt(sourceTemplate.id, 10);
+ }
+ templateRef.slots = slotPlaceholderMap(emailSlots);
+ if (!templateRef.content && templateContent) {
+   templateRef.content = templateContent;
+ }
  var payload = {
    name: targetName,
    assetType: { id: 207, name: "htmlemail" },
@@ -680,12 +718,7 @@ function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preh
      html: {
        content: sourceHtmlContent,
        slots: emailSlots,
-       template: {
-         id: parseInt(sourceTemplate.id, 10),
-         assetType: { id: 4, name: "template" },
-         content: templateContent,
-         slots: templateSlots
-       }
+       template: deepStripCreateFields(templateRef, true)
      },
      text: {}
    },
@@ -750,6 +783,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
      var assetTypeId = (template.assetType && template.assetType.id) ? parseInt(template.assetType.id, 10) : 207;
      var slotKeys = objectKeys(htmlSlots);
      var payload = null;
+     var postAttempts = [];
      var resolvedTemplateAsset = null;
      var debugPrefix = " Source assetType: " + assetTypeId + ". Has template ref: " + (sourceTemplate ? "yes" : "no") + ". Slot keys: " + (slotKeys.length ? slotKeys.join(",") : "none") + ".";
      var payloadDebug = "";
@@ -776,16 +810,17 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          payload.category = { id: template.category.id };
        }
      } else if (assetTypeId === 207) {
+       appendPostAttempts(postAttempts, buildDirectClonePayload(template, emailName, subjectlineContent, preheaderContent, textContent));
        if (sourceTemplate) {
          var fetchedTemplate = fetchAssetById(sourceTemplate.id, subdomain, accessToken);
          if (fetchedTemplate.ok && fetchedTemplate.asset) {
            resolvedTemplateAsset = fetchedTemplate.asset;
-           payload = buildCloned207Payload(template, emailName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, htmlSlots);
-         } else {
-           step3bResult = " Step 3b SKIP - Email not duplicated: Template asset fetch failed for template ID " + sourceTemplate.id + " with HTTP " + fetchedTemplate.statusCode + " - " + (fetchedTemplate.responseText || "No response body.") + debugPrefix;
+           appendPostAttempts(postAttempts, buildCloned207Payload(template, emailName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, htmlSlots));
          }
-       } else {
-         step3bResult = " Step 3b SKIP - Email not duplicated: Source asset is template-based email but views.html.template is missing." + debugPrefix;
+       }
+       payload = postAttempts.length ? postAttempts[0] : null;
+       if (!payload) {
+         step3bResult = " Step 3b SKIP - Email not duplicated: Could not build clone payload for template-based email." + debugPrefix;
        }
      } else if (assetTypeId === 208) {
        payload = buildBasePayload(template, emailName, 208);
@@ -830,17 +865,13 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
        };
        payloadDebug = truncateString(Platform.Function.Stringify(debugObj), 2500);
        var assetUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets";
-       var postAttempts = [payload];
-       if (assetTypeId === 207) {
-         var noCategoryPayload = cloneObject(payload);
-         if (noCategoryPayload && noCategoryPayload.category) {
-           delete noCategoryPayload.category;
-           postAttempts.push(noCategoryPayload);
-         }
+       if (!postAttempts.length && payload) {
+         postAttempts.push(payload);
        }
        var assetStatus = 0;
        var assetResponse = "";
        var attemptIdx = 0;
+       var winningAttempt = 0;
        for (attemptIdx = 0; attemptIdx < postAttempts.length; attemptIdx++) {
          var attemptPayload = postAttempts[attemptIdx];
          if (!attemptPayload) continue;
@@ -857,6 +888,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          assetResponse = postResp.content ? String(postResp.content) : "";
          if (assetStatus == 200 || assetStatus == 201) {
            payload = attemptPayload;
+           winningAttempt = attemptIdx + 1;
            break;
          }
          if (assetStatus != 400) {
@@ -881,7 +913,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
              }
            }
            if (journeyEmailId) {
-             step3bResult = " Step 3b OK - Email duplicated.";
+             step3bResult = " Step 3b OK - Email duplicated." + (winningAttempt > 0 ? " Attempt " + winningAttempt + "." : "");
            } else {
              step3bResult = " Step 3b SKIP - Email duplicated but legacy email ID was not available for Journey Builder.";
            }
