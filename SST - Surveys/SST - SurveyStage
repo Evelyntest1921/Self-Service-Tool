@@ -1,15 +1,41 @@
 %%[
 VAR @errorFlag, @dataExists, @testCount, @mode, @surveyId, @editSurveyName, @editSurveyStatus, @editQuestions
-VAR @navRows, @navRow, @hubUrl, @builderPageLabel
+VAR @navRows, @navRow, @hubUrl, @builderPageLabel, @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @SURVEY_STAGE_URL, @SURVEY_ANALYTICS_URL
+VAR @detailRows, @detailRow, @isSurveyBuild, @buildNavContext, @buildNavActive, @surveyUrlRows, @surveyUrlRow
 SET @errorFlag = "false"
 SET @dataExists = "true"
 SET @mode = RequestParameter("mode")
 SET @surveyId = RequestParameter("surveyid")
+SET @jid = Trim(RequestParameter("journeyId"))
 SET @hubUrl = ""
+SET @BUILD_PAGE_SELF = ""
+SET @PERFORMANCE_URL = ""
+SET @SURVEY_STAGE_URL = ""
+SET @SURVEY_ANALYTICS_URL = ""
+SET @isSurveyBuild = "false"
+SET @buildNavContext = "false"
+SET @buildNavActive = "edit-survey"
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
   SET @navRow = Row(@navRows,1)
   SET @hubUrl = Field(@navRow,"ss_home")
+  SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit")
+  SET @PERFORMANCE_URL = Field(@navRow,"ss_performance")
+ENDIF
+SET @surveyUrlRows = LookupRows("SST_SP_Survey_Url_DE","user","admin")
+IF RowCount(@surveyUrlRows) > 0 THEN
+  SET @surveyUrlRow = Row(@surveyUrlRows,1)
+  SET @SURVEY_STAGE_URL = Field(@surveyUrlRow,"create")
+  SET @SURVEY_ANALYTICS_URL = Field(@surveyUrlRow,"analytics")
+ENDIF
+IF NOT Empty(@jid) THEN
+  SET @buildNavContext = "true"
+  SET @detailRows = LookupRows("Bd_journey_analytics","journeyId",@jid)
+  IF RowCount(@detailRows) > 0 THEN
+    IF IndexOf(Field(Row(@detailRows,1),"journeyType"),"Survey") > 0 THEN
+      SET @isSurveyBuild = "true"
+    ENDIF
+  ENDIF
 ENDIF
 SET @builderPageLabel = "Create Survey"
 IF @mode == "edit" THEN
@@ -930,10 +956,33 @@ ENDIF
       </div>
       <nav class="sidebar-nav">
         <div class="nav-section"><span class="nav-section-title">MENU</span></div>
+        %%[ IF @buildNavContext == "true" AND @isSurveyBuild == "true" THEN ]%%
+        <a class="nav-link" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">
+          <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17h2v-5H3v5zm8 5h2V6h-2v16zM13 9h8V7h-8v2zM3 5v4h14V5H3zm8 14h10v-2H11v2zM13 17h8v-2h-8v2z"/></svg>
+          Manage build
+        </a>
+        %%[ IF NOT Empty(@PERFORMANCE_URL) THEN ]%%
+        <a class="nav-link" href="%%=Concat(@PERFORMANCE_URL,"?journeyId=",@jid)=%%">
+          <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 11H7v6h2v-6zm4 0h-2v6h2v-6zm4 0h-2v6h2v-6zM5 20h14V4H5v16zm14 2H5c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v16c0 1.1-.9 2-2 2z"/></svg>
+          Performance
+        </a>
+        %%[ ENDIF ]%%
+        <span class="nav-link active" role="presentation">
+          <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.003 1.003 0 0 0 0-1.42l-2.34-2.34a1.003 1.003 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z"/></svg>
+          Edit Survey
+        </span>
+        %%[ IF NOT Empty(@SURVEY_ANALYTICS_URL) AND NOT Empty(@surveyId) THEN ]%%
+        <a class="nav-link" href="%%=Concat(@SURVEY_ANALYTICS_URL,"?surveyid=",@surveyId,"&journeyId=",@jid)=%%">
+          <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/></svg>
+          Analytics
+        </a>
+        %%[ ENDIF ]%%
+        %%[ ELSE ]%%
         <span class="nav-link active" role="presentation">
           <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
           %%=v(@builderPageLabel)=%%
         </span>
+        %%[ ENDIF ]%%
       </nav>
     </aside>
 

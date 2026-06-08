@@ -1,7 +1,9 @@
 %%[
 VAR @surveyId, @errorFlag, @deleteAction, @deleteSuccess, @deleteError
 VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow, @hubUrl, @surveyHomeUrl, @surveyStageUrl, @surveyAnalyticsUrl, @surveyTakeUrl
+VAR @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @detailRows, @detailRow, @isSurveyBuild, @buildNavContext, @buildNavActive
 SET @surveyId = RequestParameter("surveyid")
+SET @jid = Trim(RequestParameter("journeyId"))
 SET @errorFlag = "false"
 SET @deleteAction = RequestParameter("deleteAction")
 SET @deleteSuccess = "false"
@@ -11,10 +13,17 @@ SET @surveyHomeUrl = ""
 SET @surveyStageUrl = ""
 SET @surveyAnalyticsUrl = ""
 SET @surveyTakeUrl = ""
+SET @BUILD_PAGE_SELF = ""
+SET @PERFORMANCE_URL = ""
+SET @isSurveyBuild = "false"
+SET @buildNavContext = "false"
+SET @buildNavActive = "analytics"
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
   SET @navRow = Row(@navRows,1)
   SET @hubUrl = Field(@navRow,"ss_home")
+  SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit")
+  SET @PERFORMANCE_URL = Field(@navRow,"ss_performance")
 ENDIF
 SET @surveyUrlRows = LookupRows("SST_SP_Survey_Url_DE","user","admin")
 IF RowCount(@surveyUrlRows) > 0 THEN
@@ -23,6 +32,15 @@ IF RowCount(@surveyUrlRows) > 0 THEN
   SET @surveyStageUrl = Field(@surveyUrlRow,"create")
   SET @surveyAnalyticsUrl = Field(@surveyUrlRow,"analytics")
   SET @surveyTakeUrl = Field(@surveyUrlRow,"take")
+ENDIF
+IF NOT Empty(@jid) THEN
+  SET @buildNavContext = "true"
+  SET @detailRows = LookupRows("Bd_journey_analytics","journeyId",@jid)
+  IF RowCount(@detailRows) > 0 THEN
+    IF IndexOf(Field(Row(@detailRows,1),"journeyType"),"Survey") > 0 THEN
+      SET @isSurveyBuild = "true"
+    ENDIF
+  ENDIF
 ENDIF
 
 
@@ -70,13 +88,36 @@ ENDIF
 
     <div class="dashboard-layout">
         <!-- Modern Sidebar -->
-        <aside class="sidebar">
+        <aside class="%%=IIF(@buildNavContext == "true" AND @isSurveyBuild == "true","maker-sidebar sidebar","sidebar")=%%" aria-label="Primary">
             <div class="sidebar-logo">
-                <img style="filter: invert(1);"
-                    src="https://dev.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&amp;w=640&amp;q=75"
-                    alt="MagMutual">
+                <a href="%%=v(@hubUrl)=%%"><img style="filter: invert(1);"
+                    src="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&amp;w=640&amp;q=75"
+                    alt="MagMutual"></a>
             </div>
             <nav class="sidebar-nav">
+                %%[ IF @buildNavContext == "true" AND @isSurveyBuild == "true" THEN ]%%
+                <div class="nav-section"><span class="nav-section-title">MENU</span></div>
+                <a class="nav-link" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">
+                    <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17h2v-5H3v5zm8 5h2V6h-2v16zM13 9h8V7h-8v2zM3 5v4h14V5H3zm8 14h10v-2H11v2zM13 17h8v-2h-8v2z"/></svg>
+                    Manage build
+                </a>
+                %%[ IF NOT Empty(@PERFORMANCE_URL) THEN ]%%
+                <a class="nav-link" href="%%=Concat(@PERFORMANCE_URL,"?journeyId=",@jid)=%%">
+                    <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 11H7v6h2v-6zm4 0h-2v6h2v-6zm4 0h-2v6h2v-6zM5 20h14V4H5v16zm14 2H5c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v16c0 1.1-.9 2-2 2z"/></svg>
+                    Performance
+                </a>
+                %%[ ENDIF ]%%
+                %%[ IF NOT Empty(@surveyStageUrl) AND NOT Empty(@surveyId) THEN ]%%
+                <a class="nav-link" href="%%=Concat(@surveyStageUrl,"?mode=edit&surveyid=",@surveyId,"&journeyId=",@jid)=%%">
+                    <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.003 1.003 0 0 0 0-1.42l-2.34-2.34a1.003 1.003 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z"/></svg>
+                    Edit Survey
+                </a>
+                %%[ ENDIF ]%%
+                <span class="nav-link active" role="presentation">
+                    <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/></svg>
+                    Analytics
+                </span>
+                %%[ ELSE ]%%
                 <div class="nav-section">
                     <span class="nav-section-title">OVERVIEW</span>
                 </div>
@@ -88,29 +129,25 @@ ENDIF
                 </a>
                 <a class="nav-link active" href="#" onclick="showSurveyAnalytics(); return false;">
                     <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                        <path
-                            d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z" />
+                        <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z" />
                     </svg>
                     <span>Survey Analytics</span>
                 </a>
                 <a class="nav-link" href="#" onclick="showReports(); return false;">
                     <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                        <path
-                            d="M9 11H7v6h2v-6zm4 0h-2v6h2v-6zm4 0h-2v6h2v-6zM5 20h14V4H5v16zm14 2H5c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v16c0 1.1-.9 2-2 2z" />
+                        <path d="M9 11H7v6h2v-6zm4 0h-2v6h2v-6zm4 0h-2v6h2v-6zM5 20h14V4H5v16zm14 2H5c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v16c0 1.1-.9 2-2 2z" />
                     </svg>
                     <span>Reports</span>
                 </a>
                 <a class="nav-link" href="#" onclick="showResponses(); return false;">
                     <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                        <path
-                            d="M20 6h-2.18c.11-.31.18-.65.18-1a2.996 2.996 0 0 0-5.5-1.65l-.5.67-.5-.68C10.96 2.54 10 2 10 2 10 2 9 3 8.18 4H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-5-2c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zM9 4c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1z" />
+                        <path d="M20 6h-2.18c.11-.31.18-.65.18-1a2.996 2.996 0 0 0-5.5-1.65l-.5.67-.5-.68C10.96 2.54 10 2 10 2 10 2 9 3 8.18 4H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-5-2c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zM9 4c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1z" />
                     </svg>
                     <span>Responses</span>
                 </a>
-               
+                %%[ ENDIF ]%%
             </nav>
-
-
+            %%[ IF @buildNavContext != "true" OR @isSurveyBuild != "true" THEN ]%%
             <div class="sidebar-footer">
                 <div class="sidebar-user">
                     <div class="user-avatar">S</div>
@@ -120,6 +157,7 @@ ENDIF
                     </div>
                 </div>
             </div>
+            %%[ ENDIF ]%%
         </aside>
 
 
@@ -1236,7 +1274,8 @@ ENDIF
 
 
         /* Sidebar */
-        .sidebar {
+        .sidebar,
+        .maker-sidebar {
             width: 280px;
             background: white;
             border-right: 1px solid var(--gray-200);
@@ -1244,6 +1283,32 @@ ENDIF
             flex-direction: column;
             padding: 32px 0;
             box-shadow: var(--shadow-sm);
+            flex-shrink: 0;
+        }
+
+        .maker-sidebar {
+            padding: 28px 0;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .maker-sidebar .sidebar-logo {
+            margin-bottom: 12px;
+            border-bottom: 1px solid #eee5e5;
+            padding-bottom: 10px;
+            align-self: center;
+        }
+
+        .maker-sidebar .sidebar-logo a {
+            display: inline-block;
+        }
+
+        .maker-sidebar .sidebar-logo img {
+            height: 40px;
+        }
+
+        .sidebar-nav span.nav-link.active {
+            cursor: default;
         }
 
 
