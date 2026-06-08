@@ -80,72 +80,13 @@ ELSE
  SET @emailName = Concat(@eventName,"_Email")
 ENDIF
 
-VAR @surveyName, @surveyDescription, @surveyId, @surveySaved
+VAR @surveyName, @surveyDescription, @surveyId, @surveySaved, @emailOk
 SET @surveyName = Trim(RequestParameter("surveyName"))
 SET @surveyDescription = RequestParameter("surveyDescription")
 SET @surveyId = ""
 SET @surveySaved = "false"
+SET @emailOk = "false"
 IF NOT Empty(@createRequested) AND NOT EMPTY(@surveyName) THEN
-  SET @surveyId = Concat("SURV_", Format(Now(), "yyyyMMdd_HHmmss"))
-  UPSERTDE(
-    "SST_SP_Surveys_Master_DE", 1, "SurveyID", @surveyId,
-    "SurveyName", @surveyName,
-    "SurveyStatus", "Active",
-    "SurveyCreatedDate", NOW()
-  )
-  SET @surveySaved = "true"
-  VAR @questionCount, @i, @questionText, @questionType, @options, @required, @questionId
-  SET @questionCount = RequestParameter("questionCount")
-  IF NOT EMPTY(@questionCount) THEN
-    FOR @i = 1 TO @questionCount DO
-      SET @questionText = RequestParameter(Concat("question", @i))
-      SET @questionType = RequestParameter(Concat("questionType", @i))
-      SET @required = RequestParameter(Concat("required", @i))
-      SET @questionId = Concat("Q", @surveyId, "_", @i)
-      SET @options = ""
-      IF @questionType == "likert" THEN
-        SET @options = "Strongly Agree|Agree|Neutral|Disagree|Strongly Disagree"
-      ELSEIF @questionType == "rating" THEN
-        SET @options = "Excellent|Good|Fair|Poor"
-      ELSEIF @questionType == "yesno" THEN
-        SET @options = "Yes|No"
-      ELSEIF @questionType == "text" THEN
-        SET @options = "Text Input"
-      ELSEIF @questionType == "multiple" THEN
-        VAR @optionCount, @j, @optionText
-        SET @optionCount = RequestParameter(Concat("optionCount", @i))
-        IF NOT EMPTY(@optionCount) THEN
-          FOR @j = 1 TO @optionCount DO
-            SET @optionText = RequestParameter(Concat("option", @i, "_", @j))
-            IF NOT EMPTY(@optionText) THEN
-              IF @j == 1 THEN
-                SET @options = @optionText
-              ELSE
-                SET @options = Concat(@options, "|", @optionText)
-              ENDIF
-            ENDIF
-          NEXT @j
-        ENDIF
-      ENDIF
-      IF @required == "true" THEN
-        SET @required = "Yes"
-      ELSE
-        SET @required = "No"
-      ENDIF
-      IF NOT EMPTY(@questionText) THEN
-        UPSERTDE(
-          "SST_SP_Survey_Questions_DE", 1, "QuestionID", @questionId,
-          "SurveyID", @surveyId,
-          "QuestionNumber", @i,
-          "QuestionText", @questionText,
-          "QuestionType", @questionType,
-          "Options", @options,
-          "Required", @required,
-          "OrderIndex", @i
-        )
-      ENDIF
-    NEXT @i
-  ENDIF
   IF Empty(@emailSubjectLine) THEN SET @emailSubjectLine = @surveyName ENDIF
   SET @surveyNameSafe = Replace(@surveyName,'"','')
   SET @surveyNameSafe = Replace(@surveyNameSafe," | ","_")
@@ -1143,7 +1084,75 @@ ENDIF
 IF NOT Empty(@journeyEmailId) THEN
  SET @resultText = Concat(@resultText," Journey Email ID: ",@journeyEmailId)
 ENDIF
-IF @authOk == "true" AND NOT Empty(@journeyEmailId) AND @createEmailOnly != "1" THEN
+IF IndexOf(@step3bResult,"Step 3b OK - Email duplicated") > 0 AND NOT Empty(@newEmailId) THEN
+ SET @emailOk = "true"
+ENDIF
+IF @emailOk == "true" AND NOT Empty(@createRequested) AND NOT EMPTY(@surveyName) THEN
+  SET @surveyId = Concat("SURV_", Format(Now(), "yyyyMMdd_HHmmss"))
+  UPSERTDE(
+    "SST_SP_Surveys_Master_DE", 1, "SurveyID", @surveyId,
+    "SurveyName", @surveyName,
+    "SurveyStatus", "Active",
+    "SurveyCreatedDate", NOW()
+  )
+  SET @surveySaved = "true"
+  VAR @questionCount, @i, @questionText, @questionType, @options, @required, @questionId
+  SET @questionCount = RequestParameter("questionCount")
+  IF NOT EMPTY(@questionCount) THEN
+    FOR @i = 1 TO @questionCount DO
+      SET @questionText = RequestParameter(Concat("question", @i))
+      SET @questionType = RequestParameter(Concat("questionType", @i))
+      SET @required = RequestParameter(Concat("required", @i))
+      SET @questionId = Concat("Q", @surveyId, "_", @i)
+      SET @options = ""
+      IF @questionType == "likert" THEN
+        SET @options = "Strongly Agree|Agree|Neutral|Disagree|Strongly Disagree"
+      ELSEIF @questionType == "rating" THEN
+        SET @options = "Excellent|Good|Fair|Poor"
+      ELSEIF @questionType == "yesno" THEN
+        SET @options = "Yes|No"
+      ELSEIF @questionType == "text" THEN
+        SET @options = "Text Input"
+      ELSEIF @questionType == "multiple" THEN
+        VAR @optionCount, @j, @optionText
+        SET @optionCount = RequestParameter(Concat("optionCount", @i))
+        IF NOT EMPTY(@optionCount) THEN
+          FOR @j = 1 TO @optionCount DO
+            SET @optionText = RequestParameter(Concat("option", @i, "_", @j))
+            IF NOT EMPTY(@optionText) THEN
+              IF @j == 1 THEN
+                SET @options = @optionText
+              ELSE
+                SET @options = Concat(@options, "|", @optionText)
+              ENDIF
+            ENDIF
+          NEXT @j
+        ENDIF
+      ENDIF
+      IF @required == "true" THEN
+        SET @required = "Yes"
+      ELSE
+        SET @required = "No"
+      ENDIF
+      IF NOT EMPTY(@questionText) THEN
+        UPSERTDE(
+          "SST_SP_Survey_Questions_DE", 1, "QuestionID", @questionId,
+          "SurveyID", @surveyId,
+          "QuestionNumber", @i,
+          "QuestionText", @questionText,
+          "QuestionType", @questionType,
+          "Options", @options,
+          "Required", @required,
+          "OrderIndex", @i
+        )
+      ENDIF
+    NEXT @i
+  ENDIF
+  SET @resultText = Concat(@resultText," Step 3c OK - Survey saved.")
+ELSEIF @showForm == "false" AND @deleteRequested != "1" AND @authOk == "true" AND @emailOk != "true" THEN
+ SET @resultText = Concat(@resultText," Stopped: email was not created. Survey, entry event, and journey were skipped.")
+ENDIF
+IF @emailOk == "true" AND @authOk == "true" AND NOT Empty(@journeyEmailId) AND @createEmailOnly != "1" THEN
  SET @eventUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/eventDefinitions")
  SET @eventPayload = Concat('{"isVisibleInPicker":false,"type":"SalesforceObjectTriggerV2","sourceApplicationExtensionId":"597D9E4A-1C0D-4225-86B2-0A1E864B7CA3","schema":{"sendableCustomObjectField":"CampaignMember:Common:Id","sendableSubscriberField":"_SubscriberKey","fields":',@schemaFields,'},"name":"',@eventName,'","mode":1,"eventDefinitionKey":"',@eventKey,'","arguments":{"useHighWatermark":false},"configurationArguments":{"applicationExtensionKey":"SalesforceObjectTriggerV2","ContactKey":"{\"relationshipIdName\":\"Id\",\"relationshipName\":\"Common\",\"isPolymorphic\":false,\"referenceObjectName\":\"Common\"}","ContactPersonType":"CampaignMember","evaluationCriteriaSummary":"Created","eventDataConfig":"{\"objects\":[{\"dePrefix\":\"CampaignMember:\",\"isPolymorphic\":false,\"relationshipName\":\"\",\"referenceObject\":\"\",\"relationshipIdName\":\"\",\"fields\":[\"Id\",\"CreatedDate\",\"Account_Owner__c\"]},{\"dePrefix\":\"CampaignMember:Common:\",\"isPolymorphic\":false,\"referenceObject\":\"Contacts and Leads\",\"relationshipName\":\"Common\",\"fields\":[\"Id\",\"Email\",\"HasOptedOutOfEmail\",\"FirstName\",\"Name\",\"LastName\",\"Title\",\"Salutation\"]},{\"dePrefix\":\"CampaignMember:Campaign:\",\"isPolymorphic\":false,\"referenceObject\":\"Campaign\",\"relationshipName\":\"Campaign\",\"fields\":[\"Name\",\"Id\"]},{\"dePrefix\":\"CampaignMember:Account:\",\"isPolymorphic\":false,\"referenceObject\":\"Account\",\"relationshipName\":\"Account\",\"fields\":[\"Id\",\"Name\",\"OwnerId\",\"Billing_State__c\"]}]}","eventDataSummary":"CampaignMember:Id; CampaignMember:CreatedDate; CampaignMember:Account_Owner__c; CampaignMember:Common:Id; CampaignMember:Common:Email; CampaignMember:Common:HasOptedOutOfEmail; CampaignMember:Common:FirstName; CampaignMember:Common:Name; CampaignMember:Common:LastName; CampaignMember:Common:Title; CampaignMember:Common:Salutation; CampaignMember:Campaign:Name; CampaignMember:Campaign:Id; CampaignMember:Account:Id; CampaignMember:Account:Name; CampaignMember:Account:OwnerId; CampaignMember:Account:Billing_State__c","objectAPIName":"CampaignMember","passThroughArgument":"{\"fields\":{\"ContactKey\":\"CampaignMember:Common:Id\",\"Email\":\"CampaignMember:Common:Email\",\"HasOptedOutOfEmail\":\"CampaignMember:Common:HasOptedOutOfEmail\"}}","primaryObjectFilterCriteria":"',@filterEscaped,'","primaryObjectFilterSummary":"CampaignMember:CampaignId EQUALS ',@campaignNameForJson,' (',@campaignId,')","relatedObjectFilterCriteria":"',@relatedEscaped,'","relatedObjectFilterSummary":"Common:Contacts and Leads:Id WASSET","salesforceTriggerCriteria":"Created","version":"3.0","whoToInject":"Contact ID/Lead ID (Contacts and Leads)"}}')
  SET @eventStatus = HTTPPost2(@eventUrl,"application/json",@eventPayload,false,@eventResponse,@eventResponseHeader,"Authorization",Concat("Bearer ",@accessToken))
@@ -1290,7 +1299,11 @@ function lookupSendClassificationCj(classificationId) {
   } catch (scErr) {}
   return null;
 }
-if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && senderProfileId && sendClassificationId) {
+var emailOk = Variable.GetValue("emailOk");
+if (emailOk != "true") {
+ journeyKey = "";
+}
+if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && senderProfileId && sendClassificationId && emailOk == "true") {
  try {
    var scRow = lookupSendClassificationCj(sendClassificationId);
    var spRowForJourney = lookupSenderProfileCj(senderProfileId);
@@ -1576,7 +1589,7 @@ if (cleanupNeeded == "1" && (eventDefId || newEmailId) && subdomain && accessTok
 }
 </script>
 %%[
-IF @showForm == "false" AND @deleteRequested != "1" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@newEmailId) THEN
+IF @showForm == "false" AND @deleteRequested != "1" AND @emailOk == "true" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@newEmailId) THEN
  SET @analyticsJourneyName = IIF(NOT Empty(@journeyName), @journeyName, @emailName)
  SET @analyticsJourneyId = IIF(NOT Empty(@journeyId), @journeyId, Concat("email:",@newEmailId))
  SET @analyticsJourneyType = @builderPageLabel
@@ -2610,19 +2623,19 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
     </div>
 %%[ ELSE ]%%
     <div class="maker-page-heading">
-      <div class="maker-page-heading-icon maker-result-status %%[ IF IndexOf(@resultText,"FAILED") > 0 THEN ]%%is-error%%[ ELSE ]%%is-success%%[ ENDIF ]%%" aria-hidden="true">
-%%[ IF IndexOf(@resultText,"FAILED") > 0 THEN ]%%
+      <div class="maker-page-heading-icon maker-result-status %%[ IF IndexOf(@resultText,"FAILED") > 0 OR (@showForm == "false" AND @deleteRequested != "1" AND @authOk == "true" AND @emailOk != "true") THEN ]%%is-error%%[ ELSE ]%%is-success%%[ ENDIF ]%%" aria-hidden="true">
+%%[ IF IndexOf(@resultText,"FAILED") > 0 OR (@showForm == "false" AND @deleteRequested != "1" AND @authOk == "true" AND @emailOk != "true") THEN ]%%
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>
 %%[ ELSE ]%%
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
 %%[ ENDIF ]%%
       </div>
       <div class="maker-page-heading-text">
-        <h1 class="maker-page-title">%%=IIF(IndexOf(@resultText,"FAILED") > 0,"Could not complete setup","Build finished")=%%</h1>
+        <h1 class="maker-page-title">%%=IIF(IndexOf(@resultText,"FAILED") > 0 OR (@showForm == "false" AND @deleteRequested != "1" AND @authOk == "true" AND @emailOk != "true"),"Could not complete setup","Build finished")=%%</h1>
       </div>
     </div>
     <p class="maker-page-subtitle">
-%%[ IF IndexOf(@resultText,"FAILED") > 0 THEN ]%%
+%%[ IF IndexOf(@resultText,"FAILED") > 0 OR (@showForm == "false" AND @deleteRequested != "1" AND @authOk == "true" AND @emailOk != "true") THEN ]%%
 Review the technical log below, adjust your inputs if needed, and try again.
 %%[ ELSEIF @createEmailOnly == "1" THEN ]%%
 Your email asset is in Content Builder. Use the link below when you are ready to edit or send tests.
