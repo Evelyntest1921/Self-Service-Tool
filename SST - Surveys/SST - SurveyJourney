@@ -834,19 +834,52 @@ function build207PutBase(createdAsset, subjectlineContent, preheaderContent, tex
  ensure207ViewDefaults(payload);
  return payload;
 }
-function build207PutContentOnly(createdAsset, sourceAsset, subjectlineContent, preheaderContent, textContent) {
- var payload = build207PutBase(createdAsset, subjectlineContent, preheaderContent, textContent);
- if (!payload.views.html || typeof payload.views.html !== "object") {
-   payload.views.html = {};
- }
- payload.views.html.content = getAssetHtmlContent(sourceAsset);
+function build207PutViewsPayload(subjectlineContent, preheaderContent, textContent, htmlView) {
+ var payload = {
+   views: {
+     subjectline: { content: subjectlineContent || "Campaign Event" },
+     preheader: { content: preheaderContent || "" },
+     html: (htmlView && typeof htmlView === "object") ? cloneObject(htmlView) : {},
+     text: {}
+   }
+ };
+ ensure207ViewDefaults(payload);
  return payload;
 }
+function build207PutCopySourceHtml(sourceAsset, subjectlineContent, preheaderContent, textContent) {
+ var sourceHtmlView = (sourceAsset.views && sourceAsset.views.html && typeof sourceAsset.views.html === "object") ? sourceAsset.views.html : {};
+ return build207PutViewsPayload(subjectlineContent, preheaderContent, textContent, sourceHtmlView);
+}
+function build207PutSyncFromParent(sourceAsset, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots, resolvedTemplateAsset) {
+ var templateContent = getAssetHtmlContent(resolvedTemplateAsset || sourceAsset);
+ var templateSlots = getAssetHtmlSlots(resolvedTemplateAsset || sourceAsset);
+ var htmlView = {
+   content: templateContent || getAssetHtmlContent(sourceAsset),
+   slots: (sourceSlots && typeof sourceSlots === "object") ? cloneObject(sourceSlots) : {},
+   template: {
+     id: parseInt(sourceTemplate.id, 10),
+     assetType: { id: 4, name: "template" },
+     content: templateContent,
+     slots: templateSlots
+   }
+ };
+ return build207PutViewsPayload(subjectlineContent, preheaderContent, textContent, htmlView);
+}
+function build207PutContentOnly(createdAsset, sourceAsset, subjectlineContent, preheaderContent, textContent) {
+ var htmlView = (createdAsset.views && createdAsset.views.html && typeof createdAsset.views.html === "object") ? cloneObject(createdAsset.views.html) : {};
+ htmlView.content = getAssetHtmlContent(sourceAsset);
+ return build207PutViewsPayload(subjectlineContent, preheaderContent, textContent, htmlView);
+}
 function build207PutFromCreated(createdAsset, sourceAsset, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots) {
- var payload = build207PutContentOnly(createdAsset, sourceAsset, subjectlineContent, preheaderContent, textContent);
- payload.views.html.slots = (sourceSlots && typeof sourceSlots === "object") ? cloneObject(sourceSlots) : {};
- payload.views.html.template = buildEmbeddedTemplateRef(sourceTemplate, sourceSlots, false, "");
- return payload;
+ var htmlView = {
+   content: getAssetHtmlContent(sourceAsset),
+   slots: (sourceSlots && typeof sourceSlots === "object") ? cloneObject(sourceSlots) : {},
+   template: buildEmbeddedTemplateRef(sourceTemplate, sourceSlots, false, "")
+ };
+ return build207PutViewsPayload(subjectlineContent, preheaderContent, textContent, htmlView);
+}
+function assetHtmlContentLength(assetObj) {
+ return safeLength(getAssetHtmlContent(assetObj));
 }
 function build207MinimalPayload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots) {
  var payload = build207SkeletonPayload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots, null);
@@ -953,8 +986,23 @@ function patchAssetPayload(subdomainValue, accessTokenValue, assetId, payload) {
  result.responseText = patchResp.content ? String(patchResp.content) : "";
  return result;
 }
-function run207HydrateAttempts(subdomainValue, accessTokenValue, createdId, createdAsset, sourceAsset, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots) {
+function run207HydrateAttempts(subdomainValue, accessTokenValue, createdId, createdAsset, sourceAsset, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots, resolvedTemplateAsset) {
  var attempts = [
+   {
+     label: "put-copy-source-html",
+     payload: build207PutCopySourceHtml(sourceAsset, subjectlineContent, preheaderContent, textContent),
+     usePatch: false
+   },
+   {
+     label: "patch-copy-source-html",
+     payload: build207PutCopySourceHtml(sourceAsset, subjectlineContent, preheaderContent, textContent),
+     usePatch: true
+   },
+   {
+     label: "put-sync-from-parent",
+     payload: build207PutSyncFromParent(sourceAsset, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots, resolvedTemplateAsset),
+     usePatch: false
+   },
    {
      label: "put-content-only",
      payload: build207PutContentOnly(createdAsset, sourceAsset, subjectlineContent, preheaderContent, textContent),
@@ -975,18 +1023,9 @@ function run207HydrateAttempts(subdomainValue, accessTokenValue, createdId, crea
      label: "put-full",
      payload: build207PutFromCreated(createdAsset, sourceAsset, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots),
      usePatch: false
-   },
-   {
-     label: "put-placeholder-slots",
-     payload: (function() {
-       var p = build207PutFromCreated(createdAsset, sourceAsset, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots);
-       p.views.html.slots = slotPlaceholderMap(sourceSlots);
-       return p;
-     })(),
-     usePatch: false
    }
  ];
- var i, attempt, response;
+ var i, attempt, response, verifyFetch;
  for (i = 0; i < attempts.length; i++) {
    attempt = attempts[i];
    if (attempt.usePatch) {
@@ -995,12 +1034,15 @@ function run207HydrateAttempts(subdomainValue, accessTokenValue, createdId, crea
      response = putAssetPayload(subdomainValue, accessTokenValue, createdId, attempt.payload);
    }
    if (response.statusCode == 200 || response.statusCode == 201) {
-     return {
-       ok: true,
-       statusCode: response.statusCode,
-       responseText: response.responseText,
-       label: attempt.label
-     };
+     verifyFetch = fetchAssetById(createdId, subdomainValue, accessTokenValue);
+     if (verifyFetch.ok && verifyFetch.asset && assetHtmlContentLength(verifyFetch.asset) > 500) {
+       return {
+         ok: true,
+         statusCode: response.statusCode,
+         responseText: response.responseText,
+         label: attempt.label
+       };
+     }
    }
  }
  return {
@@ -1037,7 +1079,7 @@ function appendCategoryVariants(targetList, labels, basePayload, labelPrefix, so
    labels.push(labelPrefix + categoryOptions[i].suffix);
  }
 }
-function tryHydrate207Clone(subdomainValue, accessTokenValue, sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots, categoryId, labelPrefix, assetTypeFn) {
+function tryHydrate207Clone(subdomainValue, accessTokenValue, sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots, resolvedTemplateAsset, categoryId, labelPrefix, assetTypeFn) {
  var skeletonPayload = build207SkeletonPayload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots, assetTypeFn);
  if (categoryId) {
    skeletonPayload.category = { id: categoryId };
@@ -1086,7 +1128,8 @@ function tryHydrate207Clone(subdomainValue, accessTokenValue, sourceAsset, targe
    preheaderContent,
    textContent,
    sourceTemplate,
-   sourceSlots
+   sourceSlots,
+   resolvedTemplateAsset
  );
  if (putResult.ok) {
    return {
@@ -1097,7 +1140,7 @@ function tryHydrate207Clone(subdomainValue, accessTokenValue, sourceAsset, targe
      label: labelPrefix + "-" + putResult.label
    };
  }
- if (extractLegacyEmailId(createdFetch.asset) && createdId) {
+ if (extractLegacyEmailId(createdFetch.asset) && createdId && assetHtmlContentLength(createdFetch.asset) > 500) {
    return {
      ok: true,
      statusCode: createResult.statusCode,
@@ -1267,6 +1310,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
              textContent,
              sourceTemplate,
              htmlSlots,
+             resolvedTemplateAsset,
              hydratePlans[hydrateIdx].categoryId,
              hydratePlans[hydrateIdx].label,
              hydratePlans[hydrateIdx].assetTypeFn
