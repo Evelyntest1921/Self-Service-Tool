@@ -806,7 +806,7 @@ function build207SkeletonPayload(sourceAsset, targetName, subjectlineContent, pr
  ensure207ViewDefaults(payload);
  return payload;
 }
-function build207PutFromCreated(createdAsset, sourceAsset, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots) {
+function build207PutBase(createdAsset, subjectlineContent, preheaderContent, textContent) {
  var payload = {
    id: createdAsset.id,
    name: createdAsset.name,
@@ -815,11 +815,7 @@ function build207PutFromCreated(createdAsset, sourceAsset, subjectlineContent, p
    views: {
      subjectline: { content: subjectlineContent || "Campaign Event" },
      preheader: { content: preheaderContent || "" },
-     html: {
-       content: getAssetHtmlContent(sourceAsset),
-       slots: (sourceSlots && typeof sourceSlots === "object") ? cloneObject(sourceSlots) : {},
-       template: buildEmbeddedTemplateRef(sourceTemplate, sourceSlots, false, "")
-     },
+     html: (createdAsset.views && createdAsset.views.html && typeof createdAsset.views.html === "object") ? cloneObject(createdAsset.views.html) : {},
      text: {}
    },
    data: createdAsset.data || {
@@ -836,6 +832,20 @@ function build207PutFromCreated(createdAsset, sourceAsset, subjectlineContent, p
  }
  applyTextSettings(payload, textContent);
  ensure207ViewDefaults(payload);
+ return payload;
+}
+function build207PutContentOnly(createdAsset, sourceAsset, subjectlineContent, preheaderContent, textContent) {
+ var payload = build207PutBase(createdAsset, subjectlineContent, preheaderContent, textContent);
+ if (!payload.views.html || typeof payload.views.html !== "object") {
+   payload.views.html = {};
+ }
+ payload.views.html.content = getAssetHtmlContent(sourceAsset);
+ return payload;
+}
+function build207PutFromCreated(createdAsset, sourceAsset, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots) {
+ var payload = build207PutContentOnly(createdAsset, sourceAsset, subjectlineContent, preheaderContent, textContent);
+ payload.views.html.slots = (sourceSlots && typeof sourceSlots === "object") ? cloneObject(sourceSlots) : {};
+ payload.views.html.template = buildEmbeddedTemplateRef(sourceTemplate, sourceSlots, false, "");
  return payload;
 }
 function build207MinimalPayload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots) {
@@ -925,6 +935,81 @@ function putAssetPayload(subdomainValue, accessTokenValue, assetId, payload) {
  result.responseText = putResp.content ? String(putResp.content) : "";
  return result;
 }
+function patchAssetPayload(subdomainValue, accessTokenValue, assetId, payload) {
+ var result = { statusCode: 0, responseText: "" };
+ var parsedId = parseInt(assetId, 10);
+ if (isNaN(parsedId)) return result;
+ var assetUrl = "https://" + subdomainValue + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + parsedId;
+ var patchReq = new Script.Util.HttpRequest(assetUrl);
+ patchReq.emptyContentHandling = 0;
+ patchReq.retries = 2;
+ patchReq.continueOnError = true;
+ patchReq.setHeader("Authorization", "Bearer " + accessTokenValue);
+ patchReq.method = "PATCH";
+ patchReq.contentType = "application/json";
+ patchReq.postData = Platform.Function.Stringify(payload);
+ var patchResp = patchReq.send();
+ result.statusCode = patchResp.statusCode;
+ result.responseText = patchResp.content ? String(patchResp.content) : "";
+ return result;
+}
+function run207HydrateAttempts(subdomainValue, accessTokenValue, createdId, createdAsset, sourceAsset, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots) {
+ var attempts = [
+   {
+     label: "put-content-only",
+     payload: build207PutContentOnly(createdAsset, sourceAsset, subjectlineContent, preheaderContent, textContent),
+     usePatch: false
+   },
+   {
+     label: "patch-content-only",
+     payload: {
+       views: {
+         html: {
+           content: getAssetHtmlContent(sourceAsset)
+         }
+       }
+     },
+     usePatch: true
+   },
+   {
+     label: "put-full",
+     payload: build207PutFromCreated(createdAsset, sourceAsset, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots),
+     usePatch: false
+   },
+   {
+     label: "put-placeholder-slots",
+     payload: (function() {
+       var p = build207PutFromCreated(createdAsset, sourceAsset, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots);
+       p.views.html.slots = slotPlaceholderMap(sourceSlots);
+       return p;
+     })(),
+     usePatch: false
+   }
+ ];
+ var i, attempt, response;
+ for (i = 0; i < attempts.length; i++) {
+   attempt = attempts[i];
+   if (attempt.usePatch) {
+     response = patchAssetPayload(subdomainValue, accessTokenValue, createdId, attempt.payload);
+   } else {
+     response = putAssetPayload(subdomainValue, accessTokenValue, createdId, attempt.payload);
+   }
+   if (response.statusCode == 200 || response.statusCode == 201) {
+     return {
+       ok: true,
+       statusCode: response.statusCode,
+       responseText: response.responseText,
+       label: attempt.label
+     };
+   }
+ }
+ return {
+   ok: false,
+   statusCode: response ? response.statusCode : 0,
+   responseText: response ? response.responseText : "",
+   label: "put-failed"
+ };
+}
 function extractCreatedAssetId(responseText) {
  var idMatch = responseText ? responseText.match(/"id"\s*:\s*"?([^",}\s]+)"?/) : null;
  return idMatch ? String(idMatch[1]) : "";
@@ -991,26 +1076,34 @@ function tryHydrate207Clone(subdomainValue, accessTokenValue, sourceAsset, targe
      label: labelPrefix + "-get-created-failed"
    };
  }
- putPayload = build207PutFromCreated(createdFetch.asset, sourceAsset, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots);
- putResult = putAssetPayload(subdomainValue, accessTokenValue, createdId, putPayload);
- if (putResult.statusCode == 200 || putResult.statusCode == 201) {
+ putResult = run207HydrateAttempts(
+   subdomainValue,
+   accessTokenValue,
+   createdId,
+   createdFetch.asset,
+   sourceAsset,
+   subjectlineContent,
+   preheaderContent,
+   textContent,
+   sourceTemplate,
+   sourceSlots
+ );
+ if (putResult.ok) {
    return {
      ok: true,
      statusCode: putResult.statusCode,
      responseText: putResult.responseText || createResult.responseText,
      createdId: createdId,
-     label: labelPrefix + "-hydrate"
+     label: labelPrefix + "-" + putResult.label
    };
  }
- putPayload.views.html.slots = slotPlaceholderMap(sourceSlots);
- putResult = putAssetPayload(subdomainValue, accessTokenValue, createdId, putPayload);
- if (putResult.statusCode == 200 || putResult.statusCode == 201) {
+ if (extractLegacyEmailId(createdFetch.asset) && createdId) {
    return {
      ok: true,
-     statusCode: putResult.statusCode,
-     responseText: putResult.responseText || createResult.responseText,
+     statusCode: createResult.statusCode,
+     responseText: createResult.responseText,
      createdId: createdId,
-     label: labelPrefix + "-hydrate-placeholder-slots"
+     label: labelPrefix + "-shell-only"
    };
  }
  return {
@@ -1018,7 +1111,7 @@ function tryHydrate207Clone(subdomainValue, accessTokenValue, sourceAsset, targe
    statusCode: putResult.statusCode,
    responseText: putResult.responseText,
    createdId: createdId,
-   label: labelPrefix + "-put-failed"
+   label: labelPrefix + "-" + putResult.label
  };
 }
 if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && deleteEmailId) {
@@ -1239,7 +1332,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
            step3bResult = " Step 3b SKIP - Email duplicated but new ID was not returned." + debugPrefix + " Response: " + assetResponse + " Debug: " + payloadDebug;
          }
        } else {
-         step3bResult = " Step 3b SKIP - Email not duplicated: HTTP " + assetStatus + " - " + (assetResponse || "No response body.") + debugPrefix + " Attempts: " + (attemptLabels.length ? attemptLabels.join(",") : "none") + (winningAttempt ? " Last: " + winningAttempt + "." : "") + (assetTypeId === 207 ? " Hydrate tried first." : "") + " Debug: " + payloadDebug;
+         step3bResult = " Step 3b SKIP - Email not duplicated: HTTP " + assetStatus + " - " + (assetResponse || "No response body.") + debugPrefix + " Hydrate: " + (hydrateLabels.length ? hydrateLabels.join(",") : "none") + ". Post: " + (attemptLabels.length ? attemptLabels.join(",") : "none") + (winningAttempt ? " Last: " + winningAttempt + "." : "") + " Debug: " + payloadDebug;
        }
      }
    } else {
