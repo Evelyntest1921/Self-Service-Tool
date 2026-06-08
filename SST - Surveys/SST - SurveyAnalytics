@@ -1,7 +1,7 @@
 %%[
 VAR @surveyId, @errorFlag, @deleteAction, @deleteSuccess, @deleteError
 VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow, @hubUrl, @surveyHomeUrl, @surveyStageUrl, @surveyAnalyticsUrl, @surveyTakeUrl
-VAR @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @detailRows, @detailRow, @isSurveyBuild, @buildNavContext, @buildNavActive
+VAR @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @detailRows, @detailRow, @isSurveyBuild, @buildNavContext, @buildNavActive, @editSurveyUrl
 SET @surveyId = RequestParameter("surveyid")
 SET @jid = Trim(RequestParameter("journeyId"))
 SET @errorFlag = "false"
@@ -18,6 +18,7 @@ SET @PERFORMANCE_URL = ""
 SET @isSurveyBuild = "false"
 SET @buildNavContext = "false"
 SET @buildNavActive = "analytics"
+SET @editSurveyUrl = ""
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
   SET @navRow = Row(@navRows,1)
@@ -33,6 +34,12 @@ IF RowCount(@surveyUrlRows) > 0 THEN
   SET @surveyAnalyticsUrl = Field(@surveyUrlRow,"analytics")
   SET @surveyTakeUrl = Field(@surveyUrlRow,"take")
 ENDIF
+IF Empty(@jid) AND NOT Empty(@surveyId) AND @surveyId != "N/A" THEN
+  SET @detailRows = LookupRows("Bd_journey_analytics","surveyId",@surveyId)
+  IF RowCount(@detailRows) > 0 THEN
+    SET @jid = Trim(Field(Row(@detailRows,1),"journeyId"))
+  ENDIF
+ENDIF
 IF NOT Empty(@jid) THEN
   SET @buildNavContext = "true"
   SET @detailRows = LookupRows("Bd_journey_analytics","journeyId",@jid)
@@ -40,6 +47,12 @@ IF NOT Empty(@jid) THEN
     IF IndexOf(Field(Row(@detailRows,1),"journeyType"),"Survey") > 0 THEN
       SET @isSurveyBuild = "true"
     ENDIF
+  ENDIF
+ENDIF
+IF NOT Empty(@surveyStageUrl) AND NOT Empty(@surveyId) THEN
+  SET @editSurveyUrl = Concat(@surveyStageUrl,"?mode=edit&surveyid=",@surveyId)
+  IF NOT Empty(@jid) THEN
+    SET @editSurveyUrl = Concat(@editSurveyUrl,"&journeyId=",@jid)
   ENDIF
 ENDIF
 
@@ -88,14 +101,14 @@ ENDIF
 
     <div class="dashboard-layout">
         <!-- Modern Sidebar -->
-        <aside class="%%=IIF(@buildNavContext == "true" AND @isSurveyBuild == "true","maker-sidebar sidebar","sidebar")=%%" aria-label="Primary">
+        <aside class="%%=IIF(@buildNavContext == "true","maker-sidebar sidebar","sidebar")=%%" aria-label="Primary">
             <div class="sidebar-logo">
                 <a href="%%=v(@hubUrl)=%%"><img style="filter: invert(1);"
                     src="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&amp;w=640&amp;q=75"
                     alt="MagMutual"></a>
             </div>
             <nav class="sidebar-nav">
-                %%[ IF @buildNavContext == "true" AND @isSurveyBuild == "true" THEN ]%%
+                %%[ IF @buildNavContext == "true" THEN ]%%
                 <div class="nav-section"><span class="nav-section-title">MENU</span></div>
                 <a class="nav-link" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">
                     <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17h2v-5H3v5zm8 5h2V6h-2v16zM13 9h8V7h-8v2zM3 5v4h14V5H3zm8 14h10v-2H11v2zM13 17h8v-2h-8v2z"/></svg>
@@ -108,7 +121,7 @@ ENDIF
                 </a>
                 %%[ ENDIF ]%%
                 %%[ IF NOT Empty(@surveyStageUrl) AND NOT Empty(@surveyId) THEN ]%%
-                <a class="nav-link" href="%%=Concat(@surveyStageUrl,"?mode=edit&surveyid=",@surveyId,"&journeyId=",@jid)=%%">
+                <a class="nav-link" href="%%=v(@editSurveyUrl)=%%">
                     <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.003 1.003 0 0 0 0-1.42l-2.34-2.34a1.003 1.003 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z"/></svg>
                     Edit Survey
                 </a>
@@ -147,7 +160,7 @@ ENDIF
                 </a>
                 %%[ ENDIF ]%%
             </nav>
-            %%[ IF @buildNavContext != "true" OR @isSurveyBuild != "true" THEN ]%%
+            %%[ IF @buildNavContext != "true" THEN ]%%
             <div class="sidebar-footer">
                 <div class="sidebar-user">
                     <div class="user-avatar">S</div>
@@ -167,7 +180,7 @@ ENDIF
         <main class="main-content">
             <!-- Survey Header with Breadcrumb -->
             <div class="survey-header">
-                %%[ IF @buildNavContext == "true" AND @isSurveyBuild == "true" THEN ]%%
+                %%[ IF @buildNavContext == "true" THEN ]%%
                 <div class="breadcrumb-section">
                     <nav class="breadcrumb-nav" aria-label="Breadcrumb">
                         <a href="%%=v(@hubUrl)=%%" class="breadcrumb-link">
@@ -262,7 +275,7 @@ ENDIF
                                 📑
                                 Preview
                             </a>
-                            <a href="%%=Concat(@surveyStageUrl, "?mode=edit&surveyid=", @surveyId, IIF(@buildNavContext == "true" AND NOT Empty(@jid), Concat("&journeyId=", @jid), ""))=%%"
+                            <a href="%%=IIF(NOT Empty(@editSurveyUrl), @editSurveyUrl, Concat(@surveyStageUrl, "?mode=edit&surveyid=", @surveyId))=%%"
                                 class="btn-edit">
                                 <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
                                     <path
