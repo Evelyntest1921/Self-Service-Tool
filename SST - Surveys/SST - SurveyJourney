@@ -635,51 +635,61 @@ function applyTextSettings(payload, textContent) {
    }
  }
 }
-function extractSlotKeysFromHtml(htmlContent) {
- var keys = [];
- var seen = {};
- var str = htmlContent ? String(htmlContent) : "";
- var pattern = "data-key=\"";
- var pos = 0;
- var start, end, key;
- while (pos < str.length && keys.length < 30) {
-   start = str.indexOf(pattern, pos);
-   if (start < 0) break;
-   start += pattern.length;
-   end = str.indexOf("\"", start);
-   if (end < 0) break;
-   key = str.substring(start, end);
-   if (key && !seen[key]) {
-     seen[key] = true;
-     keys.push(key);
-   }
-   pos = end + 1;
+function getAssetHtmlContent(assetObj) {
+ if (!assetObj || typeof assetObj !== "object") return "";
+ if (assetObj.views && assetObj.views.html && assetObj.views.html.content) {
+   return assetObj.views.html.content;
  }
- return keys;
+ return assetObj.content || "";
 }
-function alignSlotsToHtmlKeys(slotMap, htmlContent) {
- var keys = extractSlotKeysFromHtml(htmlContent);
- var aligned = {};
- var i, key;
- if (!keys.length) {
-   return (slotMap && typeof slotMap === "object") ? cloneObject(slotMap) : {};
+function getAssetHtmlSlots(assetObj) {
+ if (!assetObj || typeof assetObj !== "object") return {};
+ if (assetObj.views && assetObj.views.html && assetObj.views.html.slots && typeof assetObj.views.html.slots === "object") {
+   return assetObj.views.html.slots;
  }
- for (i = 0; i < keys.length; i++) {
-   key = keys[i];
-   if (slotMap && slotMap[key] !== null && slotMap[key] !== undefined) {
-     aligned[key] = cloneObject(slotMap[key]);
-   } else {
-     aligned[key] = {};
-   }
+ if (assetObj.slots && typeof assetObj.slots === "object") {
+   return assetObj.slots;
  }
- return aligned;
+ return {};
+}
+function applyMinimalTemplateRef(payload) {
+ if (!payload || !payload.views || !payload.views.html || !payload.views.html.template) return;
+ var templateRef = payload.views.html.template;
+ var templateId = parseInt(templateRef.id, 10);
+ if (isNaN(templateId)) return;
+ payload.views.html.template = {
+   id: templateId,
+   assetType: { id: 4, name: "template" }
+ };
+}
+function stripPayloadCategory(payload) {
+ if (payload && payload.category) {
+   delete payload.category;
+ }
+}
+function postAssetPayload(subdomainValue, accessTokenValue, payload) {
+ var result = { statusCode: 0, responseText: "" };
+ var assetUrl = "https://" + subdomainValue + ".rest.marketingcloudapis.com/asset/v1/content/assets";
+ var postReq = new Script.Util.HttpRequest(assetUrl);
+ postReq.emptyContentHandling = 0;
+ postReq.retries = 2;
+ postReq.continueOnError = true;
+ postReq.setHeader("Authorization", "Bearer " + accessTokenValue);
+ postReq.method = "POST";
+ postReq.contentType = "application/json";
+ postReq.postData = Platform.Function.Stringify(payload);
+ var postResp = postReq.send();
+ result.statusCode = postResp.statusCode;
+ result.responseText = postResp.content ? String(postResp.content) : "";
+ return result;
 }
 function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, sourceSlots) {
  var templateSource = resolvedTemplateAsset || sourceTemplate;
- var templateContent = (templateSource && templateSource.content) ? templateSource.content : "";
- var sourceHtmlContent = (sourceAsset && sourceAsset.views && sourceAsset.views.html && sourceAsset.views.html.content) ? sourceAsset.views.html.content : (sourceAsset.content || templateContent);
- var emailSlots = alignSlotsToHtmlKeys(sourceSlots, sourceHtmlContent);
- var templateSlots = alignSlotsToHtmlKeys(templateSource.slots, sourceHtmlContent);
+ var templateContent = getAssetHtmlContent(templateSource);
+ var templateSlotsObj = getAssetHtmlSlots(templateSource);
+ var templateSlots = (templateSlotsObj && typeof templateSlotsObj === "object") ? cloneObject(templateSlotsObj) : {};
+ var sourceHtmlContent = getAssetHtmlContent(sourceAsset) || templateContent;
+ var emailSlots = (sourceSlots && typeof sourceSlots === "object") ? cloneObject(sourceSlots) : {};
  var payload = {
    name: targetName,
    assetType: { id: 207, name: "htmlemail" },
@@ -823,8 +833,8 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
            emailOptions: summarizeEmailOptions(template.data),
            resolvedTemplate: resolvedTemplateAsset ? {
              id: resolvedTemplateAsset.id || "",
-             contentLength: safeLength(resolvedTemplateAsset.content),
-             slotKeys: objectKeys(resolvedTemplateAsset.slots)
+             contentLength: safeLength(getAssetHtmlContent(resolvedTemplateAsset)),
+             slotKeys: objectKeys(getAssetHtmlSlots(resolvedTemplateAsset))
            } : null
          },
          outgoing: {
@@ -839,18 +849,30 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          }
        };
        payloadDebug = truncateString(Platform.Function.Stringify(debugObj), 2500);
-       var assetUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets";
-       var postReq = new Script.Util.HttpRequest(assetUrl);
-       postReq.emptyContentHandling = 0;
-       postReq.retries = 2;
-       postReq.continueOnError = true;
-       postReq.setHeader("Authorization", "Bearer " + accessToken);
-       postReq.method = "POST";
-       postReq.contentType = "application/json";
-       postReq.postData = Platform.Function.Stringify(payload);
-       var postResp = postReq.send();
-       var assetStatus = postResp.statusCode;
-       var assetResponse = postResp.content ? String(postResp.content) : "";
+       var assetStatus = 0;
+       var assetResponse = "";
+       var retryLabels = ["standard", "minimal-template", "no-category", "minimal-no-category"];
+       var retryIndex = 0;
+       var postPayload = null;
+       for (retryIndex = 0; retryIndex < retryLabels.length; retryIndex++) {
+         postPayload = cloneObject(payload);
+         if (!postPayload) {
+           postPayload = payload;
+         }
+         if (retryLabels[retryIndex] === "minimal-template" || retryLabels[retryIndex] === "minimal-no-category") {
+           applyMinimalTemplateRef(postPayload);
+         }
+         if (retryLabels[retryIndex] === "no-category" || retryLabels[retryIndex] === "minimal-no-category") {
+           stripPayloadCategory(postPayload);
+         }
+         var postResult = postAssetPayload(subdomain, accessToken, postPayload);
+         assetStatus = postResult.statusCode;
+         assetResponse = postResult.responseText;
+         if (assetStatus == 200 || assetStatus == 201) {
+           debugPrefix = debugPrefix + " Clone attempt: " + retryLabels[retryIndex] + ".";
+           break;
+         }
+       }
        if ((assetStatus == 200 || assetStatus == 201) && assetResponse) {
          var idMatch = assetResponse.match(/"id"\s*:\s*"?([^",}\s]+)"?/);
          if (idMatch) {
@@ -877,7 +899,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
            step3bResult = " Step 3b SKIP - Email duplicated but new ID was not returned." + debugPrefix + " Response: " + assetResponse + " Debug: " + payloadDebug;
          }
        } else {
-         step3bResult = " Step 3b SKIP - Email not duplicated: HTTP " + assetStatus + " - " + (assetResponse || "No response body.") + debugPrefix + " Debug: " + payloadDebug;
+         step3bResult = " Step 3b SKIP - Email not duplicated: HTTP " + assetStatus + " - " + (assetResponse || "No response body.") + debugPrefix + " Attempts: " + retryLabels.join(",") + ". Debug: " + payloadDebug;
        }
      }
    } else {
