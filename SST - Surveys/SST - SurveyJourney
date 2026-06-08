@@ -635,6 +635,7 @@ function applyTextSettings(payload, textContent) {
    }
  }
 }
+var SST_EMAIL_CATEGORY_ID = 58374;
 function getAssetHtmlContent(assetObj) {
  if (!assetObj || typeof assetObj !== "object") return "";
  if (assetObj.views && assetObj.views.html && assetObj.views.html.content) {
@@ -652,20 +653,156 @@ function getAssetHtmlSlots(assetObj) {
  }
  return {};
 }
-function applyMinimalTemplateRef(payload) {
- if (!payload || !payload.views || !payload.views.html || !payload.views.html.template) return;
- var templateRef = payload.views.html.template;
- var templateId = parseInt(templateRef.id, 10);
- if (isNaN(templateId)) return;
- payload.views.html.template = {
-   id: templateId,
-   assetType: { id: 4, name: "template" }
- };
-}
-function stripPayloadCategory(payload) {
- if (payload && payload.category) {
-   delete payload.category;
+function deepStripCreateFields(obj, preserveThisId) {
+ var stripKeys, out, key, childPreserveId, i;
+ if (obj === null || obj === undefined) return obj;
+ if (typeof obj !== "object") return obj;
+ if (typeof obj.length === "number") {
+   var arr = [];
+   for (i = 0; i < obj.length; i++) {
+     arr.push(deepStripCreateFields(obj[i], false));
+   }
+   return arr;
  }
+ stripKeys = ["customerKey","objectID","modifiedDate","createdDate","createdBy","modifiedBy","legacyData","owner","status","modelVersion","parentId","sharingProperties","localAssets"];
+ out = {};
+ for (key in obj) {
+   if (!obj.hasOwnProperty(key)) continue;
+   if (stripKeys.indexOf(key) >= 0) continue;
+   if (key === "id") {
+    if (preserveThisId) out[key] = obj[key];
+    continue;
+   }
+   childPreserveId = key === "assetType" || key === "template";
+   out[key] = deepStripCreateFields(obj[key], childPreserveId);
+ }
+ return out;
+}
+function slotPlaceholderMap(emailSlots) {
+ var placeholders = {};
+ var keys = objectKeys(emailSlots || {});
+ var i;
+ for (i = 0; i < keys.length; i++) {
+   placeholders[keys[i]] = {};
+ }
+ return placeholders;
+}
+function buildMinimalTemplateRef(sourceTemplate) {
+ var templateId = parseInt(sourceTemplate.id, 10);
+ var ref = { assetType: { id: 4, name: "template" } };
+ if (!isNaN(templateId)) {
+   ref.id = templateId;
+ }
+ return ref;
+}
+function build207SkeletonPayload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots) {
+ var payload = {
+   name: targetName,
+   assetType: { id: 207, name: "htmlemail" },
+   channels: (sourceAsset.channels && typeof sourceAsset.channels === "object") ? cloneObject(sourceAsset.channels) : { email: true, web: false },
+   views: {
+     subjectline: { content: subjectlineContent || "Campaign Event" },
+     preheader: {},
+     html: {
+       slots: slotPlaceholderMap(sourceSlots),
+       template: buildMinimalTemplateRef(sourceTemplate)
+     }
+   },
+   data: {
+     email: {
+       options: { characterEncoding: "utf-8" }
+     }
+   }
+ };
+ applyTextSettings(payload, textContent);
+ return payload;
+}
+function build207ContentPatch(sourceAsset, subjectlineContent, preheaderContent, textContent, sourceSlots) {
+ var patch = {
+   views: {
+     subjectline: { content: subjectlineContent || "Campaign Event" },
+     preheader: hasTextContent(preheaderContent) ? { content: preheaderContent } : {},
+     html: {
+       content: getAssetHtmlContent(sourceAsset),
+       slots: (sourceSlots && typeof sourceSlots === "object") ? cloneObject(sourceSlots) : {}
+     }
+   }
+ };
+ applyTextSettings(patch, textContent);
+ return patch;
+}
+function build207MinimalPayload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots) {
+ var payload = build207SkeletonPayload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots);
+ payload.views.html.content = getAssetHtmlContent(sourceAsset);
+ payload.views.html.slots = (sourceSlots && typeof sourceSlots === "object") ? cloneObject(sourceSlots) : {};
+ return payload;
+}
+function build207PlaceholderPayload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots) {
+ var payload = build207SkeletonPayload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots);
+ payload.views.html.content = getAssetHtmlContent(sourceAsset);
+ return payload;
+}
+function buildDirectClonePayload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent) {
+ var payload = buildBasePayload(sourceAsset, targetName, 207);
+ if (!payload.views || typeof payload.views !== "object") {
+   payload.views = cloneObject(sourceAsset.views || {});
+ }
+ payload.views.subjectline = { content: subjectlineContent || "Campaign Event" };
+ payload.views.preheader = hasTextContent(preheaderContent) ? { content: preheaderContent } : {};
+ applyTextSettings(payload, textContent);
+ return deepStripCreateFields(payload, false);
+}
+function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, sourceSlots) {
+ var templateSource = resolvedTemplateAsset || sourceTemplate;
+ var templateContent = getAssetHtmlContent(templateSource);
+ var sourceHtmlContent = getAssetHtmlContent(sourceAsset) || templateContent;
+ var emailSlots = (sourceSlots && typeof sourceSlots === "object") ? cloneObject(sourceSlots) : {};
+ var templateRef = deepStripCreateFields({
+   id: parseInt(sourceTemplate.id, 10),
+   assetType: { id: 4, name: "template" },
+   content: templateContent,
+   slots: slotPlaceholderMap(emailSlots)
+ }, true);
+ var payload = {
+   name: targetName,
+   assetType: { id: 207, name: "htmlemail" },
+   channels: (sourceAsset.channels && typeof sourceAsset.channels === "object") ? cloneObject(sourceAsset.channels) : { email: true, web: false },
+   views: {
+     subjectline: { content: subjectlineContent || "Campaign Event" },
+     preheader: hasTextContent(preheaderContent) ? { content: preheaderContent } : {},
+     html: {
+       content: sourceHtmlContent,
+       slots: emailSlots,
+       template: templateRef
+     }
+   },
+   data: {
+     email: {
+       options: { characterEncoding: "utf-8" }
+     }
+   }
+ };
+ if (sourceAsset.category && sourceAsset.category.id) {
+   payload.category = { id: sourceAsset.category.id };
+ }
+ if (sourceAsset.data && sourceAsset.data.email && sourceAsset.data.email.options && typeof sourceAsset.data.email.options === "object") {
+   payload.data.email.options = cloneObject(sourceAsset.data.email.options);
+ }
+ applyTextSettings(payload, textContent);
+ return payload;
+}
+function debugPayloadSummary(debugPayload) {
+ if (!debugPayload || typeof debugPayload !== "object") return null;
+ return {
+   assetType: debugPayload.assetType || null,
+   category: debugPayload.category || null,
+   channels: debugPayload.channels || null,
+   subjectlineLength: (debugPayload.views && debugPayload.views.subjectline) ? safeLength(debugPayload.views.subjectline.content) : 0,
+   preheaderLength: (debugPayload.views && debugPayload.views.preheader) ? safeLength(debugPayload.views.preheader.content) : 0,
+   textLength: (debugPayload.views && debugPayload.views.text) ? safeLength(debugPayload.views.text.content) : 0,
+   html: summarizeHtmlView(debugPayload.views ? debugPayload.views.html : null),
+   emailOptions: summarizeEmailOptions(debugPayload.data)
+ };
 }
 function postAssetPayload(subdomainValue, accessTokenValue, payload) {
  var result = { statusCode: 0, responseText: "" };
@@ -683,46 +820,103 @@ function postAssetPayload(subdomainValue, accessTokenValue, payload) {
  result.responseText = postResp.content ? String(postResp.content) : "";
  return result;
 }
-function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, sourceSlots) {
- var templateSource = resolvedTemplateAsset || sourceTemplate;
- var templateContent = getAssetHtmlContent(templateSource);
- var templateSlotsObj = getAssetHtmlSlots(templateSource);
- var templateSlots = (templateSlotsObj && typeof templateSlotsObj === "object") ? cloneObject(templateSlotsObj) : {};
- var sourceHtmlContent = getAssetHtmlContent(sourceAsset) || templateContent;
- var emailSlots = (sourceSlots && typeof sourceSlots === "object") ? cloneObject(sourceSlots) : {};
- var payload = {
-   name: targetName,
-   assetType: { id: 207, name: "htmlemail" },
-   channels: (sourceAsset.channels && typeof sourceAsset.channels === "object") ? cloneObject(sourceAsset.channels) : { email: true, web: false },
-   views: {
-     subjectline: { content: subjectlineContent || "Campaign Event" },
-     preheader: { content: preheaderContent || "" },
-     html: {
-       content: sourceHtmlContent,
-       slots: emailSlots,
-       template: {
-         id: parseInt(sourceTemplate.id, 10),
-         assetType: { id: 4, name: "template" },
-         content: templateContent,
-         slots: templateSlots
-       }
-     },
-     text: {}
-   },
-   data: {
-     email: {
-       options: {}
-     }
+function putAssetPayload(subdomainValue, accessTokenValue, assetId, payload) {
+ var result = { statusCode: 0, responseText: "" };
+ var parsedId = parseInt(assetId, 10);
+ if (isNaN(parsedId)) return result;
+ var assetUrl = "https://" + subdomainValue + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + parsedId;
+ var putReq = new Script.Util.HttpRequest(assetUrl);
+ putReq.emptyContentHandling = 0;
+ putReq.retries = 2;
+ putReq.continueOnError = true;
+ putReq.setHeader("Authorization", "Bearer " + accessTokenValue);
+ putReq.method = "PUT";
+ putReq.contentType = "application/json";
+ putReq.postData = Platform.Function.Stringify(payload);
+ var putResp = putReq.send();
+ result.statusCode = putResp.statusCode;
+ result.responseText = putResp.content ? String(putResp.content) : "";
+ return result;
+}
+function extractCreatedAssetId(responseText) {
+ var idMatch = responseText ? responseText.match(/"id"\s*:\s*"?([^",}\s]+)"?/) : null;
+ return idMatch ? String(idMatch[1]) : "";
+}
+function appendCategoryVariants(targetList, labels, basePayload, labelPrefix, sourceAsset) {
+ var variantPayload;
+ var sourceCategoryId = (sourceAsset && sourceAsset.category && sourceAsset.category.id) ? sourceAsset.category.id : null;
+ var categoryOptions = [];
+ var i;
+ if (sourceCategoryId) {
+   categoryOptions.push({ id: sourceCategoryId, suffix: "-source-cat" });
+ }
+ categoryOptions.push({ id: SST_EMAIL_CATEGORY_ID, suffix: "-sst-cat" });
+ categoryOptions.push({ id: null, suffix: "-no-cat" });
+ if (!basePayload) return;
+ for (i = 0; i < categoryOptions.length; i++) {
+   variantPayload = cloneObject(basePayload);
+   if (!variantPayload) continue;
+   if (categoryOptions[i].id) {
+     variantPayload.category = { id: categoryOptions[i].id };
+   } else if (variantPayload.category) {
+     delete variantPayload.category;
    }
+   targetList.push(variantPayload);
+   labels.push(labelPrefix + categoryOptions[i].suffix);
+ }
+}
+function tryTwoStep207Clone(subdomainValue, accessTokenValue, sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots, categoryId, labelPrefix) {
+ var skeletonPayload = build207SkeletonPayload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, sourceSlots);
+ if (categoryId) {
+   skeletonPayload.category = { id: categoryId };
+ }
+ var createResult = postAssetPayload(subdomainValue, accessTokenValue, skeletonPayload);
+ var createdId = "";
+ var patchResult;
+ if (createResult.statusCode != 200 && createResult.statusCode != 201) {
+   return {
+     ok: false,
+     statusCode: createResult.statusCode,
+     responseText: createResult.responseText,
+     label: labelPrefix + "-skeleton-failed"
+   };
+ }
+ createdId = extractCreatedAssetId(createResult.responseText);
+ if (!createdId) {
+   return {
+     ok: false,
+     statusCode: createResult.statusCode,
+     responseText: createResult.responseText,
+     label: labelPrefix + "-no-id"
+   };
+ }
+ patchResult = putAssetPayload(subdomainValue, accessTokenValue, createdId, build207ContentPatch(sourceAsset, subjectlineContent, preheaderContent, textContent, sourceSlots));
+ if (patchResult.statusCode == 200 || patchResult.statusCode == 201) {
+   return {
+     ok: true,
+     statusCode: patchResult.statusCode,
+     responseText: patchResult.responseText || createResult.responseText,
+     createdId: createdId,
+     label: labelPrefix + "-two-step"
+   };
+ }
+ patchResult = putAssetPayload(subdomainValue, accessTokenValue, createdId, build207ContentPatch(sourceAsset, subjectlineContent, preheaderContent, textContent, slotPlaceholderMap(sourceSlots)));
+ if (patchResult.statusCode == 200 || patchResult.statusCode == 201) {
+   return {
+     ok: true,
+     statusCode: patchResult.statusCode,
+     responseText: patchResult.responseText || createResult.responseText,
+     createdId: createdId,
+     label: labelPrefix + "-two-step-placeholder-slots"
+   };
+ }
+ return {
+   ok: false,
+   statusCode: patchResult.statusCode,
+   responseText: patchResult.responseText,
+   createdId: createdId,
+   label: labelPrefix + "-patch-failed"
  };
- if (sourceAsset.category && sourceAsset.category.id) {
-   payload.category = { id: sourceAsset.category.id };
- }
- if (sourceAsset.data && sourceAsset.data.email && sourceAsset.data.email.options && typeof sourceAsset.data.email.options === "object") {
-   payload.data.email.options = cloneObject(sourceAsset.data.email.options);
- }
- applyTextSettings(payload, textContent);
- return payload;
 }
 if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && deleteEmailId) {
  try {
@@ -770,9 +964,12 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
      var assetTypeId = (template.assetType && template.assetType.id) ? parseInt(template.assetType.id, 10) : 207;
      var slotKeys = objectKeys(htmlSlots);
      var payload = null;
+     var postAttempts = [];
+     var attemptLabels = [];
      var resolvedTemplateAsset = null;
      var debugPrefix = " Source assetType: " + assetTypeId + ". Has template ref: " + (sourceTemplate ? "yes" : "no") + ". Slot keys: " + (slotKeys.length ? slotKeys.join(",") : "none") + ".";
      var payloadDebug = "";
+     var winningAttempt = "";
      if (assetTypeId === 4) {
        var templateRef = buildTemplateReference(template, template.content || htmlContent, template.slots || htmlSlots);
        var templateSlots = (template.slots && typeof template.slots === "object") ? cloneObject(template.slots) : cloneObject(htmlSlots || {});
@@ -800,7 +997,11 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          var fetchedTemplate = fetchAssetById(sourceTemplate.id, subdomain, accessToken);
          if (fetchedTemplate.ok && fetchedTemplate.asset) {
            resolvedTemplateAsset = fetchedTemplate.asset;
-           payload = buildCloned207Payload(template, emailName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, htmlSlots);
+           appendCategoryVariants(postAttempts, attemptLabels, build207PlaceholderPayload(template, emailName, subjectlineContent, preheaderContent, textContent, sourceTemplate, htmlSlots), "placeholder", template);
+           appendCategoryVariants(postAttempts, attemptLabels, build207MinimalPayload(template, emailName, subjectlineContent, preheaderContent, textContent, sourceTemplate, htmlSlots), "minimal-full-slots", template);
+           appendCategoryVariants(postAttempts, attemptLabels, buildCloned207Payload(template, emailName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, htmlSlots), "reconstructed", template);
+           appendCategoryVariants(postAttempts, attemptLabels, buildDirectClonePayload(template, emailName, subjectlineContent, preheaderContent, textContent), "direct-clone", template);
+           payload = postAttempts.length ? postAttempts[0] : null;
          } else {
            step3bResult = " Step 3b SKIP - Email not duplicated: Template asset fetch failed for template ID " + sourceTemplate.id + " with HTTP " + fetchedTemplate.statusCode + " - " + (fetchedTemplate.responseText || "No response body.") + debugPrefix;
          }
@@ -822,7 +1023,12 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
      } else {
        step3bResult = " Step 3b SKIP - Email not duplicated: Unsupported source asset type " + assetTypeId + "." + debugPrefix;
      }
-     if (payload && !step3bResult.match(/views\.html\.template is missing|Unsupported source asset type/)) {
+     if ((payload || postAttempts.length || assetTypeId === 207) && !step3bResult.match(/views\.html\.template is missing|Unsupported source asset type|Template asset fetch failed/)) {
+       if (!postAttempts.length && payload) {
+         postAttempts.push(payload);
+         attemptLabels.push("single");
+       }
+       var debugPayload = payload || postAttempts[0];
        var debugObj = {
          source: {
            assetTypeId: assetTypeId,
@@ -837,49 +1043,65 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
              slotKeys: objectKeys(getAssetHtmlSlots(resolvedTemplateAsset))
            } : null
          },
-         outgoing: {
-           assetType: payload.assetType || null,
-           category: payload.category || null,
-           channels: payload.channels || null,
-           subjectlineLength: (payload.views && payload.views.subjectline) ? safeLength(payload.views.subjectline.content) : 0,
-           preheaderLength: (payload.views && payload.views.preheader) ? safeLength(payload.views.preheader.content) : 0,
-           textLength: (payload.views && payload.views.text) ? safeLength(payload.views.text.content) : 0,
-           html: summarizeHtmlView(payload.views ? payload.views.html : null),
-           emailOptions: summarizeEmailOptions(payload.data)
-         }
+         outgoing: debugPayloadSummary(debugPayload),
+         attemptCount: postAttempts.length
        };
        payloadDebug = truncateString(Platform.Function.Stringify(debugObj), 2500);
        var assetStatus = 0;
        var assetResponse = "";
-       var retryLabels = ["standard", "minimal-template", "no-category", "minimal-no-category"];
-       var retryIndex = 0;
-       var postPayload = null;
-       for (retryIndex = 0; retryIndex < retryLabels.length; retryIndex++) {
-         postPayload = cloneObject(payload);
-         if (!postPayload) {
-           postPayload = payload;
+       var attemptIdx = 0;
+       var twoStepResult = null;
+       if (assetTypeId === 207 && sourceTemplate) {
+         var twoStepCategories = [];
+         if (template.category && template.category.id) {
+           twoStepCategories.push({ id: template.category.id, label: "two-step-source" });
          }
-         if (retryLabels[retryIndex] === "minimal-template" || retryLabels[retryIndex] === "minimal-no-category") {
-           applyMinimalTemplateRef(postPayload);
-         }
-         if (retryLabels[retryIndex] === "no-category" || retryLabels[retryIndex] === "minimal-no-category") {
-           stripPayloadCategory(postPayload);
-         }
-         var postResult = postAssetPayload(subdomain, accessToken, postPayload);
-         assetStatus = postResult.statusCode;
-         assetResponse = postResult.responseText;
-         if (assetStatus == 200 || assetStatus == 201) {
-           debugPrefix = debugPrefix + " Clone attempt: " + retryLabels[retryIndex] + ".";
-           break;
+         twoStepCategories.push({ id: SST_EMAIL_CATEGORY_ID, label: "two-step-sst" });
+         twoStepCategories.push({ id: null, label: "two-step" });
+         var twoStepIdx = 0;
+         for (twoStepIdx = 0; twoStepIdx < twoStepCategories.length; twoStepIdx++) {
+           twoStepResult = tryTwoStep207Clone(subdomain, accessToken, template, emailName, subjectlineContent, preheaderContent, textContent, sourceTemplate, htmlSlots, twoStepCategories[twoStepIdx].id, twoStepCategories[twoStepIdx].label);
+           if (twoStepResult.ok) {
+             assetStatus = twoStepResult.statusCode;
+             assetResponse = twoStepResult.responseText;
+             newEmailId = twoStepResult.createdId;
+             winningAttempt = twoStepResult.label;
+             break;
+           }
+           if (twoStepResult.statusCode != 400 && twoStepResult.label && twoStepResult.label.indexOf("skeleton-failed") < 0) {
+             assetStatus = twoStepResult.statusCode;
+             assetResponse = twoStepResult.responseText;
+             winningAttempt = twoStepResult.label;
+             break;
+           }
          }
        }
-       if ((assetStatus == 200 || assetStatus == 201) && assetResponse) {
-         var idMatch = assetResponse.match(/"id"\s*:\s*"?([^",}\s]+)"?/);
-         if (idMatch) {
-           newEmailId = String(idMatch[1]);
+       if (!winningAttempt) {
+         for (attemptIdx = 0; attemptIdx < postAttempts.length; attemptIdx++) {
+           var attemptPayload = postAttempts[attemptIdx];
+           if (!attemptPayload) continue;
+           var postResult = postAssetPayload(subdomain, accessToken, attemptPayload);
+           assetStatus = postResult.statusCode;
+           assetResponse = postResult.responseText;
+           if (assetStatus == 200 || assetStatus == 201) {
+             payload = attemptPayload;
+             winningAttempt = attemptLabels[attemptIdx] || ("attempt-" + (attemptIdx + 1));
+             break;
+           }
+           if (assetStatus != 400) {
+             winningAttempt = attemptLabels[attemptIdx] || ("attempt-" + (attemptIdx + 1));
+             break;
+           }
+         }
+       }
+       if ((assetStatus == 200 || assetStatus == 201) && (assetResponse || newEmailId)) {
+         if (!newEmailId) {
+           newEmailId = extractCreatedAssetId(assetResponse);
+         }
+         if (newEmailId) {
            var createdAsset = null;
            try {
-             createdAsset = Platform.Function.ParseJSON(assetResponse);
+             createdAsset = assetResponse ? Platform.Function.ParseJSON(assetResponse) : null;
            } catch (parseEx) {
              createdAsset = null;
            }
@@ -891,15 +1113,15 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
              }
            }
            if (journeyEmailId) {
-             step3bResult = " Step 3b OK - Email duplicated.";
+             step3bResult = " Step 3b OK - Email duplicated." + (winningAttempt ? " Attempt " + winningAttempt + "." : "");
            } else {
-             step3bResult = " Step 3b SKIP - Email duplicated but legacy email ID was not available for Journey Builder.";
+             step3bResult = " Step 3b SKIP - Email duplicated but legacy email ID was not available for Journey Builder." + (winningAttempt ? " Attempt " + winningAttempt + "." : "");
            }
          } else {
            step3bResult = " Step 3b SKIP - Email duplicated but new ID was not returned." + debugPrefix + " Response: " + assetResponse + " Debug: " + payloadDebug;
          }
        } else {
-         step3bResult = " Step 3b SKIP - Email not duplicated: HTTP " + assetStatus + " - " + (assetResponse || "No response body.") + debugPrefix + " Attempts: " + retryLabels.join(",") + ". Debug: " + payloadDebug;
+         step3bResult = " Step 3b SKIP - Email not duplicated: HTTP " + assetStatus + " - " + (assetResponse || "No response body.") + debugPrefix + " Attempts: " + (attemptLabels.length ? attemptLabels.join(",") : "none") + (winningAttempt ? " Last: " + winningAttempt + "." : "") + " Debug: " + payloadDebug;
        }
      }
    } else {
