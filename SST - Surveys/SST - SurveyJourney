@@ -526,7 +526,7 @@ function buildBasePayload(sourceAsset, targetName, targetAssetTypeId) {
  };
  if (targetAssetTypeId === 207) {
    payload.assetType.name = "templatebasedemail";
-   payload.contentType = TEMPLATE_BASED_EMAIL_CONTENT_TYPE;
+   payload.assetType.displayName = "Template-Based Email";
  } else if (targetAssetTypeId === 208) {
    payload.assetType.name = "htmlemail";
  } else if (sourceAsset.assetType && sourceAsset.assetType.name) {
@@ -571,20 +571,35 @@ function applyTextSettings(payload, textContent) {
  if (hasTextContent(textContent)) {
    payload.views.text = { content: String(textContent) };
  } else {
-   if (payload.views.text) {
-     delete payload.views.text;
-   }
+   payload.views.text = {};
    if (payload.data && payload.data.email && payload.data.email.options && payload.data.email.options.generateFrom !== undefined) {
      delete payload.data.email.options.generateFrom;
    }
  }
 }
 var SST_EMAIL_CATEGORY_ID = 58374;
-var TEMPLATE_BASED_EMAIL_CONTENT_TYPE = "application/vnd.etmc.email.Message; kind=template";
 function setTemplateBasedEmailAssetType(payload) {
  if (!payload) return;
- payload.assetType = { id: 207, name: "templatebasedemail" };
- payload.contentType = TEMPLATE_BASED_EMAIL_CONTENT_TYPE;
+ payload.assetType = { id: 207, name: "templatebasedemail", displayName: "Template-Based Email" };
+ if (payload.contentType) {
+   delete payload.contentType;
+ }
+}
+function setHtmlemail207AssetType(payload) {
+ if (!payload) return;
+ payload.assetType = { id: 207, name: "htmlemail" };
+ if (payload.contentType) {
+   delete payload.contentType;
+ }
+}
+function ensure207ViewDefaults(payload) {
+ if (!payload || !payload.views) return;
+ payload.views.text = payload.views.text || {};
+ if (!payload.views.preheader || typeof payload.views.preheader !== "object") {
+   payload.views.preheader = { content: "" };
+ } else if (payload.views.preheader.content === undefined || payload.views.preheader.content === null) {
+   payload.views.preheader.content = "";
+ }
 }
 function getAssetHtmlContent(assetObj) {
  if (!assetObj || typeof assetObj !== "object") return "";
@@ -705,29 +720,31 @@ function buildDirectClonePayload(sourceAsset, targetName, subjectlineContent, pr
 function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, sourceSlots) {
  var templateSource = resolvedTemplateAsset || sourceTemplate;
  var templateContent = getAssetHtmlContent(templateSource);
+ var templateSlotsObj = getAssetHtmlSlots(templateSource);
+ var templateSlots = (templateSlotsObj && typeof templateSlotsObj === "object") ? cloneObject(templateSlotsObj) : {};
  var sourceHtmlContent = getAssetHtmlContent(sourceAsset) || templateContent;
  var emailSlots = (sourceSlots && typeof sourceSlots === "object") ? cloneObject(sourceSlots) : {};
- var templateRef = deepStripCreateFields({
-   id: parseInt(sourceTemplate.id, 10),
-   assetType: { id: 4, name: "template" },
-   content: templateContent,
-   slots: slotPlaceholderMap(emailSlots)
- }, true);
  var payload = {
    name: targetName,
    channels: (sourceAsset.channels && typeof sourceAsset.channels === "object") ? cloneObject(sourceAsset.channels) : { email: true, web: false },
    views: {
      subjectline: { content: subjectlineContent || "Campaign Event" },
-     preheader: hasTextContent(preheaderContent) ? { content: preheaderContent } : {},
+     preheader: { content: preheaderContent || "" },
      html: {
        content: sourceHtmlContent,
        slots: emailSlots,
-       template: templateRef
-     }
+       template: {
+         id: parseInt(sourceTemplate.id, 10),
+         assetType: { id: 4, name: "template" },
+         content: templateContent,
+         slots: templateSlots
+       }
+     },
+     text: {}
    },
    data: {
      email: {
-       options: { characterEncoding: "utf-8" }
+       options: {}
      }
    }
  };
@@ -739,6 +756,7 @@ function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preh
    payload.data.email.options = cloneObject(sourceAsset.data.email.options);
  }
  applyTextSettings(payload, textContent);
+ ensure207ViewDefaults(payload);
  return payload;
 }
 function debugPayloadSummary(debugPayload) {
@@ -939,6 +957,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
        };
        setTemplateBasedEmailAssetType(payload);
        applyTextSettings(payload, textContent);
+       ensure207ViewDefaults(payload);
        if (template.category && template.category.id) {
          payload.category = { id: template.category.id };
        }
@@ -947,10 +966,14 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          var fetchedTemplate = fetchAssetById(sourceTemplate.id, subdomain, accessToken);
          if (fetchedTemplate.ok && fetchedTemplate.asset) {
            resolvedTemplateAsset = fetchedTemplate.asset;
-           appendCategoryVariants(postAttempts, attemptLabels, build207PlaceholderPayload(template, emailName, subjectlineContent, preheaderContent, textContent, sourceTemplate, htmlSlots), "placeholder", template);
-           appendCategoryVariants(postAttempts, attemptLabels, build207MinimalPayload(template, emailName, subjectlineContent, preheaderContent, textContent, sourceTemplate, htmlSlots), "minimal-full-slots", template);
-           appendCategoryVariants(postAttempts, attemptLabels, buildCloned207Payload(template, emailName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, htmlSlots), "reconstructed", template);
-           appendCategoryVariants(postAttempts, attemptLabels, buildDirectClonePayload(template, emailName, subjectlineContent, preheaderContent, textContent), "direct-clone", template);
+           var cloned207Payload = buildCloned207Payload(template, emailName, subjectlineContent, preheaderContent, textContent, sourceTemplate, resolvedTemplateAsset, htmlSlots);
+           appendCategoryVariants(postAttempts, attemptLabels, cloned207Payload, "template-based", template);
+           var legacy207Payload = cloneObject(cloned207Payload);
+           if (legacy207Payload) {
+             setHtmlemail207AssetType(legacy207Payload);
+             ensure207ViewDefaults(legacy207Payload);
+             appendCategoryVariants(postAttempts, attemptLabels, legacy207Payload, "htmlemail-207", template);
+           }
            payload = postAttempts.length ? postAttempts[0] : null;
          } else {
            step3bResult = " Step 3b SKIP - Email not duplicated: Template asset fetch failed for template ID " + sourceTemplate.id + " with HTTP " + fetchedTemplate.statusCode + " - " + (fetchedTemplate.responseText || "No response body.") + debugPrefix;
@@ -1000,32 +1023,6 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
        var assetStatus = 0;
        var assetResponse = "";
        var attemptIdx = 0;
-       var twoStepResult = null;
-       if (assetTypeId === 207 && sourceTemplate) {
-         var twoStepCategories = [];
-         if (template.category && template.category.id) {
-           twoStepCategories.push({ id: template.category.id, label: "two-step-source" });
-         }
-         twoStepCategories.push({ id: SST_EMAIL_CATEGORY_ID, label: "two-step-sst" });
-         twoStepCategories.push({ id: null, label: "two-step" });
-         var twoStepIdx = 0;
-         for (twoStepIdx = 0; twoStepIdx < twoStepCategories.length; twoStepIdx++) {
-           twoStepResult = tryTwoStep207Clone(subdomain, accessToken, template, emailName, subjectlineContent, preheaderContent, textContent, sourceTemplate, htmlSlots, twoStepCategories[twoStepIdx].id, twoStepCategories[twoStepIdx].label);
-           if (twoStepResult.ok) {
-             assetStatus = twoStepResult.statusCode;
-             assetResponse = twoStepResult.responseText;
-             newEmailId = twoStepResult.createdId;
-             winningAttempt = twoStepResult.label;
-             break;
-           }
-           if (twoStepResult.statusCode != 400 && twoStepResult.label && twoStepResult.label.indexOf("skeleton-failed") < 0) {
-             assetStatus = twoStepResult.statusCode;
-             assetResponse = twoStepResult.responseText;
-             winningAttempt = twoStepResult.label;
-             break;
-           }
-         }
-       }
        if (!winningAttempt) {
          for (attemptIdx = 0; attemptIdx < postAttempts.length; attemptIdx++) {
            var attemptPayload = postAttempts[attemptIdx];
