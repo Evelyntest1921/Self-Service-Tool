@@ -4,7 +4,7 @@ SET @deleteRequested = IIF(RequestParameter("deleteEmail") == "1","1","0")
 SET @deleteEmailId = Trim(RequestParameter("deleteEmailId"))
 SET @createMode = Trim(RequestParameter("mode"))
 IF Empty(@createMode) THEN
-SET @createMode = "rest207"
+SET @createMode = "rest207from4"
 ENDIF
 SET @itemBaseName = Trim(RequestParameter("itemBaseName"))
 SET @emailSubjectLine = Trim(RequestParameter("emailSubjectLine"))
@@ -15,13 +15,25 @@ SET @categoryId = "58374"
 ENDIF
 SET @templateConfigOk = "false"
 SET @defaultEmailId = ""
+SET @defaultParentTemplateId = "56191"
 SET @templateRows = LookupOrderedRows("bd_sst_email_templates",0,"email_id ASC","email_type","survey-template")
 IF RowCount(@templateRows) > 0 THEN
 SET @templateConfigOk = "true"
 SET @defaultEmailId = Trim(Field(Row(@templateRows,RowCount(@templateRows)),"email_id"))
 ENDIF
+SET @parentTemplateRows = LookupOrderedRows("bd_sst_email_templates",0,"email_id ASC","email_type","template")
+IF RowCount(@parentTemplateRows) > 0 THEN
+SET @deParentTemplateId = Trim(Field(Row(@parentTemplateRows,RowCount(@parentTemplateRows)),"email_id"))
+IF NOT Empty(@deParentTemplateId) THEN
+SET @defaultParentTemplateId = @deParentTemplateId
+ENDIF
+ENDIF
 IF Empty(@sourceEmailId) THEN
+IF @createMode == "rest207from4" THEN
+SET @sourceEmailId = @defaultParentTemplateId
+ELSE
 SET @sourceEmailId = @defaultEmailId
+ENDIF
 ENDIF
 SET @emailName = ""
 IF NOT Empty(@itemBaseName) THEN
@@ -223,6 +235,58 @@ return "";
 function stripHtmlTags(html) {
 return String(html || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
+function buildTemplateReference(source, fallbackContent, fallbackSlots) {
+if (!source || typeof source !== "object") return null;
+var ref = {
+  assetType: { id: 4, name: "template" }
+};
+var sourceId = parseInt(source.id, 10);
+if (!isNaN(sourceId)) {
+  ref.id = sourceId;
+}
+if (source.assetType && source.assetType.id) {
+  ref.assetType.id = parseInt(source.assetType.id, 10);
+}
+if (source.assetType && source.assetType.name) {
+  ref.assetType.name = source.assetType.name;
+}
+ref.content = source.content || fallbackContent || "";
+ref.slots = (source.slots && typeof source.slots === "object") ? cloneObject(source.slots) : cloneObject(fallbackSlots || {});
+return ref;
+}
+function buildFromTemplate4Payload(templateAsset, targetName, subjectlineContent, preheaderContent, textContent, htmlContent, htmlSlots, categoryIdValue) {
+var templateRef = buildTemplateReference(templateAsset, templateAsset.content || htmlContent, templateAsset.slots || htmlSlots);
+var templateSlots = (templateAsset.slots && typeof templateAsset.slots === "object") ? cloneObject(templateAsset.slots) : cloneObject(htmlSlots || {});
+var payload = {
+  name: targetName,
+  assetType: { id: 207, name: "htmlemail" },
+  channels: (templateAsset.channels && typeof templateAsset.channels === "object") ? cloneObject(templateAsset.channels) : { email: true, web: false },
+  views: {
+    subjectline: { content: subjectlineContent || "Survey" },
+    preheader: { content: preheaderContent || "" },
+    html: {
+      template: templateRef,
+      content: templateAsset.content || htmlContent || "",
+      slots: templateSlots || {}
+    },
+    text: { content: textContent || "" }
+  },
+  data: {
+    email: {
+      options: {
+        characterEncoding: "utf-8"
+      }
+    }
+  }
+};
+var parsedCategory = parseInt(categoryIdValue, 10);
+if (!isNaN(parsedCategory)) {
+  payload.category = { id: parsedCategory };
+} else if (templateAsset.category && templateAsset.category.id) {
+  payload.category = { id: templateAsset.category.id };
+}
+return payload;
+}
 function buildRest208Payload(targetName, subjectlineContent, htmlContent, textContent, categoryIdValue) {
 var payload = {
   name: targetName,
@@ -292,11 +356,16 @@ return payload;
 function summarizeSourceAsset(asset) {
 if (!asset) return "null";
 var htmlView = (asset.views && asset.views.html) ? asset.views.html : {};
+var assetTypeId = (asset.assetType && asset.assetType.id) ? parseInt(asset.assetType.id, 10) : 0;
+var slotKeys = objectKeys(htmlView.slots);
+if (!slotKeys.length && asset.slots) {
+  slotKeys = objectKeys(asset.slots);
+}
 return truncateString(Platform.Function.Stringify({
   id: asset.id || "",
-  assetTypeId: (asset.assetType && asset.assetType.id) ? asset.assetType.id : "",
-  htmlContentLength: safeLength(htmlView.content),
-  slotKeys: objectKeys(htmlView.slots),
+  assetTypeId: assetTypeId,
+  contentLength: safeLength(asset.content || htmlView.content),
+  slotKeys: slotKeys,
   templateId: (htmlView.template && htmlView.template.id) ? htmlView.template.id : "",
   categoryId: (asset.category && asset.category.id) ? asset.category.id : ""
 }), 1200);
@@ -335,7 +404,7 @@ try {
     var preheaderContent = (sourceViews.preheader && sourceViews.preheader.content) ? sourceViews.preheader.content : "";
     var textContent = (sourceViews.text && sourceViews.text.content) ? sourceViews.text.content : "";
     var htmlContent = htmlView.content || sourceAsset.content || "";
-    var htmlSlots = (htmlView.slots && typeof htmlView.slots === "object") ? htmlView.slots : {};
+    var htmlSlots = (htmlView.slots && typeof htmlView.slots === "object") ? htmlView.slots : ((sourceAsset.slots && typeof sourceAsset.slots === "object") ? sourceAsset.slots : {});
     var sourceTemplate = (htmlView.template && typeof htmlView.template === "object") ? htmlView.template : null;
     var assetTypeId = (sourceAsset.assetType && sourceAsset.assetType.id) ? parseInt(sourceAsset.assetType.id, 10) : 0;
     var payload = null;
@@ -343,9 +412,25 @@ try {
     if (createMode === "rest208") {
       payload = buildRest208Payload(emailName, subjectlineContent, htmlContent, textContent, categoryId);
       debugLog += " Mode: rest208 (SOAP HTMLBody + IsHTMLPaste equivalent). HTML length: " + safeLength(htmlContent) + ".";
+    } else if (createMode === "rest207from4") {
+      if (assetTypeId !== 4) {
+        createResult = "rest207from4 FAILED: Expected parent template asset type 4, got type " + assetTypeId + ". Set source to your Content Builder template ID (e.g. 56191).";
+      } else {
+        payload = buildFromTemplate4Payload(
+          sourceAsset,
+          emailName,
+          subjectlineContent,
+          preheaderContent,
+          textContent,
+          htmlContent,
+          htmlSlots,
+          categoryId
+        );
+        debugLog += " Mode: rest207from4 (create from parent template only). Template " + (sourceAsset.id || sourceEmailId) + ". Content length: " + safeLength(sourceAsset.content || htmlContent) + ". Slots: " + objectKeys(htmlSlots).join(",") + ".";
+      }
     } else {
       if (!sourceTemplate || !sourceTemplate.id) {
-        createResult = "rest207 FAILED: Source asset has no views.html.template ref. Use survey-template email (type 207), not parent template (type 4).";
+        createResult = "rest207 FAILED: Source asset has no views.html.template ref. Use survey-template email (type 207) or switch mode to rest207from4 with a type 4 template ID.";
       } else {
         var fetchedTemplate = fetchAssetById(sourceTemplate.id, subdomain, accessToken);
         if (!fetchedTemplate.ok || !fetchedTemplate.asset) {
@@ -363,7 +448,7 @@ try {
             htmlSlots,
             categoryId
           );
-          debugLog += " Mode: rest207 (template-based clone). Parent template " + sourceTemplate.id + ". HTML length: " + safeLength(htmlContent) + ". Slots: " + objectKeys(htmlSlots).join(",") + ".";
+          debugLog += " Mode: rest207 (clone survey-template email). Parent template " + sourceTemplate.id + ". HTML length: " + safeLength(htmlContent) + ". Slots: " + objectKeys(htmlSlots).join(",") + ".";
         }
       }
     }
@@ -469,15 +554,28 @@ button, .btn {
 <input type="text" id="itemBaseName" name="itemBaseName" placeholder="Survey_Test_%%=Format(Now(),'yyyyMMdd_HHmmss')=%%" required>
 <label for="emailSubjectLine">Subject</label>
 <input type="text" id="emailSubjectLine" name="emailSubjectLine" value="Survey" required>
-<label for="sourceEmailId">Source asset ID (survey-template email)</label>
-<input type="text" id="sourceEmailId" name="sourceEmailId" value="%%=IIF(NOT Empty(@defaultEmailId),@defaultEmailId,'')=%%" placeholder="From bd_sst_email_templates">
+<label for="sourceEmailId">Source asset ID</label>
+<input type="text" id="sourceEmailId" name="sourceEmailId" value="%%=IIF(@createMode == 'rest207from4',@defaultParentTemplateId,IIF(NOT Empty(@defaultEmailId),@defaultEmailId,''))=%%" placeholder="207 email or type 4 template ID">
 <label for="categoryId">Category ID (folder)</label>
 <input type="text" id="categoryId" name="categoryId" value="%%=v(@categoryId)=%%">
 <label for="mode">Create mode</label>
-<select id="mode" name="mode">
-<option value="rest207" selected>rest207 — template-based clone (SurveyJourney pattern)</option>
-<option value="rest208">rest208 — HTML paste (SOAP IsHTMLPaste equivalent)</option>
+<select id="mode" name="mode" onchange="syncSourceDefault()">
+<option value="rest207from4" %%=IIF(@createMode == "rest207from4","selected","")=%%>rest207from4 — create from parent template only (type 4 → 207)</option>
+<option value="rest207" %%=IIF(@createMode == "rest207","selected","")=%%>rest207 — clone survey-template email (type 207)</option>
+<option value="rest208" %%=IIF(@createMode == "rest208","selected","")=%%>rest208 — HTML paste (SOAP IsHTMLPaste equivalent)</option>
 </select>
+<script>
+function syncSourceDefault() {
+  var mode = document.getElementById("mode").value;
+  var source = document.getElementById("sourceEmailId");
+  if (!source.value || source.dataset.userEdited !== "1") {
+    source.value = mode === "rest207from4" ? "%%=v(@defaultParentTemplateId)=%%" : "%%=IIF(NOT Empty(@defaultEmailId),@defaultEmailId,'')=%%";
+  }
+}
+document.getElementById("sourceEmailId").addEventListener("input", function() {
+  this.dataset.userEdited = "1";
+});
+</script>
 <div class="actions">
 <button type="submit" class="btn-primary">Create test email</button>
 </div>
@@ -493,7 +591,8 @@ button, .btn {
 <li><code>IsHTMLPaste=true</code> → assetType <code>208 htmlemail</code></li>
 <li>Template slots + parent template → assetType <code>207 htmlemail</code> with <code>views.html.template</code></li>
 </ul>
-<p>Source asset should be the survey-template email (type 207) containing the MagMutual HTML with slots, Salutation_Greeting_BD, B40xxJSauNMhRR4y, and Email_Footer_2407 content blocks.</p>
+<p><strong>rest207from4:</strong> Source = parent Content Builder template (type 4, default %%=v(@defaultParentTemplateId)=%%). Creates a new 207 email with template content + slots embedded — no survey-template email required.</p>
+<p><strong>rest207:</strong> Source = survey-template email (type 207) from <code>bd_sst_email_templates</code>.</p>
 </div>
 %%[ELSE]%%
 <div class="card">
