@@ -45,6 +45,7 @@ VAR @resultText, @pageStatus
 VAR @logDelCount, @analyticsDelCnt
 VAR @attemptPurgeBuild, @purgeBuildLog, @purgeEmailOk
 VAR @attemptDeleteAsset, @step3bResult
+VAR @surveyPurgeId, @surveyDelResponses, @surveyDelQuestions, @surveyDelMaster, @surveyDeleteLog, @willRemoveBuildLog
 VAR @updRaw
 
 
@@ -1226,6 +1227,29 @@ ENDIF
 SET @combinedLog = Concat(IIF(NOT Empty(@resultText), Concat(@resultText," "), ""), Substring(IIF(NOT Empty(@trailBody), @trailBody, ""),1,6200))
 
 
+SET @surveyDeleteLog = ""
+SET @willRemoveBuildLog = "false"
+IF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk == "true") THEN
+SET @willRemoveBuildLog = "true"
+ELSEIF (@attemptDeleteAsset == "true") AND (@authOk == "true") AND (IndexOf(IIF(NOT Empty(@step3bResult), @step3bResult, ""),"OK - Email deleted") > 0) THEN
+SET @willRemoveBuildLog = "true"
+ENDIF
+IF (@willRemoveBuildLog == "true") AND (@isSurveyBuild == "true") THEN
+SET @surveyPurgeId = @dispSurveyId
+IF NOT Empty(@surveyPurgeId) AND @surveyPurgeId != "N/A" THEN
+SET @surveyDelResponses = DeleteData("SST_SP_Survey_Responses_DE", "SurveyID", @surveyPurgeId)
+SET @surveyDelQuestions = DeleteData("SST_SP_Survey_Questions_DE", "SurveyID", @surveyPurgeId)
+SET @surveyDelMaster = DeleteData("SST_SP_Surveys_Master_DE", "SurveyID", @surveyPurgeId)
+SET @surveyDeleteLog = Concat("[Survey ", @surveyPurgeId, "] Responses=", @surveyDelResponses, " Questions=", @surveyDelQuestions, " Master=", @surveyDelMaster, ".")
+ELSE
+SET @surveyDeleteLog = "[Survey] SKIP - no surveyId on build log."
+ENDIF
+ENDIF
+IF NOT Empty(@surveyDeleteLog) THEN
+SET @combinedLog = Concat(@combinedLog, " ", @surveyDeleteLog)
+ENDIF
+
+
 IF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk == "true") THEN
 SET @analyticsDelCnt = DeleteData(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
 SET @pageStatus = "purged"
@@ -1625,7 +1649,7 @@ pre.log.show{display:block}
 </nav>
 </div>
 <h1>Build successfully deleted</h1>
-<p class="sub">The page attempted deletes for journey, entry event definition, Content Builder email, and Automation Studio DE. Returning home in 3 seconds.</p>
+<p class="sub">The page attempted deletes for journey, entry event definition, Content Builder email%%[ IF @isSurveyBuild == "true" THEN ]%%, and survey questions/responses/master data%%[ ENDIF ]%%. Returning home in 3 seconds.</p>
 <div class="banner good">If any step failed, you should manually remove the remaining remnants.</div>
 <pre class="log show">%%=v(@combinedLog)=%%</pre>
 <div class="act">
@@ -1959,7 +1983,7 @@ pre.log.show{display:block}
    <button type="submit" name="confirmDeleteAsset" value="1" class="btn btn-neutral">Delete email</button>
   </form>
 %%[ ENDIF ]%%
-  <form method="post" action="" style="margin:0" onsubmit="return confirm('Delete automation and query (stack builds), journey (REST), Salesforce entry event and entry DE where possible, the Content Builder email asset, then remove this row from Recent builds. Published journeys sometimes block DELETE until stopped in Journey Builder.');">
+  <form method="post" action="" style="margin:0" onsubmit="return confirm('Delete automation and query (stack builds), journey (REST), Salesforce entry event and entry DE where possible, the Content Builder email asset%%[ IF @isSurveyBuild == "true" THEN ]%%, and survey questions/responses/master data%%[ ENDIF ]%%, then remove this row from Recent builds. Published journeys sometimes block DELETE until stopped in Journey Builder.');">
    <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
    <input type="hidden" name="postedJourneyId" value="%%=v(@jid)=%%">
    <input type="hidden" name="deleteEmailId" value="%%=v(@dispEmailId)=%%">
