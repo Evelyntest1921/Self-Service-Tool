@@ -185,6 +185,62 @@ result.statusCode = postResp.statusCode;
 result.responseText = postResp.content ? String(postResp.content) : "";
 return result;
 }
+function putAssetPayload(subdomainValue, accessTokenValue, assetId, payload) {
+var result = { statusCode: 0, responseText: "" };
+var parsedId = parseInt(assetId, 10);
+if (isNaN(parsedId)) return result;
+var assetUrl = "https://" + subdomainValue + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + parsedId;
+var putReq = new Script.Util.HttpRequest(assetUrl);
+putReq.emptyContentHandling = 0;
+putReq.retries = 2;
+putReq.continueOnError = true;
+putReq.setHeader("Authorization", "Bearer " + accessTokenValue);
+putReq.method = "PUT";
+putReq.contentType = "application/json";
+putReq.postData = Platform.Function.Stringify(payload);
+var putResp = putReq.send();
+result.statusCode = putResp.statusCode;
+result.responseText = putResp.content ? String(putResp.content) : "";
+return result;
+}
+function patchAssetPayload(subdomainValue, accessTokenValue, assetId, payload) {
+var result = { statusCode: 0, responseText: "" };
+var parsedId = parseInt(assetId, 10);
+if (isNaN(parsedId)) return result;
+var assetUrl = "https://" + subdomainValue + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + parsedId;
+var patchReq = new Script.Util.HttpRequest(assetUrl);
+patchReq.emptyContentHandling = 0;
+patchReq.retries = 2;
+patchReq.continueOnError = true;
+patchReq.setHeader("Authorization", "Bearer " + accessTokenValue);
+patchReq.method = "PATCH";
+patchReq.contentType = "application/json";
+patchReq.postData = Platform.Function.Stringify(payload);
+var patchResp = patchReq.send();
+result.statusCode = patchResp.statusCode;
+result.responseText = patchResp.content ? String(patchResp.content) : "";
+return result;
+}
+function getAssetHtmlContent(assetObj) {
+if (!assetObj || typeof assetObj !== "object") return "";
+if (assetObj.views && assetObj.views.html && assetObj.views.html.content) {
+  return assetObj.views.html.content;
+}
+return assetObj.content || "";
+}
+function getAssetHtmlSlots(assetObj) {
+if (!assetObj || typeof assetObj !== "object") return {};
+if (assetObj.views && assetObj.views.html && assetObj.views.html.slots && typeof assetObj.views.html.slots === "object") {
+  return assetObj.views.html.slots;
+}
+if (assetObj.slots && typeof assetObj.slots === "object") {
+  return assetObj.slots;
+}
+return {};
+}
+function assetHtmlContentLength(assetObj) {
+return safeLength(getAssetHtmlContent(assetObj));
+}
 function extractCreatedAssetId(responseText) {
 var idMatch = responseText ? responseText.match(/"id"\s*:\s*"?([^",}\s]+)"?/) : null;
 return idMatch ? String(idMatch[1]) : "";
@@ -213,10 +269,6 @@ return String(html || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 function setTemplateBasedEmailAssetType(payload) {
 if (!payload) return;
 payload.assetType = { id: 207, name: "templatebasedemail", displayName: "Template-Based Email" };
-}
-function setHtmlemail207AssetType(payload) {
-if (!payload) return;
-payload.assetType = { id: 207, name: "htmlemail" };
 }
 function ensure207ViewDefaults(payload) {
 if (!payload || !payload.views) return;
@@ -278,7 +330,7 @@ if (categoryMode === "none" && payload.category) {
 }
 }
 function buildTemplate4BasePayload(templateAsset, targetName, subjectlineContent, preheaderContent, htmlContent, htmlSlots, templateRef, slotMode) {
-var emailSlots = slotMode === "placeholder" ? slotPlaceholderMap(htmlSlots) : cloneObject(htmlSlots || {});
+var emailSlots = (slotMode === "placeholder" || slotMode === "skeleton") ? slotPlaceholderMap(htmlSlots) : cloneObject(htmlSlots || {});
 var payload = {
   name: targetName,
   channels: (templateAsset.channels && typeof templateAsset.channels === "object") ? cloneObject(templateAsset.channels) : { email: true, web: false },
@@ -298,43 +350,127 @@ if (slotMode !== "skeleton") {
 ensure207ViewDefaults(payload);
 return payload;
 }
-function buildTemplate4Variants(templateAsset, targetName, subjectlineContent, preheaderContent, htmlContent, htmlSlots, userCategoryId) {
+function buildTemplate4SkeletonVariants(templateAsset, targetName, subjectlineContent, preheaderContent, htmlContent, htmlSlots, userCategoryId) {
 var variants = [];
-var templateId = parseInt(templateAsset.id, 10);
 var categoryModes = ["source", "user", "none"];
 var categoryLabels = ["source-cat", "user-cat", "no-cat"];
-var i, payload, categoryMode;
-var fullRef = buildTemplateReference(templateAsset, templateAsset.content || htmlContent, templateAsset.slots || htmlSlots, true);
 var minimalRef = buildTemplateReference(templateAsset, "", htmlSlots, false);
-var minimalRefWithSlots = {
-  id: templateId,
-  assetType: { id: 4, name: "template" },
-  slots: cloneObject(templateAsset.slots || htmlSlots || {})
-};
+var i, payload, categoryMode;
 for (i = 0; i < categoryModes.length; i++) {
   categoryMode = categoryModes[i];
-  payload = buildTemplate4BasePayload(templateAsset, targetName, subjectlineContent, preheaderContent, htmlContent, htmlSlots, fullRef, "full");
-  setTemplateBasedEmailAssetType(payload);
-  applyCategoryOption(payload, categoryMode, templateAsset, userCategoryId);
-  variants.push({ label: "tbe-full-embed-" + categoryLabels[i], payload: payload });
-  payload = buildTemplate4BasePayload(templateAsset, targetName, subjectlineContent, preheaderContent, htmlContent, htmlSlots, minimalRef, "full");
-  setTemplateBasedEmailAssetType(payload);
-  applyCategoryOption(payload, categoryMode, templateAsset, userCategoryId);
-  variants.push({ label: "tbe-minimal-ref-" + categoryLabels[i], payload: payload });
-  payload = buildTemplate4BasePayload(templateAsset, targetName, subjectlineContent, preheaderContent, htmlContent, htmlSlots, minimalRefWithSlots, "full");
-  setTemplateBasedEmailAssetType(payload);
-  applyCategoryOption(payload, categoryMode, templateAsset, userCategoryId);
-  variants.push({ label: "tbe-ref-slots-only-" + categoryLabels[i], payload: payload });
   payload = buildTemplate4BasePayload(templateAsset, targetName, subjectlineContent, preheaderContent, htmlContent, htmlSlots, minimalRef, "skeleton");
   setTemplateBasedEmailAssetType(payload);
   applyCategoryOption(payload, categoryMode, templateAsset, userCategoryId);
   variants.push({ label: "tbe-skeleton-" + categoryLabels[i], payload: payload });
-  payload = buildTemplate4BasePayload(templateAsset, targetName, subjectlineContent, preheaderContent, htmlContent, htmlSlots, fullRef, "full");
-  setHtmlemail207AssetType(payload);
-  applyCategoryOption(payload, categoryMode, templateAsset, userCategoryId);
-  variants.push({ label: "htmlemail-full-embed-" + categoryLabels[i], payload: payload });
 }
 return variants;
+}
+function buildTemplate4HydrateHtmlView(templateAsset, htmlSlots) {
+var templateContent = getAssetHtmlContent(templateAsset);
+var templateSlots = getAssetHtmlSlots(templateAsset);
+return {
+  content: templateContent,
+  slots: cloneObject(htmlSlots || templateSlots),
+  template: {
+    id: parseInt(templateAsset.id, 10),
+    assetType: { id: 4, name: "template" },
+    content: templateContent,
+    slots: cloneObject(templateSlots)
+  }
+};
+}
+function buildTemplate4HydratePutFull(createdAsset, templateAsset, subjectlineContent, preheaderContent, htmlSlots) {
+var payload = {
+  id: createdAsset.id,
+  name: createdAsset.name,
+  assetType: createdAsset.assetType || { id: 207, name: "templatebasedemail" },
+  channels: createdAsset.channels || { email: true, web: false },
+  views: {
+    subjectline: { content: subjectlineContent || "Survey" },
+    preheader: { content: preheaderContent || "" },
+    html: buildTemplate4HydrateHtmlView(templateAsset, htmlSlots),
+    text: {}
+  }
+};
+if (createdAsset.category && createdAsset.category.id) {
+  payload.category = { id: createdAsset.category.id };
+}
+ensure207ViewDefaults(payload);
+return payload;
+}
+function runTemplate4HydrateAttempts(subdomainValue, accessTokenValue, createdId, createdAsset, templateAsset, subjectlineContent, preheaderContent, htmlSlots) {
+var attempts = [];
+var hydrateVariants = [
+  {
+    label: "put-sync-template",
+    usePatch: false,
+    payload: buildTemplate4HydratePutFull(createdAsset, templateAsset, subjectlineContent, preheaderContent, htmlSlots)
+  },
+  {
+    label: "put-views-only",
+    usePatch: false,
+    payload: {
+      views: {
+        subjectline: { content: subjectlineContent || "Survey" },
+        preheader: { content: preheaderContent || "" },
+        html: buildTemplate4HydrateHtmlView(templateAsset, htmlSlots),
+        text: {}
+      }
+    }
+  },
+  {
+    label: "patch-html-sync",
+    usePatch: true,
+    payload: {
+      views: {
+        html: buildTemplate4HydrateHtmlView(templateAsset, htmlSlots)
+      }
+    }
+  },
+  {
+    label: "patch-content-only",
+    usePatch: true,
+    payload: {
+      views: {
+        html: {
+          content: getAssetHtmlContent(templateAsset)
+        }
+      }
+    }
+  }
+];
+var i, variant, response, verifyFetch, lastResponse;
+for (i = 0; i < hydrateVariants.length; i++) {
+  variant = hydrateVariants[i];
+  if (variant.usePatch) {
+    response = patchAssetPayload(subdomainValue, accessTokenValue, createdId, variant.payload);
+  } else if (variant.label === "put-views-only") {
+    response = putAssetPayload(subdomainValue, accessTokenValue, createdId, variant.payload);
+  } else {
+    response = putAssetPayload(subdomainValue, accessTokenValue, createdId, variant.payload);
+  }
+  attempts.push(variant.label + "=" + response.statusCode);
+  if (response.statusCode == 200 || response.statusCode == 201) {
+    verifyFetch = fetchAssetById(createdId, subdomainValue, accessTokenValue);
+    if (verifyFetch.ok && verifyFetch.asset && assetHtmlContentLength(verifyFetch.asset) > 500) {
+      return {
+        ok: true,
+        label: variant.label,
+        htmlLength: assetHtmlContentLength(verifyFetch.asset),
+        attempts: attempts.join(", ")
+      };
+    }
+  }
+  lastResponse = response;
+}
+return {
+  ok: false,
+  label: hydrateVariants.length ? hydrateVariants[hydrateVariants.length - 1].label : "",
+  htmlLength: 0,
+  attempts: attempts.join(", "),
+  statusCode: lastResponse ? lastResponse.statusCode : 0,
+  responseText: lastResponse ? lastResponse.responseText : ""
+};
 }
 function tryPostVariants(subdomainValue, accessTokenValue, variants) {
 var attempts = [];
@@ -490,7 +626,7 @@ try {
       if (assetTypeId !== 4) {
         createResult = "rest207from4 FAILED: Expected parent template asset type 4, got type " + assetTypeId + ".";
       } else {
-        var templateVariants = buildTemplate4Variants(
+        var templateVariants = buildTemplate4SkeletonVariants(
           sourceAsset,
           emailName,
           subjectlineContent,
@@ -500,26 +636,51 @@ try {
           categoryId
         );
         var variantResult = tryPostVariants(subdomain, accessToken, templateVariants);
-        debugLog += " Mode: rest207from4. Template " + (sourceAsset.id || sourceEmailId) + ". Content length: " + safeLength(sourceAsset.content || htmlContent) + ". Slots: " + objectKeys(htmlSlots).join(",") + ". Attempts: " + variantResult.attempts + ".";
+        debugLog += " Mode: rest207from4 skeleton+hydrate. Template " + (sourceAsset.id || sourceEmailId) + ". Source content length: " + safeLength(sourceAsset.content || htmlContent) + ". Slots: " + objectKeys(htmlSlots).join(",") + ". Create attempts: " + variantResult.attempts + ".";
         if (variantResult.ok) {
           payload = variantResult.payload;
           var winningPost = variantResult.postResult;
           newEmailId = extractCreatedAssetId(winningPost.responseText);
           var createdAsset = null;
+          var createdFetch = null;
           try {
             createdAsset = Platform.Function.ParseJSON(winningPost.responseText);
           } catch (parseEx) {
             createdAsset = null;
           }
-          legacyEmailId = extractLegacyEmailId(createdAsset);
-          if (!legacyEmailId && newEmailId) {
-            var createdFetch = fetchAssetById(newEmailId, subdomain, accessToken);
+          if (!createdAsset && newEmailId) {
+            createdFetch = fetchAssetById(newEmailId, subdomain, accessToken);
             if (createdFetch.ok && createdFetch.asset) {
-              legacyEmailId = extractLegacyEmailId(createdFetch.asset);
-              debugLog += " Winning variant: " + variantResult.label + ". Verify HTML length: " + safeLength((createdFetch.asset.views && createdFetch.asset.views.html) ? createdFetch.asset.views.html.content : "") + ".";
+              createdAsset = createdFetch.asset;
             }
           }
-          createResult = "Create OK (rest207from4 via " + variantResult.label + ").";
+          legacyEmailId = extractLegacyEmailId(createdAsset);
+          if (newEmailId && createdAsset) {
+            var hydrateResult = runTemplate4HydrateAttempts(
+              subdomain,
+              accessToken,
+              newEmailId,
+              createdAsset,
+              sourceAsset,
+              subjectlineContent,
+              preheaderContent,
+              htmlSlots
+            );
+            debugLog += " Hydrate attempts: " + hydrateResult.attempts + ".";
+            if (hydrateResult.ok) {
+              createResult = "Create OK (skeleton " + variantResult.label + " + hydrate " + hydrateResult.label + "). Final HTML length: " + hydrateResult.htmlLength + ".";
+            } else {
+              createResult = "Create OK (skeleton " + variantResult.label + "). Hydrate FAILED - email shell only. Last hydrate HTTP " + hydrateResult.statusCode + ".";
+            }
+          } else {
+            createResult = "Create OK (skeleton " + variantResult.label + "). Hydrate SKIPPED - could not load created asset.";
+          }
+          if (!legacyEmailId && newEmailId) {
+            createdFetch = fetchAssetById(newEmailId, subdomain, accessToken);
+            if (createdFetch.ok && createdFetch.asset) {
+              legacyEmailId = extractLegacyEmailId(createdFetch.asset);
+            }
+          }
         } else {
           createResult = "Create FAILED (rest207from4): HTTP " + (variantResult.postResult ? variantResult.postResult.statusCode : 0) + " - " + truncateString(variantResult.postResult ? variantResult.postResult.responseText : "", 500);
           payload = null;
@@ -676,7 +837,7 @@ button, .btn {
 <li><code>IsHTMLPaste=true</code> → assetType <code>208 htmlemail</code></li>
 <li>Template slots + parent template → assetType <code>207 htmlemail</code> with <code>views.html.template</code></li>
 </ul>
-<p><strong>rest207from4:</strong> Enter your parent Content Builder template ID (type 4).</p>
+<p><strong>rest207from4:</strong> Skeleton create (only POST shape that works) then auto-hydrate template content via PUT/PATCH.</p>
 <p><strong>rest207:</strong> Enter your survey-template email asset ID (type 207).</p>
 </div>
 %%[ELSE]%%
