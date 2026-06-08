@@ -1,7 +1,7 @@
 %%[
 VAR @surveyId, @errorFlag, @deleteAction, @deleteSuccess, @deleteError
 VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow, @hubUrl, @surveyHomeUrl, @surveyStageUrl, @surveyAnalyticsUrl, @surveyTakeUrl
-VAR @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @detailRows, @detailRow, @isSurveyBuild, @buildNavContext, @buildNavActive, @editSurveyUrl
+VAR @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @detailRows, @detailRow, @isSurveyBuild, @buildNavContext, @buildNavActive, @editSurveyUrl, @surveyPreviewUrl, @surveyEmailLink
 SET @surveyId = RequestParameter("surveyid")
 SET @jid = Trim(RequestParameter("journeyId"))
 SET @errorFlag = "false"
@@ -19,6 +19,8 @@ SET @isSurveyBuild = "false"
 SET @buildNavContext = "false"
 SET @buildNavActive = "analytics"
 SET @editSurveyUrl = ""
+SET @surveyPreviewUrl = ""
+SET @surveyEmailLink = ""
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
   SET @navRow = Row(@navRows,1)
@@ -54,6 +56,10 @@ IF NOT Empty(@surveyStageUrl) AND NOT Empty(@surveyId) THEN
   IF NOT Empty(@jid) THEN
     SET @editSurveyUrl = Concat(@editSurveyUrl,"&journeyId=",@jid)
   ENDIF
+ENDIF
+IF NOT Empty(@surveyTakeUrl) AND NOT Empty(@surveyId) AND @surveyId != "N/A" THEN
+  SET @surveyPreviewUrl = Concat(@surveyTakeUrl,"?id=",@surveyId)
+  SET @surveyEmailLink = Concat(@surveyTakeUrl,"?id=",@surveyId,"&contact=%%=v(@subscriberkey)=%%")
 ENDIF
 
 
@@ -270,11 +276,19 @@ ENDIF
                         <div class="survey-actions-header">
 
 
-                            <a href="%%=Concat(@surveyTakeUrl, "?id=", @surveyId)=%%"
-                                class="btn-preview" target="_blank">
+                            <a href="%%=v(@surveyPreviewUrl)=%%"
+                                class="btn-preview" target="_blank" rel="noopener noreferrer">
                                 📑
                                 Preview
                             </a>
+                            %%[ IF NOT Empty(@surveyEmailLink) THEN ]%%
+                            <button type="button" class="btn-copy-link" id="copySurveyLinkBtn" data-survey-link="%%=v(@surveyEmailLink)=%%" title="Copy survey link for email button">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                    <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+                                </svg>
+                                Copy link
+                            </button>
+                            %%[ ENDIF ]%%
                             <a href="%%=IIF(NOT Empty(@editSurveyUrl), @editSurveyUrl, Concat(@surveyStageUrl, "?mode=edit&surveyid=", @surveyId))=%%"
                                 class="btn-edit">
                                 <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
@@ -1670,6 +1684,33 @@ ENDIF
             transform: translateY(-1px);
             color: white;
             text-decoration: none;
+        }
+
+        .btn-copy-link {
+            background: #ffffff;
+            border: 1px solid gray;
+            color: black;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+
+        .btn-copy-link:hover {
+            background: #2563eb;
+            transform: translateY(-1px);
+            color: white;
+        }
+
+        .btn-copy-link.is-copied {
+            background: #ecfdf5;
+            border-color: #10b981;
+            color: #047857;
         }
 
 
@@ -3650,6 +3691,42 @@ ENDIF
             dropdown.classList.toggle('show');
         }
 
+        function copySurveyEmailLink(buttonEl) {
+            var link = buttonEl && buttonEl.getAttribute('data-survey-link') ? buttonEl.getAttribute('data-survey-link') : '';
+            if (!link) {
+                return;
+            }
+            var originalLabel = buttonEl.innerHTML;
+            function markCopied() {
+                buttonEl.classList.add('is-copied');
+                buttonEl.innerHTML = 'Copied';
+                window.setTimeout(function () {
+                    buttonEl.classList.remove('is-copied');
+                    buttonEl.innerHTML = originalLabel;
+                }, 2000);
+            }
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(link).then(markCopied).catch(function () {
+                    window.prompt('Copy this survey link for your email:', link);
+                });
+                return;
+            }
+            var tempInput = document.createElement('textarea');
+            tempInput.value = link;
+            tempInput.setAttribute('readonly', 'readonly');
+            tempInput.style.position = 'absolute';
+            tempInput.style.left = '-9999px';
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            try {
+                document.execCommand('copy');
+                markCopied();
+            } catch (copyErr) {
+                window.prompt('Copy this survey link for your email:', link);
+            }
+            document.body.removeChild(tempInput);
+        }
+
 
 
 
@@ -4854,6 +4931,13 @@ ENDIF
             
             // Initialize search functionality
             initializeSearch();
+
+            var copySurveyLinkBtn = document.getElementById('copySurveyLinkBtn');
+            if (copySurveyLinkBtn) {
+                copySurveyLinkBtn.addEventListener('click', function () {
+                    copySurveyEmailLink(copySurveyLinkBtn);
+                });
+            }
         });
     </script>
 
