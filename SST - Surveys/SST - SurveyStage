@@ -34,6 +34,12 @@ IF Empty(@jid) AND NOT Empty(@surveyId) AND @surveyId != "N/A" AND @mode == "edi
     SET @jid = Trim(Field(Row(@detailRows,1),"journeyId"))
   ENDIF
 ENDIF
+IF (Empty(@surveyId) OR @surveyId == "N/A") AND NOT Empty(@jid) THEN
+  SET @detailRows = LookupRows("Bd_journey_analytics","journeyId",@jid)
+  IF RowCount(@detailRows) > 0 THEN
+    SET @surveyId = Trim(Field(Row(@detailRows,1),"surveyId"))
+  ENDIF
+ENDIF
 IF NOT Empty(@jid) THEN
   SET @buildNavContext = "true"
   SET @detailRows = LookupRows("Bd_journey_analytics","journeyId",@jid)
@@ -51,9 +57,9 @@ ENDIF
 
 
 
-/* Test data extension access - using SP_Survey_Questions_DE */
+/* Test data extension access - using SST_SP_Survey_Questions_DE */
 VAR @testAccess, @testAccessCount
-SET @testAccess = LookupRows("SP_Survey_Questions_DE", "QuestionID", "TEST")
+SET @testAccess = LookupRows("SST_SP_Survey_Questions_DE", "QuestionID", "TEST")
 SET @testAccessCount = RowCount(@testAccess)
 IF @testAccessCount >= 0 THEN
   SET @dataExists = "true"
@@ -64,19 +70,19 @@ ENDIF
 
 /* Additional test - try to get any record */
 VAR @anyRecord, @anyRecordCount
-SET @anyRecord = LookupRows("SP_Survey_Questions_DE", "QuestionID", "")
+SET @anyRecord = LookupRows("SST_SP_Survey_Questions_DE", "QuestionID", "")
 SET @anyRecordCount = RowCount(@anyRecord)
 
 
 /* Test with a specific field that we know exists */
 VAR @testField, @testFieldCount
-SET @testField = LookupRows("SP_Survey_Questions_DE", "SurveyID", "")
+SET @testField = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", "")
 SET @testFieldCount = RowCount(@testField)
 
 
 /* Test with a wildcard approach */
 VAR @wildcardTest, @wildcardCount
-SET @wildcardTest = LookupRows("SP_Survey_Questions_DE", "QuestionID", "*")
+SET @wildcardTest = LookupRows("SST_SP_Survey_Questions_DE", "QuestionID", "*")
 SET @wildcardCount = RowCount(@wildcardTest)
 
 
@@ -85,11 +91,11 @@ SET @wildcardCount = RowCount(@wildcardTest)
 /* Load survey data for edit mode */
 IF @mode == "edit" AND NOT EMPTY(@surveyId) THEN
   /* Get survey details from master DE */
-  SET @editSurveyName = Lookup("SP_Surveys_Master_DE", "SurveyName", "SurveyID", @surveyId)
-  SET @editSurveyStatus = Lookup("SP_Surveys_Master_DE", "SurveyStatus", "SurveyID", @surveyId)
+  SET @editSurveyName = Lookup("SST_SP_Surveys_Master_DE", "SurveyName", "SurveyID", @surveyId)
+  SET @editSurveyStatus = Lookup("SST_SP_Surveys_Master_DE", "SurveyStatus", "SurveyID", @surveyId)
  
   /* Get existing questions */
-  SET @editQuestions = LookupRows("SP_Survey_Questions_DE", "SurveyID", @surveyId)
+  SET @editQuestions = LookupOrderedRows("SST_SP_Survey_Questions_DE", 0, "QuestionNumber ASC", "SurveyID", @surveyId)
  
   /* Debug: Check if questions were found */
   VAR @questionCount
@@ -97,17 +103,17 @@ IF @mode == "edit" AND NOT EMPTY(@surveyId) THEN
  
   /* Debug: Try to get any questions from the DE to test access */
   VAR @testQuestions, @testCount
-  SET @testQuestions = LookupRows("SP_Survey_Questions_DE", "QuestionID", "")
+  SET @testQuestions = LookupRows("SST_SP_Survey_Questions_DE", "QuestionID", "")
   SET @testCount = RowCount(@testQuestions)
  
   /* Debug: Try alternative query method */
   VAR @altTestQuestions, @altTestCount
-  SET @altTestQuestions = LookupRows("SP_Survey_Questions_DE", "SurveyID", "")
+  SET @altTestQuestions = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", "")
   SET @altTestCount = RowCount(@altTestQuestions)
  
   /* Debug: Test with the specific SurveyID */
   VAR @specificTest, @specificCount
-  SET @specificTest = LookupRows("SP_Survey_Questions_DE", "SurveyID", @surveyId)
+  SET @specificTest = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId)
   SET @specificCount = RowCount(@specificTest)
  
   /* Debug: Get a sample SurveyID from the DE */
@@ -142,10 +148,10 @@ IF @submitted == "true" THEN
     SET @surveyId = Concat("SURV_", Format(Now(), "yyyyMMdd_HHmmss"))
   ENDIF
  
-  /* Save survey metadata to SP_Surveys_Master_DE */
+  /* Save survey metadata to SST_SP_Surveys_Master_DE */
   IF NOT EMPTY(@surveyName) THEN
     UPSERTDE(
-      "SP_Surveys_Master_DE", 1, "SurveyID", @surveyId,
+      "SST_SP_Surveys_Master_DE", 1, "SurveyID", @surveyId,
       "SurveyName", @surveyName,
       "SurveyStatus", "Active",
       "SurveyCreatedDate", NOW()
@@ -166,7 +172,7 @@ IF @submitted == "true" THEN
       IF @mode == "edit" AND NOT EMPTY(@surveyId) THEN
         /* Try to get existing QuestionID, otherwise generate new one */
         VAR @existingQuestionRow
-        SET @existingQuestionRow = LookupRows("SP_Survey_Questions_DE", "SurveyID", @surveyId, "QuestionNumber", @i)
+        SET @existingQuestionRow = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId, "QuestionNumber", @i)
         IF RowCount(@existingQuestionRow) > 0 THEN
           SET @questionId = Field(Row(@existingQuestionRow, 1), "QuestionID")
         ELSE
@@ -212,10 +218,10 @@ IF @submitted == "true" THEN
         SET @required = "No"
       ENDIF
      
-             /* Save question to SP_Survey_Questions_DE */
+             /* Save question to SST_SP_Survey_Questions_DE */
        IF NOT EMPTY(@questionText) THEN
          UPSERTDE(
-           "SP_Survey_Questions_DE", 1, "QuestionID", @questionId,
+           "SST_SP_Survey_Questions_DE", 1, "QuestionID", @questionId,
            "SurveyID", @surveyId,
            "QuestionNumber", @i,
            "QuestionText", @questionText,
@@ -1002,8 +1008,8 @@ ENDIF
         <span class="success-icon">✅</span>
         <div>
           <strong>Survey Created Successfully!</strong><br>
-          Survey metadata saved to SP_Surveys_Master_DE<br>
-          Questions stored in SP_Survey_Questions_DE
+          Survey metadata saved to SST_SP_Surveys_Master_DE<br>
+          Questions stored in SST_SP_Survey_Questions_DE
         </div>
       </div>
       %%[ ENDIF ]%%
