@@ -10,9 +10,6 @@ SET @itemBaseName = Trim(RequestParameter("itemBaseName"))
 SET @emailSubjectLine = Trim(RequestParameter("emailSubjectLine"))
 SET @sourceEmailId = Trim(RequestParameter("sourceEmailId"))
 SET @categoryId = Trim(RequestParameter("categoryId"))
-IF Empty(@categoryId) THEN
-SET @categoryId = "58374"
-ENDIF
 SET @emailName = ""
 IF NOT Empty(@itemBaseName) THEN
 SET @slugName = Replace(@itemBaseName,'"','')
@@ -213,7 +210,33 @@ return "";
 function stripHtmlTags(html) {
 return String(html || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
-function buildTemplateReference(source, fallbackContent, fallbackSlots) {
+function setTemplateBasedEmailAssetType(payload) {
+if (!payload) return;
+payload.assetType = { id: 207, name: "templatebasedemail", displayName: "Template-Based Email" };
+}
+function setHtmlemail207AssetType(payload) {
+if (!payload) return;
+payload.assetType = { id: 207, name: "htmlemail" };
+}
+function ensure207ViewDefaults(payload) {
+if (!payload || !payload.views) return;
+payload.views.text = payload.views.text || {};
+if (!payload.views.preheader || typeof payload.views.preheader !== "object") {
+  payload.views.preheader = { content: "" };
+} else if (payload.views.preheader.content === undefined || payload.views.preheader.content === null) {
+  payload.views.preheader.content = "";
+}
+}
+function slotPlaceholderMap(emailSlots) {
+var placeholders = {};
+var keys = objectKeys(emailSlots || {});
+var i;
+for (i = 0; i < keys.length; i++) {
+  placeholders[keys[i]] = {};
+}
+return placeholders;
+}
+function buildTemplateReference(source, fallbackContent, fallbackSlots, includeContent) {
 if (!source || typeof source !== "object") return null;
 var ref = {
   assetType: { id: 4, name: "template" }
@@ -228,42 +251,115 @@ if (source.assetType && source.assetType.id) {
 if (source.assetType && source.assetType.name) {
   ref.assetType.name = source.assetType.name;
 }
-ref.content = source.content || fallbackContent || "";
-ref.slots = (source.slots && typeof source.slots === "object") ? cloneObject(source.slots) : cloneObject(fallbackSlots || {});
+if (includeContent !== false) {
+  ref.content = source.content || fallbackContent || "";
+  ref.slots = (source.slots && typeof source.slots === "object") ? cloneObject(source.slots) : cloneObject(fallbackSlots || {});
+}
 return ref;
 }
-function buildFromTemplate4Payload(templateAsset, targetName, subjectlineContent, preheaderContent, textContent, htmlContent, htmlSlots, categoryIdValue) {
-var templateRef = buildTemplateReference(templateAsset, templateAsset.content || htmlContent, templateAsset.slots || htmlSlots);
-var templateSlots = (templateAsset.slots && typeof templateAsset.slots === "object") ? cloneObject(templateAsset.slots) : cloneObject(htmlSlots || {});
+function applyCategoryOption(payload, categoryMode, templateAsset, userCategoryId) {
+var parsedCategory;
+if (!payload) return;
+if (categoryMode === "source" && templateAsset.category && templateAsset.category.id) {
+  payload.category = { id: templateAsset.category.id };
+  return;
+}
+if (categoryMode === "user") {
+  parsedCategory = parseInt(userCategoryId, 10);
+  if (!isNaN(parsedCategory)) {
+    payload.category = { id: parsedCategory };
+  } else if (payload.category) {
+    delete payload.category;
+  }
+  return;
+}
+if (categoryMode === "none" && payload.category) {
+  delete payload.category;
+}
+}
+function buildTemplate4BasePayload(templateAsset, targetName, subjectlineContent, preheaderContent, htmlContent, htmlSlots, templateRef, slotMode) {
+var emailSlots = slotMode === "placeholder" ? slotPlaceholderMap(htmlSlots) : cloneObject(htmlSlots || {});
 var payload = {
   name: targetName,
-  assetType: { id: 207, name: "htmlemail" },
   channels: (templateAsset.channels && typeof templateAsset.channels === "object") ? cloneObject(templateAsset.channels) : { email: true, web: false },
   views: {
     subjectline: { content: subjectlineContent || "Survey" },
     preheader: { content: preheaderContent || "" },
     html: {
       template: templateRef,
-      content: templateAsset.content || htmlContent || "",
-      slots: templateSlots || {}
+      slots: emailSlots
     },
-    text: { content: textContent || "" }
-  },
-  data: {
-    email: {
-      options: {
-        characterEncoding: "utf-8"
-      }
-    }
+    text: {}
   }
 };
-var parsedCategory = parseInt(categoryIdValue, 10);
-if (!isNaN(parsedCategory)) {
-  payload.category = { id: parsedCategory };
-} else if (templateAsset.category && templateAsset.category.id) {
-  payload.category = { id: templateAsset.category.id };
+if (slotMode !== "skeleton") {
+  payload.views.html.content = templateAsset.content || htmlContent || "";
 }
+ensure207ViewDefaults(payload);
 return payload;
+}
+function buildTemplate4Variants(templateAsset, targetName, subjectlineContent, preheaderContent, htmlContent, htmlSlots, userCategoryId) {
+var variants = [];
+var templateId = parseInt(templateAsset.id, 10);
+var categoryModes = ["source", "user", "none"];
+var categoryLabels = ["source-cat", "user-cat", "no-cat"];
+var i, payload, categoryMode;
+var fullRef = buildTemplateReference(templateAsset, templateAsset.content || htmlContent, templateAsset.slots || htmlSlots, true);
+var minimalRef = buildTemplateReference(templateAsset, "", htmlSlots, false);
+var minimalRefWithSlots = {
+  id: templateId,
+  assetType: { id: 4, name: "template" },
+  slots: cloneObject(templateAsset.slots || htmlSlots || {})
+};
+for (i = 0; i < categoryModes.length; i++) {
+  categoryMode = categoryModes[i];
+  payload = buildTemplate4BasePayload(templateAsset, targetName, subjectlineContent, preheaderContent, htmlContent, htmlSlots, fullRef, "full");
+  setTemplateBasedEmailAssetType(payload);
+  applyCategoryOption(payload, categoryMode, templateAsset, userCategoryId);
+  variants.push({ label: "tbe-full-embed-" + categoryLabels[i], payload: payload });
+  payload = buildTemplate4BasePayload(templateAsset, targetName, subjectlineContent, preheaderContent, htmlContent, htmlSlots, minimalRef, "full");
+  setTemplateBasedEmailAssetType(payload);
+  applyCategoryOption(payload, categoryMode, templateAsset, userCategoryId);
+  variants.push({ label: "tbe-minimal-ref-" + categoryLabels[i], payload: payload });
+  payload = buildTemplate4BasePayload(templateAsset, targetName, subjectlineContent, preheaderContent, htmlContent, htmlSlots, minimalRefWithSlots, "full");
+  setTemplateBasedEmailAssetType(payload);
+  applyCategoryOption(payload, categoryMode, templateAsset, userCategoryId);
+  variants.push({ label: "tbe-ref-slots-only-" + categoryLabels[i], payload: payload });
+  payload = buildTemplate4BasePayload(templateAsset, targetName, subjectlineContent, preheaderContent, htmlContent, htmlSlots, minimalRef, "skeleton");
+  setTemplateBasedEmailAssetType(payload);
+  applyCategoryOption(payload, categoryMode, templateAsset, userCategoryId);
+  variants.push({ label: "tbe-skeleton-" + categoryLabels[i], payload: payload });
+  payload = buildTemplate4BasePayload(templateAsset, targetName, subjectlineContent, preheaderContent, htmlContent, htmlSlots, fullRef, "full");
+  setHtmlemail207AssetType(payload);
+  applyCategoryOption(payload, categoryMode, templateAsset, userCategoryId);
+  variants.push({ label: "htmlemail-full-embed-" + categoryLabels[i], payload: payload });
+}
+return variants;
+}
+function tryPostVariants(subdomainValue, accessTokenValue, variants) {
+var attempts = [];
+var i, postResult, lastResult;
+for (i = 0; i < variants.length; i++) {
+  postResult = postAssetPayload(subdomainValue, accessTokenValue, variants[i].payload);
+  attempts.push(variants[i].label + "=" + postResult.statusCode);
+  if (postResult.statusCode == 200 || postResult.statusCode == 201) {
+    return {
+      ok: true,
+      label: variants[i].label,
+      payload: variants[i].payload,
+      postResult: postResult,
+      attempts: attempts.join(", ")
+    };
+  }
+  lastResult = postResult;
+}
+return {
+  ok: false,
+  label: variants.length ? variants[variants.length - 1].label : "",
+  payload: variants.length ? variants[variants.length - 1].payload : null,
+  postResult: lastResult,
+  attempts: attempts.join(", ")
+};
 }
 function buildRest208Payload(targetName, subjectlineContent, htmlContent, textContent, categoryIdValue) {
 var payload = {
@@ -392,19 +488,42 @@ try {
       debugLog += " Mode: rest208 (SOAP HTMLBody + IsHTMLPaste equivalent). HTML length: " + safeLength(htmlContent) + ".";
     } else if (createMode === "rest207from4") {
       if (assetTypeId !== 4) {
-        createResult = "rest207from4 FAILED: Expected parent template asset type 4, got type " + assetTypeId + ". Set source to your Content Builder template ID (e.g. 56191).";
+        createResult = "rest207from4 FAILED: Expected parent template asset type 4, got type " + assetTypeId + ".";
       } else {
-        payload = buildFromTemplate4Payload(
+        var templateVariants = buildTemplate4Variants(
           sourceAsset,
           emailName,
           subjectlineContent,
           preheaderContent,
-          textContent,
           htmlContent,
           htmlSlots,
           categoryId
         );
-        debugLog += " Mode: rest207from4 (create from parent template only). Template " + (sourceAsset.id || sourceEmailId) + ". Content length: " + safeLength(sourceAsset.content || htmlContent) + ". Slots: " + objectKeys(htmlSlots).join(",") + ".";
+        var variantResult = tryPostVariants(subdomain, accessToken, templateVariants);
+        debugLog += " Mode: rest207from4. Template " + (sourceAsset.id || sourceEmailId) + ". Content length: " + safeLength(sourceAsset.content || htmlContent) + ". Slots: " + objectKeys(htmlSlots).join(",") + ". Attempts: " + variantResult.attempts + ".";
+        if (variantResult.ok) {
+          payload = variantResult.payload;
+          var winningPost = variantResult.postResult;
+          newEmailId = extractCreatedAssetId(winningPost.responseText);
+          var createdAsset = null;
+          try {
+            createdAsset = Platform.Function.ParseJSON(winningPost.responseText);
+          } catch (parseEx) {
+            createdAsset = null;
+          }
+          legacyEmailId = extractLegacyEmailId(createdAsset);
+          if (!legacyEmailId && newEmailId) {
+            var createdFetch = fetchAssetById(newEmailId, subdomain, accessToken);
+            if (createdFetch.ok && createdFetch.asset) {
+              legacyEmailId = extractLegacyEmailId(createdFetch.asset);
+              debugLog += " Winning variant: " + variantResult.label + ". Verify HTML length: " + safeLength((createdFetch.asset.views && createdFetch.asset.views.html) ? createdFetch.asset.views.html.content : "") + ".";
+            }
+          }
+          createResult = "Create OK (rest207from4 via " + variantResult.label + ").";
+        } else {
+          createResult = "Create FAILED (rest207from4): HTTP " + (variantResult.postResult ? variantResult.postResult.statusCode : 0) + " - " + truncateString(variantResult.postResult ? variantResult.postResult.responseText : "", 500);
+          payload = null;
+        }
       }
     } else {
       if (!sourceTemplate || !sourceTemplate.id) {
@@ -430,7 +549,7 @@ try {
         }
       }
     }
-    if (payload) {
+    if (payload && createMode !== "rest207from4") {
       var postResult = postAssetPayload(subdomain, accessToken, payload);
       debugLog += " POST HTTP " + postResult.statusCode + ". Payload summary: " + truncateString(Platform.Function.Stringify({
         name: payload.name,
@@ -535,7 +654,7 @@ button, .btn {
 <label for="sourceEmailId">Source asset ID</label>
 <input type="text" id="sourceEmailId" name="sourceEmailId" inputmode="numeric" pattern="[0-9]+" placeholder="e.g. 56191 (type 4 template) or survey email asset ID" required>
 <label for="categoryId">Category ID (folder)</label>
-<input type="text" id="categoryId" name="categoryId" inputmode="numeric" pattern="[0-9]+" placeholder="e.g. 58374">
+<input type="text" id="categoryId" name="categoryId" inputmode="numeric" pattern="[0-9]+" placeholder="Optional. Leave blank to try source template folder + no category">
 <label for="mode">Create mode</label>
 <select id="mode" name="mode">
 <option value="rest207from4" selected>rest207from4 — create from parent template only (type 4 → 207)</option>
