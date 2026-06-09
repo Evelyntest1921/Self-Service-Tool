@@ -49,9 +49,6 @@ VAR @attemptDeleteAsset, @step3bResult
 VAR @surveyPurgeId, @surveyDelResponses, @surveyDelQuestions, @surveyDelMaster, @surveyDeleteLog, @willRemoveBuildLog
 VAR @updRaw
 VAR @journeyActionRequested, @journeyAction, @attemptJourneyAction, @journeyActionOk, @journeyActionMsg, @journeyActionNewStatus
-VAR @jGetUrl, @jGetStatus, @jGetResponse, @jGetHeader, @jApiStatus, @jApiVersion
-VAR @stopUrl, @stopStatus, @stopResponse, @stopHeader
-VAR @pubUrl, @pubStatus, @pubResponse, @pubHeader
 
 
 SET @purgeRequested = IIF(NOT Empty(RequestParameter("confirmPurgeBuild")),"1","0")
@@ -273,12 +270,6 @@ SET @attemptJourneyAction = "false"
 SET @journeyActionOk = "false"
 SET @journeyActionMsg = ""
 SET @journeyActionNewStatus = ""
-SET @jGetResponse = ""
-SET @jGetHeader = ""
-SET @stopResponse = ""
-SET @stopHeader = ""
-SET @pubResponse = ""
-SET @pubHeader = ""
 
 
 IF ((@deleteRequested == "1") OR (@purgeRequested == "1") OR (@journeyActionRequested == "1")) AND (@detailCount > 0) THEN
@@ -340,54 +331,6 @@ IF (@pageStatus != "tamper") AND ((@attemptPurgeBuild == "true") OR (@attemptDel
     SET @resultText = "SFMC_AUTH has no Admin row."
   ENDIF
 ENDIF
-ENDIF
-
-
-IF (@attemptJourneyAction == "true") AND (@authOk == "true") AND NOT Empty(@accessToken) AND NOT Empty(@subdomain) THEN
- IF Substring(@jid,1,6) == "email:" THEN
-  SET @journeyActionMsg = "Email-only build - no journey to control."
- ELSE
-  SET @jGetUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/interactions/",@jid,"?extras=all")
-  SET @jGetStatus = HTTPGet2(@jGetUrl,"application/json",@jGetResponse,@jGetHeader,false,"Authorization",Concat("Bearer ",@accessToken))
-  IF @jGetStatus == 200 OR @jGetStatus == 201 THEN
-   SET @jApiStatus = RegExMatch(@jGetResponse,'"status":"([^"]+)"',1)
-   SET @jApiVersion = RegExMatch(@jGetResponse,'"version":(\d+)',1)
-   IF Empty(@jApiVersion) THEN
-    SET @jApiVersion = "1"
-   ENDIF
-   IF @journeyAction == "stop" THEN
-    IF Lowercase(@jApiStatus) == "published" OR Lowercase(@jApiStatus) == "running" THEN
-     SET @stopUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/interactions/stop/",@jid,"?versionNumber=",@jApiVersion)
-     SET @stopStatus = HTTPPost2(@stopUrl,"application/json","{}",false,@stopResponse,@stopHeader,"Authorization",Concat("Bearer ",@accessToken))
-     IF @stopStatus == 200 OR @stopStatus == 201 OR @stopStatus == 202 THEN
-      SET @journeyActionOk = "true"
-      SET @journeyActionMsg = "Journey stopped."
-      SET @journeyActionNewStatus = "Stopped"
-     ELSE
-      SET @journeyActionMsg = Concat("Stop HTTP ",@stopStatus," - ",Substring(IIF(NOT Empty(@stopResponse),@stopResponse,"(empty)"),1,200))
-     ENDIF
-    ELSE
-     SET @journeyActionMsg = Concat("Journey is ",IIF(NOT Empty(@jApiStatus),@jApiStatus,"unknown")," - not running.")
-    ENDIF
-   ELSEIF @journeyAction == "activate" THEN
-    IF Lowercase(@jApiStatus) == "published" OR Lowercase(@jApiStatus) == "running" THEN
-     SET @journeyActionMsg = "Journey is already running."
-    ELSE
-     SET @pubUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/interactions/publishAsync/",@jid,"?versionNumber=",@jApiVersion)
-     SET @pubStatus = HTTPPost2(@pubUrl,"application/json","{}",false,@pubResponse,@pubHeader,"Authorization",Concat("Bearer ",@accessToken))
-     IF @pubStatus == 200 OR @pubStatus == 201 OR @pubStatus == 202 THEN
-      SET @journeyActionOk = "true"
-      SET @journeyActionMsg = "Journey publish started. Refresh in a moment to confirm status."
-      SET @journeyActionNewStatus = "Running"
-     ELSE
-      SET @journeyActionMsg = Concat("Publish HTTP ",@pubStatus," - ",Substring(IIF(NOT Empty(@pubResponse),@pubResponse,"(empty)"),1,200))
-     ENDIF
-    ENDIF
-   ENDIF
-  ELSE
-   SET @journeyActionMsg = Concat("Journey GET HTTP ",@jGetStatus," - ",Substring(IIF(NOT Empty(@jGetResponse),@jGetResponse,"(empty)"),1,200))
-  ENDIF
- ENDIF
 ENDIF
 ]%%
 <script runat="server" language="javascript">
@@ -637,6 +580,133 @@ function buildSentDisplay(sentCountRaw, deRowCount) {
 }
 
 
+function journeyHttpJson(token, method, url, bodyStr) {
+ try {
+  var req = new Script.Util.HttpRequest(url);
+  req.emptyContentHandling = 0;
+  req.retries = 2;
+  req.continueOnError = true;
+  req.setHeader("Authorization", "Bearer " + token);
+  req.method = method;
+  if (bodyStr) {
+   req.contentType = "application/json";
+   req.postData = bodyStr;
+  }
+  var resp = req.send();
+  return {
+   status: resp.statusCode,
+   body: resp.content ? String(resp.content) : ""
+  };
+ } catch (httpEx) {
+  return {
+   status: 0,
+   body: httpEx.message || String(httpEx)
+  };
+ }
+}
+
+
+function getJourneyObject(sub, token, jid) {
+ var url =
+  "https://" +
+  sub +
+  ".rest.marketingcloudapis.com/interaction/v1/interactions/" +
+  encodeURIComponent(jid) +
+  "?extras=all";
+ var resp = journeyHttpJson(token, "GET", url, null);
+ if (resp.status != 200 && resp.status != 201) {
+  var detail = resp.body ? resp.body.substring(0, 200) : "";
+  return {
+   ok: false,
+   msg: "Journey GET HTTP " + resp.status + (detail ? " - " + detail : "."),
+   obj: null
+  };
+ }
+ try {
+  return {
+   ok: true,
+   msg: "",
+   obj: Platform.Function.ParseJSON(resp.body)
+  };
+ } catch (parseEx) {
+  return { ok: false, msg: "Could not parse journey response.", obj: null };
+ }
+}
+
+
+function journeyStatusIsRunning(status) {
+ var u = String(status || "").toLowerCase();
+ return u === "published" || u === "running";
+}
+
+
+function stopJourney(sub, token, jid) {
+ var got = getJourneyObject(sub, token, jid);
+ if (!got.ok) {
+  return { ok: false, msg: got.msg };
+ }
+ var jObj = got.obj;
+ var status = jObj.status ? String(jObj.status) : "";
+ if (!journeyStatusIsRunning(status)) {
+  return {
+   ok: false,
+   msg: "Journey is " + (status || "unknown") + " - not running."
+  };
+ }
+ var versionNum = jObj.version || 1;
+ var stopUrl =
+  "https://" +
+  sub +
+  ".rest.marketingcloudapis.com/interaction/v1/interactions/stop/" +
+  encodeURIComponent(jid) +
+  "?versionNumber=" +
+  encodeURIComponent(String(versionNum));
+ var stopResp = journeyHttpJson(token, "POST", stopUrl, "{}");
+ if (stopResp.status != 200 && stopResp.status != 201 && stopResp.status != 202) {
+  var stopErr = stopResp.body ? stopResp.body.substring(0, 200) : "";
+  return {
+   ok: false,
+   msg: "Stop HTTP " + stopResp.status + (stopErr ? " - " + stopErr : ".")
+  };
+ }
+ return { ok: true, msg: "Journey stopped.", newStatus: "Stopped" };
+}
+
+
+function activateJourney(sub, token, jid) {
+ var got = getJourneyObject(sub, token, jid);
+ if (!got.ok) {
+  return { ok: false, msg: got.msg };
+ }
+ var jObj = got.obj;
+ var status = jObj.status ? String(jObj.status) : "";
+ if (journeyStatusIsRunning(status)) {
+  return { ok: false, msg: "Journey is already running." };
+ }
+ var versionNum = jObj.version || 1;
+ var pubUrl =
+  "https://" +
+  sub +
+  ".rest.marketingcloudapis.com/interaction/v1/interactions/publishAsync/" +
+  encodeURIComponent(jid) +
+  "?versionNumber=" +
+  encodeURIComponent(String(versionNum));
+ var pubResp = journeyHttpJson(token, "POST", pubUrl, "{}");
+ if (pubResp.status != 200 && pubResp.status != 201 && pubResp.status != 202) {
+  var pubErr = pubResp.body ? pubResp.body.substring(0, 200) : "";
+  return {
+   ok: false,
+   msg: "Publish HTTP " + pubResp.status + (pubErr ? " - " + pubErr : ".")
+  };
+ }
+ return {
+  ok: true,
+  msg: "Journey publish started. Refresh in a moment to confirm status.",
+  newStatus: "Running"
+ };
+}
+
+
 var authOk = Platform.Variable.GetValue("@authOk") || "";
 var accessToken = Platform.Variable.GetValue("@accessToken") || "";
 var subdomain = Platform.Variable.GetValue("@subdomain") || "";
@@ -644,6 +714,9 @@ var attemptDeleteAsset =
  Platform.Variable.GetValue("@attemptDeleteAsset") || "";
 var attemptPurgeBuild =
  Platform.Variable.GetValue("@attemptPurgeBuild") || "";
+var attemptJourneyAction =
+ Platform.Variable.GetValue("@attemptJourneyAction") || "";
+var journeyAction = Platform.Variable.GetValue("@journeyAction") || "";
 var deleteEmailFromPost =
   Platform.Variable.GetValue("@deleteEmailFromPost") || "";
 var jidClean = Platform.Variable.GetValue("@jid") || "";
@@ -713,6 +786,51 @@ function purgeHttpDel(sdom, tok, url) {
  } catch (purgeDelEx) {
    return 0;
  }
+}
+
+
+try {
+ if (
+  attemptJourneyAction == "true" &&
+  authOk == "true" &&
+  accessToken &&
+  subdomain &&
+  jidClean
+ ) {
+  var jidAct = strTrim(jidClean);
+  if (jidAct.substring(0, 6).toLowerCase() === "email:") {
+   Platform.Variable.SetValue(
+    "@journeyActionMsg",
+    "Email-only build - no journey to control."
+   );
+  } else {
+   var actionResult = null;
+   if (journeyAction === "stop") {
+    actionResult = stopJourney(subdomain, accessToken, jidAct);
+   } else if (journeyAction === "activate") {
+    actionResult = activateJourney(subdomain, accessToken, jidAct);
+   }
+   if (actionResult) {
+    Platform.Variable.SetValue(
+     "@journeyActionOk",
+     actionResult.ok ? "true" : "false"
+    );
+    Platform.Variable.SetValue("@journeyActionMsg", actionResult.msg || "");
+    if (actionResult.ok && actionResult.newStatus) {
+     Platform.Variable.SetValue(
+      "@journeyActionNewStatus",
+      actionResult.newStatus
+     );
+    }
+   }
+  }
+ }
+} catch (journeyActEx) {
+ Platform.Variable.SetValue("@journeyActionOk", "false");
+ Platform.Variable.SetValue(
+  "@journeyActionMsg",
+  "Journey action failed: " + (journeyActEx.message || String(journeyActEx))
+ );
 }
 
 
