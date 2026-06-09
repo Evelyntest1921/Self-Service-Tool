@@ -5,10 +5,10 @@ VAR @emailPreviewUrl, @articlePreviewUrl, @automationId, @syncAutomationId, @hom
 VAR @contactIdToAdd, @triggerAutomationId, @triggerAutomationStatus, @triggerAutomationResult
 VAR @syncAutomationIdVar, @syncAutomationStatus, @syncAutomationResult, @unregisteredOpenedCount, @engagementTrimmed
 VAR @email, @contactId, @primarySpecialty, @state, @jobId, @accountName, @firstName, @lastName, @designation, @role
-VAR @mobile, @auth0UserId, @openDate, @campaignType, @emailHistory, @courseHistory, @viewEmailUrl, @responseEntry
+VAR @mobile, @auth0UserId, @openDate, @campaignType, @emailName, @contactUrl, @viewEmailUrl, @responseEntry
 VAR @responseContactId, @responseEmail, @responseDate, @responseEngagement, @responsePrimarySpecialty, @responseState
 VAR @responseJobId, @responseAccountName, @responseFirstName, @responseLastName, @responseDesignation, @responseRole
-VAR @responseMobile, @responseAuth0UserId, @responseOpenDate, @responseViewEmailUrl, @responseEmailHistory, @responseCourseHistory
+VAR @responseMobile, @responseAuth0UserId, @responseOpenDate, @responseViewEmailUrl, @responseEmailName, @responseContactUrl
 VAR @openedArray, @openedArrayCount, @openedRow, @openedValue, @openedUniqueArray, @openedCountArray, @newCounts
 VAR @bouncedArray, @bouncedArrayCount, @bouncedRow, @bouncedValue, @bouncedUniqueArray, @found2, @foundIndex2, @uniqueRow2, @uniqueValue2
 VAR @bouncedCountArray, @newCounts2, @countRow2, @countValue2, @didNotOpenArray, @didNotOpenArrayCount, @didNotOpenRow, @didNotOpenValue
@@ -176,8 +176,15 @@ SET @mobile = Field(@row, "Mobile")
 SET @auth0UserId = Field(@row, "Auth0UserId")
 SET @openDate = Field(@row, "campaign_type")
 SET @campaignType = Field(@row, "campaign_type")
-SET @emailHistory = Concat(@emailPreviewUrl, "?subscriberKey=", Field(@row, "Contact_Id"))
-SET @courseHistory = Concat(@articlePreviewUrl, "?subscriberKey=", Field(@row, "Contact_Id"))
+SET @emailName = Field(@row, "email_name")
+SET @contactUrl = ""
+IF NOT Empty(@contactId) THEN
+ IF @BU == "UAT" THEN
+  SET @contactUrl = Concat("https://magmutual--uat.sandbox.lightning.force.com/lightning/r/Contact/", @contactId, "/view")
+ ELSE
+  SET @contactUrl = Concat("https://magmutual.lightning.force.com/lightning/r/Contact/", @contactId, "/view")
+ ENDIF
+ENDIF
 SET @viewEmailUrl = Field(@row, "view_email_url") 
 IF NOT Empty(@engagement) THEN
 SET @engagementTrimmed = Trim(@engagement) 
@@ -397,12 +404,12 @@ SET @responseMobile = IIF(Empty(@mobile), "N/A", @mobile)
 SET @responseAuth0UserId = IIF(Empty(@auth0UserId), "N/A", @auth0UserId)
 SET @responseOpenDate = IIF(Empty(@openDate), "N/A", @openDate)
 SET @responseViewEmailUrl = IIF(Empty(@viewEmailUrl), "N/A", @viewEmailUrl)
-SET @responseEmailHistory = IIF(Empty(@emailHistory), "N/A", @emailHistory) 
-SET @responseCourseHistory = IIF(Empty(@courseHistory), "N/A", @courseHistory) 
+SET @responseEmailName = IIF(Empty(@emailName), "N/A", @emailName)
+SET @responseContactUrl = IIF(Empty(@contactUrl), "N/A", @contactUrl)
 SET @responseEntry = Concat(@responseContactId, ":::", @responseEmail, ":::", @responseDate, ":::", @responseEngagement,
 ":::", @responsePrimarySpecialty, ":::", @responseState, ":::", @responseJobId, ":::", @responseAccountName, ":::",
 @responseFirstName, ":::", @responseLastName, ":::", @responseDesignation, ":::", @responseRole, ":::", @responseMobile,
-":::", @responseAuth0UserId, ":::", @responseOpenDate, ":::", @responseViewEmailUrl, ":::", @responseEmailHistory, ":::",@responseCourseHistory, ":::")
+":::", @responseAuth0UserId, ":::", @responseOpenDate, ":::", @responseViewEmailUrl, ":::", @responseEmailName, ":::", @responseContactUrl, ":::")
 SET @responsesData = Concat(@responsesData, @responseEntry, "|||")
 NEXT @i
 ENDIF 
@@ -1972,8 +1979,8 @@ pre.log.show{display:block}
                                <th>First Name</th>
                                <th>Last Name</th>
                                <th>Campaign Type</th>
-                               <th>Articles</th>
-                               <th>History</th>
+                               <th>Name</th>
+                               <th>Contact</th>
                              <th>Last Email</th>
                            </tr>
                        </thead>
@@ -2893,8 +2900,8 @@ pre.log.show{display:block}
                    auth0UserId: parts[13] && parts[13] !== 'N/A' ? parts[13] : '',
                    openDate: parts[14] && parts[14] !== 'N/A' ? parts[14] : '',
                    viewEmailUrl: parts[15] && parts[15] !== 'N/A' ? parts[15] : '',
-                   emailHistory: parts[16] && parts[16] !== 'N/A' ? parts[16] : '',
-                   courseHistory: parts[17] && parts[17] !== 'N/A' ? parts[17] : ''
+                   emailName: parts[16] && parts[16] !== 'N/A' ? parts[16] : '',
+                   contactUrl: parts[17] && parts[17] !== 'N/A' ? parts[17] : ''
                };
            });
            return responses.sort((a, b) => {
@@ -3077,7 +3084,7 @@ pre.log.show{display:block}
                alert('No data to download');
                return;
            }
-           const headers = ['Contact_Id', 'Email', 'LastSent', 'Engagement', 'Primary_Specialty', 'Related_Account_Primary_State', 'JobID', 'Related_Account_Name', 'First_Name', 'Last_Name', 'Designation', 'Role', 'Mobile', 'Auth0UserId', 'Campaign', 'view_email_url', 'emailHistory', 'courseHistory'];
+           const headers = ['Contact_Id', 'Email', 'LastSent', 'Engagement', 'Primary_Specialty', 'Related_Account_Primary_State', 'JobID', 'Related_Account_Name', 'First_Name', 'Last_Name', 'Designation', 'Role', 'Mobile', 'Auth0UserId', 'Campaign', 'view_email_url', 'email_name', 'contact_url'];
            const csvRows = [headers.join(',')];
            dataToDownload.forEach(response => {
                const row = [
@@ -3097,8 +3104,8 @@ pre.log.show{display:block}
                    `"${(response.auth0UserId || '').replace(/"/g, '""')}"`,
                    `"${(response.openDate || '').replace(/"/g, '""')}"`,
                    `"${(response.viewEmailUrl || '').replace(/"/g, '""')}"`,
-                   `"${(response.emailHistory || '').replace(/"/g, '""')}"`,
-                   `"${(response.courseHistory || '').replace(/"/g, '""')}"`
+                   `"${(response.emailName || '').replace(/"/g, '""')}"`,
+                   `"${(response.contactUrl || '').replace(/"/g, '""')}"`
                ];
                csvRows.push(row.join(','));
            });
@@ -3122,7 +3129,7 @@ pre.log.show{display:block}
            const endIndex = startIndex + rowsPerPage;
            const pageData = dataToShow.slice(startIndex, endIndex);
            if (pageData.length === 0) {
-               tbody.innerHTML = '<tr><td colspan="12" style="text-align: center; padding: 24px; color: var(--text-secondary);">No records found</td></tr>';
+               tbody.innerHTML = '<tr><td colspan="14" style="text-align: center; padding: 24px; color: var(--text-secondary);">No records found</td></tr>';
                return;
            }
            tbody.innerHTML = pageData.map(response => {
@@ -3131,8 +3138,7 @@ pre.log.show{display:block}
                const engagementDisplay = response.engagement && response.engagement.trim() !== '' ? response.engagement : '-';
                const engagementClass = engagementDisplay.toLowerCase().replace(/\s+/g, '-');
                const hasViewEmailUrl = response.viewEmailUrl && response.viewEmailUrl !== 'N/A' && response.viewEmailUrl.trim() !== '';
-             const hasEmailHistory = response.emailHistory && response.emailHistory !== 'N/A' && response.emailHistory.trim() !== '';
-             const hasCourseHistory = response.courseHistory && response.courseHistory !== 'N/A' && response.courseHistory.trim() !== '';
+             const hasContactUrl = response.contactUrl && response.contactUrl !== 'N/A' && response.contactUrl.trim() !== '';
                return `
                     <tr style="${response.lastName === 'SMS' ? 'background: #000000;' : ''}">
                     <td>${response.contactId}</td>
@@ -3146,17 +3152,8 @@ pre.log.show{display:block}
                     <td>${response.firstName || '-'}</td>
                     <td>${response.lastName || '-'}</td>
                     <td>${formattedOpenDate}</td>
-                   <td>
-  ${hasCourseHistory 
-    ? `<a href="#" onclick="window.open('${response.courseHistory}', '_blank'); return false;" style="
-        font-size: 50px;
-        color: black;
-        text-decoration: none;
-      ">📃</a>` 
-    : '-'}
-</td>
-
-                    <td>${hasEmailHistory ? `<button class="history-button" onclick="window.open('${response.emailHistory}', '_blank')">All Emails</button>` : '-'}</td>
+                   <td>${response.emailName || '-'}</td>
+                    <td>${hasContactUrl ? `<a href="${response.contactUrl}" target="_blank" rel="noopener noreferrer" class="history-button">Contact</a>` : '-'}</td>
                      <td>${hasViewEmailUrl ? `<button class="open-button" onclick="window.open('${response.viewEmailUrl}', '_blank')">Preview</button>` : '-'}</td>
                 </tr>
             `;
