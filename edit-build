@@ -49,6 +49,7 @@ VAR @attemptDeleteAsset, @step3bResult
 VAR @surveyPurgeId, @surveyDelResponses, @surveyDelQuestions, @surveyDelMaster, @surveyDeleteLog, @willRemoveBuildLog
 VAR @updRaw
 VAR @journeyActionRequested, @journeyAction, @attemptJourneyAction, @journeyActionOk, @journeyActionMsg, @journeyActionNewStatus
+VAR @automationActionRequested, @attemptAutomationAction, @automationActionOk, @automationActionMsg, @automationActionNewStatus, @automationActionConfirm
 
 
 SET @purgeRequested = IIF(NOT Empty(RequestParameter("confirmPurgeBuild")),"1","0")
@@ -59,6 +60,7 @@ SET @removeLogOnly = IIF(NOT Empty(RequestParameter("confirmRemoveLog")),"1","0"
 SET @deleteEmailFromPost = Trim(RequestParameter("deleteEmailId"))
 SET @journeyActionRequested = IIF(NOT Empty(RequestParameter("confirmJourneyAction")),"1","0")
 SET @journeyAction = Trim(RequestParameter("journeyAction"))
+SET @automationActionRequested = IIF(NOT Empty(RequestParameter("confirmAutomationAction")),"1","0")
 
 
 SET @resultText = ""
@@ -270,14 +272,26 @@ SET @attemptJourneyAction = "false"
 SET @journeyActionOk = "false"
 SET @journeyActionMsg = ""
 SET @journeyActionNewStatus = ""
+SET @attemptAutomationAction = "false"
+SET @automationActionOk = "false"
+SET @automationActionMsg = ""
+SET @automationActionNewStatus = ""
+SET @automationActionConfirm = "Activate this automation schedule?"
 
 
-IF ((@deleteRequested == "1") OR (@purgeRequested == "1") OR (@journeyActionRequested == "1")) AND (@detailCount > 0) THEN
+IF ((@deleteRequested == "1") OR (@purgeRequested == "1") OR (@journeyActionRequested == "1") OR (@automationActionRequested == "1")) AND (@detailCount > 0) THEN
 SET @postedJidDel = Trim(RequestParameter("postedJourneyId"))
 IF Empty(@postedJidDel) THEN
   SET @postedJidDel = @jid
 ENDIF
-IF (@journeyActionRequested == "1") THEN
+IF (@automationActionRequested == "1") THEN
+  IF (@postedJidDel != @jid) OR (@isStackBuild != "true") THEN
+    SET @pageStatus = "tamper"
+    SET @resultText = "Automation action request did not match this stack build."
+  ELSE
+    SET @attemptAutomationAction = "true"
+  ENDIF
+ELSEIF (@journeyActionRequested == "1") THEN
   IF (@postedJidDel != @jid) OR Empty(@journeyAction) OR (@journeyAction != "stop" AND @journeyAction != "activate") THEN
     SET @pageStatus = "tamper"
     SET @resultText = "Journey action request did not match this build row."
@@ -294,7 +308,7 @@ ELSE
     SET @attemptDeleteAsset = "true"
   ENDIF
 ENDIF
-IF (@pageStatus != "tamper") AND ((@attemptPurgeBuild == "true") OR (@attemptDeleteAsset == "true") OR (@attemptJourneyAction == "true")) THEN
+IF (@pageStatus != "tamper") AND ((@attemptPurgeBuild == "true") OR (@attemptDeleteAsset == "true") OR (@attemptJourneyAction == "true") OR (@attemptAutomationAction == "true")) THEN
   SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
   IF RowCount(@authRow) > 0 THEN
     SET @authR = Row(@authRow,1)
@@ -707,6 +721,97 @@ function activateJourney(sub, token, jid) {
 }
 
 
+function performAutomationSoapStart(autoId) {
+ var id = strTrim(autoId);
+ if (!id) {
+  return { ok: false, msg: "No automation id on build log." };
+ }
+ var types = ["Automation", "Program"];
+ var ti;
+ var perform = null;
+ var topStatus = "";
+ var itemCode = "";
+ var itemMsg = "";
+ for (ti = 0; ti < types.length; ti++) {
+  try {
+   var prox = new Script.Util.WSProxy();
+   perform = prox.performItem(types[ti], { ObjectID: id }, "start", {});
+   topStatus = perform && perform.Status ? String(perform.Status) : "";
+   itemCode =
+    perform &&
+    perform.Results &&
+    perform.Results.length > 0 &&
+    perform.Results[0].StatusCode
+     ? String(perform.Results[0].StatusCode)
+     : "";
+   itemMsg =
+    perform &&
+    perform.Results &&
+    perform.Results.length > 0 &&
+    perform.Results[0].StatusMessage
+     ? String(perform.Results[0].StatusMessage)
+     : "";
+   if (topStatus === "OK" || itemCode === "OK") {
+    return {
+     ok: true,
+     msg: "Automation activated.",
+     newStatus: "Scheduled"
+    };
+   }
+  } catch (soapEx) {
+   itemMsg = soapEx.message || String(soapEx);
+  }
+ }
+ return {
+  ok: false,
+  msg: "SOAP start rejected. " + (itemMsg || topStatus || itemCode || "Unknown error.")
+ };
+}
+
+
+function runAutomationOnceRest(sub, token, autoId) {
+ var id = strTrim(autoId);
+ var url =
+  "https://" +
+  sub +
+  ".rest.marketingcloudapis.com/automation/v1/automations/" +
+  encodeURIComponent(id) +
+  "/actions/runallonce";
+ var resp = journeyHttpJson(token, "POST", url, "{}");
+ if (resp.status == 200 || resp.status == 201 || resp.status == 202) {
+  return {
+   ok: true,
+   msg: "Automation queued to run once.",
+   newStatus: "Running"
+  };
+ }
+ var detail = resp.body ? resp.body.substring(0, 200) : "";
+ return {
+  ok: false,
+  msg: "Run once HTTP " + resp.status + (detail ? " - " + detail : ".")
+ };
+}
+
+
+function activateStackAutomation(sub, token, autoId) {
+ var soapResult = performAutomationSoapStart(autoId);
+ if (soapResult.ok) {
+  return soapResult;
+ }
+ if (sub && token) {
+  var restResult = runAutomationOnceRest(sub, token, autoId);
+  if (restResult.ok) {
+   return restResult;
+  }
+  return {
+   ok: false,
+   msg: soapResult.msg + " " + restResult.msg
+  };
+ }
+ return soapResult;
+}
+
+
 var authOk = Platform.Variable.GetValue("@authOk") || "";
 var accessToken = Platform.Variable.GetValue("@accessToken") || "";
 var subdomain = Platform.Variable.GetValue("@subdomain") || "";
@@ -716,6 +821,8 @@ var attemptPurgeBuild =
  Platform.Variable.GetValue("@attemptPurgeBuild") || "";
 var attemptJourneyAction =
  Platform.Variable.GetValue("@attemptJourneyAction") || "";
+var attemptAutomationAction =
+ Platform.Variable.GetValue("@attemptAutomationAction") || "";
 var journeyAction = Platform.Variable.GetValue("@journeyAction") || "";
 var deleteEmailFromPost =
   Platform.Variable.GetValue("@deleteEmailFromPost") || "";
@@ -786,6 +893,28 @@ function purgeHttpDel(sdom, tok, url) {
  } catch (purgeDelEx) {
    return 0;
  }
+}
+
+
+try {
+ if (attemptAutomationAction == "true") {
+  var autoActId = strTrim(Platform.Variable.GetValue("@dispAutomationGuid") || "");
+  if (!autoActId && jidClean) {
+   autoActId = logDeField(jidClean, "automationGuid");
+  }
+  var autoResult = activateStackAutomation(subdomain, accessToken, autoActId);
+  Platform.Variable.SetValue("@automationActionOk", autoResult.ok ? "true" : "false");
+  Platform.Variable.SetValue("@automationActionMsg", autoResult.msg || "");
+  if (autoResult.ok && autoResult.newStatus) {
+   Platform.Variable.SetValue("@automationActionNewStatus", autoResult.newStatus);
+  }
+ }
+} catch (autoActEx) {
+ Platform.Variable.SetValue("@automationActionOk", "false");
+ Platform.Variable.SetValue(
+  "@automationActionMsg",
+  "Automation action failed: " + (autoActEx.message || String(autoActEx))
+ );
 }
 
 
@@ -1598,6 +1727,24 @@ IF (@attemptJourneyAction == "true") AND (@journeyActionOk == "true") AND NOT Em
 ENDIF
 
 
+IF (@attemptAutomationAction == "true") AND (@automationActionOk == "true") AND NOT Empty(@automationActionNewStatus) THEN
+ UpsertDE(
+  @DETAIL_EXTERNAL_KEY_DE,
+  1,
+  "journeyId", @jid,
+  "automationStatus", Substring(@automationActionNewStatus,1,50),
+  "updateDate", Now()
+ )
+ SET @dispAutomationStatus = @automationActionNewStatus
+ SET @automationStatusColor = "#6366f1"
+ IF Lowercase(@dispAutomationStatus) == "paused" THEN
+  SET @automationStatusColor = "#f59e0b"
+ ELSEIF Lowercase(@dispAutomationStatus) == "ready" OR Lowercase(@dispAutomationStatus) == "scheduled" OR Lowercase(@dispAutomationStatus) == "running" OR Lowercase(@dispAutomationStatus) == "waiting" THEN
+  SET @automationStatusColor = "#10b981"
+ ENDIF
+ENDIF
+
+
 IF (@attemptJourneyAction == "true") AND (@authOk != "true") AND Empty(@journeyActionMsg) THEN
  SET @journeyActionMsg = IIF(NOT Empty(@resultText), @resultText, "Could not authenticate to SFMC.")
 ENDIF
@@ -2085,6 +2232,11 @@ pre.log.show{display:block}
 <p class="sub">Edit journeys and templates in SFMC UI. Choose what else to tidy up.</p>
 
 
+%%[ IF (@pageStatus == "view") AND (@attemptAutomationAction == "true") AND (@automationActionOk == "true") THEN ]%%
+<div class="banner good">%%=v(@automationActionMsg)=%%</div>
+%%[ ELSEIF (@pageStatus == "view") AND (@attemptAutomationAction == "true") AND (@automationActionOk != "true") THEN ]%%
+<div class="banner bad">%%=v(@automationActionMsg)=%%</div>
+%%[ ENDIF ]%%
 %%[ IF (@pageStatus == "view") AND (@attemptJourneyAction == "true") AND (@journeyActionOk == "true") THEN ]%%
 <div class="banner good">%%=v(@journeyActionMsg)=%%</div>
 %%[ ELSEIF (@pageStatus == "view") AND (@attemptJourneyAction == "true") AND (@journeyActionOk != "true") THEN ]%%
@@ -2400,7 +2552,11 @@ pre.log.show{display:block}
    </form>
 %%[ ENDIF ]%%
 %%[ IF @isStackBuild == "true" THEN ]%%
-   <button type="button" class="btn btn-activate" id="activateAutomationBtn">Activate Automation</button>
+   <form method="post" action="" style="margin:0" onsubmit="return confirm('%%=Replace(v(@automationActionConfirm),'''','\\''')=%%');">
+    <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
+    <input type="hidden" name="postedJourneyId" value="%%=v(@jid)=%%">
+    <button type="submit" name="confirmAutomationAction" value="1" class="btn btn-activate" id="activateAutomationBtn">Activate Automation</button>
+   </form>
 %%[ ENDIF ]%%
 %%[ IF NOT Empty(@dispEmailId) THEN ]%%
    <form method="post" action="" style="margin:0" onsubmit="return confirm('Delete email %%=v(@dispEmailId)=%% from Content Builder only (journey and entry event stay).');">
