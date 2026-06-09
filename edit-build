@@ -51,8 +51,7 @@ VAR @updRaw
 VAR @journeyActionRequested, @journeyAction, @attemptJourneyAction, @journeyActionOk, @journeyActionMsg, @journeyActionNewStatus
 VAR @jGetUrl, @jGetStatus, @jGetResponse, @jGetHeader, @jApiStatus, @jApiVersion
 VAR @stopUrl, @stopStatus, @stopResponse, @stopHeader
-VAR @pubUrl, @pubStatus, @pubResponse, @pubHeader, @pubStatusId
-VAR @pollUrl, @pollHttpStatus, @pollResponse, @pollHeader, @pollState, @pollI, @pubPollDone, @jidActPref
+VAR @pubUrl, @pubStatus, @pubResponse, @pubHeader
 
 
 SET @purgeRequested = IIF(NOT Empty(RequestParameter("confirmPurgeBuild")),"1","0")
@@ -274,6 +273,12 @@ SET @attemptJourneyAction = "false"
 SET @journeyActionOk = "false"
 SET @journeyActionMsg = ""
 SET @journeyActionNewStatus = ""
+SET @jGetResponse = ""
+SET @jGetHeader = ""
+SET @stopResponse = ""
+SET @stopHeader = ""
+SET @pubResponse = ""
+SET @pubHeader = ""
 
 
 IF ((@deleteRequested == "1") OR (@purgeRequested == "1") OR (@journeyActionRequested == "1")) AND (@detailCount > 0) THEN
@@ -339,9 +344,8 @@ ENDIF
 
 
 IF (@attemptJourneyAction == "true") AND (@authOk == "true") AND NOT Empty(@accessToken) AND NOT Empty(@subdomain) THEN
- SET @jidActPref = Substring(@jid,1,7)
- IF @jidActPref == "email:" THEN
-  SET @journeyActionMsg = "Email-only build — no journey to control."
+ IF Substring(@jid,1,6) == "email:" THEN
+  SET @journeyActionMsg = "Email-only build - no journey to control."
  ELSE
   SET @jGetUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/interactions/",@jid,"?extras=all")
   SET @jGetStatus = HTTPGet2(@jGetUrl,"application/json",@jGetResponse,@jGetHeader,false,"Authorization",Concat("Bearer ",@accessToken))
@@ -360,10 +364,10 @@ IF (@attemptJourneyAction == "true") AND (@authOk == "true") AND NOT Empty(@acce
       SET @journeyActionMsg = "Journey stopped."
       SET @journeyActionNewStatus = "Stopped"
      ELSE
-      SET @journeyActionMsg = Concat("Stop HTTP ",@stopStatus," — ",Substring(IIF(NOT Empty(@stopResponse),@stopResponse,"(empty)"),1,200))
+      SET @journeyActionMsg = Concat("Stop HTTP ",@stopStatus," - ",Substring(IIF(NOT Empty(@stopResponse),@stopResponse,"(empty)"),1,200))
      ENDIF
     ELSE
-     SET @journeyActionMsg = Concat("Journey is ",IIF(NOT Empty(@jApiStatus),@jApiStatus,"unknown")," — not running.")
+     SET @journeyActionMsg = Concat("Journey is ",IIF(NOT Empty(@jApiStatus),@jApiStatus,"unknown")," - not running.")
     ENDIF
    ELSEIF @journeyAction == "activate" THEN
     IF Lowercase(@jApiStatus) == "published" OR Lowercase(@jApiStatus) == "running" THEN
@@ -372,44 +376,16 @@ IF (@attemptJourneyAction == "true") AND (@authOk == "true") AND NOT Empty(@acce
      SET @pubUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/interactions/publishAsync/",@jid,"?versionNumber=",@jApiVersion)
      SET @pubStatus = HTTPPost2(@pubUrl,"application/json","{}",false,@pubResponse,@pubHeader,"Authorization",Concat("Bearer ",@accessToken))
      IF @pubStatus == 200 OR @pubStatus == 201 OR @pubStatus == 202 THEN
-      SET @pubStatusId = RegExMatch(@pubResponse,'"statusId":"([^"]+)"',1)
-      IF NOT Empty(@pubStatusId) THEN
-       SET @pollUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/interactions/publishStatus/",@pubStatusId)
-       SET @pubPollDone = "false"
-       FOR @pollI = 1 TO 8 DO
-        IF @pubPollDone == "false" THEN
-         SET @pollHttpStatus = HTTPGet2(@pollUrl,"application/json",@pollResponse,@pollHeader,false,"Authorization",Concat("Bearer ",@accessToken))
-         IF @pollHttpStatus == 200 OR @pollHttpStatus == 201 THEN
-          SET @pollState = RegExMatch(@pollResponse,'"status":"([^"]+)"',1)
-          IF @pollState == "PublishCompleted" THEN
-           SET @journeyActionOk = "true"
-           SET @journeyActionMsg = "Journey published."
-           SET @journeyActionNewStatus = "Running"
-           SET @pubPollDone = "true"
-          ELSEIF @pollState == "Error" THEN
-           SET @journeyActionMsg = Concat("Publish failed: ",Substring(IIF(NOT Empty(@pollResponse),@pollResponse,"(empty)"),1,200))
-           SET @pubPollDone = "true"
-          ENDIF
-         ENDIF
-        ENDIF
-       NEXT @pollI
-       IF @pubPollDone == "false" THEN
-        SET @journeyActionOk = "true"
-        SET @journeyActionMsg = "Publish in progress — refresh shortly."
-        SET @journeyActionNewStatus = "Running"
-       ENDIF
-      ELSE
-       SET @journeyActionOk = "true"
-       SET @journeyActionMsg = "Publish request accepted."
-       SET @journeyActionNewStatus = "Running"
-      ENDIF
+      SET @journeyActionOk = "true"
+      SET @journeyActionMsg = "Journey publish started. Refresh in a moment to confirm status."
+      SET @journeyActionNewStatus = "Running"
      ELSE
-      SET @journeyActionMsg = Concat("Publish HTTP ",@pubStatus," — ",Substring(IIF(NOT Empty(@pubResponse),@pubResponse,"(empty)"),1,200))
+      SET @journeyActionMsg = Concat("Publish HTTP ",@pubStatus," - ",Substring(IIF(NOT Empty(@pubResponse),@pubResponse,"(empty)"),1,200))
      ENDIF
     ENDIF
    ENDIF
   ELSE
-   SET @journeyActionMsg = Concat("Journey GET HTTP ",@jGetStatus," — ",Substring(IIF(NOT Empty(@jGetResponse),@jGetResponse,"(empty)"),1,200))
+   SET @journeyActionMsg = Concat("Journey GET HTTP ",@jGetStatus," - ",Substring(IIF(NOT Empty(@jGetResponse),@jGetResponse,"(empty)"),1,200))
   ENDIF
  ENDIF
 ENDIF
