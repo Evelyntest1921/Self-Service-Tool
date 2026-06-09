@@ -113,10 +113,9 @@ function stackParseJsonSafe(text) {
 
 function stackEventSchemaFields() {
   return [
-    { name: "SubscriberKey", dataType: "Text", maxLength: "254", isNullable: true },
     { name: "greeting", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "id", dataType: "Text", maxLength: "254", isNullable: true },
-    { name: "email", dataType: "EmailAddress", maxLength: "254", isNullable: true },
+    { name: "id", dataType: "Text", maxLength: "50", isNullable: false },
+    { name: "email", dataType: "EmailAddress", maxLength: "254", isNullable: false },
     { name: "sfCampaignId", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "sfCampaignMemberId", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "sfQuickSendId", dataType: "Text", maxLength: "50", isNullable: true },
@@ -315,28 +314,16 @@ function stackApplySendableVariant(prox, ck, variant) {
 function stackSendableVariants() {
   return [
     {
-      label: "automation-current",
-      sendableDeField: "email",
-      sendableSubscriberField: "SubscriberKey",
-      sendableCustomObjectField: "SubscriberKey"
-    },
-    {
-      label: "underscore-subscriber",
+      label: "working-quick-send",
       sendableDeField: "email",
       sendableSubscriberField: "_SubscriberKey",
-      sendableCustomObjectField: "SubscriberKey"
-    },
-    {
-      label: "id-as-contact-key",
-      sendableDeField: "email",
-      sendableSubscriberField: "SubscriberKey",
       sendableCustomObjectField: "id"
     },
     {
-      label: "email-address-subscriber",
+      label: "automation-old-broken",
       sendableDeField: "email",
-      sendableSubscriberField: "EmailAddress",
-      sendableCustomObjectField: "email"
+      sendableSubscriberField: "SubscriberKey",
+      sendableCustomObjectField: "SubscriberKey"
     }
   ];
 }
@@ -345,7 +332,6 @@ function stackTrySendableRepair(prox, ck) {
   var attempts = [];
   var variants = stackSendableVariants();
   var i, cfg, result;
-  stackEnsureSubscriberKeyField(prox, ck);
   for (i = 0; i < variants.length; i++) {
     result = stackApplySendableVariant(prox, ck, variants[i]);
     cfg = stackRetrieveDeByFilter(prox, {
@@ -377,15 +363,10 @@ function stackBootstrapEntryDe(prox, token, subdomainValue, key, name, schemaVar
   var createUrl =
     "https://" + subdomainValue + ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions";
   var schema = {
+    sendableCustomObjectField: "id",
+    sendableSubscriberField: "_SubscriberKey",
     fields: stackEventSchemaFields()
   };
-  if (schemaVariant === "underscore") {
-    schema.sendableCustomObjectField = "SubscriberKey";
-    schema.sendableSubscriberField = "_SubscriberKey";
-  } else {
-    schema.sendableCustomObjectField = "SubscriberKey";
-    schema.SendableSubscriberField = "SubscriberKey";
-  }
   var createPayload = {
     name: String(name || key),
     description: "stack-de-test bootstrap",
@@ -584,10 +565,8 @@ button, .btn { display:inline-flex; align-items:center; padding:10px 16px; borde
 <div class="note">
 <p><strong>Create</strong> uses the same eventDefinitions bootstrap as Automation Triggered, then tries these SOAP repair variants:</p>
 <ul>
-<li><code>automation-current</code> — email + SubscriberKey + SubscriberKey (current code)</li>
-<li><code>underscore-subscriber</code> — email + _SubscriberKey + SubscriberKey</li>
-<li><code>id-as-contact-key</code> — email + SubscriberKey + id</li>
-<li><code>email-address-subscriber</code> — email + EmailAddress + email</li>
+<li><code>working-quick-send</code> — email + _SubscriberKey + id (matches your working DE JSON)</li>
+<li><code>automation-old-broken</code> — email + SubscriberKey + SubscriberKey (old code)</li>
 </ul>
 </div>
 %%[ELSE]%%

@@ -934,10 +934,9 @@ Platform.Load("core","1");
 
 function stackEventSchemaFields() {
   return [
-    { name: "SubscriberKey", dataType: "Text", maxLength: "254", isNullable: true },
     { name: "greeting", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "id", dataType: "Text", maxLength: "254", isNullable: true },
-    { name: "email", dataType: "EmailAddress", maxLength: "254", isNullable: true },
+    { name: "id", dataType: "Text", maxLength: "50", isNullable: false },
+    { name: "email", dataType: "EmailAddress", maxLength: "254", isNullable: false },
     { name: "sfCampaignId", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "sfCampaignMemberId", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "sfQuickSendId", dataType: "Text", maxLength: "50", isNullable: true },
@@ -945,9 +944,9 @@ function stackEventSchemaFields() {
     { name: "Account_Owner_Email", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "firstName", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "lastName", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "sfUserId", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "journeyID", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "sfOrgId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "sfUserId", dataType: "Text", maxLength: "50", isNullable: false },
+    { name: "journeyID", dataType: "Text", maxLength: "50", isNullable: false },
+    { name: "sfOrgId", dataType: "Text", maxLength: "50", isNullable: false },
     { name: "smsValue", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "mobilePhone", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "EntryObjectId", dataType: "Text", maxLength: "50", isNullable: true },
@@ -981,33 +980,6 @@ function stackRetrieveDeByFilter(prox, filter) {
   return null;
 }
 
-function stackDeHasField(prox, customerKey, fieldName) {
-  if (!customerKey || !fieldName) {
-    return false;
-  }
-  try {
-    var fieldResp = prox.retrieve(
-      "DataExtensionField",
-      ["Name"],
-      {
-        Property: "DataExtension.CustomerKey",
-        SimpleOperator: "equals",
-        Value: String(customerKey)
-      }
-    );
-    var target = String(fieldName).toLowerCase();
-    if (fieldResp && fieldResp.Results) {
-      for (var fi = 0; fi < fieldResp.Results.length; fi++) {
-        if (
-          String(fieldResp.Results[fi].Name || "").toLowerCase() === target
-        ) {
-          return true;
-        }
-      }
-    }
-  } catch (fieldLookupEx) {}
-  return false;
-}
 
 function stackConfigureSendableDe(prox, customerKey) {
   if (!customerKey) {
@@ -1019,8 +991,8 @@ function stackConfigureSendableDe(prox, customerKey) {
       IsSendable: true,
       IsTestable: true,
       SendableDataExtensionField: "email",
-      SendableSubscriberField: "SubscriberKey",
-      SendableCustomObjectField: "SubscriberKey"
+      SendableSubscriberField: "_SubscriberKey",
+      SendableCustomObjectField: "id"
     });
     var status = upd && upd.Status ? String(upd.Status) : "";
     if (status === "OK") {
@@ -1038,41 +1010,6 @@ function stackConfigureSendableDe(prox, customerKey) {
     return {
       ok: false,
       message: sendableEx.message || String(sendableEx)
-    };
-  }
-}
-
-function stackEnsureSubscriberKeyField(prox, customerKey) {
-  if (!customerKey || stackDeHasField(prox, customerKey, "SubscriberKey")) {
-    return { ok: true, added: false };
-  }
-  try {
-    var createField = prox.createItem("DataExtensionField", {
-      CustomerKey: String(customerKey),
-      Name: "SubscriberKey",
-      FieldType: "Text",
-      MaxLength: 254,
-      IsRequired: false,
-      IsNullable: true
-    });
-    var status =
-      createField && createField.Status ? String(createField.Status) : "";
-    if (status === "OK") {
-      return { ok: true, added: true };
-    }
-    var msg =
-      createField &&
-      createField.Results &&
-      createField.Results.length > 0 &&
-      createField.Results[0].StatusMessage
-        ? String(createField.Results[0].StatusMessage)
-        : "Could not add SubscriberKey column.";
-    return { ok: false, added: false, message: msg };
-  } catch (addFieldEx) {
-    return {
-      ok: false,
-      added: false,
-      message: addFieldEx.message || String(addFieldEx)
     };
   }
 }
@@ -1111,21 +1048,10 @@ function stackEnsureEntryDe(prox, token, subdomain, customerKey, deName) {
   var existing = stackResolveExistingDe(prox, customerKey, name);
   if (existing) {
     var repairKey = existing.customerKey || String(customerKey || "");
-    var repairResult = stackEnsureSubscriberKeyField(prox, repairKey);
     var sendableResult = stackConfigureSendableDe(prox, repairKey);
     var repairNote = "";
-    if (repairResult.added) {
-      repairNote =
-        " SubscriberKey column added to existing DE; re-run automation query to populate it.";
-    } else if (!repairResult.ok) {
-      repairNote =
-        " Warning: existing DE is missing SubscriberKey and could not be patched (" +
-        (repairResult.message || "unknown error") +
-        "). Delete the DE in Email Studio and rebuild, or emails may not send.";
-    }
     if (!sendableResult.ok) {
       repairNote =
-        repairNote +
         " Warning: could not set sendable flags on DE (" +
         (sendableResult.message || "unknown error") +
         ").";
@@ -1152,8 +1078,8 @@ function stackEnsureEntryDe(prox, token, subdomain, customerKey, deName) {
     eventDefinitionKey: tempEventKey,
     isVisibleInPicker: false,
     schema: {
-      sendableCustomObjectField: "SubscriberKey",
-      SendableSubscriberField: "SubscriberKey",
+      sendableCustomObjectField: "id",
+      sendableSubscriberField: "_SubscriberKey",
       fields: stackEventSchemaFields()
     }
   };
@@ -1219,7 +1145,6 @@ function stackEnsureEntryDe(prox, token, subdomain, customerKey, deName) {
   }
 
   var finalKey = resolved.customerKey || String(customerKey || "");
-  stackEnsureSubscriberKeyField(prox, finalKey);
   var sendableCfg = stackConfigureSendableDe(prox, finalKey);
   var createNote = "";
   if (!sendableCfg.ok) {
