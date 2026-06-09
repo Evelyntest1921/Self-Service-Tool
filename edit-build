@@ -25,7 +25,7 @@ SET @STACK_JOURNEY_TYPE = "Journey + Automation"
 VAR @jid, @detailRows, @detailRow, @detailCount
 VAR @dispName, @dispType, @dispEmailName, @dispEmailId, @dispDeName, @dispDeId, @dispCampaignId, @dispSurveyId
 VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationName, @dispQueryText, @isStackBuild, @isSurveyBuild, @showChecklist
-VAR @dispJourneyStatus, @dispAutomationStatus, @dispSentCount, @dispDeRowCount, @dispSentDisplay, @journeyStatusColor, @automationStatusColor, @journeyBtnLabel
+VAR @dispJourneyStatus, @dispAutomationStatus, @dispSentCount, @dispDeRowCount, @dispSentDisplay, @journeyStatusColor, @automationStatusColor, @journeyBtnLabel, @journeyActionConfirm
 VAR @surveyUrlRows, @surveyUrlRow, @buildNavContext, @buildNavActive
 VAR @chkCampaignId, @chkCampaignStatus, @chkCampaignMsg, @chkCampaignIcon
 VAR @chkPublishStatus, @chkPublishMsg, @chkPublishIcon
@@ -48,6 +48,7 @@ VAR @attemptPurgeBuild, @purgeBuildLog, @purgeEmailOk
 VAR @attemptDeleteAsset, @step3bResult
 VAR @surveyPurgeId, @surveyDelResponses, @surveyDelQuestions, @surveyDelMaster, @surveyDeleteLog, @willRemoveBuildLog
 VAR @updRaw
+VAR @journeyActionRequested, @journeyAction, @attemptJourneyAction, @journeyActionOk, @journeyActionMsg, @journeyActionNewStatus
 
 
 SET @purgeRequested = IIF(NOT Empty(RequestParameter("confirmPurgeBuild")),"1","0")
@@ -56,6 +57,8 @@ SET @jid = Trim(RequestParameter("journeyId"))
 SET @deleteRequested = IIF(NOT Empty(RequestParameter("confirmDeleteAsset")),"1","0")
 SET @removeLogOnly = IIF(NOT Empty(RequestParameter("confirmRemoveLog")),"1","0")
 SET @deleteEmailFromPost = Trim(RequestParameter("deleteEmailId"))
+SET @journeyActionRequested = IIF(NOT Empty(RequestParameter("confirmJourneyAction")),"1","0")
+SET @journeyAction = Trim(RequestParameter("journeyAction"))
 
 
 SET @resultText = ""
@@ -97,6 +100,7 @@ SET @dispSentDisplay = ""
 SET @journeyStatusColor = "#6366f1"
 SET @automationStatusColor = "#dc2626"
 SET @journeyBtnLabel = "Activate Journey"
+SET @journeyActionConfirm = "Publish and activate this journey?"
 SET @chkCampaignId = ""
 SET @chkCampaignStatus = "pending"
 SET @chkCampaignMsg = ""
@@ -180,6 +184,7 @@ IF @detailCount > 0 THEN
     ENDIF
     IF Lowercase(@dispJourneyStatus) == "running" OR Lowercase(@dispJourneyStatus) == "published" THEN
       SET @journeyBtnLabel = "Stop Journey"
+      SET @journeyActionConfirm = "Stop this journey? Contacts already in flight may still receive messages."
     ENDIF
   ENDIF
   IF NOT Empty(@dispAutomationStatus) THEN
@@ -259,14 +264,25 @@ ENDIF
 
 SET @attemptDeleteAsset = "false"
 SET @attemptPurgeBuild = "false"
+SET @attemptJourneyAction = "false"
+SET @journeyActionOk = "false"
+SET @journeyActionMsg = ""
+SET @journeyActionNewStatus = ""
 
 
-IF ((@deleteRequested == "1") OR (@purgeRequested == "1")) AND (@detailCount > 0) THEN
+IF ((@deleteRequested == "1") OR (@purgeRequested == "1") OR (@journeyActionRequested == "1")) AND (@detailCount > 0) THEN
 SET @postedJidDel = Trim(RequestParameter("postedJourneyId"))
 IF Empty(@postedJidDel) THEN
   SET @postedJidDel = @jid
 ENDIF
-IF (@postedJidDel != @jid) OR Empty(@deleteEmailFromPost) OR (@deleteEmailFromPost != @dispEmailId) THEN
+IF (@journeyActionRequested == "1") THEN
+  IF (@postedJidDel != @jid) OR Empty(@journeyAction) OR (@journeyAction != "stop" AND @journeyAction != "activate") THEN
+    SET @pageStatus = "tamper"
+    SET @resultText = "Journey action request did not match this build row."
+  ELSE
+    SET @attemptJourneyAction = "true"
+  ENDIF
+ELSEIF (@postedJidDel != @jid) OR Empty(@deleteEmailFromPost) OR (@deleteEmailFromPost != @dispEmailId) THEN
   SET @pageStatus = "tamper"
   SET @resultText = "Deletion request did not match this build row."
 ELSE
@@ -275,6 +291,8 @@ ELSE
   ELSEIF (@deleteRequested == "1") THEN
     SET @attemptDeleteAsset = "true"
   ENDIF
+ENDIF
+IF (@pageStatus != "tamper") AND ((@attemptPurgeBuild == "true") OR (@attemptDeleteAsset == "true") OR (@attemptJourneyAction == "true")) THEN
   SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
   IF RowCount(@authRow) > 0 THEN
     SET @authR = Row(@authRow,1)
@@ -560,6 +578,173 @@ function buildSentDisplay(sentCountRaw, deRowCount) {
 }
 
 
+function journeyHttp(sub, token, method, url, body) {
+ var req = new Script.Util.HttpRequest(url);
+ req.emptyContentHandling = 0;
+ req.retries = 1;
+ req.continueOnError = true;
+ req.setHeader("Authorization", "Bearer " + token);
+ req.setHeader("Content-Type", "application/json");
+ req.method = method;
+ if (body) {
+   req.postData = body;
+ }
+ var resp = req.send();
+ return {
+   status: resp.statusCode,
+   body: resp.content ? String(resp.content) : ""
+ };
+}
+
+
+function getJourneyObject(sub, token, jid) {
+ var url =
+   "https://" +
+   sub +
+   ".rest.marketingcloudapis.com/interaction/v1/interactions/" +
+   encodeURIComponent(jid) +
+   "?extras=all";
+ var resp = journeyHttp(sub, token, "GET", url, null);
+ if (resp.status != 200 && resp.status != 201) {
+   return {
+     ok: false,
+     msg: "Journey GET HTTP " + resp.status + ".",
+     obj: null
+   };
+ }
+ try {
+   return {
+     ok: true,
+     msg: "",
+     obj: Platform.Function.ParseJSON(resp.body)
+   };
+ } catch (parseJEx) {
+   return { ok: false, msg: "Could not parse journey response.", obj: null };
+ }
+}
+
+
+function journeyStatusIsRunning(status) {
+ var u = String(status || "").toLowerCase();
+ return u === "published" || u === "running";
+}
+
+
+function stopJourney(sub, token, jid) {
+ var got = getJourneyObject(sub, token, jid);
+ if (!got.ok) {
+   return { ok: false, msg: got.msg };
+ }
+ var jObj = got.obj;
+ var status = jObj.status ? String(jObj.status) : "";
+ if (!journeyStatusIsRunning(status)) {
+   return {
+     ok: false,
+     msg: "Journey is " + (status || "unknown") + " — not running."
+   };
+ }
+ var versionNum = jObj.version || 1;
+ var stopUrl =
+   "https://" +
+   sub +
+   ".rest.marketingcloudapis.com/interaction/v1/interactions/stop/" +
+   encodeURIComponent(jid) +
+   "?versionNumber=" +
+   encodeURIComponent(String(versionNum));
+ var stopResp = journeyHttp(sub, token, "POST", stopUrl, "{}");
+ if (stopResp.status != 200 && stopResp.status != 201 && stopResp.status != 202) {
+   var stopErr = stopResp.body ? stopResp.body.substring(0, 200) : "";
+   return {
+     ok: false,
+     msg: "Stop HTTP " + stopResp.status + (stopErr ? ": " + stopErr : ".")
+   };
+ }
+ return { ok: true, msg: "Journey stopped.", newStatus: "Stopped" };
+}
+
+
+function activateJourney(sub, token, jid) {
+ var got = getJourneyObject(sub, token, jid);
+ if (!got.ok) {
+   return { ok: false, msg: got.msg };
+ }
+ var jObj = got.obj;
+ var status = jObj.status ? String(jObj.status) : "";
+ if (journeyStatusIsRunning(status)) {
+   return { ok: false, msg: "Journey is already running." };
+ }
+ var versionNum = jObj.version || 1;
+ var pubUrl =
+   "https://" +
+   sub +
+   ".rest.marketingcloudapis.com/interaction/v1/interactions/publishAsync/" +
+   encodeURIComponent(jid) +
+   "?versionNumber=" +
+   encodeURIComponent(String(versionNum));
+ var pubResp = journeyHttp(sub, token, "POST", pubUrl, "{}");
+ if (pubResp.status != 200 && pubResp.status != 201 && pubResp.status != 202) {
+   var pubErr = pubResp.body ? pubResp.body.substring(0, 200) : "";
+   return {
+     ok: false,
+     msg: "Publish HTTP " + pubResp.status + (pubErr ? ": " + pubErr : ".")
+   };
+ }
+ var statusId = "";
+ try {
+   var pubObj = Platform.Function.ParseJSON(pubResp.body);
+   statusId = pubObj && pubObj.statusId ? String(pubObj.statusId) : "";
+ } catch (parsePubEx) {}
+ if (!statusId) {
+   return {
+     ok: true,
+     msg: "Publish request accepted.",
+     newStatus: "Running"
+   };
+ }
+ var pollUrl =
+   "https://" +
+   sub +
+   ".rest.marketingcloudapis.com/interaction/v1/interactions/publishStatus/" +
+   encodeURIComponent(statusId);
+ var pi, pollStatus = "";
+ for (pi = 0; pi < 8; pi++) {
+   var pollResp = journeyHttp(sub, token, "GET", pollUrl, null);
+   if (pollResp.status == 200 || pollResp.status == 201) {
+     try {
+       var pollObj = Platform.Function.ParseJSON(pollResp.body);
+       pollStatus = pollObj && pollObj.status ? String(pollObj.status) : "";
+       if (pollStatus === "PublishCompleted") {
+         return {
+           ok: true,
+           msg: "Journey published.",
+           newStatus: "Running"
+         };
+       }
+       if (pollStatus === "Error") {
+         var errDetail = "Publish failed.";
+         if (pollObj.errors && pollObj.errors.length) {
+           errDetail = String(pollObj.errors[0]);
+         }
+         return { ok: false, msg: errDetail };
+       }
+     } catch (parsePollEx) {}
+   }
+ }
+ if (pollStatus === "PublishInProcess") {
+   return {
+     ok: true,
+     msg: "Publish in progress — refresh shortly.",
+     newStatus: "Running"
+   };
+ }
+ return {
+   ok: true,
+   msg: "Publish started.",
+   newStatus: "Running"
+ };
+}
+
+
 var authOk = Platform.Variable.GetValue("@authOk") || "";
 var accessToken = Platform.Variable.GetValue("@accessToken") || "";
 var subdomain = Platform.Variable.GetValue("@subdomain") || "";
@@ -567,8 +752,11 @@ var attemptDeleteAsset =
  Platform.Variable.GetValue("@attemptDeleteAsset") || "";
 var attemptPurgeBuild =
  Platform.Variable.GetValue("@attemptPurgeBuild") || "";
+var attemptJourneyAction =
+ Platform.Variable.GetValue("@attemptJourneyAction") || "";
+var journeyAction = Platform.Variable.GetValue("@journeyAction") || "";
 var deleteEmailFromPost =
- Platform.Variable.GetValue("@deleteEmailFromPost") || "";
+  Platform.Variable.GetValue("@deleteEmailFromPost") || "";
 var jidClean = Platform.Variable.GetValue("@jid") || "";
 var dispDeIdVal = Platform.Variable.GetValue("@dispDeId") || "";
 var dispDeNameVal = Platform.Variable.GetValue("@dispDeName") || "";
@@ -640,6 +828,43 @@ function purgeHttpDel(sdom, tok, url) {
 
 
 try {
+ if (
+   attemptJourneyAction == "true" &&
+   authOk == "true" &&
+   accessToken &&
+   subdomain &&
+   jidClean
+ ) {
+   var jidAct = strTrim(jidClean);
+   var jidActPref =
+     jidAct.length >= 7 ? jidAct.substring(0, 7).toLowerCase() : "";
+   if (jidActPref === "email:") {
+     Platform.Variable.SetValue(
+       "@journeyActionMsg",
+       "Email-only build — no journey to control."
+     );
+   } else {
+     var actionResult = null;
+     if (journeyAction === "stop") {
+       actionResult = stopJourney(subdomain, accessToken, jidAct);
+     } else if (journeyAction === "activate") {
+       actionResult = activateJourney(subdomain, accessToken, jidAct);
+     }
+     if (actionResult) {
+       Platform.Variable.SetValue(
+         "@journeyActionOk",
+         actionResult.ok ? "true" : "false"
+       );
+       Platform.Variable.SetValue("@journeyActionMsg", actionResult.msg || "");
+       if (actionResult.ok && actionResult.newStatus) {
+         Platform.Variable.SetValue(
+           "@journeyActionNewStatus",
+           actionResult.newStatus
+         );
+       }
+     }
+   }
+ }
  if (attemptPurgeBuild == "true" && authOk == "true" && accessToken && subdomain) {
    var isStackPurge = Platform.Variable.GetValue("@isStackBuild") || "";
    if (isStackPurge == "true") {
@@ -1375,6 +1600,37 @@ Platform.Variable.SetValue("@step3bResult", step3bResult);
 VAR @combinedLog, @trailBody
 
 
+IF (@attemptJourneyAction == "true") AND (@journeyActionOk == "true") AND NOT Empty(@journeyActionNewStatus) THEN
+ UpsertDE(
+  @DETAIL_EXTERNAL_KEY_DE,
+  1,
+  "journeyId", @jid,
+  "journeyStatus", Substring(@journeyActionNewStatus,1,50),
+  "updateDate", Now()
+ )
+ SET @dispJourneyStatus = @journeyActionNewStatus
+ SET @journeyBtnLabel = "Activate Journey"
+ SET @journeyActionConfirm = "Publish and activate this journey?"
+ IF Lowercase(@dispJourneyStatus) == "running" OR Lowercase(@dispJourneyStatus) == "published" THEN
+  SET @journeyBtnLabel = "Stop Journey"
+  SET @journeyActionConfirm = "Stop this journey? Contacts already in flight may still receive messages."
+ ENDIF
+ SET @journeyStatusColor = "#6366f1"
+ IF Lowercase(@dispJourneyStatus) == "draft" THEN
+  SET @journeyStatusColor = "#9ca3af"
+ ELSEIF Lowercase(@dispJourneyStatus) == "running" OR Lowercase(@dispJourneyStatus) == "published" THEN
+  SET @journeyStatusColor = "#10b981"
+ ELSEIF Lowercase(@dispJourneyStatus) == "stopped" THEN
+  SET @journeyStatusColor = "#f59e0b"
+ ENDIF
+ENDIF
+
+
+IF (@attemptJourneyAction == "true") AND (@authOk != "true") AND Empty(@journeyActionMsg) THEN
+ SET @journeyActionMsg = IIF(NOT Empty(@resultText), @resultText, "Could not authenticate to SFMC.")
+ENDIF
+
+
 IF @attemptPurgeBuild == "true" THEN
 SET @trailBody = IIF(NOT Empty(@purgeBuildLog), @purgeBuildLog, Concat("Purge incomplete. ",Substring(IIF(NOT Empty(@step3bResult), @step3bResult, ""),1,620)))
 ELSE
@@ -1855,6 +2111,13 @@ pre.log.show{display:block}
 <p class="sub">Edit journeys and templates in SFMC UI. Choose what else to tidy up.</p>
 
 
+%%[ IF (@pageStatus == "view") AND (@attemptJourneyAction == "true") AND (@journeyActionOk == "true") THEN ]%%
+<div class="banner good">%%=v(@journeyActionMsg)=%%</div>
+%%[ ELSEIF (@pageStatus == "view") AND (@attemptJourneyAction == "true") AND (@journeyActionOk != "true") THEN ]%%
+<div class="banner bad">%%=v(@journeyActionMsg)=%%</div>
+%%[ ENDIF ]%%
+
+
 %%[ IF (@pageStatus == "view") AND ( IndexOf(IIF(NOT Empty(@combinedLog), @combinedLog, ""),"FAILED") > 0 OR (@attemptPurgeBuild == "true" AND @authOk == "true" AND @purgeEmailOk != "true") ) THEN ]%%
 <div class="banner warn">One or more API steps reported a problem — inspect the technical log.</div>
 %%[ ENDIF ]%%
@@ -2154,7 +2417,14 @@ pre.log.show{display:block}
 %%[ ENDIF ]%%
   </div>
   <div class="act-config" id="actConfigGroup">
-   <button type="button" class="btn btn-primary" id="activateJourneyBtn">%%=v(@journeyBtnLabel)=%%</button>
+%%[ IF @jidIsJbGuid == "true" AND NOT Empty(@jidForJbUi) THEN ]%%
+   <form method="post" action="" style="margin:0" onsubmit="return confirm('%%=Replace(v(@journeyActionConfirm),'''','\\''')=%%');">
+    <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
+    <input type="hidden" name="postedJourneyId" value="%%=v(@jid)=%%">
+    <input type="hidden" name="journeyAction" value="%%=IIF(Lowercase(@journeyBtnLabel) == 'stop journey', 'stop', 'activate')=%%">
+    <button type="submit" name="confirmJourneyAction" value="1" class="btn btn-primary" id="activateJourneyBtn">%%=v(@journeyBtnLabel)=%%</button>
+   </form>
+%%[ ENDIF ]%%
 %%[ IF @isStackBuild == "true" THEN ]%%
    <button type="button" class="btn btn-primary" id="activateAutomationBtn">Activate Automation</button>
 %%[ ENDIF ]%%
