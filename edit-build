@@ -723,7 +723,7 @@ function activateJourney(sub, token, jid) {
 }
 
 
-function automationStatusLabel(code) {
+function programStatusLabel(code) {
  var map = {
   "-1": "Error",
   "0": "BuildingError",
@@ -738,6 +738,17 @@ function automationStatusLabel(code) {
  };
  var key = String(code || "");
  return map[key] || ("Unknown(" + key + ")");
+}
+
+
+function programStartTookEffect(beforeStatus, afterStatus) {
+ if (afterStatus === "3" || afterStatus === "1") {
+  return true;
+ }
+ if (beforeStatus !== afterStatus && afterStatus !== "4") {
+  return true;
+ }
+ return false;
 }
 
 
@@ -787,6 +798,276 @@ function resolveProgramObjectId(prox, customerKey, restAutomationId) {
 }
 
 
+function pad2n(n) {
+ return (n < 10 ? "0" : "") + n;
+}
+
+
+function formatLocalDateTime(d) {
+ return (
+  d.getFullYear() +
+  "-" +
+  pad2n(d.getMonth() + 1) +
+  "-" +
+  pad2n(d.getDate()) +
+  "T" +
+  pad2n(d.getHours()) +
+  ":" +
+  pad2n(d.getMinutes()) +
+  ":" +
+  pad2n(d.getSeconds())
+ );
+}
+
+
+function extractAutomationSchedule(autoObj) {
+ var sch = null;
+ if (autoObj && autoObj.startSource && autoObj.startSource.schedule) {
+  sch = autoObj.startSource.schedule;
+ } else if (autoObj && autoObj.schedule) {
+  sch = autoObj.schedule;
+ }
+ return sch || null;
+}
+
+
+function parseIcalField(ical, field, defaultVal) {
+ var re = new RegExp(field + "=([^;]+)", "i");
+ var m = String(ical || "").match(re);
+ return m ? m[1] : defaultVal;
+}
+
+
+function computeFutureStartDate(icalRecur, prevStartLocal) {
+ var freq = parseIcalField(icalRecur, "FREQ", "HOURLY").toUpperCase();
+ var interval = parseInt(parseIcalField(icalRecur, "INTERVAL", "1"), 10);
+ if (isNaN(interval) || interval < 1) {
+  interval = 1;
+ }
+ var now = new Date();
+ var start = new Date(now.getTime());
+ if (freq === "HOURLY") {
+  start.setMinutes(0, 0, 0);
+  start.setHours(start.getHours() + interval);
+  if (start.getTime() <= now.getTime()) {
+   start.setHours(start.getHours() + interval);
+  }
+ } else if (freq === "DAILY") {
+  if (prevStartLocal) {
+   var tm = String(prevStartLocal).match(/T(\d{2}):(\d{2})/);
+   if (tm) {
+    start.setHours(parseInt(tm[1], 10), parseInt(tm[2], 10), 0, 0);
+   }
+  }
+  start.setDate(start.getDate() + interval);
+  if (start.getTime() <= now.getTime()) {
+   start.setDate(start.getDate() + interval);
+  }
+ } else if (freq === "WEEKLY") {
+  start.setDate(start.getDate() + 7 * interval);
+ } else {
+  start.setMinutes(start.getMinutes() + 15);
+ }
+ return start;
+}
+
+
+function computeEndDateFromStart(startDate) {
+ var end = new Date(startDate.getTime());
+ end.setDate(end.getDate() + 365);
+ return end;
+}
+
+
+function buildScheduleDefinitionFromIcal(icalRecur, startDt, endDt, tzId) {
+ var scheduleDef = Platform.Function.CreateObject("ScheduleDefinition");
+ var startStr = formatLocalDateTime(startDt);
+ var endStr = formatLocalDateTime(endDt);
+ Platform.Function.SetObjectProperty(scheduleDef, "RecurrenceRangeType", "EndOn");
+ Platform.Function.SetObjectProperty(scheduleDef, "StartDateTime", startStr);
+ Platform.Function.SetObjectProperty(scheduleDef, "EndDateTime", endStr);
+ var freq = parseIcalField(icalRecur, "FREQ", "HOURLY").toUpperCase();
+ var interval = parseInt(parseIcalField(icalRecur, "INTERVAL", "1"), 10);
+ if (isNaN(interval) || interval < 1) {
+  interval = 1;
+ }
+ if (freq === "HOURLY") {
+  var hRec = Platform.Function.CreateObject("HourlyRecurrence");
+  Platform.Function.SetObjectProperty(hRec, "HourlyRecurrencePatternType", "Interval");
+  Platform.Function.SetObjectProperty(hRec, "HourInterval", interval);
+  Platform.Function.SetObjectProperty(scheduleDef, "RecurrenceType", "Hourly");
+  Platform.Function.SetObjectProperty(scheduleDef, "Recurrence", hRec);
+ } else if (freq === "DAILY") {
+  var dRec = Platform.Function.CreateObject("DailyRecurrence");
+  Platform.Function.SetObjectProperty(dRec, "DailyRecurrencePatternType", "Interval");
+  Platform.Function.SetObjectProperty(dRec, "DayInterval", interval);
+  Platform.Function.SetObjectProperty(scheduleDef, "RecurrenceType", "Daily");
+  Platform.Function.SetObjectProperty(scheduleDef, "Recurrence", dRec);
+ } else if (freq === "WEEKLY") {
+  var wRec = Platform.Function.CreateObject("WeeklyRecurrence");
+  Platform.Function.SetObjectProperty(wRec, "WeeklyRecurrencePatternType", "Interval");
+  Platform.Function.SetObjectProperty(wRec, "WeekInterval", interval);
+  Platform.Function.SetObjectProperty(scheduleDef, "RecurrenceType", "Weekly");
+  Platform.Function.SetObjectProperty(scheduleDef, "Recurrence", wRec);
+ } else {
+  var fallbackRec = Platform.Function.CreateObject("HourlyRecurrence");
+  Platform.Function.SetObjectProperty(
+   fallbackRec,
+   "HourlyRecurrencePatternType",
+   "Interval"
+  );
+  Platform.Function.SetObjectProperty(fallbackRec, "HourInterval", 1);
+  Platform.Function.SetObjectProperty(scheduleDef, "RecurrenceType", "Hourly");
+  Platform.Function.SetObjectProperty(scheduleDef, "Recurrence", fallbackRec);
+ }
+ if (tzId !== null && tzId !== undefined && tzId !== "") {
+  var tzObj = Platform.Function.CreateObject("TimeZone");
+  Platform.Function.SetObjectProperty(tzObj, "ID", parseInt(String(tzId), 10));
+  Platform.Function.SetObjectProperty(scheduleDef, "TimeZone", tzObj);
+ }
+ return scheduleDef;
+}
+
+
+function invokeAutomationScheduleStart(
+ programObjectId,
+ customerKey,
+ scheduleDef,
+ scheduledTimeStr
+) {
+ var autoSoap = Platform.Function.CreateObject("Automation");
+ Platform.Function.SetObjectProperty(autoSoap, "ObjectID", String(programObjectId));
+ if (customerKey) {
+  Platform.Function.SetObjectProperty(autoSoap, "CustomerKey", String(customerKey));
+ }
+ var performOpts = Platform.Function.CreateObject("PerformOptions");
+ if (scheduledTimeStr) {
+  Platform.Function.SetObjectProperty(performOpts, "ScheduledTime", scheduledTimeStr);
+ }
+ var statusArr = [0, 0, 0];
+ var ok = Platform.Function.InvokeSchedule(
+  autoSoap,
+  "start",
+  scheduleDef,
+  statusArr,
+  performOpts
+ );
+ return {
+  ok: ok === true || ok === 1 || ok === "OK",
+  statusArr: statusArr
+ };
+}
+
+
+function reactivateAutomationSchedule(
+ sub,
+ token,
+ restAutoId,
+ customerKey,
+ programObjectId,
+ beforeStatus
+) {
+ var id = strTrim(restAutoId);
+ var baseUrl =
+  "https://" +
+  sub +
+  ".rest.marketingcloudapis.com/automation/v1/automations/" +
+  encodeURIComponent(id);
+ var got = journeyHttpJson(token, "GET", baseUrl, null);
+ if (got.status != 200 && got.status != 201) {
+  var getDetail = got.body ? got.body.substring(0, 200) : "";
+  return {
+   ok: false,
+   msg:
+    "Automation GET HTTP " +
+    got.status +
+    (getDetail ? " - " + getDetail : ".")
+  };
+ }
+ var autoObj = null;
+ try {
+  autoObj = Platform.Function.ParseJSON(got.body);
+ } catch (parseEx) {
+  return { ok: false, msg: "Could not parse automation definition." };
+ }
+ var sch = extractAutomationSchedule(autoObj);
+ if (!sch) {
+  return { ok: false, msg: "Automation has no schedule to reactivate." };
+ }
+ var icalRecur = sch.iCalRecur || sch.icalRecur || "";
+ if (!icalRecur) {
+  return { ok: false, msg: "Automation schedule is missing recurrence rule." };
+ }
+ var prevStart = sch.startDate ? String(sch.startDate) : "";
+ var tzId =
+  sch.timezoneId !== undefined && sch.timezoneId !== null
+   ? sch.timezoneId
+   : sch.timeZoneId;
+ var startDt = computeFutureStartDate(icalRecur, prevStart);
+ var endDt = computeEndDateFromStart(startDt);
+ var startStr = formatLocalDateTime(startDt);
+ var scheduleDef = buildScheduleDefinitionFromIcal(
+  icalRecur,
+  startDt,
+  endDt,
+  tzId
+ );
+ var invokeResult = invokeAutomationScheduleStart(
+  programObjectId,
+  customerKey,
+  scheduleDef,
+  startStr
+ );
+ var prox = new Script.Util.WSProxy();
+ var afterProgram = getProgramById(prox, programObjectId);
+ var afterStatus =
+  afterProgram &&
+  afterProgram.Status !== null &&
+  afterProgram.Status !== undefined
+   ? String(afterProgram.Status)
+   : "";
+ var statusInfo =
+  "Status before: " +
+  programStatusLabel(beforeStatus) +
+  " (" +
+  beforeStatus +
+  ")";
+ if (afterStatus !== "") {
+  statusInfo +=
+   " | after: " +
+   programStatusLabel(afterStatus) +
+   " (" +
+   afterStatus +
+   ")";
+ }
+ statusInfo +=
+  " | next start: " + startStr + " | recur: " + icalRecur;
+ if (!invokeResult.ok) {
+  return {
+   ok: false,
+   msg:
+    "Schedule reactivation failed. InvokeSchedule did not return OK. " +
+    statusInfo
+  };
+ }
+ if (afterStatus === "4") {
+  return {
+   ok: false,
+   msg: "Schedule submitted but automation is still paused. " + statusInfo
+  };
+ }
+ var newStatus = programStatusLabel(afterStatus);
+ if (newStatus.indexOf("Unknown") === 0) {
+  newStatus = "Scheduled";
+ }
+ return {
+  ok: true,
+  msg: "Automation schedule reactivated. " + statusInfo,
+  newStatus: newStatus
+ };
+}
+
+
 function performAutomationSoapStart(autoId, customerKey) {
  var prox = new Script.Util.WSProxy();
  var resolvedId = resolveProgramObjectId(prox, customerKey, autoId);
@@ -809,14 +1090,15 @@ function performAutomationSoapStart(autoId, customerKey) {
    : "";
  var statusInfo =
   "Status before: " +
-  automationStatusLabel(beforeStatus) +
+  programStatusLabel(beforeStatus) +
   " (" +
   beforeStatus +
   ")";
  if (beforeStatus === "3") {
   return {
    ok: false,
-   msg: "Automation is already running. " + statusInfo
+   msg: "Automation is already running. " + statusInfo,
+   beforeStatus: beforeStatus
   };
  }
  try {
@@ -851,13 +1133,24 @@ function performAutomationSoapStart(autoId, customerKey) {
   if (afterStatus !== "") {
    statusInfo +=
     " | after: " +
-    automationStatusLabel(afterStatus) +
+    programStatusLabel(afterStatus) +
     " (" +
     afterStatus +
     ")";
   }
   if (topStatus === "OK" || itemCode === "OK") {
-   var newStatus = automationStatusLabel(afterStatus);
+   if (!programStartTookEffect(beforeStatus, afterStatus)) {
+    return {
+     ok: false,
+     unchanged: true,
+     beforeStatus: beforeStatus,
+     afterStatus: afterStatus,
+     msg:
+      "SOAP start accepted but automation did not change state. " +
+      statusInfo
+    };
+   }
+   var newStatus = programStatusLabel(afterStatus);
    if (newStatus.indexOf("Unknown") === 0) {
     newStatus = "Scheduled";
    }
@@ -892,31 +1185,53 @@ function performAutomationSoapStart(autoId, customerKey) {
 }
 
 
-function runAutomationOnceRest(sub, token, autoId) {
- var id = strTrim(autoId);
- var url =
-  "https://" +
-  sub +
-  ".rest.marketingcloudapis.com/automation/v1/automations/" +
-  encodeURIComponent(id) +
-  "/actions/runallonce";
- var resp = journeyHttpJson(token, "POST", url, "{}");
- if (resp.status == 200 || resp.status == 201 || resp.status == 202) {
+function activateStackAutomation(sub, token, autoId, customerKey) {
+ var prox = new Script.Util.WSProxy();
+ var resolvedId = resolveProgramObjectId(prox, customerKey, autoId);
+ if (!resolvedId) {
+  return { ok: false, msg: "No automation id on build log." };
+ }
+ var beforeProgram = getProgramById(prox, resolvedId);
+ if (!beforeProgram) {
   return {
-   ok: true,
-   msg: "Automation queued to run once.",
-   newStatus: "Running"
+   ok: false,
+   msg:
+    "Could not retrieve automation Program (ObjectID " +
+    resolvedId +
+    "). Missing or stale automationCustomerKey on build log."
   };
  }
- var detail = resp.body ? resp.body.substring(0, 200) : "";
- return {
-  ok: false,
-  msg: "Run once HTTP " + resp.status + (detail ? " - " + detail : ".")
- };
-}
-
-
-function activateStackAutomation(sub, token, autoId, customerKey) {
+ var beforeStatus =
+  beforeProgram.Status !== null && beforeProgram.Status !== undefined
+   ? String(beforeProgram.Status)
+   : "";
+ if (beforeStatus === "3") {
+  return {
+   ok: false,
+   msg:
+    "Automation is already running. Status before: " +
+    programStatusLabel(beforeStatus) +
+    " (" +
+    beforeStatus +
+    ")"
+  };
+ }
+ if (beforeStatus === "4" || beforeStatus === "5") {
+  if (!sub || !token || !autoId) {
+   return {
+    ok: false,
+    msg: "Cannot reactivate automation schedule without API auth."
+   };
+  }
+  return reactivateAutomationSchedule(
+   sub,
+   token,
+   autoId,
+   customerKey,
+   resolvedId,
+   beforeStatus
+  );
+ }
  var soapResult = performAutomationSoapStart(autoId, customerKey);
  if (soapResult.ok) {
   return soapResult;
@@ -924,16 +1239,17 @@ function activateStackAutomation(sub, token, autoId, customerKey) {
  if (
   sub &&
   token &&
-  soapResult.msg.indexOf("already running") < 0
+  autoId &&
+  soapResult.unchanged === true
  ) {
-  var restResult = runAutomationOnceRest(sub, token, autoId);
-  if (restResult.ok) {
-   return restResult;
-  }
-  return {
-   ok: false,
-   msg: soapResult.msg + " " + restResult.msg
-  };
+  return reactivateAutomationSchedule(
+   sub,
+   token,
+   autoId,
+   customerKey,
+   resolvedId,
+   soapResult.beforeStatus || beforeStatus
+  );
  }
  return soapResult;
 }
