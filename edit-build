@@ -879,83 +879,185 @@ function computeEndDateFromStart(startDate) {
 }
 
 
-function buildScheduleDefinitionFromIcal(icalRecur, startDt, endDt, tzId) {
- var scheduleDef = Platform.Function.CreateObject("ScheduleDefinition");
- var startStr = formatLocalDateTime(startDt);
- var endStr = formatLocalDateTime(endDt);
- Platform.Function.SetObjectProperty(scheduleDef, "RecurrenceRangeType", "EndOn");
- Platform.Function.SetObjectProperty(scheduleDef, "StartDateTime", startStr);
- Platform.Function.SetObjectProperty(scheduleDef, "EndDateTime", endStr);
+function escapeXml(value) {
+ return String(value || "")
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;");
+}
+
+
+function buildScheduleRecurrenceSoapXml(icalRecur) {
  var freq = parseIcalField(icalRecur, "FREQ", "HOURLY").toUpperCase();
  var interval = parseInt(parseIcalField(icalRecur, "INTERVAL", "1"), 10);
  if (isNaN(interval) || interval < 1) {
   interval = 1;
  }
- if (freq === "HOURLY") {
-  var hRec = Platform.Function.CreateObject("HourlyRecurrence");
-  Platform.Function.SetObjectProperty(hRec, "HourlyRecurrencePatternType", "Interval");
-  Platform.Function.SetObjectProperty(hRec, "HourInterval", interval);
-  Platform.Function.SetObjectProperty(scheduleDef, "RecurrenceType", "Hourly");
-  Platform.Function.SetObjectProperty(scheduleDef, "Recurrence", hRec);
- } else if (freq === "DAILY") {
-  var dRec = Platform.Function.CreateObject("DailyRecurrence");
-  Platform.Function.SetObjectProperty(dRec, "DailyRecurrencePatternType", "Interval");
-  Platform.Function.SetObjectProperty(dRec, "DayInterval", interval);
-  Platform.Function.SetObjectProperty(scheduleDef, "RecurrenceType", "Daily");
-  Platform.Function.SetObjectProperty(scheduleDef, "Recurrence", dRec);
- } else if (freq === "WEEKLY") {
-  var wRec = Platform.Function.CreateObject("WeeklyRecurrence");
-  Platform.Function.SetObjectProperty(wRec, "WeeklyRecurrencePatternType", "Interval");
-  Platform.Function.SetObjectProperty(wRec, "WeekInterval", interval);
-  Platform.Function.SetObjectProperty(scheduleDef, "RecurrenceType", "Weekly");
-  Platform.Function.SetObjectProperty(scheduleDef, "Recurrence", wRec);
- } else {
-  var fallbackRec = Platform.Function.CreateObject("HourlyRecurrence");
-  Platform.Function.SetObjectProperty(
-   fallbackRec,
-   "HourlyRecurrencePatternType",
-   "Interval"
+ if (freq === "DAILY") {
+  return (
+   '<Recurrence xsi:type="DailyRecurrence">' +
+   "<DailyRecurrencePatternType>Interval</DailyRecurrencePatternType>" +
+   "<DayInterval>" +
+   interval +
+   "</DayInterval>" +
+   "</Recurrence>" +
+   "<RecurrenceType>Daily</RecurrenceType>"
   );
-  Platform.Function.SetObjectProperty(fallbackRec, "HourInterval", 1);
-  Platform.Function.SetObjectProperty(scheduleDef, "RecurrenceType", "Hourly");
-  Platform.Function.SetObjectProperty(scheduleDef, "Recurrence", fallbackRec);
  }
- if (tzId !== null && tzId !== undefined && tzId !== "") {
-  var tzObj = Platform.Function.CreateObject("TimeZone");
-  Platform.Function.SetObjectProperty(tzObj, "ID", parseInt(String(tzId), 10));
-  Platform.Function.SetObjectProperty(scheduleDef, "TimeZone", tzObj);
+ if (freq === "WEEKLY") {
+  return (
+   '<Recurrence xsi:type="WeeklyRecurrence">' +
+   "<WeeklyRecurrencePatternType>Interval</WeeklyRecurrencePatternType>" +
+   "<WeekInterval>" +
+   interval +
+   "</WeekInterval>" +
+   "</Recurrence>" +
+   "<RecurrenceType>Weekly</RecurrenceType>"
+  );
  }
- return scheduleDef;
+ return (
+  '<Recurrence xsi:type="HourlyRecurrence">' +
+  "<HourlyRecurrencePatternType>Interval</HourlyRecurrencePatternType>" +
+  "<HourInterval>" +
+  interval +
+  "</HourInterval>" +
+  "</Recurrence>" +
+  "<RecurrenceType>Hourly</RecurrenceType>"
+ );
 }
 
 
-function invokeAutomationScheduleStart(
+function buildScheduleStartSoapEnvelope(
+ token,
  programObjectId,
  customerKey,
- scheduleDef,
- scheduledTimeStr
+ icalRecur,
+ startDateTime,
+ endDateTime,
+ tzId,
+ scheduledTime
 ) {
- var autoSoap = Platform.Function.CreateObject("Automation");
- Platform.Function.SetObjectProperty(autoSoap, "ObjectID", String(programObjectId));
- if (customerKey) {
-  Platform.Function.SetObjectProperty(autoSoap, "CustomerKey", String(customerKey));
+ var recurrenceXml = buildScheduleRecurrenceSoapXml(icalRecur);
+ var tzXml = "";
+ if (tzId !== null && tzId !== undefined && tzId !== "") {
+  tzXml =
+   "<TimeZone>" +
+   '<PartnerKey xsi:nil="true" />' +
+   "<ID>" +
+   parseInt(String(tzId), 10) +
+   "</ID>" +
+   '<ObjectID xsi:nil="true" />' +
+   "</TimeZone>";
  }
- var performOpts = Platform.Function.CreateObject("PerformOptions");
- if (scheduledTimeStr) {
-  Platform.Function.SetObjectProperty(performOpts, "ScheduledTime", scheduledTimeStr);
- }
- var statusArr = [0, 0, 0];
- var ok = Platform.Function.InvokeSchedule(
-  autoSoap,
-  "start",
-  scheduleDef,
-  statusArr,
-  performOpts
+ var custKeyXml = customerKey
+  ? "<CustomerKey>" + escapeXml(customerKey) + "</CustomerKey>"
+  : "";
+ var optionsXml = scheduledTime
+  ? "<Options><ScheduledTime>" + escapeXml(scheduledTime) + "</ScheduledTime></Options>"
+  : "";
+ return (
+  '<?xml version="1.0" encoding="UTF-8"?>' +
+  '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">' +
+  "<soapenv:Header>" +
+  '<fueloauth xmlns="http://exacttarget.com">' +
+  escapeXml(token) +
+  "</fueloauth>" +
+  "</soapenv:Header>" +
+  "<soapenv:Body>" +
+  '<ScheduleRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI">' +
+  optionsXml +
+  "<Action>start</Action>" +
+  "<Schedule>" +
+  '<PartnerKey xsi:nil="true" />' +
+  '<ObjectID xsi:nil="true" />' +
+  recurrenceXml +
+  "<RecurrenceRangeType>EndOn</RecurrenceRangeType>" +
+  "<StartDateTime>" +
+  escapeXml(startDateTime) +
+  "</StartDateTime>" +
+  "<EndDateTime>" +
+  escapeXml(endDateTime) +
+  "</EndDateTime>" +
+  tzXml +
+  "</Schedule>" +
+  "<Interactions>" +
+  '<Interaction xsi:type="Automation">' +
+  '<PartnerKey xsi:nil="true" />' +
+  "<ObjectID>" +
+  escapeXml(programObjectId) +
+  "</ObjectID>" +
+  custKeyXml +
+  "</Interaction>" +
+  "</Interactions>" +
+  "</ScheduleRequestMsg>" +
+  "</soapenv:Body>" +
+  "</soapenv:Envelope>"
  );
- return {
-  ok: ok === true || ok === 1 || ok === "OK",
-  statusArr: statusArr
- };
+}
+
+
+function scheduleAutomationViaSoap(
+ sub,
+ token,
+ programObjectId,
+ customerKey,
+ icalRecur,
+ startStr,
+ endStr,
+ tzId
+) {
+ try {
+  var url =
+   "https://" + sub + ".soap.marketingcloudapis.com/Service.asmx";
+  var envelope = buildScheduleStartSoapEnvelope(
+   token,
+   programObjectId,
+   customerKey,
+   icalRecur,
+   startStr,
+   endStr,
+   tzId,
+   startStr
+  );
+  var req = new Script.Util.HttpRequest(url);
+  req.emptyContentHandling = 0;
+  req.retries = 1;
+  req.continueOnError = true;
+  req.method = "POST";
+  req.contentType = "text/xml; charset=utf-8";
+  req.setHeader("SOAPAction", "Schedule");
+  req.postData = envelope;
+  var resp = req.send();
+  var body = resp.content ? String(resp.content) : "";
+  if (resp.statusCode != 200) {
+   return {
+    ok: false,
+    msg:
+     "Schedule SOAP HTTP " +
+     resp.statusCode +
+     (body ? " - " + body.substring(0, 200) : ".")
+   };
+  }
+  if (body.indexOf("<StatusCode>OK</StatusCode>") >= 0) {
+   return { ok: true, msg: "" };
+  }
+  var msgMatch = body.match(/<StatusMessage>([^<]*)<\/StatusMessage>/i);
+  var codeMatch = body.match(/<StatusCode>([^<]*)<\/StatusCode>/i);
+  return {
+   ok: false,
+   msg:
+    "Schedule SOAP rejected. code=" +
+    (codeMatch ? codeMatch[1] : "?") +
+    " msg=" +
+    (msgMatch ? msgMatch[1] : body.substring(0, 200))
+  };
+ } catch (soapHttpEx) {
+  return {
+   ok: false,
+   msg: "Schedule SOAP failed: " + (soapHttpEx.message || String(soapHttpEx))
+  };
+ }
 }
 
 
@@ -1006,17 +1108,16 @@ function reactivateAutomationSchedule(
  var startDt = computeFutureStartDate(icalRecur, prevStart);
  var endDt = computeEndDateFromStart(startDt);
  var startStr = formatLocalDateTime(startDt);
- var scheduleDef = buildScheduleDefinitionFromIcal(
-  icalRecur,
-  startDt,
-  endDt,
-  tzId
- );
- var invokeResult = invokeAutomationScheduleStart(
+ var endStr = formatLocalDateTime(endDt);
+ var scheduleResult = scheduleAutomationViaSoap(
+  sub,
+  token,
   programObjectId,
   customerKey,
-  scheduleDef,
-  startStr
+  icalRecur,
+  startStr,
+  endStr,
+  tzId
  );
  var prox = new Script.Util.WSProxy();
  var afterProgram = getProgramById(prox, programObjectId);
@@ -1042,11 +1143,13 @@ function reactivateAutomationSchedule(
  }
  statusInfo +=
   " | next start: " + startStr + " | recur: " + icalRecur;
- if (!invokeResult.ok) {
+ if (!scheduleResult.ok) {
   return {
    ok: false,
    msg:
-    "Schedule reactivation failed. InvokeSchedule did not return OK. " +
+    "Schedule reactivation failed. " +
+    (scheduleResult.msg || "SOAP schedule rejected.") +
+    " " +
     statusInfo
   };
  }
