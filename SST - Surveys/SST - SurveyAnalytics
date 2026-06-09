@@ -1,6 +1,6 @@
 %%[
 VAR @surveyId, @errorFlag, @deleteAction, @deleteSuccess, @deleteError
-VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow, @hubUrl, @surveyHomeUrl, @surveyStageUrl, @surveyAnalyticsUrl, @surveyTakeUrl
+VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow, @hubUrl, @surveyHomeUrl, @surveyStageUrl, @surveyAnalyticsUrl, @surveyTakeUrl, @environment, @contactTable
 VAR @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @detailRows, @detailRow, @isSurveyBuild, @buildNavContext, @buildNavActive, @editSurveyUrl, @surveyPreviewUrl, @surveyEmailLink
 SET @surveyId = RequestParameter("surveyid")
 SET @jid = Trim(RequestParameter("journeyId"))
@@ -21,12 +21,18 @@ SET @buildNavActive = "analytics"
 SET @editSurveyUrl = ""
 SET @surveyPreviewUrl = ""
 SET @surveyEmailLink = ""
+SET @environment = ""
+SET @contactTable = "Contact_Salesforce"
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
   SET @navRow = Row(@navRows,1)
   SET @hubUrl = Field(@navRow,"ss_home")
   SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit")
   SET @PERFORMANCE_URL = Field(@navRow,"ss_performance")
+  SET @environment = Trim(Lowercase(Field(@navRow,"environment")))
+ENDIF
+IF @environment == "uat" THEN
+  SET @contactTable = "ENT.Contact_Salesforce_1"
 ENDIF
 SET @surveyUrlRows = LookupRows("SST_SP_Survey_Url_DE","user","admin")
 IF RowCount(@surveyUrlRows) > 0 THEN
@@ -1171,9 +1177,8 @@ ENDIF
                     SET @Status = Field(@row, "Status")
                     SET @LastUpdated = Field(@row, "LastUpdated")
                     
-                    /* Get contact name from ent.Contact_Salesforce_1 */
                     VAR @contactName
-                    SET @contactName = Lookup("ENT.Contact_Salesforce_1", "Name", "Id", @Contact)
+                    SET @contactName = Lookup(@contactTable, "Name", "Id", @Contact)
                     IF EMPTY(@contactName) THEN
                     SET @contactName = "N/A"
                     ENDIF

@@ -979,41 +979,6 @@ function stackRetrieveDeByFilter(prox, filter) {
   }
   return null;
 }
-
-
-function stackConfigureSendableDe(prox, customerKey) {
-  if (!customerKey) {
-    return { ok: false, message: "Missing DE CustomerKey." };
-  }
-  try {
-    var upd = prox.updateItem("DataExtension", {
-      CustomerKey: String(customerKey),
-      IsSendable: true,
-      IsTestable: true,
-      SendableDataExtensionField: "email",
-      SendableSubscriberField: "_SubscriberKey",
-      SendableCustomObjectField: "id"
-    });
-    var status = upd && upd.Status ? String(upd.Status) : "";
-    if (status === "OK") {
-      return { ok: true };
-    }
-    var msg =
-      upd &&
-      upd.Results &&
-      upd.Results.length > 0 &&
-      upd.Results[0].StatusMessage
-        ? String(upd.Results[0].StatusMessage)
-        : "Could not mark DE sendable.";
-    return { ok: false, message: msg };
-  } catch (sendableEx) {
-    return {
-      ok: false,
-      message: sendableEx.message || String(sendableEx)
-    };
-  }
-}
-
 function stackResolveExistingDe(prox, customerKey, deName) {
   var byKey = customerKey
     ? stackRetrieveDeByFilter(prox, {
@@ -1048,21 +1013,13 @@ function stackEnsureEntryDe(prox, token, subdomain, customerKey, deName) {
   var existing = stackResolveExistingDe(prox, customerKey, name);
   if (existing) {
     var repairKey = existing.customerKey || String(customerKey || "");
-    var sendableResult = stackConfigureSendableDe(prox, repairKey);
-    var repairNote = "";
-    if (!sendableResult.ok) {
-      repairNote =
-        " Warning: could not set sendable flags on DE (" +
-        (sendableResult.message || "unknown error") +
-        ").";
-    }
     return {
       ok: true,
       skipped: true,
       objectId: existing.objectId,
       customerKey: repairKey,
       name: existing.name || name,
-      message: repairNote
+      message: ""
     };
   }
 
@@ -1145,14 +1102,6 @@ function stackEnsureEntryDe(prox, token, subdomain, customerKey, deName) {
   }
 
   var finalKey = resolved.customerKey || String(customerKey || "");
-  var sendableCfg = stackConfigureSendableDe(prox, finalKey);
-  var createNote = "";
-  if (!sendableCfg.ok) {
-    createNote =
-      " Warning: DE created but sendable config failed (" +
-      (sendableCfg.message || "unknown error") +
-      ").";
-  }
 
   return {
     ok: true,
@@ -1160,7 +1109,7 @@ function stackEnsureEntryDe(prox, token, subdomain, customerKey, deName) {
     objectId: dataExtensionId,
     customerKey: finalKey,
     name: resolved.name || name,
-    message: createNote
+    message: ""
   };
 }
 
@@ -1474,30 +1423,21 @@ function postEscapeSql(value) {
 
 function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environment) {
   var camp = postEscapeSql(campaignId);
-  var jid = postEscapeSql(journeyId || "");
   var env = String(environment || "").toLowerCase();
   var cmTable = "CampaignMember_Salesforce_1";
   var contactTable = "Contact_Salesforce";
+  var accountTable = "Account_Salesforce";
   var userTable = "User_Salesforce";
   if (env === "uat") {
     cmTable = "ENT.CampaignMember_Salesforce_2";
     contactTable = "ENT.Contact_Salesforce_1";
+    accountTable = "ENT.Account_Salesforce_1";
     userTable = "ENT.User_Salesforce_1";
   }
   var emailExpr =
     "COALESCE(NULLIF(RTRIM(ISNULL(cm.email, '')), ''), NULLIF(RTRIM(ISNULL(con.Email, '')), ''))";
-  var whereClause =
-    "WHERE cm.CampaignId = '" + camp + "'\n" +
-    "  AND cm.ContactId IS NOT NULL\n" +
-    "  AND RTRIM(ISNULL(cm.ContactId, '')) <> ''\n" +
-    "  AND " + emailExpr + " <> ''";
-  if (sfUserId) {
-    whereClause =
-      whereClause + "\n  AND u.id = '" + postEscapeSql(sfUserId) + "'";
-  }
   return (
     "SELECT\n" +
-    "  cm.ContactId AS SubscriberKey,\n" +
     "  '' AS greeting,\n" +
     "  cm.ContactId AS id,\n" +
     "  " + emailExpr + " AS email,\n" +
@@ -1508,10 +1448,8 @@ function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environme
     "  u.Email AS Account_Owner_Email,\n" +
     "  con.firstName,\n" +
     "  con.lastName,\n" +
-    "  COALESCE(NULLIF(RTRIM(ISNULL(u.id, '')), ''), '') AS sfUserId,\n" +
-    "  '" +
-    jid +
-    "' AS journeyID,\n" +
+    "  u.id AS sfUserId,\n" +
+    "  '' AS journeyID,\n" +
     "  '' AS sfOrgId,\n" +
     "  GETDATE() AS DateAdded,\n" +
     "  '' AS smsValue,\n" +
@@ -1533,8 +1471,10 @@ function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environme
     "  cm.Campaign_Name__c AS EmailName\n" +
     "FROM " + cmTable + " cm\n" +
     "LEFT JOIN " + contactTable + " con ON cm.ContactId = con.id\n" +
-    "LEFT JOIN " + userTable + " u ON cm.Account_Owner__c = u.id\n" +
-    whereClause
+    "LEFT JOIN " + accountTable + " a ON con.AccountId = a.id\n" +
+    "LEFT JOIN " + userTable + " u ON u.id = a.OwnerId\n" +
+    "WHERE cm.CampaignId = '" + camp + "'\n" +
+    "  AND cm.ContactId IS NOT NULL"
   );
 }
 
