@@ -24,7 +24,7 @@ SET @STACK_JOURNEY_TYPE = "Journey + Automation"
 
 VAR @jid, @detailRows, @detailRow, @detailCount
 VAR @dispName, @dispType, @dispEmailName, @dispEmailId, @dispDeName, @dispDeId, @dispCampaignId, @dispSurveyId
-VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationName, @dispQueryText, @isStackBuild, @isSurveyBuild, @showChecklist
+VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationCustomerKey, @dispAutomationName, @dispQueryText, @isStackBuild, @isSurveyBuild, @showChecklist
 VAR @dispJourneyStatus, @dispAutomationStatus, @dispSentCount, @dispDeRowCount, @dispSentDisplay, @journeyStatusColor, @automationStatusColor, @journeyBtnLabel, @journeyBtnClass, @journeyActionConfirm
 VAR @surveyUrlRows, @surveyUrlRow, @buildNavContext, @buildNavActive
 VAR @chkCampaignId, @chkCampaignStatus, @chkCampaignMsg, @chkCampaignIcon
@@ -93,6 +93,7 @@ SET @buildNavActive = "manage"
 SET @dispQueryKey = ""
 SET @dispQueryText = ""
 SET @dispAutomationGuid = ""
+SET @dispAutomationCustomerKey = ""
 SET @dispAutomationName = ""
 SET @dispJourneyStatus = ""
 SET @dispAutomationStatus = ""
@@ -162,6 +163,7 @@ IF @detailCount > 0 THEN
     SET @isStackBuild = "true"
     SET @dispQueryKey = Trim(Field(@detailRow,"queryKey"))
     SET @dispAutomationGuid = Trim(Field(@detailRow,"automationGuid"))
+    SET @dispAutomationCustomerKey = Trim(Field(@detailRow,"automationCustomerKey"))
     SET @dispAutomationName = Trim(Field(@detailRow,"automationName"))
   ENDIF
   SET @updRaw = Field(@detailRow,"updateDate")
@@ -721,51 +723,172 @@ function activateJourney(sub, token, jid) {
 }
 
 
-function performAutomationSoapStart(autoId) {
- var id = strTrim(autoId);
- if (!id) {
-  return { ok: false, msg: "No automation id on build log." };
+function automationStatusLabel(code) {
+ var map = {
+  "-1": "Error",
+  "0": "BuildingError",
+  "1": "Building",
+  "2": "Ready",
+  "3": "Running",
+  "4": "Paused",
+  "5": "Stopped",
+  "6": "Scheduled",
+  "7": "Awaiting Trigger",
+  "8": "Inactive Trigger"
+ };
+ var key = String(code || "");
+ return map[key] || ("Unknown(" + key + ")");
+}
+
+
+function getProgramById(prox, objectId) {
+ var resp = prox.retrieve(
+  "Program",
+  ["ObjectID", "CustomerKey", "Name", "Status"],
+  {
+   Property: "ObjectID",
+   SimpleOperator: "equals",
+   Value: String(objectId)
+  }
+ );
+ if (resp && resp.Results && resp.Results.length > 0) {
+  return resp.Results[0];
  }
- var types = ["Automation", "Program"];
- var ti;
- var perform = null;
- var topStatus = "";
- var itemCode = "";
- var itemMsg = "";
- for (ti = 0; ti < types.length; ti++) {
-  try {
-   var prox = new Script.Util.WSProxy();
-   perform = prox.performItem(types[ti], { ObjectID: id }, "start", {});
-   topStatus = perform && perform.Status ? String(perform.Status) : "";
-   itemCode =
-    perform &&
-    perform.Results &&
-    perform.Results.length > 0 &&
-    perform.Results[0].StatusCode
-     ? String(perform.Results[0].StatusCode)
-     : "";
-   itemMsg =
-    perform &&
-    perform.Results &&
-    perform.Results.length > 0 &&
-    perform.Results[0].StatusMessage
-     ? String(perform.Results[0].StatusMessage)
-     : "";
-   if (topStatus === "OK" || itemCode === "OK") {
-    return {
-     ok: true,
-     msg: "Automation started.",
-     newStatus: "Scheduled"
-    };
+ return null;
+}
+
+
+function resolveProgramObjectId(prox, customerKey, restAutomationId) {
+ var key = strTrim(customerKey);
+ if (key && prox) {
+  var lookup = prox.retrieve(
+   "Program",
+   ["ObjectID", "CustomerKey"],
+   {
+    Property: "CustomerKey",
+    SimpleOperator: "equals",
+    Value: key
    }
-  } catch (soapEx) {
-   itemMsg = soapEx.message || String(soapEx);
+  );
+  if (
+   lookup &&
+   lookup.Results &&
+   lookup.Results.length > 0 &&
+   lookup.Results[0].ObjectID
+  ) {
+   return String(lookup.Results[0].ObjectID);
   }
  }
- return {
-  ok: false,
-  msg: "SOAP start rejected. " + (itemMsg || topStatus || itemCode || "Unknown error.")
- };
+ var restId = strTrim(restAutomationId);
+ if (restId && getProgramById(prox, restId)) {
+  return restId;
+ }
+ return restId;
+}
+
+
+function performAutomationSoapStart(autoId, customerKey) {
+ var prox = new Script.Util.WSProxy();
+ var resolvedId = resolveProgramObjectId(prox, customerKey, autoId);
+ if (!resolvedId) {
+  return { ok: false, msg: "No automation id on build log." };
+ }
+ var beforeProgram = getProgramById(prox, resolvedId);
+ if (!beforeProgram) {
+  return {
+   ok: false,
+   msg:
+    "Could not retrieve automation Program (ObjectID " +
+    resolvedId +
+    "). Missing or stale automationCustomerKey on build log."
+  };
+ }
+ var beforeStatus =
+  beforeProgram.Status !== null && beforeProgram.Status !== undefined
+   ? String(beforeProgram.Status)
+   : "";
+ var statusInfo =
+  "Status before: " +
+  automationStatusLabel(beforeStatus) +
+  " (" +
+  beforeStatus +
+  ")";
+ if (beforeStatus === "3") {
+  return {
+   ok: false,
+   msg: "Automation is already running. " + statusInfo
+  };
+ }
+ try {
+  var perform = prox.performItem(
+   "Program",
+   { ObjectID: resolvedId },
+   "start",
+   {}
+  );
+  var topStatus = perform && perform.Status ? String(perform.Status) : "";
+  var itemCode =
+   perform &&
+   perform.Results &&
+   perform.Results.length > 0 &&
+   perform.Results[0].StatusCode
+    ? String(perform.Results[0].StatusCode)
+    : "";
+  var itemMsg =
+   perform &&
+   perform.Results &&
+   perform.Results.length > 0 &&
+   perform.Results[0].StatusMessage
+    ? String(perform.Results[0].StatusMessage)
+    : "";
+  var afterProgram = getProgramById(prox, resolvedId);
+  var afterStatus =
+   afterProgram &&
+   afterProgram.Status !== null &&
+   afterProgram.Status !== undefined
+    ? String(afterProgram.Status)
+    : "";
+  if (afterStatus !== "") {
+   statusInfo +=
+    " | after: " +
+    automationStatusLabel(afterStatus) +
+    " (" +
+    afterStatus +
+    ")";
+  }
+  if (topStatus === "OK" || itemCode === "OK") {
+   var newStatus = automationStatusLabel(afterStatus);
+   if (newStatus.indexOf("Unknown") === 0) {
+    newStatus = "Scheduled";
+   }
+   return {
+    ok: true,
+    msg: "Automation start requested. " + statusInfo,
+    newStatus: newStatus
+   };
+  }
+  return {
+   ok: false,
+   msg:
+    "SOAP start rejected. topStatus=" +
+    topStatus +
+    " itemCode=" +
+    itemCode +
+    " itemMsg=" +
+    itemMsg +
+    ". " +
+    statusInfo
+  };
+ } catch (soapEx) {
+  return {
+   ok: false,
+   msg:
+    "SOAP start failed: " +
+    (soapEx.message || String(soapEx)) +
+    ". " +
+    statusInfo
+  };
+ }
 }
 
 
@@ -793,12 +916,16 @@ function runAutomationOnceRest(sub, token, autoId) {
 }
 
 
-function activateStackAutomation(sub, token, autoId) {
- var soapResult = performAutomationSoapStart(autoId);
+function activateStackAutomation(sub, token, autoId, customerKey) {
+ var soapResult = performAutomationSoapStart(autoId, customerKey);
  if (soapResult.ok) {
   return soapResult;
  }
- if (sub && token) {
+ if (
+  sub &&
+  token &&
+  soapResult.msg.indexOf("already running") < 0
+ ) {
   var restResult = runAutomationOnceRest(sub, token, autoId);
   if (restResult.ok) {
    return restResult;
@@ -899,10 +1026,21 @@ function purgeHttpDel(sdom, tok, url) {
 try {
  if (attemptAutomationAction == "true") {
   var autoActId = strTrim(Platform.Variable.GetValue("@dispAutomationGuid") || "");
+  var autoActKey = strTrim(
+   Platform.Variable.GetValue("@dispAutomationCustomerKey") || ""
+  );
   if (!autoActId && jidClean) {
    autoActId = logDeField(jidClean, "automationGuid");
   }
-  var autoResult = activateStackAutomation(subdomain, accessToken, autoActId);
+  if (!autoActKey && jidClean) {
+   autoActKey = logDeField(jidClean, "automationCustomerKey");
+  }
+  var autoResult = activateStackAutomation(
+   subdomain,
+   accessToken,
+   autoActId,
+   autoActKey
+  );
   Platform.Variable.SetValue("@automationActionOk", autoResult.ok ? "true" : "false");
   Platform.Variable.SetValue("@automationActionMsg", autoResult.msg || "");
   if (autoResult.ok && autoResult.newStatus) {
