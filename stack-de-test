@@ -1,0 +1,603 @@
+%%[
+SET @runRequested = RequestParameter("run")
+SET @mode = Trim(RequestParameter("mode"))
+IF Empty(@mode) THEN
+SET @mode = "create"
+ENDIF
+SET @deName = Trim(RequestParameter("deName"))
+SET @customerKey = Trim(RequestParameter("customerKey"))
+SET @showForm = "true"
+IF NOT Empty(@runRequested) THEN
+SET @showForm = "false"
+ENDIF
+SET @resultText = ""
+SET @authOk = "false"
+SET @debugLog = ""
+SET @deCustomerKey = ""
+SET @deObjectId = ""
+IF @showForm != "true" THEN
+IF Empty(@deName) AND (@mode == "create" OR Empty(@customerKey)) THEN
+SET @resultText = "Enter a DE name (create) or customer key (repair/inspect)."
+ELSE
+SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
+IF RowCount(@authRow) > 0 THEN
+  SET @row = Row(@authRow,1)
+  SET @clientId = Field(@row,"clientId")
+  SET @clientSecret = Field(@row,"clientSecret")
+  SET @subdomain = Field(@row,"subdomain")
+  IF NOT Empty(@clientId) AND NOT Empty(@clientSecret) AND NOT Empty(@subdomain) THEN
+    SET @authUrl = Concat("https://",@subdomain,".auth.marketingcloudapis.com/v2/token")
+    SET @accountId = Trim(Field(@row,"accountId"))
+    SET @authPayload = Concat('{"grant_type":"client_credentials","client_id":"',@clientId,'","client_secret":"',@clientSecret,'"')
+    IF NOT Empty(@accountId) THEN
+      SET @authPayload = Concat(@authPayload,',"account_id":"',@accountId,'"')
+    ENDIF
+    SET @authPayload = Concat(@authPayload,'}')
+    SET @authStatus = HTTPPost2(@authUrl,"application/json",@authPayload,false,@authResponse,@authResponseHeader)
+    IF @authStatus == 200 THEN
+      SET @tokenPattern = '"access_token":"([^"]+)"'
+      SET @accessToken = RegExMatch(@authResponse,@tokenPattern,1)
+      IF NOT Empty(@accessToken) THEN
+        SET @resultText = "Auth OK."
+        SET @authOk = "true"
+      ELSE
+        SET @resultText = "Auth FAILED: No access token."
+      ENDIF
+    ELSE
+      SET @resultText = Concat("Auth FAILED: HTTP ",@authStatus)
+    ENDIF
+  ELSE
+    SET @resultText = "Auth FAILED: Missing SFMC_AUTH credentials."
+  ENDIF
+ELSE
+  SET @resultText = "Auth FAILED: No SFMC_AUTH Admin row."
+ENDIF
+ENDIF
+ENDIF
+IF NOT Empty(@deName) AND Empty(@customerKey) THEN
+SET @customerKey = Replace(@deName,'"','')
+SET @customerKey = Replace(@customerKey," | ","_")
+SET @customerKey = Replace(@customerKey,"|","_")
+SET @customerKey = Replace(@customerKey," ","_")
+SET @customerKey = Replace(@customerKey,".","_")
+SET @customerKey = Replace(@customerKey,"/","_")
+ENDIF
+]%%
+<script runat="server">
+Platform.Load("core","1");
+var authOk = Variable.GetValue("authOk");
+var accessToken = Variable.GetValue("accessToken");
+var subdomain = Variable.GetValue("subdomain");
+var mode = Variable.GetValue("mode") || "create";
+var deName = Variable.GetValue("deName") || "";
+var customerKey = Variable.GetValue("customerKey") || "";
+var resultText = Variable.GetValue("resultText") || "";
+var debugLog = "";
+var deCustomerKey = "";
+var deObjectId = "";
+
+function stackRandomGuid() {
+  var tpl = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx";
+  return tpl.replace(/[xy]/g, function (c) {
+    var r = (Math.random() * 16) | 0;
+    var v = c == "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+function stackHttpJson(token, subdomainValue, method, url, bodyObj) {
+  var req = new Script.Util.HttpRequest(url);
+  req.emptyContentHandling = 0;
+  req.retries = 1;
+  req.continueOnError = true;
+  req.method = method;
+  req.contentType = "application/json";
+  req.setHeader("Authorization", "Bearer " + token);
+  if (bodyObj !== null && bodyObj !== undefined) {
+    req.postData = Platform.Function.Stringify(bodyObj);
+  }
+  var resp = req.send();
+  return {
+    status: resp.statusCode,
+    body: resp.content ? String(resp.content) : ""
+  };
+}
+
+function stackParseJsonSafe(text) {
+  try {
+    return Platform.Function.ParseJSON(String(text || ""));
+  } catch (e0) {
+    return null;
+  }
+}
+
+function stackEventSchemaFields() {
+  return [
+    { name: "SubscriberKey", dataType: "Text", maxLength: "254", isNullable: true },
+    { name: "greeting", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "id", dataType: "Text", maxLength: "254", isNullable: true },
+    { name: "email", dataType: "EmailAddress", maxLength: "254", isNullable: true },
+    { name: "sfCampaignId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "sfCampaignMemberId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "sfQuickSendId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "Account_Owner_Name", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "Account_Owner_Email", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "firstName", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "lastName", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "sfUserId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "journeyID", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "sfOrgId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "smsValue", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "mobilePhone", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "EntryObjectId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "DateAdded", dataType: "Date", isNullable: true },
+    { name: "Role", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "OwnerId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "Specialty", dataType: "Text", maxLength: "100", isNullable: true },
+    { name: "AccountName", dataType: "Text", maxLength: "255", isNullable: true },
+    { name: "State", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "Designation", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "senderPhone", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "senderTitle", dataType: "Text", maxLength: "255", isNullable: true },
+    { name: "senderLicense", dataType: "Text", maxLength: "255", isNullable: true },
+    { name: "senderMobile", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "Salutation", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "AppointmentLink", dataType: "Text", maxLength: "4000", isNullable: true },
+    { name: "VAWP", dataType: "Text", maxLength: "4000", isNullable: true },
+    { name: "EmailName", dataType: "Text", maxLength: "255", isNullable: true }
+  ];
+}
+
+function fieldRefName(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "object" && value.Name) return String(value.Name);
+  return String(value);
+}
+
+function stackRetrieveDeByFilter(prox, filter) {
+  var resp = prox.retrieve(
+    "DataExtension",
+    [
+      "ObjectID",
+      "CustomerKey",
+      "Name",
+      "IsSendable",
+      "IsTestable",
+      "SendableDataExtensionField",
+      "SendableSubscriberField",
+      "SendableCustomObjectField"
+    ],
+    filter
+  );
+  if (resp && resp.Results && resp.Results.length > 0 && resp.Results[0].ObjectID) {
+    var row = resp.Results[0];
+    return {
+      objectId: String(row.ObjectID),
+      customerKey: String(row.CustomerKey || ""),
+      name: String(row.Name || ""),
+      isSendable: row.IsSendable === true || row.IsSendable === "true",
+      isTestable: row.IsTestable === true || row.IsTestable === "true",
+      sendableDeField: fieldRefName(row.SendableDataExtensionField),
+      sendableSubscriberField: fieldRefName(row.SendableSubscriberField),
+      sendableCustomObjectField: fieldRefName(row.SendableCustomObjectField)
+    };
+  }
+  return null;
+}
+
+function stackResolveExistingDe(prox, key, name) {
+  var byKey = key
+    ? stackRetrieveDeByFilter(prox, {
+        Property: "CustomerKey",
+        SimpleOperator: "equals",
+        Value: String(key)
+      })
+    : null;
+  if (byKey) return byKey;
+  if (name) {
+    return stackRetrieveDeByFilter(prox, {
+      Property: "Name",
+      SimpleOperator: "equals",
+      Value: String(name)
+    });
+  }
+  return null;
+}
+
+function stackFormatDeConfig(label, cfg) {
+  if (!cfg) return label + ": not found";
+  return (
+    label +
+    ": CustomerKey=" +
+    cfg.customerKey +
+    " IsSendable=" +
+    cfg.isSendable +
+    " UsedForSending=" +
+    (cfg.sendableDeField || "(empty)") +
+    " RelatesToSubscriberOn=" +
+    (cfg.sendableCustomObjectField || "(empty)") +
+    " SendableSubscriberField=" +
+    (cfg.sendableSubscriberField || "(empty)")
+  );
+}
+
+function stackDeHasField(prox, ck, fieldName) {
+  try {
+    var fieldResp = prox.retrieve(
+      "DataExtensionField",
+      ["Name"],
+      {
+        Property: "DataExtension.CustomerKey",
+        SimpleOperator: "equals",
+        Value: String(ck)
+      }
+    );
+    var target = String(fieldName).toLowerCase();
+    if (fieldResp && fieldResp.Results) {
+      for (var fi = 0; fi < fieldResp.Results.length; fi++) {
+        if (String(fieldResp.Results[fi].Name || "").toLowerCase() === target) {
+          return true;
+        }
+      }
+    }
+  } catch (fieldLookupEx) {}
+  return false;
+}
+
+function stackEnsureSubscriberKeyField(prox, ck) {
+  if (!ck || stackDeHasField(prox, ck, "SubscriberKey")) {
+    return { ok: true, added: false };
+  }
+  try {
+    var createField = prox.createItem("DataExtensionField", {
+      CustomerKey: String(ck),
+      Name: "SubscriberKey",
+      FieldType: "Text",
+      MaxLength: 254,
+      IsRequired: false,
+      IsNullable: true
+    });
+    var status = createField && createField.Status ? String(createField.Status) : "";
+    if (status === "OK") {
+      return { ok: true, added: true };
+    }
+    return {
+      ok: false,
+      added: false,
+      message:
+        createField &&
+        createField.Results &&
+        createField.Results.length > 0 &&
+        createField.Results[0].StatusMessage
+          ? String(createField.Results[0].StatusMessage)
+          : "Could not add SubscriberKey column."
+    };
+  } catch (addFieldEx) {
+    return { ok: false, added: false, message: addFieldEx.message || String(addFieldEx) };
+  }
+}
+
+function stackApplySendableVariant(prox, ck, variant) {
+  try {
+    var payload = {
+      CustomerKey: String(ck),
+      IsSendable: true,
+      IsTestable: true
+    };
+    if (variant.sendableDeField) {
+      payload.SendableDataExtensionField = variant.sendableDeField;
+    }
+    if (variant.sendableSubscriberField) {
+      payload.SendableSubscriberField = variant.sendableSubscriberField;
+    }
+    if (variant.sendableCustomObjectField) {
+      payload.SendableCustomObjectField = variant.sendableCustomObjectField;
+    }
+    var upd = prox.updateItem("DataExtension", payload);
+    var status = upd && upd.Status ? String(upd.Status) : "";
+    if (status === "OK") {
+      return { ok: true, label: variant.label };
+    }
+    return {
+      ok: false,
+      label: variant.label,
+      message:
+        upd && upd.Results && upd.Results.length > 0 && upd.Results[0].StatusMessage
+          ? String(upd.Results[0].StatusMessage)
+          : "updateItem failed"
+    };
+  } catch (variantEx) {
+    return { ok: false, label: variant.label, message: variantEx.message || String(variantEx) };
+  }
+}
+
+function stackSendableVariants() {
+  return [
+    {
+      label: "automation-current",
+      sendableDeField: "email",
+      sendableSubscriberField: "SubscriberKey",
+      sendableCustomObjectField: "SubscriberKey"
+    },
+    {
+      label: "underscore-subscriber",
+      sendableDeField: "email",
+      sendableSubscriberField: "_SubscriberKey",
+      sendableCustomObjectField: "SubscriberKey"
+    },
+    {
+      label: "id-as-contact-key",
+      sendableDeField: "email",
+      sendableSubscriberField: "SubscriberKey",
+      sendableCustomObjectField: "id"
+    },
+    {
+      label: "email-address-subscriber",
+      sendableDeField: "email",
+      sendableSubscriberField: "EmailAddress",
+      sendableCustomObjectField: "email"
+    }
+  ];
+}
+
+function stackTrySendableRepair(prox, ck) {
+  var attempts = [];
+  var variants = stackSendableVariants();
+  var i, cfg, result;
+  stackEnsureSubscriberKeyField(prox, ck);
+  for (i = 0; i < variants.length; i++) {
+    result = stackApplySendableVariant(prox, ck, variants[i]);
+    cfg = stackRetrieveDeByFilter(prox, {
+      Property: "CustomerKey",
+      SimpleOperator: "equals",
+      Value: String(ck)
+    });
+    attempts.push(
+      variants[i].label +
+        "=" +
+        (result.ok ? "OK" : "FAIL") +
+        " " +
+        stackFormatDeConfig("after", cfg)
+    );
+    if (
+      cfg &&
+      cfg.isSendable &&
+      cfg.sendableDeField &&
+      cfg.sendableCustomObjectField
+    ) {
+      return { ok: true, label: variants[i].label, attempts: attempts.join(" | ") };
+    }
+  }
+  return { ok: false, label: "none", attempts: attempts.join(" | ") };
+}
+
+function stackBootstrapEntryDe(prox, token, subdomainValue, key, name, schemaVariant) {
+  var tempEventKey = "eventDef" + String(stackRandomGuid()).replace(/-/g, "").substring(0, 22);
+  var createUrl =
+    "https://" + subdomainValue + ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions";
+  var schema = {
+    fields: stackEventSchemaFields()
+  };
+  if (schemaVariant === "underscore") {
+    schema.sendableCustomObjectField = "SubscriberKey";
+    schema.sendableSubscriberField = "_SubscriberKey";
+  } else {
+    schema.sendableCustomObjectField = "SubscriberKey";
+    schema.SendableSubscriberField = "SubscriberKey";
+  }
+  var createPayload = {
+    name: String(name || key),
+    description: "stack-de-test bootstrap",
+    type: "APIEvent",
+    mode: "Production",
+    eventDefinitionKey: tempEventKey,
+    isVisibleInPicker: false,
+    schema: schema
+  };
+  var createResp = stackHttpJson(token, subdomainValue, "POST", createUrl, createPayload);
+  if (createResp.status != 200 && createResp.status != 201) {
+    return {
+      ok: false,
+      message: "bootstrap HTTP " + createResp.status + " - " + createResp.body
+    };
+  }
+  var createObj = stackParseJsonSafe(createResp.body);
+  var tempEventDefId = createObj && createObj.id ? String(createObj.id) : "";
+  var dataExtensionId =
+    createObj && (createObj.dataExtensionId || createObj.dataExtensionID)
+      ? String(createObj.dataExtensionId || createObj.dataExtensionID)
+      : "";
+  if (!dataExtensionId && tempEventDefId) {
+    var getEvResp = stackHttpJson(
+      token,
+      subdomainValue,
+      "GET",
+      createUrl + "/" + encodeURIComponent(tempEventDefId),
+      null
+    );
+    if (getEvResp.status == 200) {
+      var getEvObj = stackParseJsonSafe(getEvResp.body);
+      if (getEvObj && (getEvObj.dataExtensionId || getEvObj.dataExtensionID)) {
+        dataExtensionId = String(getEvObj.dataExtensionId || getEvObj.dataExtensionID);
+      }
+    }
+  }
+  if (tempEventDefId) {
+    stackHttpJson(
+      token,
+      subdomainValue,
+      "DELETE",
+      createUrl + "/" + encodeURIComponent(tempEventDefId),
+      null
+    );
+  }
+  if (!dataExtensionId) {
+    return { ok: false, message: "bootstrap succeeded but dataExtensionId missing." };
+  }
+  var resolved = stackRetrieveDeByFilter(prox, {
+    Property: "ObjectID",
+    SimpleOperator: "equals",
+    Value: dataExtensionId
+  });
+  if (!resolved) {
+    resolved = stackResolveExistingDe(prox, key, name);
+  }
+  if (!resolved) {
+    return {
+      ok: false,
+      message: "Created dataExtensionId " + dataExtensionId + " but SOAP lookup failed."
+    };
+  }
+  return {
+    ok: true,
+    customerKey: resolved.customerKey || String(key || ""),
+    objectId: dataExtensionId,
+    name: resolved.name || name,
+    beforeConfig: resolved
+  };
+}
+
+if (authOk == "true" && accessToken && subdomain) {
+  try {
+    var prox = new Script.Util.WSProxy();
+    if (mode === "inspect" || mode === "repair") {
+      var existingCfg = stackResolveExistingDe(prox, customerKey, deName);
+      if (!existingCfg) {
+        resultText = resultText + " DE not found for key/name.";
+      } else {
+        deCustomerKey = existingCfg.customerKey;
+        deObjectId = existingCfg.objectId;
+        debugLog = stackFormatDeConfig("Current", existingCfg);
+        if (mode === "repair") {
+          var repairResult = stackTrySendableRepair(prox, existingCfg.customerKey);
+          debugLog = debugLog + " Repair attempts: " + repairResult.attempts;
+          if (repairResult.ok) {
+            resultText = resultText + " Repair OK via " + repairResult.label + ".";
+          } else {
+            resultText = resultText + " Repair FAILED - no variant produced full sendable config.";
+          }
+        } else {
+          resultText = resultText + " Inspect OK.";
+        }
+      }
+    } else {
+      var bootstrap = stackBootstrapEntryDe(
+        prox,
+        accessToken,
+        subdomain,
+        customerKey,
+        deName,
+        "current"
+      );
+      if (!bootstrap.ok) {
+        resultText = resultText + " Create FAILED: " + bootstrap.message;
+      } else {
+        deCustomerKey = bootstrap.customerKey;
+        deObjectId = bootstrap.objectId;
+        debugLog =
+          stackFormatDeConfig("After bootstrap (before repair)", bootstrap.beforeConfig) +
+          " | ";
+        var repairAfterCreate = stackTrySendableRepair(prox, bootstrap.customerKey);
+        debugLog = debugLog + "Repair attempts: " + repairAfterCreate.attempts;
+        if (repairAfterCreate.ok) {
+          resultText =
+            resultText +
+            " Create OK. Sendable fixed via " +
+            repairAfterCreate.label +
+            ". CustomerKey=" +
+            bootstrap.customerKey;
+        } else {
+          resultText =
+            resultText +
+            " Create OK but sendable repair FAILED. CustomerKey=" +
+            bootstrap.customerKey +
+            " — open DE in Email Studio and compare Used for sending / Relates to Subscriber On.";
+        }
+      }
+    }
+  } catch (runEx) {
+    resultText = resultText + " ERROR: " + (runEx.message || String(runEx));
+  }
+}
+
+Platform.Variable.SetValue("@resultText", resultText);
+Platform.Variable.SetValue("@debugLog", debugLog);
+Platform.Variable.SetValue("@deCustomerKey", deCustomerKey);
+Platform.Variable.SetValue("@deObjectId", deObjectId);
+</script>
+%%[
+SET @resultText = Concat(@resultText," ",@debugLog)
+IF NOT Empty(@deCustomerKey) THEN
+SET @resultText = Concat(@resultText," DE CustomerKey: ",@deCustomerKey)
+ENDIF
+IF NOT Empty(@deObjectId) THEN
+SET @resultText = Concat(@resultText," ObjectID: ",@deObjectId)
+ENDIF
+]%%
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stack DE Sendable Test</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+:root { --primary:#6366f1; --border:#e5e7eb; --text:#111827; --muted:#6b7280; --bg:#f9fafb; }
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:Inter,sans-serif; background:var(--bg); color:var(--text); line-height:1.5; }
+.wrap { max-width:820px; margin:40px auto; padding:0 20px 48px; }
+h1 { font-size:1.5rem; margin-bottom:8px; }
+.lead { color:var(--muted); margin-bottom:24px; font-size:.95rem; }
+.card { background:#fff; border:1px solid var(--border); border-radius:12px; padding:24px; margin-bottom:16px; }
+label { display:block; font-size:.85rem; font-weight:600; margin-bottom:6px; }
+input, select { width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:8px; font-size:.95rem; margin-bottom:16px; }
+button, .btn { display:inline-flex; align-items:center; padding:10px 16px; border-radius:8px; border:none; cursor:pointer; font-weight:600; font-size:.9rem; text-decoration:none; }
+.btn-primary { background:var(--primary); color:#fff; }
+.btn-secondary { background:#eef2ff; color:#3730a3; }
+.result { padding:16px; border-radius:8px; background:#f3f4f6; font-size:.85rem; white-space:pre-wrap; word-break:break-word; }
+.note { font-size:.85rem; color:var(--muted); margin-top:16px; }
+.note code { background:#f3f4f6; padding:2px 6px; border-radius:4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Stack DE sendable test</h1>
+<p class="lead">Creates an Automation Triggered-style entry DE, shows sendable config, then tries repair variants for <strong>Used for sending</strong> and <strong>Relates to Subscriber On</strong>.</p>
+%%[IF @showForm == "true" THEN]%%
+<div class="card">
+<form method="get" action="%%=RequestParameter('PAGEURL')=%%">
+<input type="hidden" name="run" value="1">
+<label for="deName">DE name</label>
+<input type="text" id="deName" name="deName" placeholder="Test_Stack_DE_%%=Format(Now(),'yyyyMMdd_HHmmss')=%%" required>
+<label for="customerKey">Customer key (optional — slug from name if blank)</label>
+<input type="text" id="customerKey" name="customerKey" placeholder="Leave blank to derive from name">
+<label for="mode">Mode</label>
+<select id="mode" name="mode">
+<option value="create">Create DE + auto-repair sendable</option>
+<option value="repair">Repair sendable on existing DE</option>
+<option value="inspect">Inspect sendable config only</option>
+</select>
+<button type="submit" class="btn-primary">Run test</button>
+</form>
+</div>
+<div class="note">
+<p><strong>Create</strong> uses the same eventDefinitions bootstrap as Automation Triggered, then tries these SOAP repair variants:</p>
+<ul>
+<li><code>automation-current</code> — email + SubscriberKey + SubscriberKey (current code)</li>
+<li><code>underscore-subscriber</code> — email + _SubscriberKey + SubscriberKey</li>
+<li><code>id-as-contact-key</code> — email + SubscriberKey + id</li>
+<li><code>email-address-subscriber</code> — email + EmailAddress + email</li>
+</ul>
+</div>
+%%[ELSE]%%
+<div class="card">
+<div class="result">%%=v(@resultText)=%%</div>
+<div style="margin-top:16px;">
+<a class="btn btn-secondary" href="%%=RequestParameter('PAGEURL')=%%">Run another test</a>
+</div>
+</div>
+%%[ENDIF]%%
+</div>
+</body>
+</html>
