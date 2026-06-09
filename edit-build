@@ -25,7 +25,7 @@ SET @STACK_JOURNEY_TYPE = "Journey + Automation"
 VAR @jid, @detailRows, @detailRow, @detailCount
 VAR @dispName, @dispType, @dispEmailName, @dispEmailId, @dispDeName, @dispDeId, @dispCampaignId, @dispSurveyId
 VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationName, @dispQueryText, @isStackBuild, @isSurveyBuild, @showChecklist
-VAR @dispJourneyStatus, @dispAutomationStatus, @dispSentCount, @journeyStatusColor, @automationStatusColor
+VAR @dispJourneyStatus, @dispAutomationStatus, @dispSentCount, @dispDeRowCount, @dispSentDisplay, @journeyStatusColor, @automationStatusColor
 VAR @surveyUrlRows, @surveyUrlRow, @buildNavContext, @buildNavActive
 VAR @chkCampaignId, @chkCampaignStatus, @chkCampaignMsg, @chkCampaignIcon
 VAR @chkPublishStatus, @chkPublishMsg, @chkPublishIcon
@@ -92,6 +92,8 @@ SET @dispAutomationName = ""
 SET @dispJourneyStatus = ""
 SET @dispAutomationStatus = ""
 SET @dispSentCount = ""
+SET @dispDeRowCount = "0"
+SET @dispSentDisplay = ""
 SET @journeyStatusColor = "#6366f1"
 SET @automationStatusColor = "#dc2626"
 SET @chkCampaignId = ""
@@ -450,6 +452,49 @@ function logDeField(jid, colName) {
 }
 
 
+function resolveEntryDeRowCount(deName) {
+ var name = strTrim(deName);
+ if (!name || name.toUpperCase() === "N/A") {
+   return 0;
+ }
+ try {
+   var prox = new Script.Util.WSProxy();
+   var deFilter = {
+     Property: "Name",
+     SimpleOperator: "equals",
+     Value: name
+   };
+   var rde = prox.retrieve("DataExtension", ["CustomerKey"], deFilter);
+   if (rde && rde.Results && rde.Results.length > 0 && rde.Results[0].CustomerKey) {
+     return Platform.Function.DataExtensionRowCount(String(rde.Results[0].CustomerKey));
+   }
+ } catch (deLookupEx) {}
+ try {
+   return Platform.Function.DataExtensionRowCount(name);
+ } catch (deCountEx) {}
+ return 0;
+}
+
+
+function buildSentDisplay(sentCountRaw, deRowCount) {
+ var sent = strTrim(sentCountRaw);
+ var total = Number(deRowCount);
+ if (isNaN(total) || total < 0) {
+   total = 0;
+ }
+ if (sent && total > 0) {
+   return sent + " of " + total;
+ }
+ if (sent) {
+   return sent;
+ }
+ if (total > 0) {
+   return "0 of " + total;
+ }
+ return "";
+}
+
+
 var authOk = Platform.Variable.GetValue("@authOk") || "";
 var accessToken = Platform.Variable.GetValue("@accessToken") || "";
 var subdomain = Platform.Variable.GetValue("@subdomain") || "";
@@ -462,6 +507,16 @@ var deleteEmailFromPost =
 var jidClean = Platform.Variable.GetValue("@jid") || "";
 var dispDeIdVal = Platform.Variable.GetValue("@dispDeId") || "";
 var dispDeNameVal = Platform.Variable.GetValue("@dispDeName") || "";
+var detailCountVal = Number(Platform.Variable.GetValue("@detailCount") || 0);
+if (detailCountVal > 0) {
+ var deRowCountVal = resolveEntryDeRowCount(dispDeNameVal);
+ var sentDisplayVal = buildSentDisplay(
+   Platform.Variable.GetValue("@dispSentCount") || "",
+   deRowCountVal
+ );
+ Platform.Variable.SetValue("@dispDeRowCount", String(deRowCountVal));
+ Platform.Variable.SetValue("@dispSentDisplay", sentDisplayVal);
+}
 var step3bResult = " Step 3b SKIP — Nothing to delete.";
 var purgeParts = [];
 
@@ -2006,9 +2061,9 @@ pre.log.show{display:block}
  <dt>Automation status</dt>
  <dd><span class="status-value"><svg class="status-dot" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="5" fill="%%=v(@automationStatusColor)=%%"/></svg>%%=v(@dispAutomationStatus)=%%</span></dd>
 %%[ ENDIF ]%%
-%%[ IF NOT Empty(@dispSentCount) THEN ]%%
+%%[ IF NOT Empty(@dispSentDisplay) THEN ]%%
  <dt>Sent count</dt>
- <dd>%%=v(@dispSentCount)=%%</dd>
+ <dd>%%=v(@dispSentDisplay)=%%</dd>
 %%[ ENDIF ]%%
 </dl>
 %%[ ENDIF ]%%
