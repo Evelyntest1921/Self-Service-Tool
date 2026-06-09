@@ -26,6 +26,8 @@ SET @resultText = ""
 SET @journeyName = ""
 SET @eventName = ""
 SET @eventDefId = ""
+SET @deCustomerKey = ""
+SET @entryDeName = ""
 SET @journeyId = ""
 SET @templateConfigOk = "false"
 SET @templateCount = 0
@@ -848,6 +850,27 @@ function readEventDefinitionKey(evObj) {
   return String(evObj.eventDefinitionKey || "");
 }
 
+function resolveDeMetaByObjectId(objectId) {
+  if (!objectId) {
+    return { customerKey: "", name: "" };
+  }
+  try {
+    var prox = new Script.Util.WSProxy();
+    var rde = prox.retrieve("DataExtension", ["CustomerKey", "Name"], {
+      Property: "ObjectID",
+      SimpleOperator: "equals",
+      Value: String(objectId)
+    });
+    if (rde && rde.Results && rde.Results.length > 0) {
+      return {
+        customerKey: String(rde.Results[0].CustomerKey || ""),
+        name: String(rde.Results[0].Name || "")
+      };
+    }
+  } catch (deMetaEx) {}
+  return { customerKey: "", name: "" };
+}
+
 function resolveEventDefinition(evId, sub, token, createResponse) {
   var createObj = parseEventDefJson(createResponse);
   var dataExtensionId = readDataExtensionId(createObj);
@@ -949,6 +972,9 @@ if (
       metaData: trigMeta
     };
     Platform.Variable.SetValue("@eventDataExtensionId", eventDataExtensionId);
+    var entryDeMeta = resolveDeMetaByObjectId(eventDataExtensionId);
+    Platform.Variable.SetValue("@deCustomerKey", entryDeMeta.customerKey);
+    Platform.Variable.SetValue("@entryDeName", entryDeMeta.name);
     Platform.Variable.SetValue(
       "@apiEventTriggerJson",
       Platform.Function.Stringify(trigObj)
@@ -2060,8 +2086,8 @@ IF @showForm == "false" AND @deleteRequested != "1" AND IndexOf(@resultText,"FAI
  IF @createEmailOnly == "1" THEN
    SET @analyticsJourneyType = Concat(Substring(@builderPageLabel,1,32)," | email-only")
  ENDIF
- SET @analyticsDeName = IIF(NOT Empty(@eventName), @eventName, "N/A")
- SET @analyticsDeId = IIF(NOT Empty(@eventDefId), @eventDefId, "N/A")
+ SET @analyticsDeName = IIF(NOT Empty(@entryDeName), @entryDeName, IIF(NOT Empty(@deCustomerKey), @deCustomerKey, "N/A"))
+ SET @analyticsDeId = IIF(NOT Empty(@deCustomerKey), @deCustomerKey, "N/A")
  SET @analyticsCampaignId = ""
  IF @createEmailOnly != "1" AND NOT Empty(@campaignId) AND Length(@campaignId) >= 15 THEN
   SET @analyticsCampaignId = Substring(@campaignId,1,18)
@@ -2075,7 +2101,7 @@ IF @showForm == "false" AND @deleteRequested != "1" AND IndexOf(@resultText,"FAI
   "journeyType", Substring(@analyticsJourneyType,1,50),
   "emailName", Substring(@emailName,1,50),
   "emailId", Substring(@newEmailId,1,50),
-  "deName", Substring(@analyticsDeName,1,50),
+  "deName", Substring(@analyticsDeName,1,200),
   "deId", Substring(@analyticsDeId,1,50),
   "campaignId", Substring(@analyticsCampaignId,1,18),
   "updateDate", Now()

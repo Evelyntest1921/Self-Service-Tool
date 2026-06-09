@@ -452,8 +452,14 @@ function logDeField(jid, colName) {
 }
 
 
-function resolveEntryDeRowCount(deName) {
+function resolveEntryDeRowCount(deCustomerKey, deName) {
+ var key = strTrim(deCustomerKey);
  var name = strTrim(deName);
+ if (key && key.toUpperCase() !== "N/A") {
+   try {
+     return Platform.Function.DataExtensionRowCount(key);
+   } catch (keyCountEx) {}
+ }
  if (!name || name.toUpperCase() === "N/A") {
    return 0;
  }
@@ -473,6 +479,61 @@ function resolveEntryDeRowCount(deName) {
    return Platform.Function.DataExtensionRowCount(name);
  } catch (deCountEx) {}
  return 0;
+}
+
+
+function resolveJourneyEntryEventId(sub, token, jid) {
+ var journeyId = strTrim(jid);
+ if (!journeyId || !sub || !token || journeyId.indexOf("email:") === 0) {
+   return "";
+ }
+ try {
+   var jGetUrl =
+     "https://" +
+     sub +
+     ".rest.marketingcloudapis.com/interaction/v1/interactions/" +
+     encodeURIComponent(journeyId) +
+     "?extras=all";
+   var jGetReq = new Script.Util.HttpRequest(jGetUrl);
+   jGetReq.emptyContentHandling = 0;
+   jGetReq.continueOnError = true;
+   jGetReq.setHeader("Authorization", "Bearer " + token);
+   jGetReq.method = "GET";
+   var jGetResp = jGetReq.send();
+   if (jGetResp.statusCode == 200 || jGetResp.statusCode == 201) {
+     var jObj = Platform.Function.ParseJSON(String(jGetResp.content));
+     var triggers = jObj && jObj.triggers ? jObj.triggers : [];
+     if (triggers.length > 0 && triggers[0]) {
+       var trigMeta = triggers[0].metaData || {};
+       var entryId = strTrim(trigMeta.eventDefinitionId || "");
+       if (!entryId && triggers[0].arguments) {
+         entryId = strTrim(triggers[0].arguments.eventDefinitionId || "");
+       }
+       return entryId;
+     }
+   }
+ } catch (entryEvEx) {}
+ return "";
+}
+
+
+function resolveDeObjectIdByCustomerKey(customerKey) {
+ var key = strTrim(customerKey);
+ if (!key || key.toUpperCase() === "N/A") {
+   return "";
+ }
+ try {
+   var prox = new Script.Util.WSProxy();
+   var rde = prox.retrieve("DataExtension", ["ObjectID"], {
+     Property: "CustomerKey",
+     SimpleOperator: "equals",
+     Value: key
+   });
+   if (rde && rde.Results && rde.Results.length > 0 && rde.Results[0].ObjectID) {
+     return String(rde.Results[0].ObjectID);
+   }
+ } catch (deKeyEx) {}
+ return "";
 }
 
 
@@ -509,7 +570,7 @@ var dispDeIdVal = Platform.Variable.GetValue("@dispDeId") || "";
 var dispDeNameVal = Platform.Variable.GetValue("@dispDeName") || "";
 var detailCountVal = Number(Platform.Variable.GetValue("@detailCount") || 0);
 if (detailCountVal > 0) {
- var deRowCountVal = resolveEntryDeRowCount(dispDeNameVal);
+ var deRowCountVal = resolveEntryDeRowCount(dispDeIdVal, dispDeNameVal);
  var sentDisplayVal = buildSentDisplay(
    Platform.Variable.GetValue("@dispSentCount") || "",
    deRowCountVal
@@ -666,8 +727,11 @@ try {
    }
 
 
-   var evRaw = dispDeIdVal ? strTrim(dispDeIdVal) : "";
-   var evU = evRaw.toUpperCase();
+   var evRaw = resolveJourneyEntryEventId(subdomain, accessToken, jidClean);
+   if (!evRaw && dispDeIdVal) {
+     evRaw = strTrim(dispDeIdVal);
+   }
+   var evU = evRaw ? evRaw.toUpperCase() : "";
    if (evRaw && evU != "N/A") {
      var dataExtensionId = null;
      try {
@@ -708,6 +772,9 @@ try {
      }
      try {
        var deObjId = dataExtensionId;
+       if (!deObjId && dispDeIdVal) {
+         deObjId = resolveDeObjectIdByCustomerKey(dispDeIdVal);
+       }
        if (!deObjId && dispDeNameVal) {
          var proxLook = new Script.Util.WSProxy();
          var deFilter = {
@@ -999,17 +1066,15 @@ if (showChecklist == "1") {
              }
            }
            if (jbEntryId) {
-             if (chkLogDeId && chkLogDeId.toUpperCase() !== "N/A") {
-               if (jbEntryId === chkLogDeId) {
-                 entryStatus = "pass";
-                 entryMsg = "Entry event matches build log (" + jbEntryId + ").";
-               } else {
-                 entryStatus = "fail";
-                 entryMsg = "Journey entry " + jbEntryId + " does not match log " + chkLogDeId + ".";
-               }
+             if (chkLogDeId && chkLogDeId.toUpperCase() !== "N/A" && jbEntryId === chkLogDeId) {
+               entryStatus = "pass";
+               entryMsg = "Entry event matches build log (" + jbEntryId + ").";
              } else {
                entryStatus = "pass";
                entryMsg = "Entry event id: " + jbEntryId + ".";
+               if (chkLogDeId && chkLogDeId.toUpperCase() !== "N/A") {
+                 entryMsg = entryMsg + " DE customer key logged as " + chkLogDeId + ".";
+               }
              }
            } else {
              entryStatus = "fail";
@@ -2043,7 +2108,7 @@ pre.log.show{display:block}
  <dd>%%=v(@dispEmailId)=%%</dd>
  <dt>Log key (journeyId)</dt>
  <dd>%%=v(@jid)=%%</dd>
- <dt>Entry source</dt>
+ <dt>DE customer key</dt>
  <dd>%%=IIF(NOT Empty(@dispDeId) AND @dispDeId != "N/A", @dispDeId, "—")=%%</dd>
  <dt>Data extension name</dt>
  <dd>%%=IIF(NOT Empty(@dispDeName) AND @dispDeName != "N/A", @dispDeName, "—")=%%</dd>
