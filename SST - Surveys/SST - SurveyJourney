@@ -1749,7 +1749,6 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
      var journeyId = idMatch ? idMatch[1] : "";
      if (journeyId) {
        Platform.Variable.SetValue("@journeyId", journeyId);
-       Platform.Variable.SetValue("@deCustomerKey", journeyId);
        journeyResult = journeyResult + " Journey ID: " + journeyId + " (draft).";
      }
    } else {
@@ -1871,11 +1870,63 @@ if (cleanupNeeded == "1" && (eventDefId || newEmailId) && subdomain && accessTok
  Platform.Variable.SetValue("@resultText", resultText + cleanupLog);
 }
 
+function resolveDeMetaByObjectIdSj(objectId) {
+ if (!objectId) {
+   return { customerKey: "", name: "" };
+ }
+ try {
+   var prox = new Script.Util.WSProxy();
+   var rde = prox.retrieve("DataExtension", ["CustomerKey", "Name"], {
+     Property: "ObjectID",
+     SimpleOperator: "equals",
+     Value: String(objectId)
+   });
+   if (rde && rde.Results && rde.Results.length > 0) {
+     return {
+       customerKey: String(rde.Results[0].CustomerKey || ""),
+       name: String(rde.Results[0].Name || "")
+     };
+   }
+ } catch (deMetaEx) {}
+ return { customerKey: "", name: "" };
+}
+
+function resolveDeMetaFromEventDefSj(sub, token, evId) {
+ if (!evId || !sub || !token) {
+   return { customerKey: "", name: "" };
+ }
+ try {
+   var getUrl =
+     "https://" +
+     sub +
+     ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
+     encodeURIComponent(String(evId));
+   var getReq = new Script.Util.HttpRequest(getUrl);
+   getReq.emptyContentHandling = 0;
+   getReq.continueOnError = true;
+   getReq.setHeader("Authorization", "Bearer " + token);
+   getReq.method = "GET";
+   var getResp = getReq.send();
+   if ((getResp.statusCode == 200 || getResp.statusCode == 201) && getResp.content) {
+     var evtObj = Platform.Function.ParseJSON(String(getResp.content));
+     var deObjId = evtObj.dataExtensionId || evtObj.dataExtensionID || "";
+     return resolveDeMetaByObjectIdSj(deObjId);
+   }
+ } catch (evMetaEx) {}
+ return { customerKey: "", name: "" };
+}
+
+var sjEventDefId = Variable.GetValue("eventDefId") || Platform.Variable.GetValue("@eventDefId") || "";
+var sjSub = Variable.GetValue("subdomain") || Platform.Variable.GetValue("@subdomain") || "";
+var sjToken = Variable.GetValue("accessToken") || Platform.Variable.GetValue("@accessToken") || "";
+if (sjEventDefId && sjSub && sjToken) {
+ var sjDeMeta = resolveDeMetaFromEventDefSj(sjSub, sjToken, sjEventDefId);
+ Platform.Variable.SetValue("@deCustomerKey", sjDeMeta.customerKey);
+ Platform.Variable.SetValue("@entryDeName", sjDeMeta.name);
+}
+
 </script>
 %%[
-IF Empty(@journeyId) AND IndexOf(@resultText,"Journey ID:") > 0 THEN
- SET @journeyId = RegExMatch(@resultText,"Journey ID: ([^ ]+)",1)
-ENDIF
 IF @showForm == "false" AND @deleteRequested != "1" AND @emailOk == "true" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@newEmailId) THEN
  SET @analyticsJourneyName = IIF(NOT Empty(@journeyName), @journeyName, @emailName)
  SET @analyticsJourneyId = IIF(NOT Empty(@journeyId), @journeyId, Concat("email:",@newEmailId))
@@ -1884,7 +1935,7 @@ IF @showForm == "false" AND @deleteRequested != "1" AND @emailOk == "true" AND I
    SET @analyticsJourneyType = Concat(Substring(@builderPageLabel,1,32)," | email-only")
  ENDIF
  SET @analyticsDeName = IIF(NOT Empty(@entryDeName), @entryDeName, IIF(NOT Empty(@deCustomerKey), @deCustomerKey, "N/A"))
- SET @analyticsDeId = IIF(NOT Empty(@journeyId), @journeyId, "N/A")
+ SET @analyticsDeId = IIF(NOT Empty(@deCustomerKey), @deCustomerKey, "N/A")
  SET @analyticsCampaignId = ""
  IF @createEmailOnly != "1" AND NOT Empty(@campaignId) AND Length(@campaignId) >= 15 THEN
   SET @analyticsCampaignId = Substring(@campaignId,1,18)
@@ -1907,6 +1958,9 @@ IF @showForm == "false" AND @deleteRequested != "1" AND @emailOk == "true" AND I
   "surveyId", Substring(@analyticsSurveyId,1,50),
   "updateDate", Now()
  )
+ENDIF
+IF Empty(@journeyId) AND IndexOf(@resultText,"Journey ID:") > 0 THEN
+ SET @journeyId = RegExMatch(@resultText,"Journey ID: ([^ ]+)",1)
 ENDIF
 SET @resultJourneyId = @journeyId
 IF Empty(@resultJourneyId) AND NOT Empty(@analyticsJourneyId) THEN

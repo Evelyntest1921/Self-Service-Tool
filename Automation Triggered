@@ -83,8 +83,6 @@ IF NOT Empty(@stackCampaignName) THEN
  SET @assetKey = Replace(@assetKey,"/","_")
  SET @queryKey = @assetKey
  SET @automationKey = @assetKey
- SET @journeyKey = GUID()
- SET @journeyId = @journeyKey
 ENDIF
 SET @campaignName = @stackCampaignName
 SET @campaignLookup = RetrieveSalesforceObjects("Campaign","Id,Name","Id","=",@campaignId)
@@ -1200,12 +1198,37 @@ function stackCreateEntryDeViaSoap(prox, customerKey, deName) {
      "Entry DE created but ObjectID was not returned. CustomerKey=" + ck + "."
    };
   }
+  var verified = stackRetrieveDeByFilter(prox, {
+   Property: "ObjectID",
+   SimpleOperator: "equals",
+   Value: objectId
+  });
+  if (!verified || !verified.customerKey) {
+   verified = stackResolveExistingDe(prox, ck, name);
+  }
+  if (!verified || !verified.customerKey) {
+   return {
+    ok: false,
+    message:
+     "Entry DE created but CustomerKey could not be verified. ObjectID=" +
+     objectId +
+     "."
+   };
+  }
+  var keyNote =
+   verified.customerKey !== ck
+    ? " Actual CustomerKey=" +
+      verified.customerKey +
+      " (requested " +
+      ck +
+      ")."
+    : "";
   return {
    ok: true,
-   objectId: objectId,
-   customerKey: ck,
-   name: name,
-   message: " uniqueKey is primary key; id is sendable contact key."
+   objectId: verified.objectId || objectId,
+   customerKey: verified.customerKey,
+   name: verified.name || name,
+   message: keyNote + " uniqueKey is primary key; id is sendable contact key."
   };
 }
 
@@ -1293,16 +1316,7 @@ if (
   accessToken
 ) {
   try {
-    var journeyKeyVal = String(
-      Variable.GetValue("journeyKey") ||
-        Platform.Variable.GetValue("@journeyKey") ||
-        ""
-    ).replace(/^\s+|\s+$/g, "");
-    var deCustomerKey = journeyKeyVal
-      ? journeyKeyVal
-      : assetKey
-      ? String(assetKey)
-      : String(eventName || "");
+    var deCustomerKey = assetKey ? String(assetKey) : String(eventName || "");
     var deName = eventName ? String(eventName) : deCustomerKey;
     var proxDe = new Script.Util.WSProxy();
     var deResult = stackEnsureEntryDe(proxDe, accessToken, subdomain, deCustomerKey, deName);
@@ -1326,10 +1340,7 @@ if (
         "@journeyUrl",
         "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/interactions"
       );
-      if (!journeyKeyVal) {
-        Platform.Variable.SetValue("@journeyKey", Platform.Function.GUID());
-        Platform.Variable.SetValue("@journeyId", Platform.Variable.GetValue("@journeyKey"));
-      }
+      Platform.Variable.SetValue("@journeyKey", Platform.Function.GUID());
     }
   } catch (step3Ex) {
     resultText =
@@ -2881,7 +2892,6 @@ if (
      var journeyId = idMatch ? idMatch[1] : "";
      if (journeyId) {
        Platform.Variable.SetValue("@journeyId", journeyId);
-       Platform.Variable.SetValue("@deCustomerKey", journeyId);
        journeyResult = journeyResult + " Journey ID: " + journeyId + " (draft).";
      }
    } else {
@@ -3011,7 +3021,7 @@ IF @showForm == "false" AND @deleteAllRequested != "1" AND IndexOf(@resultText,"
  SET @analyticsJourneyId = IIF(NOT Empty(@journeyId), @journeyId, Concat("email:",@newEmailId))
  SET @analyticsJourneyType = @builderPageLabel
  SET @analyticsDeName = IIF(NOT Empty(@entryDeName), @entryDeName, IIF(NOT Empty(@deCustomerKey), @deCustomerKey, "N/A"))
- SET @analyticsDeId = IIF(NOT Empty(@journeyId), @journeyId, IIF(NOT Empty(@deCustomerKey), @deCustomerKey, "N/A"))
+ SET @analyticsDeId = IIF(NOT Empty(@deCustomerKey), @deCustomerKey, "N/A")
  SET @analyticsAutomationName = IIF(NOT Empty(@stackCampaignName), @stackCampaignName, IIF(NOT Empty(@journeyName), @journeyName, ""))
  SET @analyticsAutomationGuid = IIF(NOT Empty(@automationId), @automationId, "")
  SET @analyticsAutomationCustomerKey = IIF(NOT Empty(@automationKey), @automationKey, "")
