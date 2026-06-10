@@ -25,7 +25,7 @@ SET @STACK_JOURNEY_TYPE = "Journey + Automation"
 VAR @jid, @detailRows, @detailRow, @detailCount
 VAR @dispName, @dispType, @dispEmailName, @dispEmailId, @dispDeName, @dispDeId, @dispCampaignId, @dispSurveyId
 VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationCustomerKey, @dispAutomationName, @dispQueryText, @isStackBuild, @isSurveyBuild, @showChecklist
-VAR @dispJourneyStatus, @dispAutomationStatus, @dispSentCount, @dispDeRowCount, @dispSentDisplay, @journeyStatusColor, @automationStatusColor, @journeyBtnLabel, @journeyBtnClass, @journeyActionConfirm
+VAR @dispJourneyStatus, @dispAutomationStatus, @dispSentCount, @dispDeRowCount, @dispDeIdCount, @dispSentDisplay, @sentCountV, @journeyStatusColor, @automationStatusColor, @journeyBtnLabel, @journeyBtnClass, @journeyActionConfirm
 VAR @surveyUrlRows, @surveyUrlRow, @buildNavContext, @buildNavActive
 VAR @chkCampaignId, @chkCampaignStatus, @chkCampaignMsg, @chkCampaignIcon
 VAR @chkPublishStatus, @chkPublishMsg, @chkPublishIcon
@@ -99,6 +99,7 @@ SET @dispJourneyStatus = ""
 SET @dispAutomationStatus = ""
 SET @dispSentCount = ""
 SET @dispDeRowCount = "0"
+SET @dispDeIdCount = "0"
 SET @dispSentDisplay = ""
 SET @journeyStatusColor = "#6366f1"
 SET @automationStatusColor = "#dc2626"
@@ -155,9 +156,6 @@ IF @detailCount > 0 THEN
   SET @dispEmailId = Trim(Field(@detailRow,"emailId"))
   SET @dispDeName = Field(@detailRow,"deName")
   SET @dispDeId = Field(@detailRow,"deId")
-  
-  SET @sentCountV = "0"
-  
   SET @dispSurveyId = Trim(Field(@detailRow,"surveyId"))
   IF IndexOf(@dispType,"Survey") > 0 THEN
     SET @isSurveyBuild = "true"
@@ -181,6 +179,22 @@ IF @detailCount > 0 THEN
   SET @dispSentCount = Trim(Field(@detailRow,"sentCount"))
   IF Empty(@dispSentCount) THEN
     SET @dispSentCount = Trim(Field(@detailRow,"SentCount"))
+  ENDIF
+  SET @dispDeIdCount = 0
+  IF NOT Empty(@dispDeId) AND @dispDeId != "N/A" THEN
+    SET @sentCountV = LookupRows(@dispDeId, "type", "SST")
+    SET @dispDeIdCount = RowCount(@sentCountV)
+    IF @dispDeIdCount == 0 THEN
+      SET @dispDeIdCount = DataExtensionRowCount(@dispDeId)
+    ENDIF
+  ENDIF
+  SET @dispSentDisplay = ""
+  IF NOT Empty(@dispSentCount) AND @dispDeIdCount > 0 THEN
+    SET @dispSentDisplay = Concat(@dispSentCount, " of ", @dispDeIdCount)
+  ELSEIF NOT Empty(@dispSentCount) THEN
+    SET @dispSentDisplay = @dispSentCount
+  ELSEIF @dispDeIdCount > 0 THEN
+    SET @dispSentDisplay = Concat("0 of ", @dispDeIdCount)
   ENDIF
   IF NOT Empty(@dispJourneyStatus) THEN
     IF Lowercase(@dispJourneyStatus) == "draft" THEN
@@ -961,12 +975,16 @@ var dispDeIdVal = Platform.Variable.GetValue("@dispDeId") || "";
 var dispDeNameVal = Platform.Variable.GetValue("@dispDeName") || "";
 var detailCountVal = Number(Platform.Variable.GetValue("@detailCount") || 0);
 if (detailCountVal > 0) {
- var deRowCountVal = resolveEntryDeRowCount(dispDeIdVal, dispDeNameVal);
+ var deRowCountVal = Number(Platform.Variable.GetValue("@dispDeIdCount") || 0);
+ if (isNaN(deRowCountVal) || deRowCountVal <= 0) {
+   deRowCountVal = resolveEntryDeRowCount(dispDeIdVal, dispDeNameVal);
+ }
  var sentDisplayVal = buildSentDisplay(
    Platform.Variable.GetValue("@dispSentCount") || "",
    deRowCountVal
  );
  Platform.Variable.SetValue("@dispDeRowCount", String(deRowCountVal));
+ Platform.Variable.SetValue("@dispDeIdCount", String(deRowCountVal));
  Platform.Variable.SetValue("@dispSentDisplay", sentDisplayVal);
 }
 var step3bResult = " Step 3b SKIP — Nothing to delete.";
@@ -2728,8 +2746,8 @@ pre.log.show{display:block}
  </dd>
 %%[ ENDIF ]%%
 %%[ IF NOT Empty(@dispSentDisplay) THEN ]%%
- <dt>Sent count </dt>
- <dd>%%=v(@dispSentDisplay)=%% %%[ IF NOT Empty(@dispDeIdCount) THEN ]%% of %%=v(@dispDeIdCount)=%% %%[ ENDIF ]%%</dd>
+ <dt>Sent count</dt>
+ <dd>%%=v(@dispSentDisplay)=%%</dd>
 %%[ ENDIF ]%%
  <dt>Build actions</dt>
  <dd class="detail-dd-wrap">
