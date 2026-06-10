@@ -181,20 +181,21 @@ IF @detailCount > 0 THEN
     SET @dispSentCount = Trim(Field(@detailRow,"SentCount"))
   ENDIF
   SET @dispDeIdCount = 0
-  IF NOT Empty(@dispDeId) AND @dispDeId != "N/A" THEN
-    SET @sentCountV = LookupRows(@dispDeId, "type", "SST")
-    SET @dispDeIdCount = RowCount(@sentCountV)
-    IF @dispDeIdCount == 0 THEN
-      SET @dispDeIdCount = DataExtensionRowCount(@dispDeId)
-    ENDIF
-  ENDIF
   SET @dispSentDisplay = ""
-  IF NOT Empty(@dispSentCount) AND @dispDeIdCount > 0 THEN
-    SET @dispSentDisplay = Concat(@dispSentCount, " of ", @dispDeIdCount)
+  IF @isStackBuild == "true" THEN
+    IF NOT Empty(@dispDeId) AND @dispDeId != "N/A" THEN
+      SET @sentCountV = LookupRows(@dispDeId, "type", "SST")
+      SET @dispDeIdCount = RowCount(@sentCountV)
+    ENDIF
+    IF NOT Empty(@dispSentCount) AND @dispDeIdCount > 0 THEN
+      SET @dispSentDisplay = Concat(@dispSentCount, " of ", @dispDeIdCount)
+    ELSEIF NOT Empty(@dispSentCount) THEN
+      SET @dispSentDisplay = @dispSentCount
+    ELSEIF @dispDeIdCount > 0 THEN
+      SET @dispSentDisplay = Concat("0 of ", @dispDeIdCount)
+    ENDIF
   ELSEIF NOT Empty(@dispSentCount) THEN
     SET @dispSentDisplay = @dispSentCount
-  ELSEIF @dispDeIdCount > 0 THEN
-    SET @dispSentDisplay = Concat("0 of ", @dispDeIdCount)
   ENDIF
   IF NOT Empty(@dispJourneyStatus) THEN
     IF Lowercase(@dispJourneyStatus) == "draft" THEN
@@ -974,11 +975,9 @@ var jidClean = Platform.Variable.GetValue("@jid") || "";
 var dispDeIdVal = Platform.Variable.GetValue("@dispDeId") || "";
 var dispDeNameVal = Platform.Variable.GetValue("@dispDeName") || "";
 var detailCountVal = Number(Platform.Variable.GetValue("@detailCount") || 0);
-if (detailCountVal > 0) {
+var isStackBuildVal = Platform.Variable.GetValue("@isStackBuild") || "";
+if (detailCountVal > 0 && isStackBuildVal == "true") {
  var deRowCountVal = Number(Platform.Variable.GetValue("@dispDeIdCount") || 0);
- if (isNaN(deRowCountVal) || deRowCountVal <= 0) {
-   deRowCountVal = resolveEntryDeRowCount(dispDeIdVal, dispDeNameVal);
- }
  var sentDisplayVal = buildSentDisplay(
    Platform.Variable.GetValue("@dispSentCount") || "",
    deRowCountVal
