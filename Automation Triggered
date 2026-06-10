@@ -1056,17 +1056,93 @@ function stackBuildSoapDeFields() {
 }
 
 
+function stackResolveDeCategoryId(prox) {
+ var categoryId = 0;
+ try {
+  var rows = Platform.Function.LookupRows(
+   "Bd_journey_analytics",
+   "journeyType",
+   "Journey + Automation"
+  );
+  if (rows && rows.length > 0) {
+   var ri;
+   for (ri = 0; ri < rows.length; ri++) {
+    var deKey = rows[ri].deId;
+    if (!deKey) {
+     continue;
+    }
+    deKey = String(deKey);
+    if (deKey.toUpperCase() === "N/A") {
+     continue;
+    }
+    var rde = prox.retrieve(
+     "DataExtension",
+     ["CategoryID"],
+     {
+      Property: "CustomerKey",
+      SimpleOperator: "equals",
+      Value: deKey
+     }
+    );
+    if (
+     rde &&
+     rde.Results &&
+     rde.Results.length > 0 &&
+     rde.Results[0].CategoryID !== null &&
+     rde.Results[0].CategoryID !== undefined
+    ) {
+     categoryId = parseInt(String(rde.Results[0].CategoryID), 10);
+     if (!isNaN(categoryId) && categoryId > 0) {
+      return categoryId;
+     }
+    }
+   }
+  }
+ } catch (lookupEx) {}
+
+ try {
+  var folders = prox.retrieve(
+   "DataFolder",
+   ["ID", "Name", "ContentType"],
+   {
+    Property: "ContentType",
+    SimpleOperator: "equals",
+    Value: "dataextension"
+   }
+  );
+  if (folders && folders.Results && folders.Results.length > 0) {
+   var fi;
+   for (fi = 0; fi < folders.Results.length; fi++) {
+    var fname = String(folders.Results[fi].Name || "");
+    if (fname === "Data Extensions") {
+     categoryId = parseInt(String(folders.Results[fi].ID), 10);
+     if (!isNaN(categoryId) && categoryId > 0) {
+      return categoryId;
+     }
+    }
+   }
+   categoryId = parseInt(String(folders.Results[0].ID), 10);
+   if (!isNaN(categoryId) && categoryId > 0) {
+    return categoryId;
+   }
+  }
+ } catch (folderEx) {}
+
+ return 0;
+}
+
+
 function stackCreateEntryDeViaSoap(prox, customerKey, deName) {
   var ck = String(customerKey || "");
   var name = String(deName || ck || "Entry DE");
   if (!ck) {
    return { ok: false, message: "Entry DE CustomerKey is required." };
   }
+  var categoryId = stackResolveDeCategoryId(prox);
   var deConfig = {
    Name: name,
    CustomerKey: ck,
    Description: "Stack entry DE created via Journey Maker",
-   CategoryID: 58374,
    Fields: stackBuildSoapDeFields(),
    IsSendable: true,
    IsTestable: true,
@@ -1078,6 +1154,9 @@ function stackCreateEntryDeViaSoap(prox, customerKey, deName) {
     Name: "Subscriber Key"
    }
   };
+  if (categoryId > 0) {
+   deConfig.CategoryID = categoryId;
+  }
   var createResp = prox.createItem("DataExtension", deConfig);
   var status =
    createResp && createResp.Status ? String(createResp.Status) : "UNKNOWN";
