@@ -936,8 +936,8 @@ Platform.Load("core","1");
 function stackEventSchemaFields() {
   return [
     { name: "greeting", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "id", dataType: "Text", maxLength: "50", isNullable: false },
-    { name: "email", dataType: "EmailAddress", maxLength: "254", isNullable: false },
+    { name: "id", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "email", dataType: "EmailAddress", maxLength: "254", isNullable: true },
     { name: "sfCampaignId", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "sfCampaignMemberId", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "sfQuickSendId", dataType: "Text", maxLength: "50", isNullable: true },
@@ -945,9 +945,9 @@ function stackEventSchemaFields() {
     { name: "Account_Owner_Email", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "firstName", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "lastName", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "sfUserId", dataType: "Text", maxLength: "50", isNullable: false },
-    { name: "journeyID", dataType: "Text", maxLength: "50", isNullable: false },
-    { name: "sfOrgId", dataType: "Text", maxLength: "50", isNullable: false },
+    { name: "sfUserId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "journeyID", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "sfOrgId", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "smsValue", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "mobilePhone", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "EntryObjectId", dataType: "Text", maxLength: "50", isNullable: true },
@@ -965,7 +965,8 @@ function stackEventSchemaFields() {
     { name: "Salutation", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "AppointmentLink", dataType: "Text", maxLength: "4000", isNullable: true },
     { name: "VAWP", dataType: "Text", maxLength: "4000", isNullable: true },
-    { name: "EmailName", dataType: "Text", maxLength: "255", isNullable: true }
+    { name: "EmailName", dataType: "Text", maxLength: "255", isNullable: true },
+    { name: "uniqueKey", dataType: "Text", maxLength: "50", isNullable: true }
   ];
 }
 
@@ -1009,110 +1010,153 @@ function stackParseJsonSafe(text) {
   }
 }
 
+function stackMapSchemaFieldToSoap(fieldDef) {
+  var name = fieldDef.name;
+  var fieldType = "Text";
+  if (fieldDef.dataType === "EmailAddress") {
+   fieldType = "EmailAddress";
+  } else if (fieldDef.dataType === "Date") {
+   fieldType = "Date";
+  }
+  var soapField = {
+   Name: name,
+   FieldType: fieldType,
+   IsNillable: true,
+   IsRequired: false
+  };
+  if (fieldDef.maxLength) {
+   soapField.MaxLength = parseInt(String(fieldDef.maxLength), 10);
+  }
+  if (name === "uniqueKey") {
+   soapField.IsPrimaryKey = true;
+   soapField.IsRequired = true;
+   soapField.IsNillable = false;
+  }
+  return soapField;
+}
+
+
+function stackBuildSoapDeFields() {
+  var schema = stackEventSchemaFields();
+  var fields = [];
+  var uniqueField = null;
+  var i;
+  for (i = 0; i < schema.length; i++) {
+   var soapField = stackMapSchemaFieldToSoap(schema[i]);
+   if (schema[i].name === "uniqueKey") {
+    uniqueField = soapField;
+   } else {
+    fields.push(soapField);
+   }
+  }
+  if (uniqueField) {
+   fields.unshift(uniqueField);
+  }
+  return fields;
+}
+
+
+function stackCreateEntryDeViaSoap(prox, customerKey, deName) {
+  var ck = String(customerKey || "");
+  var name = String(deName || ck || "Entry DE");
+  if (!ck) {
+   return { ok: false, message: "Entry DE CustomerKey is required." };
+  }
+  var deConfig = {
+   Name: name,
+   CustomerKey: ck,
+   Description: "Stack entry DE created via Journey Maker",
+   CategoryID: 58374,
+   Fields: stackBuildSoapDeFields(),
+   IsSendable: true,
+   IsTestable: true,
+   SendableDataExtensionField: {
+    Name: "id",
+    FieldType: "Text"
+   },
+   SendableSubscriberField: {
+    Name: "Subscriber Key"
+   }
+  };
+  var createResp = prox.createItem("DataExtension", deConfig);
+  var status =
+   createResp && createResp.Status ? String(createResp.Status) : "UNKNOWN";
+  var msg =
+   createResp &&
+   createResp.Results &&
+   createResp.Results.length > 0 &&
+   createResp.Results[0].StatusMessage
+    ? String(createResp.Results[0].StatusMessage)
+    : "No status message returned.";
+  if (status !== "OK") {
+   return {
+    ok: false,
+    message: "Entry DE SOAP create failed. " + msg
+   };
+  }
+  var objectId = "";
+  if (createResp && createResp.Results && createResp.Results.length > 0) {
+   var row = createResp.Results[0];
+   objectId = row.ObjectID
+    ? String(row.ObjectID)
+    : row.NewObjectID
+    ? String(row.NewObjectID)
+    : row.NewID
+    ? String(row.NewID)
+    : "";
+  }
+  if (!objectId) {
+   var resolved = stackResolveExistingDe(prox, ck, name);
+   if (resolved && resolved.objectId) {
+    objectId = resolved.objectId;
+   }
+  }
+  if (!objectId) {
+   return {
+    ok: false,
+    message:
+     "Entry DE created but ObjectID was not returned. CustomerKey=" + ck + "."
+   };
+  }
+  return {
+   ok: true,
+   objectId: objectId,
+   customerKey: ck,
+   name: name,
+   message: " uniqueKey is primary key; id is sendable contact key."
+  };
+}
+
+
 function stackEnsureEntryDe(prox, token, subdomain, customerKey, deName) {
   var name = String(deName || customerKey || "Entry DE");
   var existing = stackResolveExistingDe(prox, customerKey, name);
   if (existing) {
-    var repairKey = existing.customerKey || String(customerKey || "");
-    return {
-      ok: true,
-      skipped: true,
-      objectId: existing.objectId,
-      customerKey: repairKey,
-      name: existing.name || name,
-      message: ""
-    };
-  }
-
-  var tempEventKey =
-    "eventDef" + String(stackRandomGuid()).replace(/-/g, "").substring(0, 22);
-  var createUrl =
-    "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions";
-  var createPayload = {
-    name: name,
-    description: "",
-    type: "APIEvent",
-    mode: "Production",
-    eventDefinitionKey: tempEventKey,
-    isVisibleInPicker: false,
-    schema: {
-      sendableCustomObjectField: "id",
-      sendableSubscriberField: "_SubscriberKey",
-      fields: stackEventSchemaFields()
-    }
-  };
-  var createResp = stackHttpJson(token, subdomain, "POST", createUrl, createPayload);
-  if (createResp.status != 200 && createResp.status != 201) {
-    return {
-      ok: false,
-      message:
-        "entry DE bootstrap HTTP " +
-        createResp.status +
-        " - " +
-        (createResp.body || "No response body.")
-    };
-  }
-
-  var createObj = stackParseJsonSafe(createResp.body);
-  var tempEventDefId =
-    createObj && createObj.id ? String(createObj.id) : "";
-  var dataExtensionId =
-    createObj && (createObj.dataExtensionId || createObj.dataExtensionID)
-      ? String(createObj.dataExtensionId || createObj.dataExtensionID)
-      : "";
-
-  if (!dataExtensionId && tempEventDefId) {
-    var getEvUrl = createUrl + "/" + encodeURIComponent(tempEventDefId);
-    var getEvResp = stackHttpJson(token, subdomain, "GET", getEvUrl, null);
-    if (getEvResp.status == 200) {
-      var getEvObj = stackParseJsonSafe(getEvResp.body);
-      if (getEvObj && (getEvObj.dataExtensionId || getEvObj.dataExtensionID)) {
-        dataExtensionId = String(getEvObj.dataExtensionId || getEvObj.dataExtensionID);
-      }
-    }
-  }
-
-  if (tempEventDefId) {
-    var deleteUrl = createUrl + "/" + encodeURIComponent(tempEventDefId);
-    stackHttpJson(token, subdomain, "DELETE", deleteUrl, null);
-  }
-
-  if (!dataExtensionId) {
-    return {
-      ok: false,
-      message: "entry DE bootstrap succeeded but dataExtensionId was not resolved."
-    };
-  }
-
-  var resolved = stackRetrieveDeByFilter(prox, {
-    Property: "ObjectID",
-    SimpleOperator: "equals",
-    Value: dataExtensionId
-  });
-  if (!resolved) {
-    resolved = stackResolveExistingDe(prox, customerKey, name);
-  }
-  if (!resolved) {
-    return {
-      ok: false,
-      message:
-        "entry DE bootstrap created dataExtensionId " +
-        dataExtensionId +
-        " but CustomerKey lookup failed."
-    };
-  }
-
-  var finalKey = resolved.customerKey || String(customerKey || "");
-
-  return {
+   var repairKey = existing.customerKey || String(customerKey || "");
+   return {
     ok: true,
-    skipped: false,
-    objectId: dataExtensionId,
-    customerKey: finalKey,
-    name: resolved.name || name,
+    skipped: true,
+    objectId: existing.objectId,
+    customerKey: repairKey,
+    name: existing.name || name,
     message: ""
+   };
+  }
+
+  var created = stackCreateEntryDeViaSoap(prox, customerKey, name);
+  if (!created.ok) {
+   return created;
+  }
+  return {
+   ok: true,
+   skipped: false,
+   objectId: created.objectId,
+   customerKey: created.customerKey,
+   name: created.name,
+   message: created.message || ""
   };
 }
+
 
 function stackHttpJson(token, subdomain, method, url, bodyObj) {
   var req = new Script.Util.HttpRequest(url);
@@ -1470,7 +1514,8 @@ function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environme
     "  con.Salutation AS Salutation,\n" +
     "  u.Appointment_Link__c AS AppointmentLink,\n" +
     "  '' AS VAWP,\n" +
-    "  cm.Campaign_Name__c AS EmailName\n" +
+    "  cm.Campaign_Name__c AS EmailName,\n" +
+    "  cm.id AS uniqueKey\n" +
     "FROM " + cmTable + " cm\n" +
     "LEFT JOIN " + contactTable + " con ON cm.ContactId = con.id\n" +
     "LEFT JOIN " + accountTable + " a ON con.AccountId = a.id\n" +
