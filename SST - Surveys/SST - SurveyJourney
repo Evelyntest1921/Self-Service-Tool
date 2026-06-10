@@ -1870,59 +1870,109 @@ if (cleanupNeeded == "1" && (eventDefId || newEmailId) && subdomain && accessTok
  Platform.Variable.SetValue("@resultText", resultText + cleanupLog);
 }
 
-function resolveDeMetaByObjectIdSj(objectId) {
- if (!objectId) {
-   return { customerKey: "", name: "" };
- }
+function resolveDeRecordSj(prox, filter) {
  try {
-   var prox = new Script.Util.WSProxy();
-   var rde = prox.retrieve("DataExtension", ["CustomerKey", "Name"], {
-     Property: "ObjectID",
-     SimpleOperator: "equals",
-     Value: String(objectId)
-   });
-   if (rde && rde.Results && rde.Results.length > 0) {
-     return {
-       customerKey: String(rde.Results[0].CustomerKey || ""),
-       name: String(rde.Results[0].Name || "")
-     };
-   }
- } catch (deMetaEx) {}
- return { customerKey: "", name: "" };
+  var rde = prox.retrieve("DataExtension", ["CustomerKey", "Name"], filter);
+  if (rde && rde.Results && rde.Results.length > 0 && rde.Results[0].CustomerKey) {
+   return {
+    customerKey: String(rde.Results[0].CustomerKey),
+    name: String(rde.Results[0].Name || "")
+   };
+  }
+ } catch (deRecEx) {}
+ return null;
 }
 
-function resolveDeMetaFromEventDefSj(sub, token, evId) {
+function resolveDeMetaFromEventDefSj(sub, token, evId, eventName) {
  if (!evId || !sub || !token) {
-   return { customerKey: "", name: "" };
+  return { customerKey: "", name: "" };
  }
  try {
-   var getUrl =
-     "https://" +
-     sub +
-     ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
-     encodeURIComponent(String(evId));
-   var getReq = new Script.Util.HttpRequest(getUrl);
-   getReq.emptyContentHandling = 0;
-   getReq.continueOnError = true;
-   getReq.setHeader("Authorization", "Bearer " + token);
-   getReq.method = "GET";
-   var getResp = getReq.send();
-   if ((getResp.statusCode == 200 || getResp.statusCode == 201) && getResp.content) {
-     var evtObj = Platform.Function.ParseJSON(String(getResp.content));
-     var deObjId = evtObj.dataExtensionId || evtObj.dataExtensionID || "";
-     return resolveDeMetaByObjectIdSj(deObjId);
+  var prox = new Script.Util.WSProxy();
+  var getUrl =
+   "https://" +
+   sub +
+   ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
+   encodeURIComponent(String(evId));
+  var getReq = new Script.Util.HttpRequest(getUrl);
+  getReq.emptyContentHandling = 0;
+  getReq.continueOnError = true;
+  getReq.setHeader("Authorization", "Bearer " + token);
+  getReq.method = "GET";
+  var getResp = getReq.send();
+  if ((getResp.statusCode == 200 || getResp.statusCode == 201) && getResp.content) {
+   var evtObj = Platform.Function.ParseJSON(String(getResp.content));
+   var deObjId = evtObj.dataExtensionId || evtObj.dataExtensionID || "";
+   var deKeyHint =
+    evtObj.dataExtensionKey ||
+    evtObj.dataExtensionCustomerKey ||
+    evtObj.criteria ||
+    "";
+   if (deKeyHint && typeof deKeyHint === "object" && deKeyHint.deKey) {
+    deKeyHint = deKeyHint.deKey;
    }
+   var candidates = [];
+   if (deKeyHint) {
+    candidates.push(String(deKeyHint));
+   }
+   if (deObjId) {
+    candidates.push(String(deObjId));
+   }
+   var ci;
+   for (ci = 0; ci < candidates.length; ci++) {
+    var byKey = resolveDeRecordSj(prox, {
+     Property: "CustomerKey",
+     SimpleOperator: "equals",
+     Value: candidates[ci]
+    });
+    if (byKey) {
+     return byKey;
+    }
+   }
+   if (deObjId) {
+    var byId = resolveDeRecordSj(prox, {
+     Property: "ObjectID",
+     SimpleOperator: "equals",
+     Value: String(deObjId)
+    });
+    if (byId) {
+     return byId;
+    }
+   }
+  }
+  if (eventName) {
+   var byName = resolveDeRecordSj(prox, {
+    Property: "Name",
+    SimpleOperator: "equals",
+    Value: String(eventName)
+   });
+   if (byName) {
+    return byName;
+   }
+  }
  } catch (evMetaEx) {}
  return { customerKey: "", name: "" };
 }
 
-var sjEventDefId = Variable.GetValue("eventDefId") || Platform.Variable.GetValue("@eventDefId") || "";
-var sjSub = Variable.GetValue("subdomain") || Platform.Variable.GetValue("@subdomain") || "";
-var sjToken = Variable.GetValue("accessToken") || Platform.Variable.GetValue("@accessToken") || "";
+var sjEventDefId =
+ Platform.Variable.GetValue("@eventDefId") || Variable.GetValue("eventDefId") || "";
+var sjSub =
+ Platform.Variable.GetValue("@subdomain") || Variable.GetValue("subdomain") || "";
+var sjToken =
+ Platform.Variable.GetValue("@accessToken") || Variable.GetValue("accessToken") || "";
+var sjEventName =
+ Platform.Variable.GetValue("@eventName") || Variable.GetValue("eventName") || "";
 if (sjEventDefId && sjSub && sjToken) {
- var sjDeMeta = resolveDeMetaFromEventDefSj(sjSub, sjToken, sjEventDefId);
- Platform.Variable.SetValue("@deCustomerKey", sjDeMeta.customerKey);
- Platform.Variable.SetValue("@entryDeName", sjDeMeta.name);
+ var sjDeMeta = resolveDeMetaFromEventDefSj(
+  sjSub,
+  sjToken,
+  sjEventDefId,
+  sjEventName
+ );
+ if (sjDeMeta.customerKey) {
+  Platform.Variable.SetValue("@deCustomerKey", sjDeMeta.customerKey);
+  Platform.Variable.SetValue("@entryDeName", sjDeMeta.name || sjEventName);
+ }
 }
 
 </script>
@@ -1953,7 +2003,7 @@ IF @showForm == "false" AND @deleteRequested != "1" AND @emailOk == "true" AND I
   "emailName", Substring(@emailName,1,50),
   "emailId", Substring(@newEmailId,1,50),
   "deName", Substring(@analyticsDeName,1,200),
-  "deId", Substring(@analyticsDeId,1,50),
+  "deId", Substring(@analyticsDeId,1,200),
   "campaignId", Substring(@analyticsCampaignId,1,18),
   "surveyId", Substring(@analyticsSurveyId,1,50),
   "updateDate", Now()
