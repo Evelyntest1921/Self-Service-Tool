@@ -155,6 +155,10 @@ IF @detailCount > 0 THEN
   SET @dispEmailId = Trim(Field(@detailRow,"emailId"))
   SET @dispDeName = Field(@detailRow,"deName")
   SET @dispDeId = Field(@detailRow,"deId")
+  
+  SET @sentCountV = LookupRows(@dispDeId,"type","SST")
+  SET @dispDeIdCount = RowCount(@sentCountV)
+  
   SET @dispSurveyId = Trim(Field(@detailRow,"surveyId"))
   IF IndexOf(@dispType,"Survey") > 0 THEN
     SET @isSurveyBuild = "true"
@@ -178,21 +182,6 @@ IF @detailCount > 0 THEN
   SET @dispSentCount = Trim(Field(@detailRow,"sentCount"))
   IF Empty(@dispSentCount) THEN
     SET @dispSentCount = Trim(Field(@detailRow,"SentCount"))
-  ENDIF
-  SET @dispDeRowCount = "0"
-  IF NOT Empty(@dispDeId) AND @dispDeId != "N/A" THEN
-    SET @dispDeRowCount = DataExtensionRowCount(@dispDeId)
-  ENDIF
-  IF @dispDeRowCount == "0" AND NOT Empty(@dispDeName) AND @dispDeName != "N/A" THEN
-    SET @dispDeRowCount = DataExtensionRowCount(@dispDeName)
-  ENDIF
-  SET @dispSentDisplay = ""
-  IF NOT Empty(@dispSentCount) AND Number(@dispDeRowCount) > 0 THEN
-    SET @dispSentDisplay = Concat(@dispSentCount, " of ", @dispDeRowCount)
-  ELSEIF NOT Empty(@dispSentCount) THEN
-    SET @dispSentDisplay = @dispSentCount
-  ELSEIF Number(@dispDeRowCount) > 0 THEN
-    SET @dispSentDisplay = Concat("0 of ", @dispDeRowCount)
   ENDIF
   IF NOT Empty(@dispJourneyStatus) THEN
     IF Lowercase(@dispJourneyStatus) == "draft" THEN
@@ -738,7 +727,7 @@ function activateJourney(sub, token, jid) {
 }
 
 
-function programStatusLabel(code) {
+function automationStatusLabel(code) {
  var map = {
   "-1": "Error",
   "0": "BuildingError",
@@ -753,17 +742,6 @@ function programStatusLabel(code) {
  };
  var key = String(code || "");
  return map[key] || ("Unknown(" + key + ")");
-}
-
-
-function programStartTookEffect(beforeStatus, afterStatus) {
- if (afterStatus === "3" || afterStatus === "1") {
-  return true;
- }
- if (beforeStatus !== afterStatus && afterStatus !== "4") {
-  return true;
- }
- return false;
 }
 
 
@@ -813,379 +791,6 @@ function resolveProgramObjectId(prox, customerKey, restAutomationId) {
 }
 
 
-function pad2n(n) {
- return (n < 10 ? "0" : "") + n;
-}
-
-
-function formatLocalDateTime(d) {
- return (
-  d.getFullYear() +
-  "-" +
-  pad2n(d.getMonth() + 1) +
-  "-" +
-  pad2n(d.getDate()) +
-  "T" +
-  pad2n(d.getHours()) +
-  ":" +
-  pad2n(d.getMinutes()) +
-  ":" +
-  pad2n(d.getSeconds())
- );
-}
-
-
-function extractAutomationSchedule(autoObj) {
- var sch = null;
- if (autoObj && autoObj.startSource && autoObj.startSource.schedule) {
-  sch = autoObj.startSource.schedule;
- } else if (autoObj && autoObj.schedule) {
-  sch = autoObj.schedule;
- }
- return sch || null;
-}
-
-
-function parseIcalField(ical, field, defaultVal) {
- var re = new RegExp(field + "=([^;]+)", "i");
- var m = String(ical || "").match(re);
- return m ? m[1] : defaultVal;
-}
-
-
-function computeFutureStartDate(icalRecur, prevStartLocal) {
- var freq = parseIcalField(icalRecur, "FREQ", "HOURLY").toUpperCase();
- var interval = parseInt(parseIcalField(icalRecur, "INTERVAL", "1"), 10);
- if (isNaN(interval) || interval < 1) {
-  interval = 1;
- }
- var now = new Date();
- var start = new Date(now.getTime());
- if (freq === "HOURLY") {
-  start.setMinutes(0, 0, 0);
-  start.setHours(start.getHours() + interval);
-  if (start.getTime() <= now.getTime()) {
-   start.setHours(start.getHours() + interval);
-  }
- } else if (freq === "DAILY") {
-  if (prevStartLocal) {
-   var tm = String(prevStartLocal).match(/T(\d{2}):(\d{2})/);
-   if (tm) {
-    start.setHours(parseInt(tm[1], 10), parseInt(tm[2], 10), 0, 0);
-   }
-  }
-  start.setDate(start.getDate() + interval);
-  if (start.getTime() <= now.getTime()) {
-   start.setDate(start.getDate() + interval);
-  }
- } else if (freq === "WEEKLY") {
-  start.setDate(start.getDate() + 7 * interval);
- } else {
-  start.setMinutes(start.getMinutes() + 15);
- }
- return start;
-}
-
-
-function computeEndDateFromStart(startDate) {
- var end = new Date(startDate.getTime());
- end.setDate(end.getDate() + 365);
- return end;
-}
-
-
-function escapeXml(value) {
- return String(value || "")
-  .replace(/&/g, "&amp;")
-  .replace(/</g, "&lt;")
-  .replace(/>/g, "&gt;")
-  .replace(/"/g, "&quot;");
-}
-
-
-function buildScheduleRecurrenceSoapXml(icalRecur) {
- var freq = parseIcalField(icalRecur, "FREQ", "HOURLY").toUpperCase();
- var interval = parseInt(parseIcalField(icalRecur, "INTERVAL", "1"), 10);
- if (isNaN(interval) || interval < 1) {
-  interval = 1;
- }
- if (freq === "DAILY") {
-  return (
-   '<Recurrence xsi:type="DailyRecurrence">' +
-   "<DailyRecurrencePatternType>Interval</DailyRecurrencePatternType>" +
-   "<DayInterval>" +
-   interval +
-   "</DayInterval>" +
-   "</Recurrence>" +
-   "<RecurrenceType>Daily</RecurrenceType>"
-  );
- }
- if (freq === "WEEKLY") {
-  return (
-   '<Recurrence xsi:type="WeeklyRecurrence">' +
-   "<WeeklyRecurrencePatternType>Interval</WeeklyRecurrencePatternType>" +
-   "<WeekInterval>" +
-   interval +
-   "</WeekInterval>" +
-   "</Recurrence>" +
-   "<RecurrenceType>Weekly</RecurrenceType>"
-  );
- }
- return (
-  '<Recurrence xsi:type="HourlyRecurrence">' +
-  "<HourlyRecurrencePatternType>Interval</HourlyRecurrencePatternType>" +
-  "<HourInterval>" +
-  interval +
-  "</HourInterval>" +
-  "</Recurrence>" +
-  "<RecurrenceType>Hourly</RecurrenceType>"
- );
-}
-
-
-function buildScheduleStartSoapEnvelope(
- token,
- programObjectId,
- customerKey,
- icalRecur,
- startDateTime,
- endDateTime,
- tzId,
- scheduledTime
-) {
- var recurrenceXml = buildScheduleRecurrenceSoapXml(icalRecur);
- var tzXml = "";
- if (tzId !== null && tzId !== undefined && tzId !== "") {
-  tzXml =
-   "<TimeZone>" +
-   '<PartnerKey xsi:nil="true" />' +
-   "<ID>" +
-   parseInt(String(tzId), 10) +
-   "</ID>" +
-   '<ObjectID xsi:nil="true" />' +
-   "</TimeZone>";
- }
- var custKeyXml = customerKey
-  ? "<CustomerKey>" + escapeXml(customerKey) + "</CustomerKey>"
-  : "";
- var optionsXml = scheduledTime
-  ? "<Options><ScheduledTime>" + escapeXml(scheduledTime) + "</ScheduledTime></Options>"
-  : "";
- return (
-  '<?xml version="1.0" encoding="UTF-8"?>' +
-  '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">' +
-  "<soapenv:Header>" +
-  '<fueloauth xmlns="http://exacttarget.com">' +
-  escapeXml(token) +
-  "</fueloauth>" +
-  "</soapenv:Header>" +
-  "<soapenv:Body>" +
-  '<ScheduleRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI">' +
-  optionsXml +
-  "<Action>start</Action>" +
-  "<Schedule>" +
-  '<PartnerKey xsi:nil="true" />' +
-  '<ObjectID xsi:nil="true" />' +
-  recurrenceXml +
-  "<RecurrenceRangeType>EndOn</RecurrenceRangeType>" +
-  "<StartDateTime>" +
-  escapeXml(startDateTime) +
-  "</StartDateTime>" +
-  "<EndDateTime>" +
-  escapeXml(endDateTime) +
-  "</EndDateTime>" +
-  tzXml +
-  "</Schedule>" +
-  "<Interactions>" +
-  '<Interaction xsi:type="Automation">' +
-  '<PartnerKey xsi:nil="true" />' +
-  "<ObjectID>" +
-  escapeXml(programObjectId) +
-  "</ObjectID>" +
-  custKeyXml +
-  "</Interaction>" +
-  "</Interactions>" +
-  "</ScheduleRequestMsg>" +
-  "</soapenv:Body>" +
-  "</soapenv:Envelope>"
- );
-}
-
-
-function scheduleAutomationViaSoap(
- sub,
- token,
- programObjectId,
- customerKey,
- icalRecur,
- startStr,
- endStr,
- tzId
-) {
- try {
-  var url =
-   "https://" + sub + ".soap.marketingcloudapis.com/Service.asmx";
-  var envelope = buildScheduleStartSoapEnvelope(
-   token,
-   programObjectId,
-   customerKey,
-   icalRecur,
-   startStr,
-   endStr,
-   tzId,
-   startStr
-  );
-  var req = new Script.Util.HttpRequest(url);
-  req.emptyContentHandling = 0;
-  req.retries = 1;
-  req.continueOnError = true;
-  req.method = "POST";
-  req.contentType = "text/xml; charset=utf-8";
-  req.setHeader("SOAPAction", "Schedule");
-  req.postData = envelope;
-  var resp = req.send();
-  var body = resp.content ? String(resp.content) : "";
-  if (resp.statusCode != 200) {
-   return {
-    ok: false,
-    msg:
-     "Schedule SOAP HTTP " +
-     resp.statusCode +
-     (body ? " - " + body.substring(0, 200) : ".")
-   };
-  }
-  if (body.indexOf("<StatusCode>OK</StatusCode>") >= 0) {
-   return { ok: true, msg: "" };
-  }
-  var msgMatch = body.match(/<StatusMessage>([^<]*)<\/StatusMessage>/i);
-  var codeMatch = body.match(/<StatusCode>([^<]*)<\/StatusCode>/i);
-  return {
-   ok: false,
-   msg:
-    "Schedule SOAP rejected. code=" +
-    (codeMatch ? codeMatch[1] : "?") +
-    " msg=" +
-    (msgMatch ? msgMatch[1] : body.substring(0, 200))
-  };
- } catch (soapHttpEx) {
-  return {
-   ok: false,
-   msg: "Schedule SOAP failed: " + (soapHttpEx.message || String(soapHttpEx))
-  };
- }
-}
-
-
-function reactivateAutomationSchedule(
- sub,
- token,
- restAutoId,
- customerKey,
- programObjectId,
- beforeStatus
-) {
- var id = strTrim(restAutoId);
- var baseUrl =
-  "https://" +
-  sub +
-  ".rest.marketingcloudapis.com/automation/v1/automations/" +
-  encodeURIComponent(id);
- var got = journeyHttpJson(token, "GET", baseUrl, null);
- if (got.status != 200 && got.status != 201) {
-  var getDetail = got.body ? got.body.substring(0, 200) : "";
-  return {
-   ok: false,
-   msg:
-    "Automation GET HTTP " +
-    got.status +
-    (getDetail ? " - " + getDetail : ".")
-  };
- }
- var autoObj = null;
- try {
-  autoObj = Platform.Function.ParseJSON(got.body);
- } catch (parseEx) {
-  return { ok: false, msg: "Could not parse automation definition." };
- }
- var sch = extractAutomationSchedule(autoObj);
- if (!sch) {
-  return { ok: false, msg: "Automation has no schedule to reactivate." };
- }
- var icalRecur = sch.iCalRecur || sch.icalRecur || "";
- if (!icalRecur) {
-  return { ok: false, msg: "Automation schedule is missing recurrence rule." };
- }
- var prevStart = sch.startDate ? String(sch.startDate) : "";
- var tzId =
-  sch.timezoneId !== undefined && sch.timezoneId !== null
-   ? sch.timezoneId
-   : sch.timeZoneId;
- var startDt = computeFutureStartDate(icalRecur, prevStart);
- var endDt = computeEndDateFromStart(startDt);
- var startStr = formatLocalDateTime(startDt);
- var endStr = formatLocalDateTime(endDt);
- var scheduleResult = scheduleAutomationViaSoap(
-  sub,
-  token,
-  programObjectId,
-  customerKey,
-  icalRecur,
-  startStr,
-  endStr,
-  tzId
- );
- var prox = new Script.Util.WSProxy();
- var afterProgram = getProgramById(prox, programObjectId);
- var afterStatus =
-  afterProgram &&
-  afterProgram.Status !== null &&
-  afterProgram.Status !== undefined
-   ? String(afterProgram.Status)
-   : "";
- var statusInfo =
-  "Status before: " +
-  programStatusLabel(beforeStatus) +
-  " (" +
-  beforeStatus +
-  ")";
- if (afterStatus !== "") {
-  statusInfo +=
-   " | after: " +
-   programStatusLabel(afterStatus) +
-   " (" +
-   afterStatus +
-   ")";
- }
- statusInfo +=
-  " | next start: " + startStr + " | recur: " + icalRecur;
- if (!scheduleResult.ok) {
-  return {
-   ok: false,
-   msg:
-    "Schedule reactivation failed. " +
-    (scheduleResult.msg || "SOAP schedule rejected.") +
-    " " +
-    statusInfo
-  };
- }
- if (afterStatus === "4") {
-  return {
-   ok: false,
-   msg: "Schedule submitted but automation is still paused. " + statusInfo
-  };
- }
- var newStatus = programStatusLabel(afterStatus);
- if (newStatus.indexOf("Unknown") === 0) {
-  newStatus = "Scheduled";
- }
- return {
-  ok: true,
-  msg: "Automation schedule reactivated. " + statusInfo,
-  newStatus: newStatus
- };
-}
-
-
 function performAutomationSoapStart(autoId, customerKey) {
  var prox = new Script.Util.WSProxy();
  var resolvedId = resolveProgramObjectId(prox, customerKey, autoId);
@@ -1208,15 +813,14 @@ function performAutomationSoapStart(autoId, customerKey) {
    : "";
  var statusInfo =
   "Status before: " +
-  programStatusLabel(beforeStatus) +
+  automationStatusLabel(beforeStatus) +
   " (" +
   beforeStatus +
   ")";
  if (beforeStatus === "3") {
   return {
    ok: false,
-   msg: "Automation is already running. " + statusInfo,
-   beforeStatus: beforeStatus
+   msg: "Automation is already running. " + statusInfo
   };
  }
  try {
@@ -1251,24 +855,13 @@ function performAutomationSoapStart(autoId, customerKey) {
   if (afterStatus !== "") {
    statusInfo +=
     " | after: " +
-    programStatusLabel(afterStatus) +
+    automationStatusLabel(afterStatus) +
     " (" +
     afterStatus +
     ")";
   }
   if (topStatus === "OK" || itemCode === "OK") {
-   if (!programStartTookEffect(beforeStatus, afterStatus)) {
-    return {
-     ok: false,
-     unchanged: true,
-     beforeStatus: beforeStatus,
-     afterStatus: afterStatus,
-     msg:
-      "SOAP start accepted but automation did not change state. " +
-      statusInfo
-    };
-   }
-   var newStatus = programStatusLabel(afterStatus);
+   var newStatus = automationStatusLabel(afterStatus);
    if (newStatus.indexOf("Unknown") === 0) {
     newStatus = "Scheduled";
    }
@@ -1303,53 +896,31 @@ function performAutomationSoapStart(autoId, customerKey) {
 }
 
 
+function runAutomationOnceRest(sub, token, autoId) {
+ var id = strTrim(autoId);
+ var url =
+  "https://" +
+  sub +
+  ".rest.marketingcloudapis.com/automation/v1/automations/" +
+  encodeURIComponent(id) +
+  "/actions/runallonce";
+ var resp = journeyHttpJson(token, "POST", url, "{}");
+ if (resp.status == 200 || resp.status == 201 || resp.status == 202) {
+  return {
+   ok: true,
+   msg: "Automation queued to run once.",
+   newStatus: "Running"
+  };
+ }
+ var detail = resp.body ? resp.body.substring(0, 200) : "";
+ return {
+  ok: false,
+  msg: "Run once HTTP " + resp.status + (detail ? " - " + detail : ".")
+ };
+}
+
+
 function activateStackAutomation(sub, token, autoId, customerKey) {
- var prox = new Script.Util.WSProxy();
- var resolvedId = resolveProgramObjectId(prox, customerKey, autoId);
- if (!resolvedId) {
-  return { ok: false, msg: "No automation id on build log." };
- }
- var beforeProgram = getProgramById(prox, resolvedId);
- if (!beforeProgram) {
-  return {
-   ok: false,
-   msg:
-    "Could not retrieve automation Program (ObjectID " +
-    resolvedId +
-    "). Missing or stale automationCustomerKey on build log."
-  };
- }
- var beforeStatus =
-  beforeProgram.Status !== null && beforeProgram.Status !== undefined
-   ? String(beforeProgram.Status)
-   : "";
- if (beforeStatus === "3") {
-  return {
-   ok: false,
-   msg:
-    "Automation is already running. Status before: " +
-    programStatusLabel(beforeStatus) +
-    " (" +
-    beforeStatus +
-    ")"
-  };
- }
- if (beforeStatus === "4" || beforeStatus === "5") {
-  if (!sub || !token || !autoId) {
-   return {
-    ok: false,
-    msg: "Cannot reactivate automation schedule without API auth."
-   };
-  }
-  return reactivateAutomationSchedule(
-   sub,
-   token,
-   autoId,
-   customerKey,
-   resolvedId,
-   beforeStatus
-  );
- }
  var soapResult = performAutomationSoapStart(autoId, customerKey);
  if (soapResult.ok) {
   return soapResult;
@@ -1357,17 +928,16 @@ function activateStackAutomation(sub, token, autoId, customerKey) {
  if (
   sub &&
   token &&
-  autoId &&
-  soapResult.unchanged === true
+  soapResult.msg.indexOf("already running") < 0
  ) {
-  return reactivateAutomationSchedule(
-   sub,
-   token,
-   autoId,
-   customerKey,
-   resolvedId,
-   soapResult.beforeStatus || beforeStatus
-  );
+  var restResult = runAutomationOnceRest(sub, token, autoId);
+  if (restResult.ok) {
+   return restResult;
+  }
+  return {
+   ok: false,
+   msg: soapResult.msg + " " + restResult.msg
+  };
  }
  return soapResult;
 }
@@ -1392,10 +962,7 @@ var dispDeIdVal = Platform.Variable.GetValue("@dispDeId") || "";
 var dispDeNameVal = Platform.Variable.GetValue("@dispDeName") || "";
 var detailCountVal = Number(Platform.Variable.GetValue("@detailCount") || 0);
 if (detailCountVal > 0) {
- var deRowCountVal = Number(Platform.Variable.GetValue("@dispDeRowCount") || 0);
- if (isNaN(deRowCountVal) || deRowCountVal <= 0) {
-   deRowCountVal = resolveEntryDeRowCount(dispDeIdVal, dispDeNameVal);
- }
+ var deRowCountVal = resolveEntryDeRowCount(dispDeIdVal, dispDeNameVal);
  var sentDisplayVal = buildSentDisplay(
    Platform.Variable.GetValue("@dispSentCount") || "",
    deRowCountVal
@@ -3162,13 +2729,13 @@ pre.log.show{display:block}
  </dd>
 %%[ ENDIF ]%%
 %%[ IF NOT Empty(@dispSentDisplay) THEN ]%%
- <dt>Sent count</dt>
- <dd>%%=v(@dispSentDisplay)=%%</dd>
+ <dt>Sent count </dt>
+ <dd>%%=v(@dispSentDisplay)=%% %%[ IF NOT Empty(@dispDeIdCount) THEN ]%% of %%=v(@dispDeIdCount)=%% %%[ ENDIF ]%%</dd>
 %%[ ENDIF ]%%
  <dt>Build actions</dt>
  <dd class="detail-dd-wrap">
   <div class="detail-dd-row">
-   <span>Manage</span>
+   <span>Manage Build</span>
    <button type="button" class="detail-expand-btn" aria-expanded="false" aria-controls="buildActionsPanel" aria-label="Show build actions">
     <svg class="detail-chevron" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/></svg>
    </button>
