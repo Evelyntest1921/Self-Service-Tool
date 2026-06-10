@@ -966,7 +966,6 @@ function stackEventSchemaFields() {
     { name: "AppointmentLink", dataType: "Text", maxLength: "4000", isNullable: true },
     { name: "VAWP", dataType: "Text", maxLength: "4000", isNullable: true },
     { name: "EmailName", dataType: "Text", maxLength: "255", isNullable: true },
-    { name: "type", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "uniqueKey", dataType: "Text", maxLength: "50", isNullable: true }
   ];
 }
@@ -1198,37 +1197,12 @@ function stackCreateEntryDeViaSoap(prox, customerKey, deName) {
      "Entry DE created but ObjectID was not returned. CustomerKey=" + ck + "."
    };
   }
-  var verified = stackRetrieveDeByFilter(prox, {
-   Property: "ObjectID",
-   SimpleOperator: "equals",
-   Value: objectId
-  });
-  if (!verified || !verified.customerKey) {
-   verified = stackResolveExistingDe(prox, ck, name);
-  }
-  if (!verified || !verified.customerKey) {
-   return {
-    ok: false,
-    message:
-     "Entry DE created but CustomerKey could not be verified. ObjectID=" +
-     objectId +
-     "."
-   };
-  }
-  var keyNote =
-   verified.customerKey !== ck
-    ? " Actual CustomerKey=" +
-      verified.customerKey +
-      " (requested " +
-      ck +
-      ")."
-    : "";
   return {
    ok: true,
-   objectId: verified.objectId || objectId,
-   customerKey: verified.customerKey,
-   name: verified.name || name,
-   message: keyNote + " uniqueKey is primary key; id is sendable contact key."
+   objectId: objectId,
+   customerKey: ck,
+   name: name,
+   message: " uniqueKey is primary key; id is sendable contact key."
   };
 }
 
@@ -1620,7 +1594,6 @@ function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environme
     "  u.Appointment_Link__c AS AppointmentLink,\n" +
     "  '' AS VAWP,\n" +
     "  cm.Campaign_Name__c AS EmailName,\n" +
-    "  'SST' AS type,\n" +
     "  cm.id AS uniqueKey\n" +
     "FROM " + cmTable + " cm\n" +
     "LEFT JOIN " + contactTable + " con ON cm.ContactId = con.id\n" +
@@ -1821,63 +1794,6 @@ function postResolveEntryDe(prox, eventName, eventDefId, token, subdomain, asset
         name: String(deResp.Results[0].Name || eventName)
       };
     }
-  }
-  return null;
-}
-
-function postResolveDeByObjectId(prox, objectId) {
-  var id = String(objectId || "");
-  if (!id || !prox) {
-    return null;
-  }
-  var resp = prox.retrieve(
-    "DataExtension",
-    ["ObjectID", "CustomerKey", "Name"],
-    {
-      Property: "ObjectID",
-      SimpleOperator: "equals",
-      Value: id
-    }
-  );
-  if (resp && resp.Results && resp.Results.length > 0 && resp.Results[0].CustomerKey) {
-    return {
-      objectId: String(resp.Results[0].ObjectID || id),
-      customerKey: String(resp.Results[0].CustomerKey),
-      name: String(resp.Results[0].Name || "")
-    };
-  }
-  return null;
-}
-
-function postResolveEntryDeForBuild(prox, opts) {
-  var objectId = String(opts.objectId || "");
-  var hintKey = String(opts.customerKeyHint || "");
-  var hintName = String(opts.nameHint || "");
-  var verified = objectId ? postResolveDeByObjectId(prox, objectId) : null;
-  if (verified && verified.customerKey) {
-    return verified;
-  }
-  var resolved = postResolveEntryDe(
-    prox,
-    hintName,
-    opts.eventDefId,
-    opts.token,
-    opts.subdomain,
-    opts.assetKey
-  );
-  if (resolved && resolved.customerKey) {
-    return {
-      objectId: objectId,
-      customerKey: resolved.customerKey,
-      name: resolved.name || hintName
-    };
-  }
-  if (hintKey) {
-    return {
-      objectId: objectId,
-      customerKey: hintKey,
-      name: hintName
-    };
   }
   return null;
 }
@@ -2270,23 +2186,14 @@ if (postDeleteRequested != "1") {
         ".";
     } else {
       var postProx = new Script.Util.WSProxy();
-      var entryDe = postResolveEntryDeForBuild(postProx, {
-        objectId: postEntryDeObjectId,
-        customerKeyHint: postDeCustomerKeyVal,
-        nameHint: postEventName || postStackName,
-        eventDefId: postEventDefId,
-        token: postAccessToken,
-        subdomain: postSubdomain,
-        assetKey: postAssetKey
-      });
-      if (!entryDe || !entryDe.customerKey) {
+      var entryDe = {
+        customerKey: postDeCustomerKeyVal,
+        name: postEventName || postStackName
+      };
+      if (!entryDe.customerKey) {
         postSuffix = " Step 5 FAILED - entry DE CustomerKey missing.";
       } else {
         Platform.Variable.SetValue("@deCustomerKey", entryDe.customerKey);
-        Platform.Variable.SetValue("@entryDeName", entryDe.name || postEventName || postStackName);
-        if (entryDe.objectId) {
-          Platform.Variable.SetValue("@entryDeObjectId", entryDe.objectId);
-        }
         var queryText = postBuildCampaignMemberQuery(
           postCampaignId,
           postSfUserId,
@@ -3109,7 +3016,7 @@ IF @showForm == "false" AND @deleteAllRequested != "1" AND IndexOf(@resultText,"
   "emailName", Substring(@emailName,1,50),
   "emailId", Substring(@newEmailId,1,50),
   "deName", Substring(@analyticsDeName,1,200),
-  "deId", Substring(@analyticsDeId,1,200),
+  "deId", Substring(@analyticsDeId,1,50),
   "automationName", Substring(@analyticsAutomationName,1,50),
   "automationGuid", Substring(@analyticsAutomationGuid,1,50),
   "automationCustomerKey", Substring(@analyticsAutomationCustomerKey,1,50),
