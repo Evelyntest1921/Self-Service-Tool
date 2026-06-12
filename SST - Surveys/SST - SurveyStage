@@ -1,13 +1,19 @@
 %%[
-VAR @errorFlag, @dataExists, @testCount, @mode, @surveyId, @editSurveyName, @editSurveyStatus, @editSurveyDescription, @editSurveyTargetAudience, @editQuestions
+VAR @errorFlag, @dataExists, @testCount, @mode, @surveyId, @updated, @editSurveyName, @editSurveyStatus, @editSurveyDescription, @editSurveyTargetAudience, @editQuestions
 VAR @navRows, @navRow, @hubUrl, @builderPageLabel, @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @SURVEY_STAGE_URL, @SURVEY_ANALYTICS_URL
-VAR @detailRows, @detailRow, @isSurveyBuild, @buildNavContext, @buildNavActive, @surveyUrlRows, @surveyUrlRow
+VAR @detailRows, @detailRow, @isSurveyBuild, @buildNavContext, @buildNavActive, @surveyUrlRows, @surveyUrlRow, @redirectBase, @qPos, @redirectUrl
 SET @errorFlag = "false"
 SET @dataExists = "true"
 SET @mode = RequestParameter("mode")
-SET @surveyId = RequestParameter("surveyid")
+SET @surveyId = Trim(RequestParameter("surveyid"))
+IF Empty(@surveyId) THEN
+  SET @surveyId = Trim(RequestParameter("SurveyID"))
+ENDIF
 SET @updated = RequestParameter("updated")
 SET @jid = Trim(RequestParameter("journeyId"))
+IF @updated == "1" AND Empty(@mode) THEN
+  SET @mode = "edit"
+ENDIF
 SET @hubUrl = ""
 SET @BUILD_PAGE_SELF = ""
 SET @PERFORMANCE_URL = ""
@@ -85,48 +91,6 @@ SET @testFieldCount = RowCount(@testField)
 VAR @wildcardTest, @wildcardCount
 SET @wildcardTest = LookupRows("SST_SP_Survey_Questions_DE", "QuestionID", "*")
 SET @wildcardCount = RowCount(@wildcardTest)
-
-
-
-
-/* Load survey data for edit mode */
-IF @mode == "edit" AND NOT EMPTY(@surveyId) THEN
-  /* Get survey details from master DE */
-  SET @editSurveyName = Lookup("SST_SP_Surveys_Master_DE", "SurveyName", "SurveyID", @surveyId)
-  SET @editSurveyStatus = Lookup("SST_SP_Surveys_Master_DE", "SurveyStatus", "SurveyID", @surveyId)
-  SET @editSurveyDescription = Lookup("SST_SP_Surveys_Master_DE", "SurveyDescription", "SurveyID", @surveyId)
-  SET @editSurveyTargetAudience = Lookup("SST_SP_Surveys_Master_DE", "SurveyTargetAudience", "SurveyID", @surveyId)
- 
-  /* Get existing questions */
-  SET @editQuestions = LookupOrderedRows("SST_SP_Survey_Questions_DE", 0, "QuestionNumber ASC", "SurveyID", @surveyId)
- 
-  /* Debug: Check if questions were found */
-  VAR @questionCount
-  SET @questionCount = RowCount(@editQuestions)
- 
-  /* Debug: Try to get any questions from the DE to test access */
-  VAR @testQuestions, @testCount
-  SET @testQuestions = LookupRows("SST_SP_Survey_Questions_DE", "QuestionID", "")
-  SET @testCount = RowCount(@testQuestions)
- 
-  /* Debug: Try alternative query method */
-  VAR @altTestQuestions, @altTestCount
-  SET @altTestQuestions = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", "")
-  SET @altTestCount = RowCount(@altTestQuestions)
- 
-  /* Debug: Test with the specific SurveyID */
-  VAR @specificTest, @specificCount
-  SET @specificTest = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId)
-  SET @specificCount = RowCount(@specificTest)
- 
-  /* Debug: Get a sample SurveyID from the DE */
-  VAR @sampleSurveyId
-  IF @testCount > 0 THEN
-    SET @sampleSurveyId = Field(Row(@testQuestions, 1), "SurveyID")
-  ELSEIF @altTestCount > 0 THEN
-    SET @sampleSurveyId = Field(Row(@altTestQuestions, 1), "SurveyID")
-  ENDIF
-ENDIF
 
 
 
@@ -240,22 +204,55 @@ IF @submitted == "true" THEN
   ENDIF
 
   IF @mode == "edit" AND NOT EMPTY(@surveyId) AND NOT EMPTY(@surveyName) THEN
-    SET @pageUrl = RequestParameter("PAGEURL")
-    IF Empty(@pageUrl) THEN
-      SET @pageUrl = @SURVEY_STAGE_URL
-    ENDIF
-    IF NOT Empty(@pageUrl) THEN
-      IF IndexOf(@pageUrl, "?") > 0 THEN
-        SET @redirectUrl = Concat(@pageUrl, "&mode=edit&surveyid=", @surveyId, "&updated=1")
-      ELSE
-        SET @redirectUrl = Concat(@pageUrl, "?mode=edit&surveyid=", @surveyId, "&updated=1")
+    IF Empty(@jid) AND @surveyId != "N/A" THEN
+      SET @detailRows = LookupRows("Bd_journey_analytics","surveyId",@surveyId)
+      IF RowCount(@detailRows) > 0 THEN
+        SET @jid = Trim(Field(Row(@detailRows,1),"journeyId"))
       ENDIF
+    ENDIF
+    SET @redirectBase = @SURVEY_STAGE_URL
+    IF Empty(@redirectBase) THEN
+      SET @redirectBase = RequestParameter("PAGEURL")
+    ENDIF
+    IF NOT Empty(@redirectBase) THEN
+      SET @qPos = IndexOf(@redirectBase, "?")
+      IF @qPos > 0 THEN
+        SET @redirectBase = Substring(@redirectBase, 1, Subtract(@qPos, 1))
+      ENDIF
+      SET @redirectUrl = Concat(@redirectBase, "?mode=edit&surveyid=", @surveyId, "&updated=1")
       IF NOT Empty(@jid) THEN
         SET @redirectUrl = Concat(@redirectUrl, "&journeyId=", @jid)
       ENDIF
       Redirect(@redirectUrl)
     ENDIF
   ENDIF
+ENDIF
+
+IF Empty(@jid) AND NOT Empty(@surveyId) AND @surveyId != "N/A" AND @mode == "edit" THEN
+  SET @detailRows = LookupRows("Bd_journey_analytics","surveyId",@surveyId)
+  IF RowCount(@detailRows) > 0 THEN
+    SET @jid = Trim(Field(Row(@detailRows,1),"journeyId"))
+  ENDIF
+ENDIF
+IF NOT Empty(@jid) THEN
+  SET @buildNavContext = "true"
+  SET @detailRows = LookupRows("Bd_journey_analytics","journeyId",@jid)
+  IF RowCount(@detailRows) > 0 THEN
+    IF IndexOf(Field(Row(@detailRows,1),"journeyType"),"Survey") > 0 THEN
+      SET @isSurveyBuild = "true"
+    ENDIF
+  ENDIF
+ENDIF
+IF @mode == "edit" THEN
+  SET @builderPageLabel = "Edit Survey"
+ENDIF
+
+IF @mode == "edit" AND NOT Empty(@surveyId) THEN
+  SET @editSurveyName = Lookup("SST_SP_Surveys_Master_DE", "SurveyName", "SurveyID", @surveyId)
+  SET @editSurveyStatus = Lookup("SST_SP_Surveys_Master_DE", "SurveyStatus", "SurveyID", @surveyId)
+  SET @editSurveyDescription = Lookup("SST_SP_Surveys_Master_DE", "SurveyDescription", "SurveyID", @surveyId)
+  SET @editSurveyTargetAudience = Lookup("SST_SP_Surveys_Master_DE", "SurveyTargetAudience", "SurveyID", @surveyId)
+  SET @editQuestions = LookupOrderedRows("SST_SP_Survey_Questions_DE", 0, "QuestionNumber ASC", "SurveyID", @surveyId)
 ENDIF
 ]%%
 
@@ -1083,7 +1080,7 @@ ENDIF
     color: var(--gray-900); padding-bottom: 20px">%%=v(@builderPageLabel)=%%</span>
         <p class="sub">Quickly create marketing cloud surveys.</p>
       <!-- Survey Creation Form -->
-      <form method="POST" action="%%=RequestParameter('PAGEURL')=%%" id="surveyForm">
+      <form method="POST" action="%%=IIF(NOT Empty(@SURVEY_STAGE_URL), @SURVEY_STAGE_URL, RequestParameter('PAGEURL'))=%%" id="surveyForm">
         <input type="hidden" name="submitted" value="true">
         %%[ IF @mode == "edit" THEN ]%%
         <input type="hidden" name="mode" value="edit">
