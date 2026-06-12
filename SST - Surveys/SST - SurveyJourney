@@ -1389,9 +1389,9 @@ IF @emailOk == "true" AND @authOk == "true" AND NOT Empty(@journeyEmailId) AND @
  SET @triggerConfig = Concat('{"applicationExtensionKey":"SalesforceObjectTriggerV2","version":"3.0","objectAPIName":"CampaignMember","salesforceTriggerCriteria":"Created","contactKey":',@contactKeyObj,',"eventDataConfig":',@eventDataConfigObj,',"eventDataSummary":"CampaignMember:Id; CampaignMember:CreatedDate; CampaignMember:Account_Owner__c; CampaignMember:Common:Id; CampaignMember:Common:Email; CampaignMember:Common:HasOptedOutOfEmail; CampaignMember:Common:FirstName; CampaignMember:Common:Name; CampaignMember:Common:LastName; CampaignMember:Common:Title; CampaignMember:Common:Salutation; CampaignMember:Campaign:Name; CampaignMember:Campaign:Id; CampaignMember:Account:Id; CampaignMember:Account:Name; CampaignMember:Account:OwnerId; CampaignMember:Account:Billing_State__c","primaryObjectFilterCriteria":',@filterCriteria,',"primaryObjectFilterSummary":"CampaignMember:CampaignId EQUALS ',@campaignNameForJson,' (',@campaignId,')","relatedObjectFilterCriteria":',@relatedFilter,',"relatedObjectFilterSummary":"Common:Contacts and Leads:Id WASSET","additionalObjectFilterCriteria":"","passThroughArgument":',@passThroughArgObj,',"contactPersonType":"CampaignMember","evaluationCriteriaSummary":"Created","whoToInject":"Contact ID/Lead ID (Contacts and Leads)"}')
  SET @triggerMeta = Concat('{"eventDefinitionId":"',@eventDefId,'","eventDefinitionKey":"',@eventKey,'","chainType":"None","configurationRequired":false,"iconUrl":"/events/js/salesforce-event/events/NetworkMember/images/SF-Event-Icon.svg","title":"","entrySourceGroupConfigUrl":"jb:///data/entry/salesforce-event/entrysourcegroupconfig.json"}')
  IF @addTaskActivity == "1" THEN
-   SET @waitActivity = '{"type":"WAIT","key":"WAIT-1","name":"1 min","outcomes":[{"next":"SALESCLOUDACTIVITY-1","metaData":{"invalid":false}}],"metaData":{"isConfigured":true,"isExtended":false,"waitType":"duration","guidanceCardKey":null,"uiType":"WAITBYDURATION"},"configurationArguments":{"waitDuration":1,"waitUnit":"MINUTES","timeZone":"America/New_York","specifiedTime":"00:00"}}'
+   SET @waitActivity = '{"type":"WAIT","key":"WAIT-1","name":"1 min","outcomes":[{"next":"SALESCLOUDACTIVITY-2","metaData":{"invalid":false}}],"metaData":{"isConfigured":true,"isExtended":false,"waitType":"duration","guidanceCardKey":null,"uiType":"WAITBYDURATION"},"configurationArguments":{"waitDuration":1,"waitUnit":"MINUTES","timeZone":"America/New_York","specifiedTime":"00:00"}}'
  ELSE
-   SET @waitActivity = '{"type":"WAIT","key":"WAIT-1","name":"1 min","outcomes":[{"next":null,"metaData":{"invalid":false}}],"metaData":{"isConfigured":true,"isExtended":false,"waitType":"duration","guidanceCardKey":null,"uiType":"WAITBYDURATION"},"configurationArguments":{"waitDuration":1,"waitUnit":"MINUTES","timeZone":"America/New_York","specifiedTime":"00:00"}}'
+   SET @waitActivity = '{"type":"WAIT","key":"WAIT-1","name":"1 min","outcomes":[{"next":"SALESCLOUDACTIVITY-2","metaData":{"invalid":false}}],"metaData":{"isConfigured":true,"isExtended":false,"waitType":"duration","guidanceCardKey":null,"uiType":"WAITBYDURATION"},"configurationArguments":{"waitDuration":1,"waitUnit":"MINUTES","timeZone":"America/New_York","specifiedTime":"00:00"}}'
  ENDIF
  ELSE
    SET @resultText = Concat(@resultText," Step 3 FAILED: HTTP ",@eventStatus," - ",@eventResponse)
@@ -1520,6 +1520,179 @@ function lookupSendClassificationCj(classificationId) {
     if (rows.length > 0) return rows[0];
   } catch (scErr) {}
   return null;
+}
+function randomGuidCj() {
+  var tpl = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx";
+  return tpl.replace(/[xy]/g, function (c) {
+    var r = (Math.random() * 16) | 0;
+    var v = c == "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+function buildCampaignSecondaryLookupCj(campId, campLabel) {
+  var lookupObj = {
+    label: "Campaign ID",
+    name: "CampaignId",
+    datatype: "reference",
+    length: 18,
+    nillable: false,
+    custom: false,
+    updateable: false,
+    createable: true,
+    defaultedoncreate: false,
+    externalid: false,
+    idlookup: false,
+    precision: 0,
+    scale: 0,
+    displaydatatype: "Lookup Relationship",
+    objectname: "CampaignMember",
+    relationname: "Campaign",
+    referenceto: ["Campaign"],
+    isnamefield: false,
+    id: "CampaignId",
+    config: {
+      uiComponent: "typeahead",
+      processors: ["static"],
+      validators: [{}],
+      relatedFields: [
+        {
+          fieldName: "Status",
+          routeConfig: {
+            objectType: "campaignmemberstatus",
+            fields: "campaignid,id,label,isdeleted",
+            sortField: "label",
+            filterParams: "isdeleted=false|campaignId="
+          }
+        }
+      ]
+    },
+    required: true,
+    multipleOptions: false,
+    attributeMatch: ["Text"],
+    value: { id: campId, name: campLabel },
+    valueLabel: campLabel,
+    referenceObject: "Campaign"
+  };
+  return Platform.Function.Stringify(lookupObj);
+}
+function buildCmUpdateActivityCj(opts) {
+  var ek = opts.eventKey;
+  var campId = opts.campaignId;
+  var campLabel = opts.campaignLabel || campId;
+  var nextKey = opts.nextKey || "";
+  var mergeContactId = '{{Event."' + ek + '"."CampaignMember:Common:Id"}}';
+  var outcome = {
+    key: randomGuidCj(),
+    arguments: {},
+    metaData: { invalid: false }
+  };
+  if (nextKey) {
+    outcome.next = nextKey;
+  }
+  return {
+    id: randomGuidCj(),
+    key: "SALESCLOUDACTIVITY-2",
+    name: "Update Campaign Member Activity",
+    description: "",
+    type: "SALESCLOUDACTIVITY",
+    outcomes: [outcome],
+    arguments: {
+      version: "1.0",
+      objectMap: {
+        objects: [
+          {
+            type: "CampaignMember",
+            subtype: null,
+            order: "1",
+            action: "Update",
+            lookup: {
+              type: "salesforceLookup",
+              lookupObject: "CampaignMember",
+              steps: [
+                {
+                  criteria: [
+                    {
+                      FieldName: "ContactId",
+                      FieldValue: mergeContactId,
+                      FieldValueLabel: "CampaignMember:Common:Id",
+                      FieldType: "reference",
+                      ReferenceObjectNames: ["CONTACT"],
+                      AdditionalInfo: {
+                        objectLookupType: "Contact",
+                        identifyingField: "ContactId",
+                        identifyingFieldType: "reference",
+                        identifyingFieldLabel: "Contact ID"
+                      }
+                    },
+                    {
+                      FieldName: "CampaignId",
+                      FieldValue: campId,
+                      FieldValueLabel: campLabel,
+                      FieldType: "reference",
+                      AdditionalInfo: {
+                        secondaryLookup: buildCampaignSecondaryLookupCj(
+                          campId,
+                          campLabel
+                        )
+                      }
+                    }
+                  ],
+                  MultiOutComeOption: "DoNotUpdate",
+                  ZeroOutComeOption: "CreateNew"
+                }
+              ]
+            },
+            fields: [
+              {
+                Updateable: "false",
+                FieldName: "CampaignId",
+                FieldLabel: "Campaign ID",
+                FieldValue: campId,
+                FieldValueLabel: campLabel,
+                Required: "true",
+                FieldType: "reference",
+                MappingType: "Constant",
+                Processor: "static",
+                ReferenceObjectNames: ["CAMPAIGN"],
+                AdditionalInfo: { ReferenceObject: "Campaign" }
+              },
+              {
+                Updateable: "false",
+                FieldName: "ContactId",
+                FieldLabel: "Contact ID",
+                FieldValue: mergeContactId,
+                FieldValueLabel: "CampaignMember:Common:Id",
+                Required: "false",
+                FieldType: "reference",
+                MappingType: "Constant",
+                Processor: "static",
+                ReferenceObjectNames: ["CONTACT"]
+              },
+              {
+                UpdateType: "OverWriteNewValue",
+                Updateable: "true",
+                FieldName: "Status",
+                FieldLabel: "Status",
+                FieldValue: "Sent",
+                FieldValueLabel: "Sent",
+                Required: "false",
+                FieldType: "picklist",
+                MappingType: "Constant",
+                Processor: "static"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    configurationArguments: {
+      applicationExtensionKey: "Salesforce_Activity_CampaignMember"
+    },
+    metaData: {
+      isConfigured: true,
+      expressionBuilderPrefix: "Campaign Member"
+    }
+  };
 }
 var emailOk = Variable.GetValue("emailOk");
 if (emailOk != "true") {
@@ -1671,7 +1844,21 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
      };
      taskActivity = Platform.Function.Stringify(taskActivityObj);
    }
-   var activitiesJson = addTaskActivity == "1" ? (emailActivity + ',' + waitActivity + ',' + taskActivity) : (emailActivity + ',' + waitActivity);
+   var eventKeyCj = Platform.Variable.GetValue("@eventKey") || "";
+   var campaignIdCj = Platform.Variable.GetValue("@campaignId") || "";
+   var campaignNameCj = Platform.Variable.GetValue("@campaignName") || campaignIdCj;
+   var cmNextKey = addTaskActivity == "1" ? "SALESCLOUDACTIVITY-1" : "";
+   var cmObj = buildCmUpdateActivityCj({
+     eventKey: eventKeyCj,
+     campaignId: campaignIdCj,
+     campaignLabel: campaignNameCj,
+     nextKey: cmNextKey
+   });
+   var cmActivity = Platform.Function.Stringify(cmObj);
+   var activitiesJson = emailActivity + "," + waitActivity + "," + cmActivity;
+   if (addTaskActivity == "1") {
+     activitiesJson = activitiesJson + "," + taskActivity;
+   }
    var journeyPayload = '{"name":"' + journeyNameEscaped + '","definitionType":"Multistep","channel":"","description":"","version":1,"workflowApiVersion":1.0,"entryMode":"OnceAndDone","key":"' + journeyKey + '","activities":[' + activitiesJson + '],"notifiers":[],"metaData":{"disableEndWait":true,"dataSource":"ContactsModel","highThroughputSending":{"email":false}},"defaults":{"email":["' + (defaultEmailEscaped || "") + '"],"properties":{"analyticsTracking":{"enabled":true,"analyticsType":"google","urlDomainsToTrack":[]}}},"goals":[],"exits":[],"triggers":[' + triggerWithOutcomes + ']}';
    var postReq = new Script.Util.HttpRequest(journeyUrl);
    postReq.emptyContentHandling = 0;
