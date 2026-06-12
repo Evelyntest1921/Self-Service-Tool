@@ -13,6 +13,7 @@ ENDIF
 SET @hubUrl = ""
 SET @buildDetailUrl = ""
 SET @surveyHomeUrl = ""
+SET @surveyStageUrl = ""
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
  SET @navRow = Row(@navRows,1)
@@ -23,6 +24,7 @@ SET @surveyUrlRows = LookupRows("SST_SP_Survey_Url_DE","user","admin")
 IF RowCount(@surveyUrlRows) > 0 THEN
  SET @surveyUrlRow = Row(@surveyUrlRows,1)
  SET @surveyHomeUrl = Field(@surveyUrlRow,"dashboard")
+ SET @surveyStageUrl = Field(@surveyUrlRow,"create")
 ENDIF
 SET @builderPageLabel = "Survey"
 SET @showForm = "true"
@@ -1369,69 +1371,7 @@ ENDIF
 IF IndexOf(@step3bResult,"Step 3b OK - Email created") > 0 AND NOT Empty(@newEmailId) THEN
  SET @emailOk = "true"
 ENDIF
-IF @emailOk == "true" AND NOT Empty(@createRequested) AND NOT EMPTY(@surveyName) THEN
-  SET @surveyId = Concat("SURV_", Format(Now(), "yyyyMMdd_HHmmss"))
-  UPSERTDE(
-    "SST_SP_Surveys_Master_DE", 1, "SurveyID", @surveyId,
-    "SurveyName", @surveyName,
-    "SurveyStatus", "Active",
-    "SurveyCreatedDate", NOW()
-  )
-  SET @surveySaved = "true"
-  VAR @questionCount, @i, @questionText, @questionType, @options, @required, @questionId
-  SET @questionCount = RequestParameter("questionCount")
-  IF NOT EMPTY(@questionCount) THEN
-    FOR @i = 1 TO @questionCount DO
-      SET @questionText = RequestParameter(Concat("question", @i))
-      SET @questionType = RequestParameter(Concat("questionType", @i))
-      SET @required = RequestParameter(Concat("required", @i))
-      SET @questionId = Concat("Q", @surveyId, "_", @i)
-      SET @options = ""
-      IF @questionType == "likert" THEN
-        SET @options = "Strongly Agree|Agree|Neutral|Disagree|Strongly Disagree"
-      ELSEIF @questionType == "rating" THEN
-        SET @options = "Excellent|Good|Fair|Poor"
-      ELSEIF @questionType == "yesno" THEN
-        SET @options = "Yes|No"
-      ELSEIF @questionType == "text" THEN
-        SET @options = "Text Input"
-      ELSEIF @questionType == "multiple" THEN
-        VAR @optionCount, @j, @optionText
-        SET @optionCount = RequestParameter(Concat("optionCount", @i))
-        IF NOT EMPTY(@optionCount) THEN
-          FOR @j = 1 TO @optionCount DO
-            SET @optionText = RequestParameter(Concat("option", @i, "_", @j))
-            IF NOT EMPTY(@optionText) THEN
-              IF @j == 1 THEN
-                SET @options = @optionText
-              ELSE
-                SET @options = Concat(@options, "|", @optionText)
-              ENDIF
-            ENDIF
-          NEXT @j
-        ENDIF
-      ENDIF
-      IF @required == "true" THEN
-        SET @required = "Yes"
-      ELSE
-        SET @required = "No"
-      ENDIF
-      IF NOT EMPTY(@questionText) THEN
-        UPSERTDE(
-          "SST_SP_Survey_Questions_DE", 1, "QuestionID", @questionId,
-          "SurveyID", @surveyId,
-          "QuestionNumber", @i,
-          "QuestionText", @questionText,
-          "QuestionType", @questionType,
-          "Options", @options,
-          "Required", @required,
-          "OrderIndex", @i
-        )
-      ENDIF
-    NEXT @i
-  ENDIF
-  SET @resultText = Concat(@resultText," Step 3c OK - Survey saved.")
-ELSEIF @showForm == "false" AND @deleteRequested != "1" AND @authOk == "true" AND @emailOk != "true" THEN
+IF @showForm == "false" AND @deleteRequested != "1" AND @authOk == "true" AND @emailOk != "true" THEN
  SET @resultText = Concat(@resultText," Stopped: email was not created. Survey, entry event, and journey were skipped.")
 ENDIF
 IF @emailOk == "true" AND @authOk == "true" AND NOT Empty(@journeyEmailId) AND @createEmailOnly != "1" THEN
@@ -1978,6 +1918,17 @@ if (sjEventDefId && sjSub && sjToken) {
 </script>
 %%[
 IF @showForm == "false" AND @deleteRequested != "1" AND @emailOk == "true" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@newEmailId) THEN
+ IF NOT EMPTY(@surveyName) THEN
+  SET @surveyId = Concat("SURV_", Format(Now(), "yyyyMMdd_HHmmss"))
+  UPSERTDE(
+   "SST_SP_Surveys_Master_DE", 1, "SurveyID", @surveyId,
+   "SurveyName", @surveyName,
+   "SurveyStatus", "Active",
+   "SurveyCreatedDate", NOW()
+  )
+  SET @surveySaved = "true"
+  SET @resultText = Concat(@resultText," Step 3c OK - Survey record created.")
+ ENDIF
  SET @analyticsJourneyName = IIF(NOT Empty(@journeyName), @journeyName, @emailName)
  SET @analyticsJourneyId = IIF(NOT Empty(@journeyId), @journeyId, Concat("email:",@newEmailId))
  SET @analyticsJourneyType = @builderPageLabel
@@ -2322,7 +2273,6 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 textarea.textarea-control { min-height: 88px; resize: vertical; }
 .select-control:focus, .textarea-control:focus { outline: none; border-color: var(--primary-color); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1); }
 .question-card .sender-settings-panel { margin-bottom: 8px; }
-.question-card .btn-add-question { margin-top: 8px; }
 .sender-settings-body .sender-template-group { margin-top: 20px; }
 .sender-settings-body .sender-template-group .question-text { margin-bottom: 12px; }
 .sender-settings-body .email-cards { margin-bottom: 0; }
@@ -2471,338 +2421,6 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
 
 
 
-    /* Question Builder */
-    .question-builder {
-      background: var(--bg-secondary);
-      border-radius: var(--radius-md);
-      padding: 24px;
-      margin-bottom: 24px;
-    }
-
-
-
-
-    .question-type-selector {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 16px;
-      margin-bottom: 24px;
-    }
-
-
-
-
-    .question-type-card {
-      background: var(--bg-primary);
-      border: 2px solid var(--border-color);
-      border-radius: var(--radius-md);
-      padding: 20px;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      text-align: center;
-    }
-
-
-
-
-    .question-type-card:hover {
-      border-color: var(--primary-color);
-      transform: translateY(-2px);
-      box-shadow: var(--shadow-md);
-    }
-
-
-
-
-    .question-type-card.selected {
-      border-color: var(--primary-color);
-      background: rgba(99, 102, 241, 0.05);
-    }
-
-
-
-
-    .question-type-icon {
-      font-size: 24px;
-      margin-bottom: 8px;
-    }
-
-
-
-
-    .question-type-title {
-      font-weight: 600;
-      margin-bottom: 4px;
-    }
-
-
-
-
-    .question-type-desc {
-      font-size: 12px;
-      color: var(--text-secondary);
-    }
-
-
-
-
-    /* Questions List */
-    .questions-list {
-      margin-top: 24px;
-    }
-
-
-
-
-    .question-item {
-      background: var(--bg-primary);
-      border: 1px solid var(--border-color);
-      border-radius: var(--radius-md);
-      padding: 20px;
-      margin-bottom: 16px;
-      position: relative;
-    }
-
-
-
-
-    .question-item .question-item-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 16px;
-    }
-
-    .question-item .question-item-number {
-      background: var(--primary-color);
-      color: white;
-      width: 24px;
-      height: 24px;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 12px;
-      font-weight: 600;
-    }
-
-
-
-
-    .question-actions {
-      display: flex;
-      gap: 8px;
-    }
-
-
-
-
-    .btn-remove {
-      background: #ef4444;
-      color: white;
-      border: none;
-      padding: 6px 12px;
-      border-radius: var(--radius-sm);
-      cursor: pointer;
-      font-size: 12px;
-      transition: background 0.2s ease;
-    }
-
-
-
-
-    .btn-remove:hover {
-      background: #dc2626;
-    }
-
-
-
-
-         /* Options for different question types */
-     .question-options {
-       margin-top: 16px;
-     }
-
-
-
-
-     .option-item {
-       display: flex;
-       align-items: center;
-       margin-bottom: 12px;
-       background: var(--bg-secondary);
-       padding: 12px;
-       border-radius: var(--radius-md);
-       border: 1px solid var(--border-light);
-     }
-
-
-
-
-     .option-label {
-       font-weight: 500;
-       color: var(--text-primary);
-       margin-right: 12px;
-       min-width: 120px;
-       font-size: 14px;
-     }
-
-
-
-
-     .option-input {
-       flex: 1;
-       margin-right: 8px;
-       background: white;
-       border: 1px solid var(--border-color);
-       border-radius: var(--radius-sm);
-       padding: 8px 12px;
-       font-size: 14px;
-     }
-
-
-
-
-     .option-input:focus {
-       outline: none;
-       border-color: var(--primary-color);
-       box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1);
-     }
-
-
-
-
-     .question-type-select {
-       background: white;
-       border: 1px solid var(--border-color);
-       border-radius: var(--radius-md);
-       padding: 10px 12px;
-       font-size: 14px;
-       font-weight: 500;
-       color: var(--text-primary);
-       cursor: pointer;
-       transition: all 0.2s ease;
-     }
-
-
-
-
-     .question-type-select:focus {
-       outline: none;
-       border-color: var(--primary-color);
-       box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
-     }
-
-
-
-
-    .btn-remove-option {
-      background: #ef4444;
-      color: white;
-      border: none;
-      padding: 4px 8px;
-      border-radius: var(--radius-sm);
-      cursor: pointer;
-      font-size: 10px;
-    }
-
-
-
-
-    .btn-add-option {
-      background: var(--secondary-color);
-      color: white;
-      border: none;
-      padding: 8px 16px;
-      border-radius: var(--radius-sm);
-      cursor: pointer;
-      font-size: 12px;
-      margin-top: 8px;
-    }
-
-
-
-
-    /* Buttons */
-    .btn {
-      padding: 12px 24px;
-      border: none;
-      border-radius: var(--radius-md);
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      font-size: 14px;
-    }
-
-
-
-
-    .btn-primary {
-      background: var(--primary-color);
-      color: white;
-    }
-
-
-
-
-    .btn-primary:hover {
-      background: var(--primary-dark);
-      transform: translateY(-1px);
-      box-shadow: var(--shadow-md);
-    }
-
-
-
-
-    .btn-secondary {
-      background: var(--bg-tertiary);
-      color: var(--text-primary);
-      border: 1px solid var(--border-color);
-    }
-
-
-
-
-    .btn-secondary:hover {
-      background: var(--border-color);
-    }
-
-
-
-
-    .action-buttons {
-      display: flex;
-      gap: 16px;
-      justify-content: flex-end;
-      margin-top: 32px;
-      padding-top: 24px;
-      border-top: 1px solid var(--border-color);
-    }
-
-    .btn-add-question {
-      background: #4d4d4d;
-      color: white;
-      border: none;
-      padding: 12px 24px;
-      border-radius: var(--radius-md);
-      cursor: pointer;
-      font-weight: 600;
-      margin-top: 16px;
-      transition: all 0.2s ease;
-    }
-
-
-
-
-    .btn-add-question:hover {
-      background: #000000;
-      transform: translateY(-1px);
-    }
-
-
-
-
-
 .sender-settings-panel {
   margin-top: 8px;
   border: 1px solid var(--border-color);
@@ -2908,7 +2526,7 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
         <h1 class="maker-page-title">Create Survey</h1>
       </div>
     </div>
-    <p class="maker-page-subtitle">Enter survey details, target audience, sender configuration, and questions. A survey journey and email are created when a target audience is provided.</p>
+    <p class="maker-page-subtitle">Enter survey details, target audience, and sender configuration. Marketing Cloud assets are created first; add questions afterward from Edit Survey.</p>
     <div class="maker-form-shell">
    <form method="post" action="" id="surveyForm">
      <div class="question-card">
@@ -2984,15 +2602,6 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
            </div>
          </div>
        </div>
-       <div class="question-header" style="margin-top: 24px;">
-         <div class="question-number">4</div>
-         <div class="question-text">Question Builder</div>
-       </div>
-       <div class="questions-list" id="questionsList"></div>
-       <button type="button" class="btn-add-question" id="addQuestionBtn">
-         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="margin-right: 8px;"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-         Add Question
-       </button>
        <div class="form-group" style="margin-top: 24px;">
          <label style="display:flex;align-items:center;gap:10px;font-size:1rem;">
            <input type="checkbox" name="addTaskActivity" value="1" %%[ IF @addTaskActivity == "1" THEN ]%%checked%%[ ENDIF ]%%>
@@ -3028,7 +2637,7 @@ Review the technical log below, adjust your inputs if needed, and try again.
 %%[ ELSEIF @createEmailOnly == "1" THEN ]%%
 Your email asset is in Content Builder. Use the link below when you are ready to edit or send tests.
 %%[ ELSE ]%%
-Your survey is saved%%=IIF(@surveySaved == "true", Concat(" (", @surveyId, ")"), "")=%%. Your journey and email are in Marketing Cloud. Open them below or return to the builder to start another run.
+Your survey record is ready%%=IIF(@surveySaved == "true", Concat(" (", @surveyId, ")"), "")=%%. Your journey and email are in Marketing Cloud. Use Edit Survey to add questions, or open the links below.
 %%[ ENDIF ]%%
     </p>
     <div class="maker-form-shell">
@@ -3049,8 +2658,8 @@ Your survey is saved%%=IIF(@surveySaved == "true", Concat(" (", @surveyId, ")"),
 %%[ IF @resultJourneyIsGuid == "true" THEN ]%%
           <a href="https://mc.s13.exacttarget.com/cloud/#app/Journey%20Builder/%23%%=v(@resultJourneyId)=%%/1" target="_blank" rel="noopener noreferrer" class="maker-btn maker-btn--primary">Open journey</a>
 %%[ ENDIF ]%%
-%%[ IF NOT Empty(@buildDetailUrl) AND NOT Empty(@resultJourneyId) THEN ]%%
-          <a href="%%=Concat(@buildDetailUrl,"?journeyId=",@resultJourneyId)=%%" class="maker-btn maker-btn--secondary">Edit Build</a>
+%%[ IF NOT Empty(@surveyStageUrl) AND NOT Empty(@surveyId) THEN ]%%
+          <a href="%%=Concat(@surveyStageUrl,"?mode=edit&surveyid=",@surveyId,IIF(NOT Empty(@resultJourneyId),Concat("&journeyId=",@resultJourneyId),""))=%%" class="maker-btn maker-btn--secondary">Edit Survey</a>
 %%[ ENDIF ]%%
           <a href="https://mc.s13.exacttarget.com/cloud/#app/Content%20Builder/" target="_blank" rel="noopener noreferrer" class="maker-btn maker-btn--secondary">Open Content Builder</a>
         </div>
@@ -3074,414 +2683,12 @@ Your survey is saved%%=IIF(@surveySaved == "true", Concat(" (", @surveyId, ")"),
   </main>
 </div>
 <script>
-    let questionCounter = 0;
-    let selectedQuestionType = '';
-
-         // Add question function
-     function addQuestion() {
-       questionCounter++;
-       const questionHtml = createQuestionHTML(questionCounter, 'likert'); // Default to likert
-       
-       const questionsList = document.getElementById('questionsList');
-       questionsList.insertAdjacentHTML('beforeend', questionHtml);
-     }
-         // Create question HTML based on type
-     function createQuestionHTML(number, type, existingText = '', existingOptions = '') {
-       const baseHtml = `
-         <div class="question-item" data-question="${number}">
-           <div class="question-item-header">
-             <div class="question-item-number">${number}</div>
-             <div class="question-actions">
-               <button type="button" class="btn-remove" onclick="removeQuestion(${number})">Remove</button>
-             </div>
-           </div>
-           <div class="form-group">
-             <input type="text" class="textarea-control" name="question${number}" placeholder="Question ${number}" value="${existingText}" required>
-           </div>
-           <div class="form-group">
-             <select class="select-control question-type-select" onchange="updateQuestionType(${number}, this.value)">
-               <option value="likert" ${type === 'likert' ? 'selected' : ''}>Likert Scale</option>
-               <option value="rating" ${type === 'rating' ? 'selected' : ''}>Rating Scale</option>
-               <option value="yesno" ${type === 'yesno' ? 'selected' : ''}>Yes/No</option>
-               <option value="text" ${type === 'text' ? 'selected' : ''}>Text Input</option>
-               <option value="multiple" ${type === 'multiple' ? 'selected' : ''}>Multiple Choice</option>
-             </select>
-             <input type="hidden" name="questionType${number}" value="${type}">
-             <input type="hidden" name="required${number}" value="true">
-           </div>
-       `;
-
-
-
-
-      let optionsHtml = '';
-     
-             switch(type) {
-         case 'likert':
-           optionsHtml = `
-             <div class="question-options">
-               <div class="option-item">
-                 <div class="option-label">Strongly Disagree</div>
-                 <input type="text" class="option-input" name="option${number}_1" value="Strongly Disagree" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">Disagree</div>
-                 <input type="text" class="option-input" name="option${number}_2" value="Disagree" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">Neutral</div>
-                 <input type="text" class="option-input" name="option${number}_3" value="Neutral" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">Agree</div>
-                 <input type="text" class="option-input" name="option${number}_4" value="Agree" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">Strongly Agree</div>
-                 <input type="text" class="option-input" name="option${number}_5" value="Strongly Agree" readonly>
-               </div>
-             </div>
-           `;
-           break;
-           
-         case 'rating':
-           optionsHtml = `
-             <div class="question-options">
-               <div class="option-item">
-                 <div class="option-label">⭐ Poor</div>
-                 <input type="text" class="option-input" name="option${number}_1" value="Poor" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">⭐⭐ Fair</div>
-                 <input type="text" class="option-input" name="option${number}_2" value="Fair" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">⭐⭐⭐ Good</div>
-                 <input type="text" class="option-input" name="option${number}_3" value="Good" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">⭐⭐⭐⭐ Very Good</div>
-                 <input type="text" class="option-input" name="option${number}_4" value="Very Good" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">⭐⭐⭐⭐⭐ Excellent</div>
-                 <input type="text" class="option-input" name="option${number}_5" value="Excellent" readonly>
-               </div>
-             </div>
-           `;
-           break;
-           
-         case 'yesno':
-           optionsHtml = `
-             <div class="question-options">
-               <div class="option-item">
-                 <div class="option-label">✅ Yes</div>
-                 <input type="text" class="option-input" name="option${number}_1" value="Yes" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">❌ No</div>
-                 <input type="text" class="option-input" name="option${number}_2" value="No" readonly>
-               </div>
-             </div>
-           `;
-           break;
-           
-         case 'text':
-           optionsHtml = `
-             <div class="question-options">
-               <div class="option-item">
-                 <div class="option-label">📝 Text Response</div>
-                 <textarea class="form-textarea" name="option${number}_1" placeholder="This will be a text area for open-ended responses" readonly></textarea>
-               </div>
-             </div>
-           `;
-           break;
-         
-                 case 'multiple':
-           let multipleOptionsHtml = `<div class="question-options" id="options${number}">`;
-           
-           if (existingOptions) {
-             const options = existingOptions.split('|');
-             options.forEach((option, index) => {
-               multipleOptionsHtml += `
-                 <div class="option-item">
-                   <div class="option-label">📋 Option ${index + 1}</div>
-                   <input type="text" class="option-input" name="option${number}_${index + 1}" placeholder="Enter option text" value="${option}" required>
-                   <button type="button" class="btn-remove-option" onclick="removeOption(${number}, ${index + 1})">×</button>
-                 </div>
-               `;
-             });
-           } else {
-             multipleOptionsHtml += `
-               <div class="option-item">
-                 <div class="option-label">📋 Option 1</div>
-                 <input type="text" class="option-input" name="option${number}_1" placeholder="Enter option text" required>
-                 <button type="button" class="btn-remove-option" onclick="removeOption(${number}, 1)">×</button>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">📋 Option 2</div>
-                 <input type="text" class="option-input" name="option${number}_2" placeholder="Enter option text" required>
-                 <button type="button" class="btn-remove-option" onclick="removeOption(${number}, 2)">×</button>
-               </div>
-             `;
-           }
-           
-           multipleOptionsHtml += `</div><button type="button" class="btn-add-option" onclick="addOption(${number})">Add Option</button>`;
-           optionsHtml = multipleOptionsHtml;
-           break;
-      }
-
-
-
-
-      return baseHtml + optionsHtml + '</div>';
-    }
-
-
-
-
-    // Remove question
-    function removeQuestion(number) {
-      const question = document.querySelector(`[data-question="${number}"]`);
-      if (question) {
-        question.remove();
-        renumberQuestions();
-      }
-    }
-
-
-
-
-    function renumberQuestions() {
-      const questions = document.querySelectorAll('.question-item');
-      questions.forEach((question, index) => {
-        const number = index + 1;
-        const oldNumber = question.dataset.question;
-        question.dataset.question = String(number);
-        const numEl = question.querySelector('.question-item-number');
-        if (numEl) numEl.textContent = number;
-        const qInput = question.querySelector('input[name^="question"]');
-        if (qInput) {
-          qInput.name = 'question' + number;
-          qInput.placeholder = 'Question ' + number;
-        }
-        const typeInput = question.querySelector('input[name^="questionType"]');
-        if (typeInput) typeInput.name = 'questionType' + number;
-        const reqInput = question.querySelector('input[name^="required"]');
-        if (reqInput) reqInput.name = 'required' + number;
-        const typeSelect = question.querySelector('.question-type-select');
-        if (typeSelect) typeSelect.setAttribute('onchange', 'updateQuestionType(' + number + ', this.value)');
-        const removeBtn = question.querySelector('.btn-remove');
-        if (removeBtn) removeBtn.setAttribute('onclick', 'removeQuestion(' + number + ')');
-        question.querySelectorAll('[name^="option"]').forEach(function(el) {
-          el.name = el.name.replace('option' + oldNumber + '_', 'option' + number + '_');
-        });
-        const optionsBox = question.querySelector('[id^="options"]');
-        if (optionsBox) optionsBox.id = 'options' + number;
-        const addOptBtn = question.querySelector('.btn-add-option');
-        if (addOptBtn) addOptBtn.setAttribute('onclick', 'addOption(' + number + ')');
-        question.querySelectorAll('.btn-remove-option').forEach(function(btn, optIdx) {
-          btn.setAttribute('onclick', 'removeOption(' + number + ', ' + (optIdx + 1) + ')');
-        });
-      });
-      questionCounter = questions.length;
-    }
-
-
-
-
-         // Update question type and refresh options
-     function updateQuestionType(questionNumber, newType) {
-       const questionItem = document.querySelector('[data-question="' + questionNumber + '"]');
-       if (!questionItem) return;
-       const typeHidden = questionItem.querySelector('input[name^="questionType"]');
-       if (typeHidden) typeHidden.value = newType;
-       const existingOptions = questionItem.querySelector('.question-options');
-       if (existingOptions) existingOptions.remove();
-       const existingAddOption = questionItem.querySelector('.btn-add-option');
-       if (existingAddOption) existingAddOption.remove();
-       questionItem.insertAdjacentHTML('beforeend', createOptionsHTML(questionNumber, newType));
-     }
-     
-     // Create options HTML based on type
-     function createOptionsHTML(number, type) {
-       switch(type) {
-         case 'likert':
-           return `
-             <div class="question-options">
-               <div class="option-item">
-                 <div class="option-label">Strongly Disagree</div>
-                 <input type="text" class="option-input" name="option${number}_1" value="Strongly Disagree" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">Disagree</div>
-                 <input type="text" class="option-input" name="option${number}_2" value="Disagree" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">Neutral</div>
-                 <input type="text" class="option-input" name="option${number}_3" value="Neutral" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">Agree</div>
-                 <input type="text" class="option-input" name="option${number}_4" value="Agree" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">Strongly Agree</div>
-                 <input type="text" class="option-input" name="option${number}_5" value="Strongly Agree" readonly>
-               </div>
-             </div>
-           `;
-           
-         case 'rating':
-           return `
-             <div class="question-options">
-               <div class="option-item">
-                 <div class="option-label">⭐ Poor</div>
-                 <input type="text" class="option-input" name="option${number}_1" value="Poor" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">⭐⭐ Fair</div>
-                 <input type="text" class="option-input" name="option${number}_2" value="Fair" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">⭐⭐⭐ Good</div>
-                 <input type="text" class="option-input" name="option${number}_3" value="Good" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">⭐⭐⭐⭐ Very Good</div>
-                 <input type="text" class="option-input" name="option${number}_4" value="Very Good" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">⭐⭐⭐⭐⭐ Excellent</div>
-                 <input type="text" class="option-input" name="option${number}_5" value="Excellent" readonly>
-               </div>
-             </div>
-           `;
-           
-         case 'yesno':
-           return `
-             <div class="question-options">
-               <div class="option-item">
-                 <div class="option-label">✅ Yes</div>
-                 <input type="text" class="option-input" name="option${number}_1" value="Yes" readonly>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">❌ No</div>
-                 <input type="text" class="option-input" name="option${number}_2" value="No" readonly>
-               </div>
-             </div>
-           `;
-           
-         case 'text':
-           return `
-             <div class="question-options">
-               <div class="option-item">
-                 <div class="option-label">📝 Text Response</div>
-                 <textarea class="form-textarea" name="option${number}_1" placeholder="This will be a text area for open-ended responses" readonly></textarea>
-               </div>
-             </div>
-           `;
-           
-         case 'multiple':
-           return `
-             <div class="question-options" id="options${number}">
-               <div class="option-item">
-                 <div class="option-label">📋 Option 1</div>
-                 <input type="text" class="option-input" name="option${number}_1" placeholder="Enter option text" required>
-                 <button type="button" class="btn-remove-option" onclick="removeOption(${number}, 1)">×</button>
-               </div>
-               <div class="option-item">
-                 <div class="option-label">📋 Option 2</div>
-                 <input type="text" class="option-input" name="option${number}_2" placeholder="Enter option text" required>
-                 <button type="button" class="btn-remove-option" onclick="removeOption(${number}, 2)">×</button>
-               </div>
-             </div>
-             <button type="button" class="btn-add-option" onclick="addOption(${number})">Add Option</button>
-           `;
-           
-         default:
-           return '';
-       }
-     }
-
-
-
-
-     // Add option for multiple choice
-     function addOption(questionNumber) {
-       const optionsContainer = document.getElementById(`options${questionNumber}`);
-       const optionCount = optionsContainer.children.length + 1;
-       
-       const optionHtml = `
-         <div class="option-item">
-           <div class="option-label">📋 Option ${optionCount}</div>
-           <input type="text" class="option-input" name="option${questionNumber}_${optionCount}" placeholder="Enter option text" required>
-           <button type="button" class="btn-remove-option" onclick="removeOption(${questionNumber}, ${optionCount})">×</button>
-         </div>
-       `;
-       
-       optionsContainer.insertAdjacentHTML('beforeend', optionHtml);
-     }
-
-
-
-
-    // Remove option
-    function removeOption(questionNumber, optionNumber) {
-      const option = document.querySelector(`input[name="option${questionNumber}_${optionNumber}"]`).parentElement;
-      if (option) {
-        option.remove();
-      }
-    }
-
-
-
-
-    // Preview survey
-    function previewSurvey() {
-      // This would open a preview modal or navigate to preview page
-      alert('Preview functionality would show how the survey will look to respondents');
-    }
-
-
-
-
-
- document.addEventListener('DOMContentLoaded', function() {
-   var addBtn = document.getElementById('addQuestionBtn');
-   if (addBtn) addBtn.addEventListener('click', addQuestion);
-   if (!document.querySelector('.question-item')) addQuestion();
- });
-
  var form = document.getElementById('surveyForm') || document.querySelector('form[method="post"]');
  if (form && form.querySelector('#submitBtn')) {
    var btn = document.getElementById('submitBtn');
    var btnText = document.getElementById('btnText');
    var btnSpinner = document.getElementById('btnSpinner');
-   form.addEventListener('submit', function(e) {
-     var questions = document.querySelectorAll('.question-item');
-     if (questions.length === 0) {
-       e.preventDefault();
-       alert('Please add at least one question to your survey');
-       return;
-     }
-     var questionCountInput = document.createElement('input');
-     questionCountInput.type = 'hidden';
-     questionCountInput.name = 'questionCount';
-     questionCountInput.value = questions.length;
-     form.appendChild(questionCountInput);
-     questions.forEach(function(question, index) {
-       var questionNumber = index + 1;
-       var typeInput = question.querySelector('input[name^="questionType"]');
-       if (typeInput && typeInput.value === 'multiple') {
-         var options = question.querySelectorAll('.option-input');
-         var optionCountInput = document.createElement('input');
-         optionCountInput.type = 'hidden';
-         optionCountInput.name = 'optionCount' + questionNumber;
-         optionCountInput.value = options.length;
-         form.appendChild(optionCountInput);
-       }
-     });
+   form.addEventListener('submit', function() {
      btn.disabled = true;
      if (btnText) btnText.textContent = 'Creating...';
      if (btnSpinner) btnSpinner.style.display = 'inline-block';
