@@ -1,6 +1,6 @@
 %%[
 VAR @errorFlag, @dataExists, @testCount, @mode, @surveyId, @updated, @editSurveyName, @editSurveyStatus, @editSurveyDescription, @editSurveyTargetAudience, @editQuestions
-VAR @navRows, @navRow, @hubUrl, @builderPageLabel, @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @SURVEY_STAGE_URL, @SURVEY_ANALYTICS_URL
+VAR @navRows, @navRow, @hubUrl, @builderPageLabel, @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @SURVEY_STAGE_URL, @SURVEY_ANALYTICS_URL, @SURVEY_TAKE_URL, @surveyPreviewUrl
 VAR @detailRows, @detailRow, @isSurveyBuild, @buildNavContext, @buildNavActive, @surveyUrlRows, @surveyUrlRow, @redirectBase, @qPos, @redirectUrl
 SET @errorFlag = "false"
 SET @dataExists = "true"
@@ -19,6 +19,8 @@ SET @BUILD_PAGE_SELF = ""
 SET @PERFORMANCE_URL = ""
 SET @SURVEY_STAGE_URL = ""
 SET @SURVEY_ANALYTICS_URL = ""
+SET @SURVEY_TAKE_URL = ""
+SET @surveyPreviewUrl = ""
 SET @isSurveyBuild = "false"
 SET @buildNavContext = "false"
 SET @buildNavActive = "edit-survey"
@@ -34,6 +36,7 @@ IF RowCount(@surveyUrlRows) > 0 THEN
   SET @surveyUrlRow = Row(@surveyUrlRows,1)
   SET @SURVEY_STAGE_URL = Field(@surveyUrlRow,"create")
   SET @SURVEY_ANALYTICS_URL = Field(@surveyUrlRow,"analytics")
+  SET @SURVEY_TAKE_URL = Field(@surveyUrlRow,"take")
 ENDIF
 IF Empty(@jid) AND NOT Empty(@surveyId) AND @surveyId != "N/A" AND @mode == "edit" THEN
   SET @detailRows = LookupRows("Bd_journey_analytics","surveyId",@surveyId)
@@ -46,6 +49,9 @@ IF (Empty(@surveyId) OR @surveyId == "N/A") AND NOT Empty(@jid) THEN
   IF RowCount(@detailRows) > 0 THEN
     SET @surveyId = Trim(Field(Row(@detailRows,1),"surveyId"))
   ENDIF
+ENDIF
+IF NOT Empty(@SURVEY_TAKE_URL) AND NOT Empty(@surveyId) AND @surveyId != "N/A" THEN
+  SET @surveyPreviewUrl = Concat(@SURVEY_TAKE_URL,"?id=",@surveyId)
 ENDIF
 IF NOT Empty(@jid) THEN
   SET @buildNavContext = "true"
@@ -245,6 +251,10 @@ IF NOT Empty(@jid) THEN
 ENDIF
 IF @mode == "edit" THEN
   SET @builderPageLabel = "Edit Survey"
+ENDIF
+
+IF NOT Empty(@SURVEY_TAKE_URL) AND NOT Empty(@surveyId) AND @surveyId != "N/A" THEN
+  SET @surveyPreviewUrl = Concat(@SURVEY_TAKE_URL,"?id=",@surveyId)
 ENDIF
 
 IF @mode == "edit" AND NOT Empty(@surveyId) THEN
@@ -817,6 +827,11 @@ ENDIF
       font-size: 14px;
     }
 
+    a.btn {
+      text-decoration: none;
+      display: inline-block;
+    }
+
 
 
 
@@ -1132,7 +1147,11 @@ ENDIF
         </div>
         <!-- Action Buttons -->
         <div class="action-buttons">
+          %%[ IF NOT Empty(@surveyPreviewUrl) THEN ]%%
+          <a href="%%=v(@surveyPreviewUrl)=%%" class="btn btn-secondary" target="_blank" rel="noopener noreferrer">Preview Survey</a>
+          %%[ ELSE ]%%
           <button type="button" class="btn btn-secondary" onclick="previewSurvey()">Preview Survey</button>
+          %%[ ENDIF ]%%
           <button type="submit" class="btn" style="background-color:#000000; color:white;">%%=IIF(@mode == "edit", "Update Survey", "Create Survey")=%%</button>
         </div>
       </form>
@@ -1572,8 +1591,7 @@ ENDIF
 
     // Preview survey
     function previewSurvey() {
-      // This would open a preview modal or navigate to preview page
-      alert('Preview functionality would show how the survey will look to respondents');
+      alert('Save the survey first, then preview opens the live Take Survey page.');
     }
 
 
