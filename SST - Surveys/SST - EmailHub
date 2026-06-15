@@ -2,13 +2,12 @@
 Platform.Load("core", "1");
 
 var adminCreateKey = "";
-var defaultCategoryId = 556442;
-var defaultSubject = "Got 2 minutes? Tell us what you think";
-var defaultTextBody = "We're always looking for ways to improve, and your input makes a big difference. Take Survey: https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt";
 var resultStatus = "";
 var resultMessage = "";
+var createdAssetId = "";
+var createdCustomerKey = "";
 
-function formField(name) {
+function formValue(name) {
   var value = "";
   try {
     value = Platform.Request.GetFormField(name);
@@ -16,11 +15,11 @@ function formField(name) {
   return value || "";
 }
 
-function trimValue(value) {
+function clean(value) {
   return String(value || "").replace(/^\s+|\s+$/g, "");
 }
 
-function encodeHtml(value) {
+function htmlSafe(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -28,61 +27,98 @@ function encodeHtml(value) {
     .replace(/"/g, "&quot;");
 }
 
-function shortKey() {
-  return String(Platform.Function.GUID()).replace(/-/g, "").substring(0, 8);
+function asJson(value) {
+  return Platform.Function.Stringify(value);
 }
 
-function ampBlock(lines) {
-  var pct = String.fromCharCode(37, 37);
-  return pct + "[" + lines.join("\n") + "]" + pct;
+function fromJson(value) {
+  return Platform.Function.ParseJSON(String(value || "{}"));
 }
 
-function ampValue(value) {
-  var pct = String.fromCharCode(37, 37);
-  return pct + "=" + value + "=" + pct;
+function guidKey() {
+  return String(Platform.Function.GUID()).replace(/-/g, "");
 }
 
-function ampToken(value) {
-  var pct = String.fromCharCode(37, 37);
-  return pct + value + pct;
+function field(row, name) {
+  if (!row) return "";
+  return row[name] || row[String(name)] || "";
 }
 
-function buildEmailHtml() {
-  var greetingAmp = ampBlock([
-    "SET @firstName = AttributeValue(\"FirstName\")",
-    "IF EMPTY(@firstName) THEN",
-    "  SET @firstName = AttributeValue(\"CampaignMember:Common:FirstName\")",
-    "ENDIF",
-    "IF EMPTY(@firstName) THEN",
-    "  SET @fullGreeting = \"Hello,\"",
-    "ELSE",
-    "  SET @fullGreeting = Concat(\"Hello \", @firstName, \",\")",
-    "ENDIF"
-  ]);
-  var footerAmp = ampValue("ContentBlockByKey(\"Email_Footer_2407\")");
-  var surveyContactToken = ampToken("CampaignMember:Common:Id");
+function getAuthConfig() {
+  var rows = Platform.Function.LookupRows("SFMC_AUTH", "User", "Admin");
+  if (!rows || rows.length < 1) {
+    throw "Missing SFMC_AUTH row for User=Admin.";
+  }
+  var row = rows[0];
+  var clientId = clean(field(row, "clientId"));
+  var clientSecret = clean(field(row, "clientSecret"));
+  var subdomain = clean(field(row, "subdomain"));
+  var accountId = clean(field(row, "accountId"));
+  if (!clientId || !clientSecret || !subdomain) {
+    throw "SFMC_AUTH must include clientId, clientSecret, and subdomain.";
+  }
+  return {
+    clientId: clientId,
+    clientSecret: clientSecret,
+    subdomain: subdomain,
+    accountId: accountId
+  };
+}
+
+function getAccessToken(auth) {
+  var payload = {
+    grant_type: "client_credentials",
+    client_id: auth.clientId,
+    client_secret: auth.clientSecret
+  };
+  if (auth.accountId) {
+    payload.account_id = auth.accountId;
+  }
+  var req = new Script.Util.HttpRequest("https://" + auth.subdomain + ".auth.marketingcloudapis.com/v2/token");
+  req.emptyContentHandling = 0;
+  req.retries = 2;
+  req.continueOnError = true;
+  req.contentType = "application/json";
+  req.method = "POST";
+  req.postData = asJson(payload);
+  var resp = req.send();
+  var body = String(resp.content || "");
+  if (resp.statusCode != 200) {
+    throw "Auth HTTP " + resp.statusCode + ": " + body;
+  }
+  var parsed = fromJson(body);
+  if (!parsed.access_token) {
+    throw "Auth response did not include access_token.";
+  }
+  return parsed.access_token;
+}
+
+function createAsset(auth, token, payload) {
+  var req = new Script.Util.HttpRequest("https://" + auth.subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets");
+  req.emptyContentHandling = 0;
+  req.retries = 2;
+  req.continueOnError = true;
+  req.contentType = "application/json";
+  req.setHeader("Authorization", "Bearer " + token);
+  req.method = "POST";
+  req.postData = asJson(payload);
+  var resp = req.send();
+  var body = String(resp.content || "");
+  if (resp.statusCode != 200 && resp.statusCode != 201) {
+    throw "Asset create HTTP " + resp.statusCode + ": " + body;
+  }
+  return fromJson(body);
+}
+
+function minimalEmailHtml() {
   return [
-    "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#eaeaea;margin:0;padding:0;\">",
-    "<tr><td align=\"center\">",
-    "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#393939;\">",
-    "<tr><td style=\"padding:30px;\"><a href=\"https://magmutual.com/\" target=\"_blank\"><img src=\"https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/MM_PrimaryLogo_Reversed.png\" alt=\"MagMutual\" width=\"200\" border=\"0\" style=\"display:block;\"></a></td></tr>",
-    "<tr><td style=\"padding:20px 45px 30px;font-family:Arial,Helvetica,sans-serif;color:#ffffff;\"><h1 style=\"font-size:32px;line-height:36px;margin:0;color:#ffffff;\">Got 2 minutes? Tell us what you think</h1></td></tr>",
-    "</table>",
+    "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#f4f4f4;\">",
+    "<tr><td align=\"center\" style=\"padding:30px;\">",
     "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;\">",
-    "<tr><td style=\"padding:30px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">",
-    "<div style=\"display:none;\">" + greetingAmp + "</div>",
-    "<p style=\"margin:0 0 20px;\">" + ampValue("v(@fullGreeting)") + "</p>",
-    "<p style=\"margin:0 0 20px;\">We're always looking for ways to improve, and your input makes a big difference. We've put together a short survey and would really appreciate a few minutes of your time.</p>",
-    "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr><td bgcolor=\"#0060F5\" style=\"background:#0060F5;\"><a href=\"https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=SURV_20260612_102301&contact=" + surveyContactToken + "\" target=\"_blank\" style=\"display:block;padding:10px 99px 10px 10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;text-decoration:none;\">Take Survey</a></td></tr></table>",
-    "<p style=\"margin:20px 0 0;\">If you have any questions or run into any issues, don't hesitate to reach out.</p>",
-    "<p style=\"margin:20px 0 0;\">Thank you for sharing your thoughts &mdash; we truly value your feedback!</p>",
-    "<p style=\"margin:20px 0 0;\">Best regards,<br>MagMutual Insurance</p>",
-    "</td></tr>",
-    "</table>",
-    footerAmp,
-    "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;\">",
-    "<tr><td align=\"center\" style=\"padding:20px 30px;font-family:Arial,Helvetica,sans-serif;font-size:9px;line-height:12px;color:#808080;\">",
-    ampToken("Member_Busname") + " " + ampToken("Member_Addr") + "<br>" + ampToken("Member_City") + ", " + ampToken("Member_State") + ", " + ampToken("Member_PostalCode"),
+    "<tr><td style=\"padding:30px;font-family:Arial,Helvetica,sans-serif;color:#161616;\">",
+    "<h1 style=\"margin:0 0 20px;font-size:28px;line-height:34px;color:#161616;\">Email Hub Test</h1>",
+    "<p style=\"margin:0 0 20px;font-size:16px;line-height:24px;\">This is a simplified Content Builder email created from the Email Hub CloudPage.</p>",
+    "<a href=\"https://magmutual.com/\" target=\"_blank\" style=\"display:inline-block;background:#0060F5;color:#ffffff;padding:12px 18px;text-decoration:none;font-size:16px;\">Test Link</a>",
     "</td></tr>",
     "</table>",
     "</td></tr>",
@@ -90,55 +126,80 @@ function buildEmailHtml() {
   ].join("");
 }
 
-function createEmail(name, subject, textBody, categoryId) {
-  var prox = new Script.Util.WSProxy();
-  var email = {
-    Name: name,
-    Subject: subject,
-    HTMLBody: buildEmailHtml(),
-    TextBody: textBody,
-    CharacterSet: "utf-8",
-    CategoryID: categoryId,
-    CategoryIDSpecified: true
-  };
-  return prox.createItem("Email", email);
-}
-
-if (formField("createEmail") == "1") {
+if (formValue("createEmail") == "1") {
   try {
     if (!adminCreateKey) {
       throw "Set adminCreateKey at the top of this CloudPage before creating emails.";
     }
-    if (formField("accessKey") != adminCreateKey) {
+    if (formValue("accessKey") != adminCreateKey) {
       throw "Invalid access key.";
     }
-    var emailName = trimValue(formField("emailName"));
+    var emailName = clean(formValue("emailName"));
     if (!emailName) {
-      emailName = "SST Survey Email " + shortKey();
+      emailName = "SST Email Hub Test " + guidKey().substring(0, 8);
     }
-    var subject = trimValue(formField("subject"));
+    var subject = clean(formValue("subject"));
     if (!subject) {
-      subject = defaultSubject;
+      subject = "Email Hub Test";
     }
-    var textBody = trimValue(formField("textBody"));
+    var preheader = clean(formValue("preheader"));
+    if (!preheader) {
+      preheader = "Testing Content Builder email creation.";
+    }
+    var textBody = clean(formValue("textBody"));
     if (!textBody) {
-      textBody = defaultTextBody;
+      textBody = "This is a simplified Content Builder email created from the Email Hub CloudPage.";
     }
-    var categoryId = parseInt(trimValue(formField("categoryId")) || defaultCategoryId, 10);
-    if (isNaN(categoryId)) {
-      throw "Folder Category ID must be a number.";
+    createdCustomerKey = "sst-email-hub-test-" + guidKey();
+    var payload = {
+      name: emailName,
+      customerKey: createdCustomerKey,
+      assetType: {
+        id: 208,
+        name: "htmlemail"
+      },
+      channels: {
+        email: true,
+        web: false
+      },
+      views: {
+        html: {
+          content: minimalEmailHtml()
+        },
+        text: {
+          content: textBody
+        },
+        subjectline: {
+          content: subject
+        },
+        preheader: {
+          content: preheader
+        }
+      },
+      data: {
+        email: {
+          options: {
+            characterEncoding: "utf-8"
+          }
+        }
+      }
+    };
+    var categoryId = clean(formValue("categoryId"));
+    if (categoryId) {
+      var parsedCategoryId = parseInt(categoryId, 10);
+      if (isNaN(parsedCategoryId)) {
+        throw "Category ID must be a number when provided.";
+      }
+      payload.category = {
+        id: parsedCategoryId
+      };
     }
-    var response = createEmail(emailName, subject, textBody, categoryId);
-    if (response && response.Status == "OK") {
-      resultStatus = "success";
-      resultMessage = "Email created successfully.";
-    } else if (response && response.Results && response.Results.length > 0) {
-      resultStatus = "error";
-      resultMessage = String(response.Results[0].StatusMessage || response.Results[0].ErrorCode || "Email create failed.");
-    } else {
-      resultStatus = "error";
-      resultMessage = "Email create failed.";
-    }
+    var auth = getAuthConfig();
+    var token = getAccessToken(auth);
+    var created = createAsset(auth, token, payload);
+    createdAssetId = String(created.id || "");
+    resultStatus = "success";
+    resultMessage = "Minimal Content Builder email created.";
   } catch (ex) {
     resultStatus = "error";
     resultMessage = String(ex);
@@ -147,6 +208,8 @@ if (formField("createEmail") == "1") {
 
 Platform.Variable.SetValue("@emailHubResultStatus", resultStatus);
 Platform.Variable.SetValue("@emailHubResultMessage", resultMessage);
+Platform.Variable.SetValue("@emailHubAssetId", createdAssetId);
+Platform.Variable.SetValue("@emailHubCustomerKey", createdCustomerKey);
 </script>
 <style>
   body {
@@ -156,7 +219,7 @@ Platform.Variable.SetValue("@emailHubResultMessage", resultMessage);
     font-family: Arial, Helvetica, sans-serif;
   }
   .page {
-    max-width: 720px;
+    max-width: 760px;
     margin: 0 auto;
     padding: 32px 20px;
   }
@@ -222,9 +285,9 @@ Platform.Variable.SetValue("@emailHubResultMessage", resultMessage);
 <main class="page">
   <div class="card">
     <h1>SST Email Hub</h1>
-    <p>Create the survey email using the SOAP Email object.</p>
+    <p>Create a simplified Content Builder email asset first. Leave Category ID blank for the first test.</p>
     <script runat="server">
-      function bodyEncodeHtml(value) {
+      function bodyHtmlSafe(value) {
         return String(value || "")
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
@@ -233,8 +296,17 @@ Platform.Variable.SetValue("@emailHubResultMessage", resultMessage);
       }
       var bodyResultStatus = Platform.Variable.GetValue("@emailHubResultStatus");
       var bodyResultMessage = Platform.Variable.GetValue("@emailHubResultMessage");
+      var bodyAssetId = Platform.Variable.GetValue("@emailHubAssetId");
+      var bodyCustomerKey = Platform.Variable.GetValue("@emailHubCustomerKey");
       if (bodyResultStatus) {
-        Write('<div class="notice ' + bodyEncodeHtml(bodyResultStatus) + '"><strong>' + bodyEncodeHtml(bodyResultMessage) + '</strong></div>');
+        Write('<div class="notice ' + bodyHtmlSafe(bodyResultStatus) + '"><strong>' + bodyHtmlSafe(bodyResultMessage) + '</strong>');
+        if (bodyAssetId) {
+          Write('<br>Asset ID: ' + bodyHtmlSafe(bodyAssetId));
+        }
+        if (bodyCustomerKey) {
+          Write('<br>Customer Key: ' + bodyHtmlSafe(bodyCustomerKey));
+        }
+        Write('</div>');
       }
     </script>
     <form method="post">
@@ -242,15 +314,17 @@ Platform.Variable.SetValue("@emailHubResultMessage", resultMessage);
       <label for="accessKey">Access Key</label>
       <input id="accessKey" name="accessKey" type="password" autocomplete="off">
       <label for="emailName">Email Name</label>
-      <input id="emailName" name="emailName" value="SST Survey Email">
+      <input id="emailName" name="emailName" value="SST Email Hub Test">
       <label for="subject">Subject</label>
-      <input id="subject" name="subject" value="Got 2 minutes? Tell us what you think">
-      <label for="categoryId">Email Studio Folder Category ID</label>
-      <input id="categoryId" name="categoryId" value="556442">
+      <input id="subject" name="subject" value="Email Hub Test">
+      <label for="preheader">Preheader</label>
+      <input id="preheader" name="preheader" value="Testing Content Builder email creation.">
+      <label for="categoryId">Content Builder Category ID Optional</label>
+      <input id="categoryId" name="categoryId" value="">
       <label for="textBody">Text Body</label>
-      <textarea id="textBody" name="textBody">We're always looking for ways to improve, and your input makes a big difference. Take Survey: https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt</textarea>
-      <button type="submit">Create Email</button>
+      <textarea id="textBody" name="textBody">This is a simplified Content Builder email created from the Email Hub CloudPage.</textarea>
+      <button type="submit">Create Test Email</button>
     </form>
-    <p class="small">Set <strong>adminCreateKey</strong> at the top of this CloudPage before deploying. This version creates a legacy Email Studio email, matching the SOAP documentation in your reference file.</p>
+    <p class="small">Set <strong>adminCreateKey</strong> at the top before testing. Keep Category ID blank first because folder IDs are BU-specific.</p>
   </div>
 </main>
