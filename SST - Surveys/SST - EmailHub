@@ -49,6 +49,11 @@ function ampValue(value) {
   return pct + "=" + value + "=" + pct;
 }
 
+function ampToken(value) {
+  var pct = String.fromCharCode(37, 37);
+  return pct + value + pct;
+}
+
 function field(row, name) {
   if (!row) return "";
   return row[name] || row[String(name)] || "";
@@ -129,14 +134,68 @@ function minimalEmailHtml() {
     "IF EMPTY(@surveyContactId) THEN",
     "  SET @surveyContactId = _subscriberKey",
     "ENDIF",
+    "SET @subscriberKey = _subscriberKey",
+    "IF EMPTY(@subscriberKey) THEN",
+    "  SET @subscriberKey = emailaddr",
+    "ENDIF",
     "SET @firstName = AttributeValue(\"CampaignMember:Common:FirstName\")",
     "IF EMPTY(@firstName) THEN",
     "  SET @firstName = AttributeValue(\"FirstName\")",
     "ENDIF",
-    "IF EMPTY(@firstName) THEN",
-    "  SET @fullGreeting = \"Hello,\"",
-    "ELSE",
+    "SET @lastName = AttributeValue(\"CampaignMember:Common:LastName\")",
+    "IF EMPTY(@lastName) THEN",
+    "  SET @lastName = AttributeValue(\"LastName\")",
+    "ENDIF",
+    "SET @salutation = AttributeValue(\"CampaignMember:Common:Salutation\")",
+    "IF EMPTY(@salutation) THEN",
+    "  SET @salutation = AttributeValue(\"Salutation\")",
+    "ENDIF",
+    "SET @contactAccountId = AttributeValue(\"CampaignMember:Account:Id\")",
+    "SET @contactRowsFound = \"false\"",
+    "IF NOT EMPTY(@surveyContactId) THEN",
+    "  SET @contactRows = LookupRows(\"ent.Contact_Salesforce_1\",\"Id\",@surveyContactId)",
+    "  IF RowCount(@contactRows) > 0 THEN",
+    "    SET @contactRowsFound = \"true\"",
+    "  ENDIF",
+    "ENDIF",
+    "IF @contactRowsFound != \"true\" AND IndexOf(@subscriberKey,\"@\") > 0 THEN",
+    "  SET @contactRows = LookupRows(\"ent.Contact_Salesforce_1\",\"Email\",@subscriberKey)",
+    "  IF RowCount(@contactRows) > 0 THEN",
+    "    SET @contactRowsFound = \"true\"",
+    "  ENDIF",
+    "ENDIF",
+    "IF @contactRowsFound != \"true\" AND NOT EMPTY(@subscriberKey) THEN",
+    "  SET @contactRows = LookupRows(\"ent.Contact_Salesforce_1\",\"Id\",@subscriberKey)",
+    "  IF RowCount(@contactRows) > 0 THEN",
+    "    SET @contactRowsFound = \"true\"",
+    "  ENDIF",
+    "ENDIF",
+    "IF @contactRowsFound == \"true\" THEN",
+    "  SET @contactRow = Row(@contactRows,1)",
+    "  IF EMPTY(@surveyContactId) OR IndexOf(@surveyContactId,\"@\") > 0 THEN",
+    "    SET @surveyContactId = Field(@contactRow,\"Id\")",
+    "  ENDIF",
+    "  IF EMPTY(@firstName) THEN",
+    "    SET @firstName = Field(@contactRow,\"FirstName\")",
+    "  ENDIF",
+    "  IF EMPTY(@lastName) THEN",
+    "    SET @lastName = Field(@contactRow,\"LastName\")",
+    "  ENDIF",
+    "  IF EMPTY(@salutation) THEN",
+    "    SET @salutation = Field(@contactRow,\"Salutation\")",
+    "  ENDIF",
+    "  IF EMPTY(@contactAccountId) THEN",
+    "    SET @contactAccountId = Field(@contactRow,\"AccountId\")",
+    "  ENDIF",
+    "ENDIF",
+    "IF NOT EMPTY(@salutation) AND NOT EMPTY(@lastName) THEN",
+    "  SET @fullGreeting = Concat(\"Hello \", @salutation, \" \", @lastName, \",\")",
+    "ELSEIF NOT EMPTY(@firstName) THEN",
     "  SET @fullGreeting = Concat(\"Hello \", @firstName, \",\")",
+    "ELSEIF NOT EMPTY(@lastName) THEN",
+    "  SET @fullGreeting = Concat(\"Hello Mr./Mrs. \", @lastName, \",\")",
+    "ELSE",
+    "  SET @fullGreeting = \"Hello,\"",
     "ENDIF",
     "SET @ownerId = AttributeValue(\"CampaignMember:Account:OwnerId\")",
     "IF EMPTY(@ownerId) THEN",
@@ -144,6 +203,20 @@ function minimalEmailHtml() {
     "ENDIF",
     "IF EMPTY(@ownerId) THEN",
     "  SET @ownerId = AttributeValue(\"OwnerId\")",
+    "ENDIF",
+    "IF EMPTY(@ownerId) AND NOT EMPTY(@contactAccountId) THEN",
+    "  SET @accountRows = LookupRows(\"ent.Account_Salesforce_1\",\"Id\",@contactAccountId)",
+    "  IF RowCount(@accountRows) > 0 THEN",
+    "    SET @accountRow = Row(@accountRows,1)",
+    "    SET @ownerId = Field(@accountRow,\"OwnerId\")",
+    "  ENDIF",
+    "ENDIF",
+    "IF EMPTY(@ownerId) AND NOT EMPTY(@contactAccountId) THEN",
+    "  SET @sfAccountRows = RetrieveSalesforceObjects(\"Account\",\"OwnerId\",\"Id\",\"=\",@contactAccountId)",
+    "  IF RowCount(@sfAccountRows) > 0 THEN",
+    "    SET @sfAccountRow = Row(@sfAccountRows,1)",
+    "    SET @ownerId = Field(@sfAccountRow,\"OwnerId\")",
+    "  ENDIF",
     "ENDIF",
     "SET @sendfromName = \"MagMutual\"",
     "SET @sendFromEmail = \"info@magmutual.com\"",
@@ -201,6 +274,14 @@ function minimalEmailHtml() {
   var fullGreeting = ampValue("v(@fullGreeting)");
   var signatureOutput = ampValue("v(@signature)");
   var footerBlock = ampValue("ContentBlockByKey(\"Email_Footer_2407\")");
+  var memberAddressBlock = [
+    "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;\">",
+    "<tr><td align=\"center\" style=\"padding:0 30px 30px;font-family:Arial,Helvetica,sans-serif;font-size:9px;line-height:12px;color:#808080;\">",
+    ampToken("Member_Busname") + " " + ampToken("Member_Addr") + "<br>",
+    ampToken("Member_City") + ", " + ampToken("Member_State") + ", " + ampToken("Member_PostalCode"),
+    "</td></tr>",
+    "</table>"
+  ].join("");
   return [
     "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#eaeaea;margin:0;padding:0;\">",
     "<tr><td align=\"center\">",
@@ -220,6 +301,7 @@ function minimalEmailHtml() {
     "</td></tr>",
     "</table>",
     footerBlock,
+    memberAddressBlock,
     "</td></tr>",
     "</table>"
   ].join("");
