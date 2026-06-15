@@ -1,0 +1,535 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html
+    xmlns="http://www.w3.org/1999/xhtml"
+    xmlns:o="urn:schemas-microsoft-com:office:office"
+    xmlns:v="urn:schemas-microsoft-com:vml"
+>
+    <head>
+        <title>MagMutual</title>
+        <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+        <meta content="telephone=no" name="format-detection" />
+        <meta content="IE=edge" http-equiv="X-UA-Compatible" />
+        <!--Main Stylesheet-->
+      <div style="display:none;">
+         %%=contentblockbykey("DM_Main_Styles_DEV")=%%
+      </div>
+       </head
+    ><!--[if gte mso 9]>
+        <xml>
+            <o:OfficeDocumentSettings>
+                <o:AllowPNG />
+                <o:PixelsPerInch>96</o:PixelsPerInch>
+            </o:OfficeDocumentSettings>
+        </xml>
+    <![endif]-->
+  <div style=display:none;>
+%%[
+    SET @Description = "Business Development"
+]%%
+    </div>
+    <body
+        bgcolor="#FFFFFF"
+        leftmargin="0"
+        topmargin="0"
+        marginwidth="0"
+        marginheight="0"
+        style="padding:0; margin: 0px; background-color : #FFFFFF;"
+    >
+        <table
+            role="Presentation"
+            width="100%"
+            border="0"
+            align="center"
+            cellpadding="0"
+            cellspacing="0"
+        >
+            <tr>
+                <td
+                    height="30"
+                    style="height:30px; mso-line-height-rule:exactly; line-height:30px; font-size:30px; padding:0;"
+                >
+                    &nbsp;
+                </td>
+            </tr>
+            <tr>
+                <td align="center">
+                    <table
+                        role="Presentation"
+                        class="tableDimension"
+                        align="center"
+                        width="600"
+                        border="0"
+                        cellpadding="0"
+                        cellspacing="0"
+                        bgcolor="#FFFFFF"
+                    >
+                       <tr>
+                            <td
+                                align="left"
+                                valign="top"
+                                style="font-size : 14px; font-family : Arial, helvetica, sans-serif; line-height: 18px; color : #000000; padding: 0 20px;"
+                            >
+                                <div style="display:none;">
+%%[
+
+/* ---------------- DEFAULTS ---------------- */
+SET @subscriberKey = _subscriberKey
+SET @senderId = ""
+
+IF EMPTY(@subscriberKey) THEN
+  SET @subscriberKey = emailaddr
+ENDIF
+
+
+IF IndexOf(@subscriberKey, "@") > 0 THEN
+/* ---------------- LOOK AT EMAIL ---------------- */
+SET @rows = LookupRows("ent.Contact_Salesforce_1","Email",@subscriberKey)
+ELSE
+/* ---------------- LOOK AT SUBSCRIBERKEY ---------------- */
+SET @rows = LookupRows("ent.Contact_Salesforce_1","Id",@subscriberKey)
+ENDIF
+
+IF RowCount(@rows) > 0 THEN
+
+  SET @row = Row(@rows,1)
+
+  SET @contactfirstname   = Field(@row,"FirstName")
+  SET @contactlastname    = Field(@row,"LastName")
+  SET @contactsalutation  = Field(@row,"Salutation")
+  SET @contactaccountname = Field(@row,"AccountName__c")
+  SET @contactaccountid   = Field(@row,"AccountId")
+  SET @contactphone       = Field(@row,"Phone")
+  SET @contactage         = Field(@row,"Age__c")
+  SET @contactspecialty   = Field(@row,"Specialty__c")
+  SET @contactTitle       = Field(@row,"Title")
+  SET @contactCity        = Field(@row,"MailingCity")
+  SET @contactState       = Field(@row,"MailingState")
+  SET @contactOwnerId     = Field(@row,"OwnerId")
+  SET @contactRole        = Field(@row,"Role__c")
+  SET @contactBirthdate   = Field(@row,"Birthdate")
+  SET @contactGender      = Field(@row,"Gender__c")
+
+
+/* ---------------- FALLBACK TO SALESFORCE ---------------- */
+ELSE
+
+  IF EMPTY(@useLookup) THEN
+  
+/* ---------------- FIND CONTACT BASED ON EMAIL OR CONTACTID ---------------- */
+IF IndexOf(@subscriberKey, "@") > 0 THEN
+/* ---------------- FIND CONTACT BASED ON EMAIL ---------------- */
+    SET @sfRows = RetrieveSalesforceObjects(
+      "Contact",
+      "FirstName, LastName, Salutation, AccountId, Phone, Age__c, Specialty__c, Title, MailingCity, MailingState, OwnerId, Role__c, Birthdate, Gender__c",
+      "Email","=",@subscriberKey
+    )
+    ELSE
+    /* ---------------- FIND CONTACT BASED ON CONTACTID ---------------- */
+     SET @sfRows = RetrieveSalesforceObjects(
+      "Contact",
+      "FirstName, LastName, Salutation, AccountId, Phone, Age__c, Specialty__c, Title, MailingCity, MailingState, OwnerId, Role__c, Birthdate, Gender__c",
+      "Id","=",@subscriberKey
+    )
+    ENDIF
+
+    IF RowCount(@sfRows) > 0 THEN
+
+      SET @sfRow = Row(@sfRows,1)
+
+      SET @contactfirstname  = Field(@sfRow,"FirstName")
+      SET @contactlastname   = Field(@sfRow,"LastName")
+      SET @contactsalutation = Field(@sfRow,"Salutation")
+      SET @contactaccountid  = Field(@sfRow,"AccountId")
+      SET @contactphone      = Field(@sfRow,"Phone")
+      SET @contactage        = Field(@sfRow,"Age__c")
+      SET @contactspecialty  = Field(@sfRow,"Specialty__c")
+      SET @contactTitle      = Field(@sfRow,"Title")
+      SET @contactCity       = Field(@sfRow,"MailingCity")
+      SET @contactState      = Field(@sfRow,"MailingState")
+      SET @contactOwnerId    = Field(@sfRow,"OwnerId")
+      SET @contactRole       = Field(@sfRow,"Role__c")
+      SET @contactBirthdate  = Field(@sfRow,"Birthdate")
+      SET @contactGender     = Field(@sfRow,"Gender__c")
+
+    
+   ENDIF
+  ENDIF
+
+ENDIF
+
+/* ---------------- GET FULL STATE NAME ---*/
+SET @fullStateName = Lookup("States_DE", "State", "Abbreviation", @contactState)
+SET @contactState = IIF(Empty(@fullStateName),"your state", @fullStateName)
+  
+/* ---------------- SENDER DETAILS/VARIABLES ---*/
+
+/* ---------------- FIND ACCOUNT OWNER: TRY DATA EXTENSION FIRST ---------------- */
+
+SET @accountrows = LookupRows("ent.Account_Salesforce_1","Id",@contactaccountid)
+
+IF RowCount(@accountrows) > 0 THEN
+
+  SET @row = Row(@accountrows,1)
+
+  IF EMPTY(@senderId) THEN
+     SET @AccountOwnerId    = Field(@row,"OwnerId")
+  ELSE
+     SET @AccountOwnerId    = @senderId
+  ENDIF
+  SET @contactAccountType = Field(@row,"Type")
+  SET @contactAccountPoliciesHeld = Field(@row,"Policies_Held__C")
+  
+  
+  ELSE
+ 
+
+    /* ---------------- TRY SF TO GET ACC ID ---------------- */
+
+   SET @sfRows = RetrieveSalesforceObjects(
+      "Account",
+      "OwnerId",
+      "Id","=",@contactaccountid
+    )
+
+    IF RowCount(@sfRows) > 0 THEN
+
+      SET @sfRow = Row(@sfRows,1)
+      
+      IF EMPTY(@senderId) THEN
+         SET @AccountOwnerId    = Field(@row,"OwnerId")
+      ELSE
+         SET @AccountOwnerId    = @senderId
+      ENDIF
+      SET @contactAccountType = Field(@row,"Type")
+      SET @contactAccountPoliciesHeld = Field(@row,"Policies_Held__C")
+      ENDIF
+ENDIF
+
+/* ---------------- TRY DE FIRST ---------------- */
+SET @rows = LookupRows("ent.User_Salesforce_1","Id", @AccountOwnerId)
+
+IF RowCount(@rows) > 0 THEN
+
+  SET @row = Row(@rows,1)
+  SET @senderExist = "True"
+  SET @senderName   = Field(@row,"Name")
+  SET @senderAppointmentLink    = Field(@row,"Appointment_Link__c")
+  SET @senderTitle    = Field(@row,"Title")
+  SET @senderSalesLicenseNumber    = Field(@row,"Sales_License_Number__c")
+  SET @senderEmail    = Field(@row,"Email")
+  SET @senderPhone    = Field(@row,"Phone")
+  SET @senderCompanyName    = Field(@row,"CompanyName")
+  
+  ELSE
+  
+  /* ---------------- TRY SF IF DE EMPTY ---------------- */
+   SET @sfRows = RetrieveSalesforceObjects(
+      "User",
+      "Name,Appointment_Link__c,Title,Sales_License_Number__c,Email,Phone,CompanyName",
+      "Id","=",@AccountOwnerId
+    )
+
+    IF RowCount(@sfRows) > 0 THEN
+
+      SET @sfRow = Row(@sfRows,1)
+      SET @senderExist = "True"
+      SET @senderName   = Field(@sfRow,"Name")
+      SET @senderAppointmentLink    = Field(@sfRow,"Appointment_Link__c")
+      SET @senderTitle    = Field(@sfRow,"Title")
+      SET @senderSalesLicenseNumber    = Field(@sfRow,"Sales_License_Number__c")
+      SET @senderEmail    = Field(@sfRow,"Email")
+      SET @senderPhone    = Field(@sfRow,"Phone")
+      SET @senderCompanyName    = Field(@sfRow,"CompanyName")
+     ENDIF
+  
+  ENDIF
+  
+  
+/* ---------------- GREETING ---------------- */
+
+IF EMPTY(@greeting) THEN
+  SET @greeting = "Hello"
+ENDIF
+
+IF NOT EMPTY(@contactsalutation) THEN
+  SET @fullGreeting = Concat(@greeting," ",@contactsalutation," ",@contactlastname,",")
+ELSEIF NOT EMPTY(@contactfirstname) THEN
+  SET @fullGreeting = Concat(@greeting," ",@contactfirstname,",")
+ELSE
+  SET @fullGreeting = Concat(@greeting," Mr./Mrs. ",@contactlastname,",")
+ENDIF
+
+]%%
+</div>
+
+
+<p>%%=v(@fullGreeting)=%%</p>
+
+
+
+
+
+
+                            </td>
+                        </tr>
+ <tr>
+                       <tr>
+                            <td
+                                align="left"
+                                valign="top"
+                                style="padding: 20px 20px 0;"
+                            >
+                                
+                            </td>
+                        </tr>
+                        <!-- DROP CONTENT -->
+                     
+                       
+                        <tr>
+                            <td
+                                align="left"
+                                valign="top"
+                                style="font-size : 14px; font-family : Arial, helvetica, sans-serif; line-height: 18px; color : #000000; padding: 0 20px;"
+                            >
+                                <table cellpadding="0" cellspacing="0" width="100%" role="presentation" style="min-width: 100%; " class="stylingblock-content-wrapper"><tr><td class="stylingblock-content-wrapper camarker-inner"><table cellpadding="0" cellspacing="0" role="presentation" width="100%">
+ 
+  <tr>
+   <td>
+    <p>
+     Thank you for your recent visit to our Learning Center! We hope you found our educational resources helpful in your practice of medicine. Based on your specialty, we thought you might be interested in more of our content:</p></td></tr></table><table cellpadding="0" cellspacing="0" role="presentation" width="100%">
+ 
+  <tr>
+   <td>
+    <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%">
+     
+      <tr>
+       <td>
+        <a href="https://user-content.s13.sfmc-content.com/"><img alt="" border="0" src="null"></a></td></tr><tr>
+       <td>
+        <a href="https://user-content.s13.sfmc-content.com/"><img alt="" border="0" src="null"></a></td></tr></table></td></tr></table><table cellpadding="0" cellspacing="0" role="presentation" width="100%">
+ 
+  <tr>
+   <td>
+    <p>
+     With our upgraded Learning Center, you can access educational content &mdash; including an extensive library offering CME credits &mdash; and manage your learning activities more effectively. We&rsquo;re committed to being your trusted partner for professional development and risk management advice.</p></td></tr></table></td></tr></table>
+                            </td>
+                        </tr>
+                      
+                          <tr>
+                            <td
+                                align="left"
+                                valign="top"
+                                style="font-size : 14px; font-family : Arial, helvetica, sans-serif; line-height: 18px; color : #000000; padding: 0 20px;"
+                            >
+                                <div style="display:none;">
+  %%[
+ /* ------====== Put User Id Here  ======--------- */
+  SET @customSender = ""
+  SET @showBookingLink = "true"
+  
+  
+  IF NOT EMPTY(@senderExist) THEN
+ 
+  SET @sendfromName = @senderName
+  SET @sendFromEmail = @senderEmail
+  SET @senderTitle = @senderTitle
+  SET @signaturePhone = @senderPhone
+  SET @hasLicense = @senderSalesLicenseNumber    
+  IF @showBookingLink != "false" THEN
+     SET @hasAppointmentLink = @senderAppointmentLink    
+  ENDIF
+  
+  ELSE
+ /* ------====== Put User Id Here  ======--------- */
+  SET @useLookup = ""
+ /* ------====== Signature Logic  ======--------- */
+  IF EMPTY(@customSender) THEN
+  SET @userId = ""
+  SET @subscriberContext = _SubscriberKey
+  IF EMPTY(@SubscriberContext) THEN
+     SET @subscriberContext = emailaddr
+  ENDIF
+  
+  
+  /* ------====== Get Account Owner ======--------- */
+  set @findContactRows = RetrieveSalesforceObjects(
+   "Contact",
+   "AccountId",
+   "Id", "=", @subscriberContext)
+   IF RowCount(@findContactRows) > 0 THEN
+    set @findContactRow = Row(@findContactRows, 1)
+     SET @accountId = Field(@findContactRow, "AccountId")
+   ENDIF
+  /* ------====== Get Account Owner ======--------- */
+  set @findAccountRows = RetrieveSalesforceObjects(
+   "Account",
+   "OwnerId",
+   "Id", "=", @accountId)
+   IF RowCount(@findAccountRows) > 0 THEN
+    set @findAccountRow = Row(@findAccountRows, 1)
+     SET @userId = Field(@findAccountRow, "OwnerId")
+   ENDIF
+  ELSE
+    SET @userId = @customSender 
+  ENDIF
+   /* ------====== FIND the contact fields from DE ------======>> */
+ SET @rows = LookupRows("ent.User_Salesforce_1", "Id", @userId)
+IF RowCount(@rows) > 0 THEN
+  SET @useLookup = "True"
+  SET @row = Row(@rows,1)
+  SET @sendfromName = Field(@row, "Name")
+  SET @sendFromEmail = Field(@row, "Email")
+  SET @senderTitle = ""
+  SET @signaturePhone = ""
+  SET @hasLicense = ""
+  
+  
+  IF @showBookingLink != "false" THEN
+  SET @hasAppointmentLink = Field(@row, "Appointment_Link__c")
+  ENDIF
+ENDIF
+  /* <<------====== FIND the contact fields from DE ------====== */
+  IF EMPTY(@useLookup) THEN
+  set @requesterRows = RetrieveSalesforceObjects(
+   "User",
+   "Name, Email, Title, Phone, Sales_License_Number__c, Appointment_Link__c",
+   "Id", "=", @userId)
+IF RowCount(@requesterRows) > 0 THEN
+  set @requesterRow = Row(@requesterRows, 1)
+  SET @sendfromName = Field(@requesterRow, "Name")
+  SET @sendFromEmail = Field(@requesterRow, "Email")
+  SET @senderTitle = Field(@requesterRow, "Title")
+  SET @signaturePhone = Field(@requesterRow, "Phone")
+  SET @hasLicense = Field(@requesterRow, "Sales_License_Number__c")
+  IF @showBookingLink != "false" THEN
+  SET @hasAppointmentLink = Field(@requesterRow, "Appointment_Link__c")
+  ENDIF
+ENDIF
+  ENDIF
+  /* Signature logic starts from here */
+  IF @hasLicense != "" THEN
+   SET @senderLicense = Concat("License #: ", @hasLicense, "<br>")
+  ENDIF
+  SET @senderFirstName = Substring(@sendfromName, 1, Subtract(IndexOf(@sendfromName, " "), 1))
+  /* Fallback for corporate number*/
+  IF EMPTY(@signaturePhone) THEN
+    SET @signaturePhone = "(800) 282-4882"
+  ENDIF
+  
+  ENDIF
+]%%
+  %%[
+SET @signature = Concat(
+'<p style="font-family: ''IBM Plex Sans'', Arial, Helvetica, sans-serif; font-size:14px; color:#161616; line-height:20px; padding:0px 0px 0;">',
+IIF(NOT EMPTY(@hasAppointmentLink),
+Concat('<a href="https://cloud.go.magmutual.com/go-redirect-to-uat-link?url=',@hasAppointmentLink,'" target="_blank" style="text-decoration:underline;">Book time to meet with me</a><br /><br />'),
+''
+),
+'Best regards,<br /><br />',
+'<span style="font-style:italic; font-family: serif; font-size:20px;">',@senderFirstName,'</span><br />',
+@senderTitle,'<br />',
+@sendfromName,'<br />',
+@sendFromEmail,'<br />',
+@signaturePhone,'<br />',
+@senderLicense,' MagMutual Insurance',
+'</p><br /><br />'
+)
+]%%
+</div>
+%%=v(@signature)=%%
+                            </td>
+                        </tr>
+ <tr>
+                            <td valign="top" style="padding: 0 20px;"></td>
+                        </tr>
+                        <tr>
+                            <td valign="top" style="font-size : 14px; font-family : Arial, helvetica, sans-serif; line-height: 18px; color : #000000; padding: 0 20px; display:none;">%%=ContentBlockByKey("DM_opens_tracking_pixel_DEV")=%%</td>
+                        </tr>
+                    </table>
+                  <div style="display:none;">
+%%[
+    SET @subscriberKey = _subscriberKey
+]%%
+                  </div>
+<!-- FOOTER-->
+                    <table
+                        role="Presentation"
+                        class="tableDimension"
+                        align="center"
+                        width="100%"
+                        border="0"
+                        cellpadding="0"
+                        cellspacing="0"
+                        bgcolor="#FFFFFF"
+                    >
+                        <!--  Spacer-->
+                        <tr>
+                            <td
+                                align="center"
+                                height="30"
+                                style="line-height:0px; font-size:30px; height:30px;"
+                            >
+                                <img
+                                    src="https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/spacer.gif"
+                                    width="1"
+                                    height="30"
+                                    alt=""
+                                    border="0"
+                                    style="display:block"
+                                />
+                            </td>
+                        </tr>
+                        <tr>
+                            <td
+                                align="center"
+                                style="font-size : 9px; font-family : Arial, helvetica, sans-serif; line-height : 12px; color : #808080;"
+                            >
+                                <a
+                                    alias="Unsubscribe"
+                                    conversion="false"
+                                    data-linkto="cloudpageslandingpage"
+                                    href="%%=RedirectTo(CloudPagesURL(2962, 'subscriberKey', _subscriberKey))=%%"
+                                    style="color:#808080;text-decoration:underline;"
+                                    title="Unsubscribe"
+                                    >Unsubscribe</a
+                                >
+                            </td>
+                        </tr>
+                        <tr>
+                            <td
+                                align="center"
+                                style="font-size : 9px; font-family : Arial, helvetica, sans-serif; line-height : 12px; color : #808080;"
+                            >
+                                %%Member_Busname%% %%Member_Addr%% <br />
+                                %%Member_City%%, %%Member_State%%,
+                                %%Member_PostalCode%%
+                            </td>
+                        </tr>
+                        <!--  Spacer-->
+                        <tr>
+                            <td
+                                align="center"
+                                height="30"
+                                style="line-height:0px; font-size:30px; height:30px;"
+                            >
+                                <img
+                                    src="https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/spacer.gif"
+                                    width="1"
+                                    height="30"
+                                    alt=""
+                                    border="0"
+                                    style="display:block"
+                                />
+                            </td>
+                        </tr>
+                    </table>
+                    <!--END OF CONTAINER TABLE -->
+                </td>
+            </tr>
+        </table>
+        <custom name="opencounter" type="tracking" /><custom
+            name="usermatch"
+            type="tracking"
+        />
+    </body>
+</html>
