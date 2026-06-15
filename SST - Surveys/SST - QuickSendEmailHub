@@ -15,6 +15,23 @@ function formValue(name) {
   return value || "";
 }
 
+function queryValue(name) {
+  var value = "";
+  try {
+    value = Platform.Request.GetQueryStringParameter(name);
+  } catch (e) {}
+  if (!value) {
+    try {
+      value = Request.GetQueryStringParameter(name);
+    } catch (ex) {}
+  }
+  return value || "";
+}
+
+function requestValue(name) {
+  return formValue(name) || queryValue(name);
+}
+
 function clean(value) {
   return String(value || "").replace(/^\s+|\s+$/g, "");
 }
@@ -137,6 +154,131 @@ function createAsset(auth, token, payload) {
     throw "Asset create HTTP " + resp.statusCode + ": " + body;
   }
   return fromJson(body);
+}
+
+function previewTables(environment) {
+  if (String(environment || "").toLowerCase() == "uat") {
+    return {
+      contact: "ENT.Contact_Salesforce_1",
+      account: "ENT.Account_Salesforce_1",
+      user: "ENT.User_Salesforce_1",
+      label: "UAT"
+    };
+  }
+  return {
+    contact: "Contact_Salesforce",
+    account: "Account_Salesforce",
+    user: "User_Salesforce",
+    label: "Production"
+  };
+}
+
+function firstLookupRow(deName, lookupField, lookupFieldValue) {
+  if (!lookupFieldValue) return null;
+  try {
+    var rows = Platform.Function.LookupRows(deName, lookupField, lookupFieldValue);
+    if (rows && rows.length > 0) {
+      return rows[0];
+    }
+  } catch (e) {}
+  return null;
+}
+
+function buildGreeting(firstName, lastName, salutation) {
+  if (salutation && lastName) {
+    return "Hello " + salutation + " " + lastName + ",";
+  }
+  if (firstName) {
+    return "Hello " + firstName + ",";
+  }
+  if (lastName) {
+    return "Hello Mr./Mrs. " + lastName + ",";
+  }
+  return "Hello,";
+}
+
+function senderFirstName(sendfromName) {
+  var name = clean(sendfromName);
+  var spaceIndex = name.indexOf(" ");
+  if (spaceIndex > 0) {
+    return name.substring(0, spaceIndex);
+  }
+  return name || "MagMutual";
+}
+
+function buildPreviewSignature(row) {
+  var sendfromName = clean(field(row, "Name")) || "MagMutual";
+  var sendFromEmail = clean(field(row, "Email")) || "info@magmutual.com";
+  var senderTitle = clean(field(row, "Title"));
+  var signaturePhone = clean(field(row, "Phone")) || "(800) 282-4882";
+  var senderSalesLicenseNumber = clean(field(row, "Sales_License_Number__c"));
+  var senderAppointmentLink = clean(field(row, "Appointment_Link__c"));
+  var parts = [
+    "<p style=\"margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">"
+  ];
+  if (senderAppointmentLink) {
+    parts.push("<a href=\"https://cloud.go.magmutual.com/go-redirect-to-uat-link?url=" + htmlSafe(senderAppointmentLink) + "\" target=\"_blank\" style=\"text-decoration:underline;\">Book time to meet with me</a><br><br>");
+  }
+  parts.push("Best regards,<br>");
+  parts.push("<span style=\"font-style:italic;font-family:serif;font-size:20px;\">" + htmlSafe(senderFirstName(sendfromName)) + "</span><br>");
+  if (senderTitle) {
+    parts.push(htmlSafe(senderTitle) + "<br>");
+  }
+  parts.push(htmlSafe(sendfromName) + "<br>");
+  parts.push(htmlSafe(sendFromEmail) + "<br>");
+  parts.push(htmlSafe(signaturePhone) + "<br>");
+  if (senderSalesLicenseNumber) {
+    parts.push("License #: " + htmlSafe(senderSalesLicenseNumber) + "<br>");
+  }
+  parts.push(" MagMutual Insurance</p>");
+  return parts.join("");
+}
+
+function buildPreviewData(contactId, environment) {
+  var tables = previewTables(environment);
+  var requestedContactId = clean(contactId) || "0033l000037NLyuAAG";
+  var contactRow = null;
+  var accountRow = null;
+  var userRow = null;
+  var firstName = "";
+  var lastName = "";
+  var salutation = "";
+  var contactAccountId = "";
+  var ownerId = "";
+  if (requestedContactId.indexOf("@") > 0) {
+    contactRow = firstLookupRow(tables.contact, "Email", requestedContactId);
+  }
+  if (!contactRow) {
+    contactRow = firstLookupRow(tables.contact, "Id", requestedContactId);
+  }
+  if (contactRow) {
+    requestedContactId = clean(field(contactRow, "Id")) || requestedContactId;
+    firstName = clean(field(contactRow, "FirstName"));
+    lastName = clean(field(contactRow, "LastName"));
+    salutation = clean(field(contactRow, "Salutation"));
+    contactAccountId = clean(field(contactRow, "AccountId"));
+    ownerId = clean(field(contactRow, "OwnerId")) || clean(field(contactRow, "Account_Owner__c"));
+  }
+  if (!ownerId && contactAccountId) {
+    accountRow = firstLookupRow(tables.account, "Id", contactAccountId);
+    if (accountRow) {
+      ownerId = clean(field(accountRow, "OwnerId"));
+    }
+  }
+  if (ownerId) {
+    userRow = firstLookupRow(tables.user, "Id", ownerId);
+  }
+  return {
+    contactId: requestedContactId,
+    dataSource: tables.label,
+    contactTable: tables.contact,
+    accountTable: tables.account,
+    userTable: tables.user,
+    contactFound: contactRow ? true : false,
+    ownerFound: userRow ? true : false,
+    fullGreeting: buildGreeting(firstName, lastName, salutation),
+    signatureHtml: buildPreviewSignature(userRow)
+  };
 }
 
 function quickSendEmailHtml(introBody) {
@@ -342,11 +484,18 @@ if (formValue("createEmail") == "1") {
   }
 }
 
+var previewContactId = clean(requestValue("previewContactId")) || "0033l000037NLyuAAG";
+var navigationEnvironment = clean(lookupValue("bd_sst_page_navigation", "environment", "type", "cloudpage")).toLowerCase();
+var previewEnvironment = navigationEnvironment == "uat" ? "uat" : "prod";
+var previewData = buildPreviewData(previewContactId, previewEnvironment);
+
 Platform.Variable.SetValue("@quickSendEmailResultStatus", resultStatus);
 Platform.Variable.SetValue("@quickSendEmailResultMessage", resultMessage);
 Platform.Variable.SetValue("@quickSendEmailAssetId", createdAssetId);
 Platform.Variable.SetValue("@quickSendEmailCustomerKey", createdCustomerKey);
 Platform.Variable.SetValue("@quickSendEmailHubUrl", hubUrl);
+Platform.Variable.SetValue("@quickSendEmailPreviewContactId", previewContactId);
+Platform.Variable.SetValue("@quickSendEmailPreviewDataJson", asJson(previewData));
 </script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -538,6 +687,20 @@ Platform.Variable.SetValue("@quickSendEmailHubUrl", hubUrl);
     gap: 24px;
     grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
   }
+  .preview-contact-panel {
+    background: #ffffff;
+    border-bottom: 1px solid var(--border-color);
+    display: none;
+    padding: 16px;
+  }
+  .preview-contact-panel.open {
+    display: block;
+  }
+  .preview-contact-actions {
+    align-items: center;
+    display: flex;
+    gap: 12px;
+  }
   .preview-panel {
     border: 1px solid var(--border-color);
     background: #ffffff;
@@ -555,15 +718,21 @@ Platform.Variable.SetValue("@quickSendEmailHubUrl", hubUrl);
   .preview-avatar {
     align-items: center;
     background: #e5e7eb;
+    border: 0;
     border-radius: 999px;
     color: var(--gray-700);
+    cursor: pointer;
     display: flex;
     flex: 0 0 40px;
     font-size: 16px;
     font-weight: 700;
     height: 40px;
     justify-content: center;
+    padding: 0;
     width: 40px;
+  }
+  .preview-avatar:hover {
+    background: var(--gray-200);
   }
   .preview-message-meta {
     align-items: center;
@@ -714,13 +883,31 @@ With our upgraded Learning Center, you can access educational content, including
           </form>
           <section class="preview-panel" aria-label="Email preview">
             <div class="preview-header">
-              <div class="preview-avatar" aria-hidden="true">M</div>
+              <button class="preview-avatar" id="previewContactToggle" type="button" aria-expanded="false" aria-controls="previewContactPanel">M</button>
               <div class="preview-message-meta">
                 <div class="preview-message-copy">
                   <strong id="previewSubject">Recommended Learning Center resources</strong>
                   <span id="previewPreheader">Helpful educational resources selected for your practice.</span>
                 </div>
                 <div class="preview-date" id="previewDate"></div>
+              </div>
+            </div>
+            <div class="preview-contact-panel" id="previewContactPanel">
+              <div class="form-group">
+                <label class="form-label" for="previewContactId">Preview Contact ID</label>
+                <script runat="server">
+                  function previewFormSafe(value) {
+                    return String(value || "")
+                      .replace(/&/g, "&amp;")
+                      .replace(/</g, "&lt;")
+                      .replace(/>/g, "&gt;")
+                      .replace(/"/g, "&quot;");
+                  }
+                  Write('<input class="form-input" id="previewContactId" name="previewContactId" value="' + previewFormSafe(Platform.Variable.GetValue("@quickSendEmailPreviewContactId") || "0033l000037NLyuAAG") + '">');
+                </script>
+              </div>
+              <div class="preview-contact-actions">
+                <button class="btn btn-create" id="refreshPreviewData" type="button">Refresh Preview</button>
               </div>
             </div>
             <iframe class="preview-frame" id="emailPreviewFrame" title="Email preview"></iframe>
@@ -730,8 +917,22 @@ With our upgraded Learning Center, you can access educational content, including
     </div>
   </main>
 </div>
+<script runat="server">
+  function previewJsonSafe(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+  Write('<textarea id="previewDataJson" hidden>' + previewJsonSafe(Platform.Variable.GetValue("@quickSendEmailPreviewDataJson") || "{}") + '</textarea>');
+</script>
 <script>
   (function () {
+    var previewData = {};
+    try {
+      previewData = JSON.parse(document.getElementById("previewDataJson").value || "{}");
+    } catch (e) {}
     function el(id) {
       return document.getElementById(id);
     }
@@ -747,14 +948,16 @@ With our upgraded Learning Center, you can access educational content, including
     }
     function previewHtml() {
       var introBody = textToHtml(el("introBody").value);
+      var greeting = escapeHtml(previewData.fullGreeting || "Hello,");
+      var signatureHtml = previewData.signatureHtml || "<p style=\"margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">Best regards,<br><br><span style=\"font-style:italic;font-family:serif;font-size:20px;\">MagMutual</span><br>MagMutual Insurance</p>";
       return [
         "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;margin:0;padding:30px 0;\">",
         "<tr><td align=\"left\">",
         "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;max-width:100%;\">",
         "<tr><td style=\"font-family:Arial,Helvetica,sans-serif;color:#161616;font-size:14px;line-height:20px;padding:0 20px;\">",
-        "<p style=\"margin:0 0 18px;\">Hello,</p>",
+        "<p style=\"margin:0 0 18px;\">" + greeting + "</p>",
         "<p style=\"margin:0 0 18px;\">" + introBody + "</p>",
-        "<p style=\"margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">Best regards,<br><br><span style=\"font-style:italic;font-family:serif;font-size:20px;\">MagMutual</span><br>MagMutual Insurance</p>",
+        signatureHtml,
         "</td></tr>",
         "<tr><td align=\"left\" style=\"padding:30px 20px 0;font-family:Arial,Helvetica,sans-serif;font-size:9px;line-height:12px;color:#808080;\"><u>Unsubscribe</u><br>Member business address renders in SFMC send context.</td></tr>",
         "</table>",
@@ -768,9 +971,24 @@ With our upgraded Learning Center, you can access educational content, including
       el("previewDate").textContent = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
       el("emailPreviewFrame").srcdoc = previewHtml();
     }
+    function refreshPreviewData() {
+      var params = new URLSearchParams(window.location.search);
+      params.set("previewContactId", el("previewContactId").value || "0033l000037NLyuAAG");
+      params.delete("previewEnvironment");
+      window.location.href = window.location.pathname + "?" + params.toString();
+    }
+    function togglePreviewContact() {
+      var panel = el("previewContactPanel");
+      var toggle = el("previewContactToggle");
+      var isOpen = panel.className.indexOf("open") > -1;
+      panel.className = isOpen ? "preview-contact-panel" : "preview-contact-panel open";
+      toggle.setAttribute("aria-expanded", isOpen ? "false" : "true");
+    }
     ["subject", "preheader", "introBody"].forEach(function (id) {
       el(id).addEventListener("input", updatePreview);
     });
+    el("previewContactToggle").addEventListener("click", togglePreviewContact);
+    el("refreshPreviewData").addEventListener("click", refreshPreviewData);
     updatePreview();
   })();
 </script>
