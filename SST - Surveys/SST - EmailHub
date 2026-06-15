@@ -2,16 +2,11 @@
 Platform.Load("core", "1");
 
 var adminCreateKey = "";
-var authDataExtension = "SFMC_AUTH";
-var authUser = "Admin";
 var defaultCategoryId = 556442;
 var defaultSubject = "Got 2 minutes? Tell us what you think";
-var defaultPreheader = "We would appreciate a few minutes of your time.";
 var defaultTextBody = "We're always looking for ways to improve, and your input makes a big difference. Take Survey: https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt";
 var resultStatus = "";
 var resultMessage = "";
-var createdAssetId = "";
-var createdCustomerKey = "";
 
 function formField(name) {
   var value = "";
@@ -25,7 +20,7 @@ function trimValue(value) {
   return String(value || "").replace(/^\s+|\s+$/g, "");
 }
 
-function htmlEncode(value) {
+function encodeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -33,16 +28,8 @@ function htmlEncode(value) {
     .replace(/"/g, "&quot;");
 }
 
-function safeJson(value) {
-  return Platform.Function.Stringify(value);
-}
-
-function parseJson(value) {
-  return Platform.Function.ParseJSON(String(value || "{}"));
-}
-
-function compactGuid() {
-  return String(Platform.Function.GUID()).replace(/-/g, "");
+function shortKey() {
+  return String(Platform.Function.GUID()).replace(/-/g, "").substring(0, 8);
 }
 
 function ampBlock(lines) {
@@ -60,239 +47,61 @@ function ampToken(value) {
   return pct + value + pct;
 }
 
-function buildSurveyEmailHtml() {
-  var initAmp = [
-    "SET @subscriberKey = _subscriberKey",
-    "SET @senderId = \"\"",
-    "SET @senderExist = \"\"",
-    "SET @senderLicense = \"\"",
-    "IF EMPTY(@subscriberKey) THEN",
-    "  SET @subscriberKey = emailaddr",
+function buildEmailHtml() {
+  var greetingAmp = ampBlock([
+    "SET @firstName = AttributeValue(\"FirstName\")",
+    "IF EMPTY(@firstName) THEN",
+    "  SET @firstName = AttributeValue(\"CampaignMember:Common:FirstName\")",
     "ENDIF",
-    "IF IndexOf(@subscriberKey, \"@\") > 0 THEN",
-    "  SET @rows = LookupRows(\"ent.Contact_Salesforce_1\",\"Email\",@subscriberKey)",
+    "IF EMPTY(@firstName) THEN",
+    "  SET @fullGreeting = \"Hello,\"",
     "ELSE",
-    "  SET @rows = LookupRows(\"ent.Contact_Salesforce_1\",\"Id\",@subscriberKey)",
-    "ENDIF",
-    "IF RowCount(@rows) > 0 THEN",
-    "  SET @row = Row(@rows,1)",
-    "  SET @contactfirstname = Field(@row,\"FirstName\")",
-    "  SET @contactlastname = Field(@row,\"LastName\")",
-    "  SET @contactsalutation = Field(@row,\"Salutation\")",
-    "  SET @contactaccountid = Field(@row,\"AccountId\")",
-    "  SET @contactState = Field(@row,\"MailingState\")",
-    "ELSE",
-    "  IF IndexOf(@subscriberKey, \"@\") > 0 THEN",
-    "    SET @sfRows = RetrieveSalesforceObjects(\"Contact\",\"FirstName,LastName,Salutation,AccountId,MailingState\",\"Email\",\"=\",@subscriberKey)",
-    "  ELSE",
-    "    SET @sfRows = RetrieveSalesforceObjects(\"Contact\",\"FirstName,LastName,Salutation,AccountId,MailingState\",\"Id\",\"=\",@subscriberKey)",
-    "  ENDIF",
-    "  IF RowCount(@sfRows) > 0 THEN",
-    "    SET @sfRow = Row(@sfRows,1)",
-    "    SET @contactfirstname = Field(@sfRow,\"FirstName\")",
-    "    SET @contactlastname = Field(@sfRow,\"LastName\")",
-    "    SET @contactsalutation = Field(@sfRow,\"Salutation\")",
-    "    SET @contactaccountid = Field(@sfRow,\"AccountId\")",
-    "    SET @contactState = Field(@sfRow,\"MailingState\")",
-    "  ENDIF",
-    "ENDIF",
-    "SET @fullStateName = Lookup(\"States_DE\", \"State\", \"Abbreviation\", @contactState)",
-    "SET @contactState = IIF(Empty(@fullStateName),\"your state\", @fullStateName)",
-    "SET @accountrows = LookupRows(\"ent.Account_Salesforce_1\",\"Id\",@contactaccountid)",
-    "IF RowCount(@accountrows) > 0 THEN",
-    "  SET @accountrow = Row(@accountrows,1)",
-    "  SET @AccountOwnerId = IIF(EMPTY(@senderId),Field(@accountrow,\"OwnerId\"),@senderId)",
-    "ELSE",
-    "  SET @sfAccountRows = RetrieveSalesforceObjects(\"Account\",\"OwnerId\",\"Id\",\"=\",@contactaccountid)",
-    "  IF RowCount(@sfAccountRows) > 0 THEN",
-    "    SET @sfAccountRow = Row(@sfAccountRows,1)",
-    "    SET @AccountOwnerId = IIF(EMPTY(@senderId),Field(@sfAccountRow,\"OwnerId\"),@senderId)",
-    "  ENDIF",
-    "ENDIF",
-    "SET @userRows = LookupRows(\"ent.User_Salesforce_1\",\"Id\", @AccountOwnerId)",
-    "IF RowCount(@userRows) > 0 THEN",
-    "  SET @userRow = Row(@userRows,1)",
-    "  SET @senderExist = \"True\"",
-    "  SET @senderName = Field(@userRow,\"Name\")",
-    "  SET @senderAppointmentLink = Field(@userRow,\"Appointment_Link__c\")",
-    "  SET @senderTitle = Field(@userRow,\"Title\")",
-    "  SET @senderSalesLicenseNumber = Field(@userRow,\"Sales_License_Number__c\")",
-    "  SET @senderEmail = Field(@userRow,\"Email\")",
-    "  SET @senderPhone = Field(@userRow,\"Phone\")",
-    "ELSE",
-    "  SET @sfUserRows = RetrieveSalesforceObjects(\"User\",\"Name,Appointment_Link__c,Title,Sales_License_Number__c,Email,Phone\",\"Id\",\"=\",@AccountOwnerId)",
-    "  IF RowCount(@sfUserRows) > 0 THEN",
-    "    SET @sfUserRow = Row(@sfUserRows,1)",
-    "    SET @senderExist = \"True\"",
-    "    SET @senderName = Field(@sfUserRow,\"Name\")",
-    "    SET @senderAppointmentLink = Field(@sfUserRow,\"Appointment_Link__c\")",
-    "    SET @senderTitle = Field(@sfUserRow,\"Title\")",
-    "    SET @senderSalesLicenseNumber = Field(@sfUserRow,\"Sales_License_Number__c\")",
-    "    SET @senderEmail = Field(@sfUserRow,\"Email\")",
-    "    SET @senderPhone = Field(@sfUserRow,\"Phone\")",
-    "  ENDIF",
-    "ENDIF",
-    "SET @greeting = IIF(EMPTY(@greeting),\"Hello\",@greeting)",
-    "IF NOT EMPTY(@contactsalutation) THEN",
-    "  SET @fullGreeting = Concat(@greeting,\" \",@contactsalutation,\" \",@contactlastname,\",\")",
-    "ELSEIF NOT EMPTY(@contactfirstname) THEN",
-    "  SET @fullGreeting = Concat(@greeting,\" \",@contactfirstname,\",\")",
-    "ELSEIF NOT EMPTY(@contactlastname) THEN",
-    "  SET @fullGreeting = Concat(@greeting,\" Mr./Mrs. \",@contactlastname,\",\")",
-    "ELSE",
-    "  SET @fullGreeting = Concat(@greeting,\",\")",
+    "  SET @fullGreeting = Concat(\"Hello \", @firstName, \",\")",
     "ENDIF"
-  ];
-  var signatureAmp = [
-    "SET @customSender = \"\"",
-    "SET @showBookingLink = \"false\"",
-    "IF NOT EMPTY(@senderExist) THEN",
-    "  SET @sendfromName = @senderName",
-    "  SET @sendFromEmail = @senderEmail",
-    "  SET @signaturePhone = @senderPhone",
-    "  SET @hasLicense = @senderSalesLicenseNumber",
-    "  SET @hasAppointmentLink = IIF(@showBookingLink != \"false\",@senderAppointmentLink,\"\")",
-    "ENDIF",
-    "IF EMPTY(@sendfromName) THEN",
-    "  SET @sendfromName = \"MagMutual\"",
-    "ENDIF",
-    "IF EMPTY(@sendFromEmail) THEN",
-    "  SET @sendFromEmail = \"info@magmutual.com\"",
-    "ENDIF",
-    "IF EMPTY(@signaturePhone) THEN",
-    "  SET @signaturePhone = \"(800) 282-4882\"",
-    "ENDIF",
-    "IF NOT EMPTY(@hasLicense) THEN",
-    "  SET @senderLicense = Concat(\"License #: \", @hasLicense, \"<br>\")",
-    "ENDIF",
-    "IF IndexOf(@sendfromName,\" \") > 0 THEN",
-    "  SET @senderFirstName = Substring(@sendfromName, 1, Subtract(IndexOf(@sendfromName, \" \"), 1))",
-    "ELSE",
-    "  SET @senderFirstName = @sendfromName",
-    "ENDIF",
-    "SET @signature = Concat(",
-    "'<p style=\"font-family: IBM Plex Sans, Arial, Helvetica, sans-serif; font-size:14px; color:#161616; line-height:20px; padding:0;\">',",
-    "IIF(NOT EMPTY(@hasAppointmentLink),Concat('<a href=\"https://cloud.go.magmutual.com/go-redirect-to-uat-link?url=',@hasAppointmentLink,'\" target=\"_blank\" style=\"text-decoration:underline;\">Book time to meet with me</a><br /><br />'),''),",
-    "'Best regards,<br />',",
-    "'<span style=\"font-style:italic; font-family: serif; font-size:20px;\">',@senderFirstName,'</span><br />',",
-    "@senderTitle,'<br />',",
-    "@sendfromName,'<br />',",
-    "@sendFromEmail,'<br />',",
-    "@signaturePhone,'<br />',",
-    "@senderLicense,' MagMutual Insurance',",
-    "'</p><br /><br />')"
-  ];
+  ]);
+  var footerAmp = ampValue("ContentBlockByKey(\"Email_Footer_2407\")");
+  var surveyContactToken = ampToken("CampaignMember:Common:Id");
   return [
-    "<!DOCTYPE html>",
-    "<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:v=\"urn:schemas-microsoft-com:vml\">",
-    "<head>",
-    "<title>MagMutual</title>",
-    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />",
-    "<meta name=\"format-detection\" content=\"telephone=no\" />",
-    "<meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\" />",
-    "<style type=\"text/css\">",
-    "@font-face{font-family:'IBM Plex Sans';font-style:normal;font-weight:400;font-display:swap;src:url(https://fonts.gstatic.com/s/ibmplexsans/v19/zYXgKVElMYYaJe8bpLHnCwDKhdHeFaxOedc.woff2) format('woff2');}",
-    ".ReadMsgBody,.ExternalClass{width:100%;}.ExternalClass,.ExternalClass p,.ExternalClass span,.ExternalClass font,.ExternalClass td,.ExternalClass div{line-height:100%;}",
-    "a{color:#0F62FE;text-decoration:underline;}table td{border-collapse:collapse;}body,table,td{font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:18px;}td{font-family:Arial,Helvetica,sans-serif,'IBM Plex Sans';}",
-    "h1{font-family:'IBM Plex Sans',Arial,Helvetica,sans-serif!important;font-size:32px!important;color:#FFFFFF!important;line-height:36px!important;}p{font-family:'IBM Plex Sans',Arial,Helvetica,sans-serif;font-size:14px;color:#161616;line-height:20px;font-weight:500;margin:20px 0 0;padding:0!important;}",
-    "@media only screen and (max-width:480px){table.tableDimension{width:100%!important;border-right:none!important;}img.photo{width:100%!important;height:auto!important;}}",
-    "</style>",
-    "</head>",
-    "<body bgcolor=\"#FFFFFF\" leftmargin=\"0\" topmargin=\"0\" marginwidth=\"0\" marginheight=\"0\" style=\"padding:0;margin:0;background-color:#eaeaea;\">",
-    "<table role=\"Presentation\" width=\"100%\" border=\"0\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\"><tr><td align=\"center\">",
-    "<table role=\"Presentation\" class=\"tableDimension\" align=\"center\" width=\"600\" border=\"0\" cellpadding=\"0\" cellspacing=\"0\" bgcolor=\"#393939\">",
-    "<tr><td valign=\"top\" style=\"padding:30px;\"><a href=\"https://magmutual.com/\" target=\"_blank\"><img src=\"https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/MM_PrimaryLogo_Reversed.png\" alt=\"MagMutual\" border=\"0\" style=\"display:block;\" width=\"200\" /></a></td></tr>",
-    "<tr><td align=\"center\" height=\"20\" style=\"line-height:0;font-size:20px;height:20px;\"><img src=\"https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/spacer.gif\" width=\"1\" height=\"20\" alt=\"\" border=\"0\" style=\"display:block\" /></td></tr>",
-    "<tr><td style=\"font-family:'IBM Plex Sans',Arial,Helvetica,sans-serif;font-size:32px;color:#FFFFFF;line-height:36px;padding:0 45px 10px;\"><h1>Got 2 minutes? Tell us what you think</h1></td></tr>",
-    "<tr><td align=\"center\" height=\"35\" style=\"line-height:0;font-size:35px;height:35px;\"><img src=\"https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/spacer.gif\" width=\"1\" height=\"35\" alt=\"\" border=\"0\" style=\"display:block\" /></td></tr>",
+    "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#eaeaea;margin:0;padding:0;\">",
+    "<tr><td align=\"center\">",
+    "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#393939;\">",
+    "<tr><td style=\"padding:30px;\"><a href=\"https://magmutual.com/\" target=\"_blank\"><img src=\"https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/MM_PrimaryLogo_Reversed.png\" alt=\"MagMutual\" width=\"200\" border=\"0\" style=\"display:block;\"></a></td></tr>",
+    "<tr><td style=\"padding:20px 45px 30px;font-family:Arial,Helvetica,sans-serif;color:#ffffff;\"><h1 style=\"font-size:32px;line-height:36px;margin:0;color:#ffffff;\">Got 2 minutes? Tell us what you think</h1></td></tr>",
     "</table>",
-    "<table role=\"Presentation\" class=\"tableDimension\" align=\"center\" width=\"600\" border=\"0\" cellpadding=\"0\" cellspacing=\"0\" bgcolor=\"#FFFFFF\">",
-    "<tr><td align=\"left\" valign=\"top\" style=\"font-size:14px;font-family:Arial,Helvetica,sans-serif;line-height:18px;color:#000000;padding:0 30px;\">",
-    "<div style=\"display:none;\">" + ampBlock(initAmp) + "</div>",
-    "<p>" + ampValue("v(@fullGreeting)") + "</p><br>",
+    "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;\">",
+    "<tr><td style=\"padding:30px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">",
+    "<div style=\"display:none;\">" + greetingAmp + "</div>",
+    "<p style=\"margin:0 0 20px;\">" + ampValue("v(@fullGreeting)") + "</p>",
+    "<p style=\"margin:0 0 20px;\">We're always looking for ways to improve, and your input makes a big difference. We've put together a short survey and would really appreciate a few minutes of your time.</p>",
+    "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr><td bgcolor=\"#0060F5\" style=\"background:#0060F5;\"><a href=\"https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=SURV_20260612_102301&contact=" + surveyContactToken + "\" target=\"_blank\" style=\"display:block;padding:10px 99px 10px 10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;text-decoration:none;\">Take Survey</a></td></tr></table>",
+    "<p style=\"margin:20px 0 0;\">If you have any questions or run into any issues, don't hesitate to reach out.</p>",
+    "<p style=\"margin:20px 0 0;\">Thank you for sharing your thoughts &mdash; we truly value your feedback!</p>",
+    "<p style=\"margin:20px 0 0;\">Best regards,<br>MagMutual Insurance</p>",
     "</td></tr>",
-    "<tr><td align=\"left\" valign=\"top\" style=\"font-size:14px;font-family:Arial,Helvetica,sans-serif;line-height:18px;color:#000000;padding:0 30px;\">",
-    "<p>We're always looking for ways to improve, and your input makes a big difference. We've put together a short survey and would really appreciate a few minutes of your time.</p>",
-    "<table width=\"100%\" border=\"0\" cellspacing=\"0\" cellpadding=\"0\" role=\"presentation\"><tr><td align=\"left\" style=\"padding-top:20px;\"><table border=\"0\" cellspacing=\"0\" cellpadding=\"0\" role=\"presentation\"><tr><td bgcolor=\"#0060F5\" style=\"background-color:#0060F5;\"><a target=\"_blank\" style=\"font-size:16px;font-family:Arial,Helvetica,sans-serif;color:#FFFFFF;text-align:left;text-decoration:none;display:block;background-color:#0060F5;border:1px solid #0060F5;padding:10px 99px 10px 10px;\" href=\"https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=SURV_20260612_102301&contact=" + ampToken("CampaignMember:Common:Id") + "\" title=\"Survey link\" alias=\"Surveylink\" conversion=\"false\" data-linkto=\"https://\">Take Survey</a></td></tr></table></td></tr></table>",
-    "<p>If you have any questions or run into any issues, don't hesitate to reach out.</p>",
-    "<p>Thank you for sharing your thoughts &mdash; we truly value your feedback!</p>",
-    "<div style=\"display:none;\">" + ampBlock(signatureAmp) + "</div>",
-    ampValue("v(@signature)"),
-    "</td></tr>",
-    "<tr><td align=\"center\" height=\"20\" style=\"line-height:0;font-size:20px;height:20px;\"><img src=\"https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/spacer.gif\" width=\"1\" height=\"20\" alt=\"\" border=\"0\" style=\"display:block\" /></td></tr>",
     "</table>",
-    ampValue("ContentBlockByKey(\"Email_Footer_2407\")"),
-    "<table role=\"Presentation\" class=\"tableDimension\" align=\"center\" width=\"600\" border=\"0\" cellpadding=\"0\" cellspacing=\"0\" bgcolor=\"#FFFFFF\"><tr><td align=\"center\" style=\"font-size:9px;font-family:Arial,Helvetica,sans-serif;line-height:12px;color:#808080;\">" + ampToken("Member_Busname") + " " + ampToken("Member_Addr") + "<br />" + ampToken("Member_City") + ", " + ampToken("Member_State") + ", " + ampToken("Member_PostalCode") + "</td></tr><tr><td align=\"center\" height=\"30\" style=\"line-height:0;font-size:30px;height:30px;\"><img src=\"https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/spacer.gif\" width=\"1\" height=\"30\" alt=\"\" border=\"0\" style=\"display:block\" /></td></tr></table>",
-    "</td></tr></table>",
-    "</body>",
-    "</html>"
-  ].join("\n");
+    footerAmp,
+    "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;\">",
+    "<tr><td align=\"center\" style=\"padding:20px 30px;font-family:Arial,Helvetica,sans-serif;font-size:9px;line-height:12px;color:#808080;\">",
+    ampToken("Member_Busname") + " " + ampToken("Member_Addr") + "<br>" + ampToken("Member_City") + ", " + ampToken("Member_State") + ", " + ampToken("Member_PostalCode"),
+    "</td></tr>",
+    "</table>",
+    "</td></tr>",
+    "</table>"
+  ].join("");
 }
 
-function lookupAuth() {
-  var rows = Platform.Function.LookupRows(authDataExtension, "User", authUser);
-  if (!rows || rows.length < 1) {
-    throw "Missing SFMC_AUTH row for User=Admin.";
-  }
-  var row = rows[0];
-  var clientId = trimValue(row.clientId);
-  var clientSecret = trimValue(row.clientSecret);
-  var subdomain = trimValue(row.subdomain);
-  var accountId = trimValue(row.accountId);
-  if (!clientId || !clientSecret || !subdomain) {
-    throw "SFMC_AUTH row must include clientId, clientSecret, and subdomain.";
-  }
-  return {
-    clientId: clientId,
-    clientSecret: clientSecret,
-    subdomain: subdomain,
-    accountId: accountId
+function createEmail(name, subject, textBody, categoryId) {
+  var prox = new Script.Util.WSProxy();
+  var email = {
+    Name: name,
+    Subject: subject,
+    HTMLBody: buildEmailHtml(),
+    TextBody: textBody,
+    CharacterSet: "utf-8",
+    CategoryID: categoryId,
+    CategoryIDSpecified: true
   };
-}
-
-function requestToken(auth) {
-  var payload = {
-    grant_type: "client_credentials",
-    client_id: auth.clientId,
-    client_secret: auth.clientSecret
-  };
-  if (auth.accountId) {
-    payload.account_id = auth.accountId;
-  }
-  var req = new Script.Util.HttpRequest("https://" + auth.subdomain + ".auth.marketingcloudapis.com/v2/token");
-  req.emptyContentHandling = 0;
-  req.retries = 2;
-  req.continueOnError = true;
-  req.contentType = "application/json";
-  req.method = "POST";
-  req.postData = safeJson(payload);
-  var resp = req.send();
-  var body = String(resp.content || "");
-  if (resp.statusCode != 200) {
-    throw "Auth failed with HTTP " + resp.statusCode + ": " + body;
-  }
-  var parsed = parseJson(body);
-  if (!parsed.access_token) {
-    throw "Auth succeeded but no access_token was returned.";
-  }
-  return parsed.access_token;
-}
-
-function postAsset(subdomain, token, payload) {
-  var req = new Script.Util.HttpRequest("https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets");
-  req.emptyContentHandling = 0;
-  req.retries = 2;
-  req.continueOnError = true;
-  req.contentType = "application/json";
-  req.setHeader("Authorization", "Bearer " + token);
-  req.method = "POST";
-  req.postData = safeJson(payload);
-  var resp = req.send();
-  var body = String(resp.content || "");
-  if (resp.statusCode != 200 && resp.statusCode != 201) {
-    throw "Create email failed with HTTP " + resp.statusCode + ": " + body;
-  }
-  return parseJson(body);
+  return prox.createItem("Email", email);
 }
 
 if (formField("createEmail") == "1") {
@@ -305,15 +114,11 @@ if (formField("createEmail") == "1") {
     }
     var emailName = trimValue(formField("emailName"));
     if (!emailName) {
-      emailName = "SST Survey Email " + compactGuid().substring(0, 8);
+      emailName = "SST Survey Email " + shortKey();
     }
     var subject = trimValue(formField("subject"));
     if (!subject) {
       subject = defaultSubject;
-    }
-    var preheader = trimValue(formField("preheader"));
-    if (!preheader) {
-      preheader = defaultPreheader;
     }
     var textBody = trimValue(formField("textBody"));
     if (!textBody) {
@@ -323,58 +128,25 @@ if (formField("createEmail") == "1") {
     if (isNaN(categoryId)) {
       throw "Folder Category ID must be a number.";
     }
-    createdCustomerKey = "sst-survey-email-" + compactGuid();
-    var auth = lookupAuth();
-    var token = requestToken(auth);
-    var payload = {
-      name: emailName,
-      customerKey: createdCustomerKey,
-      assetType: {
-        id: 208,
-        name: "htmlemail"
-      },
-      category: {
-        id: categoryId
-      },
-      channels: {
-        email: true,
-        web: false
-      },
-      views: {
-        html: {
-          content: buildSurveyEmailHtml()
-        },
-        text: {
-          content: textBody
-        },
-        subjectline: {
-          content: subject
-        },
-        preheader: {
-          content: preheader
-        }
-      },
-      data: {
-        email: {
-          options: {
-            characterEncoding: "utf-8"
-          }
-        }
-      }
-    };
-    var created = postAsset(auth.subdomain, token, payload);
-    createdAssetId = String(created.id || "");
-    resultStatus = "success";
-    resultMessage = "Email created successfully.";
+    var response = createEmail(emailName, subject, textBody, categoryId);
+    if (response && response.Status == "OK") {
+      resultStatus = "success";
+      resultMessage = "Email created successfully.";
+    } else if (response && response.Results && response.Results.length > 0) {
+      resultStatus = "error";
+      resultMessage = String(response.Results[0].StatusMessage || response.Results[0].ErrorCode || "Email create failed.");
+    } else {
+      resultStatus = "error";
+      resultMessage = "Email create failed.";
+    }
   } catch (ex) {
     resultStatus = "error";
     resultMessage = String(ex);
   }
 }
+
 Platform.Variable.SetValue("@emailHubResultStatus", resultStatus);
 Platform.Variable.SetValue("@emailHubResultMessage", resultMessage);
-Platform.Variable.SetValue("@emailHubAssetId", createdAssetId);
-Platform.Variable.SetValue("@emailHubCustomerKey", createdCustomerKey);
 </script>
 <style>
   body {
@@ -384,7 +156,7 @@ Platform.Variable.SetValue("@emailHubCustomerKey", createdCustomerKey);
     font-family: Arial, Helvetica, sans-serif;
   }
   .page {
-    max-width: 920px;
+    max-width: 720px;
     margin: 0 auto;
     padding: 32px 20px;
   }
@@ -450,9 +222,9 @@ Platform.Variable.SetValue("@emailHubCustomerKey", createdCustomerKey);
 <main class="page">
   <div class="card">
     <h1>SST Email Hub</h1>
-    <p>Create the survey email as a Content Builder HTML email asset.</p>
+    <p>Create the survey email using the SOAP Email object.</p>
     <script runat="server">
-      function bodyHtmlEncode(value) {
+      function bodyEncodeHtml(value) {
         return String(value || "")
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
@@ -461,17 +233,8 @@ Platform.Variable.SetValue("@emailHubCustomerKey", createdCustomerKey);
       }
       var bodyResultStatus = Platform.Variable.GetValue("@emailHubResultStatus");
       var bodyResultMessage = Platform.Variable.GetValue("@emailHubResultMessage");
-      var bodyAssetId = Platform.Variable.GetValue("@emailHubAssetId");
-      var bodyCustomerKey = Platform.Variable.GetValue("@emailHubCustomerKey");
       if (bodyResultStatus) {
-        Write('<div class="notice ' + bodyHtmlEncode(bodyResultStatus) + '"><strong>' + bodyHtmlEncode(bodyResultMessage) + '</strong>');
-        if (bodyAssetId) {
-          Write('<br>Asset ID: ' + bodyHtmlEncode(bodyAssetId));
-        }
-        if (bodyCustomerKey) {
-          Write('<br>Customer Key: ' + bodyHtmlEncode(bodyCustomerKey));
-        }
-        Write('</div>');
+        Write('<div class="notice ' + bodyEncodeHtml(bodyResultStatus) + '"><strong>' + bodyEncodeHtml(bodyResultMessage) + '</strong></div>');
       }
     </script>
     <form method="post">
@@ -482,14 +245,12 @@ Platform.Variable.SetValue("@emailHubCustomerKey", createdCustomerKey);
       <input id="emailName" name="emailName" value="SST Survey Email">
       <label for="subject">Subject</label>
       <input id="subject" name="subject" value="Got 2 minutes? Tell us what you think">
-      <label for="preheader">Preheader</label>
-      <input id="preheader" name="preheader" value="We would appreciate a few minutes of your time.">
-      <label for="categoryId">Content Builder Folder Category ID</label>
+      <label for="categoryId">Email Studio Folder Category ID</label>
       <input id="categoryId" name="categoryId" value="556442">
       <label for="textBody">Text Body</label>
       <textarea id="textBody" name="textBody">We're always looking for ways to improve, and your input makes a big difference. Take Survey: https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt</textarea>
       <button type="submit">Create Email</button>
     </form>
-    <p class="small">Set <strong>adminCreateKey</strong> at the top of this CloudPage before deploying. The page will refuse to create emails until that value is configured.</p>
+    <p class="small">Set <strong>adminCreateKey</strong> at the top of this CloudPage before deploying. This version creates a legacy Email Studio email, matching the SOAP documentation in your reference file.</p>
   </div>
 </main>
