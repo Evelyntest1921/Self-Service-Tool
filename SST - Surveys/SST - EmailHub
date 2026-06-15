@@ -17,6 +17,23 @@ function formValue(name) {
   return value || "";
 }
 
+function queryValue(name) {
+  var value = "";
+  try {
+    value = Platform.Request.GetQueryStringParameter(name);
+  } catch (e) {}
+  if (!value) {
+    try {
+      value = Request.GetQueryStringParameter(name);
+    } catch (ex) {}
+  }
+  return value || "";
+}
+
+function requestValue(name) {
+  return formValue(name) || queryValue(name);
+}
+
 function clean(value) {
   return String(value || "").replace(/^\s+|\s+$/g, "");
 }
@@ -141,6 +158,131 @@ function createAsset(auth, token, payload) {
     throw "Asset create HTTP " + resp.statusCode + ": " + body;
   }
   return fromJson(body);
+}
+
+function previewTables(environment) {
+  if (String(environment || "").toLowerCase() == "uat") {
+    return {
+      contact: "ENT.Contact_Salesforce_1",
+      account: "ENT.Account_Salesforce_1",
+      user: "ENT.User_Salesforce_1",
+      label: "UAT"
+    };
+  }
+  return {
+    contact: "Contact_Salesforce",
+    account: "Account_Salesforce",
+    user: "User_Salesforce",
+    label: "Production"
+  };
+}
+
+function firstLookupRow(deName, lookupField, lookupFieldValue) {
+  if (!lookupFieldValue) return null;
+  try {
+    var rows = Platform.Function.LookupRows(deName, lookupField, lookupFieldValue);
+    if (rows && rows.length > 0) {
+      return rows[0];
+    }
+  } catch (e) {}
+  return null;
+}
+
+function buildGreeting(firstName, lastName, salutation) {
+  if (salutation && lastName) {
+    return "Hello " + salutation + " " + lastName + ",";
+  }
+  if (firstName) {
+    return "Hello " + firstName + ",";
+  }
+  if (lastName) {
+    return "Hello Mr./Mrs. " + lastName + ",";
+  }
+  return "Hello,";
+}
+
+function senderFirstName(sendfromName) {
+  var name = clean(sendfromName);
+  var spaceIndex = name.indexOf(" ");
+  if (spaceIndex > 0) {
+    return name.substring(0, spaceIndex);
+  }
+  return name || "MagMutual";
+}
+
+function buildPreviewSignature(row) {
+  var sendfromName = clean(field(row, "Name")) || "MagMutual";
+  var sendFromEmail = clean(field(row, "Email")) || "info@magmutual.com";
+  var senderTitle = clean(field(row, "Title"));
+  var signaturePhone = clean(field(row, "Phone")) || "(800) 282-4882";
+  var senderSalesLicenseNumber = clean(field(row, "Sales_License_Number__c"));
+  var senderAppointmentLink = clean(field(row, "Appointment_Link__c"));
+  var parts = [
+    "<p style=\"margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">"
+  ];
+  if (senderAppointmentLink) {
+    parts.push("<a href=\"https://cloud.go.magmutual.com/go-redirect-to-uat-link?url=" + htmlSafe(senderAppointmentLink) + "\" target=\"_blank\" style=\"text-decoration:underline;\">Book time to meet with me</a><br><br>");
+  }
+  parts.push("Best regards,<br>");
+  parts.push("<span style=\"font-style:italic;font-family:serif;font-size:20px;\">" + htmlSafe(senderFirstName(sendfromName)) + "</span><br>");
+  if (senderTitle) {
+    parts.push(htmlSafe(senderTitle) + "<br>");
+  }
+  parts.push(htmlSafe(sendfromName) + "<br>");
+  parts.push(htmlSafe(sendFromEmail) + "<br>");
+  parts.push(htmlSafe(signaturePhone) + "<br>");
+  if (senderSalesLicenseNumber) {
+    parts.push("License #: " + htmlSafe(senderSalesLicenseNumber) + "<br>");
+  }
+  parts.push(" MagMutual Insurance</p>");
+  return parts.join("");
+}
+
+function buildPreviewData(contactId, environment) {
+  var tables = previewTables(environment);
+  var requestedContactId = clean(contactId) || "0033l000037NLyuAAG";
+  var contactRow = null;
+  var accountRow = null;
+  var userRow = null;
+  var firstName = "";
+  var lastName = "";
+  var salutation = "";
+  var contactAccountId = "";
+  var ownerId = "";
+  if (requestedContactId.indexOf("@") > 0) {
+    contactRow = firstLookupRow(tables.contact, "Email", requestedContactId);
+  }
+  if (!contactRow) {
+    contactRow = firstLookupRow(tables.contact, "Id", requestedContactId);
+  }
+  if (contactRow) {
+    requestedContactId = clean(field(contactRow, "Id")) || requestedContactId;
+    firstName = clean(field(contactRow, "FirstName"));
+    lastName = clean(field(contactRow, "LastName"));
+    salutation = clean(field(contactRow, "Salutation"));
+    contactAccountId = clean(field(contactRow, "AccountId"));
+    ownerId = clean(field(contactRow, "OwnerId")) || clean(field(contactRow, "Account_Owner__c"));
+  }
+  if (!ownerId && contactAccountId) {
+    accountRow = firstLookupRow(tables.account, "Id", contactAccountId);
+    if (accountRow) {
+      ownerId = clean(field(accountRow, "OwnerId"));
+    }
+  }
+  if (ownerId) {
+    userRow = firstLookupRow(tables.user, "Id", ownerId);
+  }
+  return {
+    contactId: requestedContactId,
+    dataSource: tables.label,
+    contactTable: tables.contact,
+    accountTable: tables.account,
+    userTable: tables.user,
+    contactFound: contactRow ? true : false,
+    ownerFound: userRow ? true : false,
+    fullGreeting: buildGreeting(firstName, lastName, salutation),
+    signatureHtml: buildPreviewSignature(userRow)
+  };
 }
 
 function minimalEmailHtml(headline, textBody) {
@@ -408,6 +550,17 @@ if (formValue("createEmail") == "1") {
   }
 }
 
+var previewContactId = clean(requestValue("previewContactId")) || "0033l000037NLyuAAG";
+var previewEnvironment = clean(requestValue("previewEnvironment")).toLowerCase();
+var navigationEnvironment = clean(lookupValue("bd_sst_page_navigation", "environment", "type", "cloudpage")).toLowerCase();
+if (!previewEnvironment) {
+  previewEnvironment = navigationEnvironment == "uat" ? "uat" : "prod";
+}
+if (previewEnvironment != "uat") {
+  previewEnvironment = "prod";
+}
+var previewData = buildPreviewData(previewContactId, previewEnvironment);
+
 Platform.Variable.SetValue("@emailHubResultStatus", resultStatus);
 Platform.Variable.SetValue("@emailHubResultMessage", resultMessage);
 Platform.Variable.SetValue("@emailHubAssetId", createdAssetId);
@@ -415,6 +568,9 @@ Platform.Variable.SetValue("@emailHubCustomerKey", createdCustomerKey);
 Platform.Variable.SetValue("@emailHubHubUrl", hubUrl);
 Platform.Variable.SetValue("@emailHubSurveyStageUrl", surveyStageUrl);
 Platform.Variable.SetValue("@emailHubSurveyAnalyticsUrl", surveyAnalyticsUrl);
+Platform.Variable.SetValue("@emailHubPreviewContactId", previewContactId);
+Platform.Variable.SetValue("@emailHubPreviewEnvironment", previewEnvironment);
+Platform.Variable.SetValue("@emailHubPreviewDataJson", asJson(previewData));
 </script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -626,6 +782,14 @@ Platform.Variable.SetValue("@emailHubSurveyAnalyticsUrl", surveyAnalyticsUrl);
     box-shadow: var(--shadow-md);
     transform: translateY(-1px);
   }
+  .btn-secondary {
+    background: var(--gray-100);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+  }
+  .btn-secondary:hover {
+    background: var(--gray-200);
+  }
   .btn-create {
     background: #000000;
     border-radius: 0;
@@ -663,6 +827,12 @@ Platform.Variable.SetValue("@emailHubSurveyAnalyticsUrl", surveyAnalyticsUrl);
   }
   #emailHubForm {
     min-width: 0;
+  }
+  .preview-config-actions {
+    align-items: center;
+    display: flex;
+    gap: 12px;
+    margin-bottom: 20px;
   }
   .preview-panel {
     border: 1px solid var(--border-color);
@@ -820,6 +990,44 @@ Platform.Variable.SetValue("@emailHubSurveyAnalyticsUrl", surveyAnalyticsUrl);
       <form method="post" id="emailHubForm">
         <input type="hidden" name="createEmail" value="1">
         <div class="form-group">
+          <label class="form-label" for="previewContactId">Preview Contact ID</label>
+          <script runat="server">
+            function previewFormSafe(value) {
+              return String(value || "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;");
+            }
+            Write('<input class="form-input" id="previewContactId" name="previewContactId" value="' + previewFormSafe(Platform.Variable.GetValue("@emailHubPreviewContactId") || "0033l000037NLyuAAG") + '">');
+          </script>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="previewEnvironment">Preview Data Source</label>
+          <script runat="server">
+            var previewEnvValue = Platform.Variable.GetValue("@emailHubPreviewEnvironment") || "prod";
+            Write('<select class="form-input" id="previewEnvironment" name="previewEnvironment">');
+            Write('<option value="prod"' + (previewEnvValue == "prod" ? " selected" : "") + '>Production</option>');
+            Write('<option value="uat"' + (previewEnvValue == "uat" ? " selected" : "") + '>UAT</option>');
+            Write('</select>');
+          </script>
+        </div>
+        <div class="preview-config-actions">
+          <button class="btn btn-secondary" id="refreshPreviewData" type="button">Refresh Preview</button>
+          <script runat="server">
+            function previewStatusSafe(value) {
+              return String(value || "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;");
+            }
+            var previewDataForStatus = Platform.Function.ParseJSON(Platform.Variable.GetValue("@emailHubPreviewDataJson") || "{}");
+            var previewStatus = previewDataForStatus.contactFound ? "Using " + previewDataForStatus.contactTable : "Contact not found in " + previewDataForStatus.contactTable;
+            Write('<span class="small">' + previewStatusSafe(previewStatus) + '</span>');
+          </script>
+        </div>
+        <div class="form-group">
           <label class="form-label" for="emailName">Email Name</label>
           <input class="form-input" id="emailName" name="emailName" value="SST Survey Email">
         </div>
@@ -863,8 +1071,22 @@ Platform.Variable.SetValue("@emailHubSurveyAnalyticsUrl", surveyAnalyticsUrl);
     </div>
   </main>
 </div>
+<script runat="server">
+  function previewJsonSafe(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+  Write('<textarea id="previewDataJson" hidden>' + previewJsonSafe(Platform.Variable.GetValue("@emailHubPreviewDataJson") || "{}") + '</textarea>');
+</script>
 <script>
   (function () {
+    var previewData = {};
+    try {
+      previewData = JSON.parse(document.getElementById("previewDataJson").value || "{}");
+    } catch (e) {}
     function el(id) {
       return document.getElementById(id);
     }
@@ -880,6 +1102,9 @@ Platform.Variable.SetValue("@emailHubSurveyAnalyticsUrl", surveyAnalyticsUrl);
     }
     function previewHtml() {
       var headline = escapeHtml(el("headline").value || "Got 2 minutes? Tell us what you think");
+      var greeting = escapeHtml(previewData.fullGreeting || "Hello,");
+      var signatureHtml = previewData.signatureHtml || "<p style=\"margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">Best regards,<br><span style=\"font-style:italic;font-family:serif;font-size:20px;\">MagMutual</span><br>MagMutual Insurance</p>";
+      var surveyContactId = encodeURIComponent(previewData.contactId || el("previewContactId").value || "");
       var textBody = textToHtml(el("textBody").value);
       return [
         "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#eaeaea;margin:0;padding:0;\">",
@@ -890,12 +1115,12 @@ Platform.Variable.SetValue("@emailHubSurveyAnalyticsUrl", surveyAnalyticsUrl);
         "</table>",
         "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;max-width:100%;\">",
         "<tr><td style=\"padding:30px;font-family:Arial,Helvetica,sans-serif;color:#161616;font-size:14px;line-height:20px;\">",
-        "<p style=\"margin:0 0 20px;\">Hello,</p>",
+        "<p style=\"margin:0 0 20px;\">" + greeting + "</p>",
         "<p style=\"margin:0 0 20px;\">" + textBody + "</p>",
-        "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr><td bgcolor=\"#0060F5\" style=\"background:#0060F5;\"><a href=\"https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=SURV_20260612_102301\" target=\"_blank\" style=\"display:block;padding:10px 99px 10px 10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;text-decoration:none;\">Take Survey</a></td></tr></table>",
+        "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr><td bgcolor=\"#0060F5\" style=\"background:#0060F5;\"><a href=\"https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=SURV_20260612_102301&contact=" + surveyContactId + "\" target=\"_blank\" style=\"display:block;padding:10px 99px 10px 10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;text-decoration:none;\">Take Survey</a></td></tr></table>",
         "<p style=\"margin:20px 0 0;\">If you have any questions or run into any issues, don't hesitate to reach out.</p>",
         "<p style=\"margin:20px 0 0;\">Thank you for sharing your thoughts &mdash; we truly value your feedback!</p>",
-        "<p style=\"margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">Best regards,<br><span style=\"font-style:italic;font-family:serif;font-size:20px;\">MagMutual</span><br>MagMutual Insurance</p>",
+        signatureHtml,
         "</td></tr>",
         "</table>",
         "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;max-width:100%;\">",
@@ -911,9 +1136,16 @@ Platform.Variable.SetValue("@emailHubSurveyAnalyticsUrl", surveyAnalyticsUrl);
       el("previewDate").textContent = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
       el("emailPreviewFrame").srcdoc = previewHtml();
     }
+    function refreshPreviewData() {
+      var params = new URLSearchParams(window.location.search);
+      params.set("previewContactId", el("previewContactId").value || "0033l000037NLyuAAG");
+      params.set("previewEnvironment", el("previewEnvironment").value || "prod");
+      window.location.href = window.location.pathname + "?" + params.toString();
+    }
     ["subject", "preheader", "headline", "textBody"].forEach(function (id) {
       el(id).addEventListener("input", updatePreview);
     });
+    el("refreshPreviewData").addEventListener("click", refreshPreviewData);
     updatePreview();
   })();
 </script>
