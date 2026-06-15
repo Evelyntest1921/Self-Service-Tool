@@ -6,6 +6,9 @@ var resultStatus = "";
 var resultMessage = "";
 var createdAssetId = "";
 var createdCustomerKey = "";
+var hubUrl = "";
+var surveyStageUrl = "";
+var surveyAnalyticsUrl = "";
 
 function formValue(name) {
   var value = "";
@@ -63,6 +66,17 @@ function field(row, name) {
   if (!row) return "";
   return row[name] || row[String(name)] || "";
 }
+
+function lookupValue(deName, returnField, lookupField, lookupValue) {
+  try {
+    return clean(Platform.Function.Lookup(deName, returnField, lookupField, lookupValue));
+  } catch (e) {}
+  return "";
+}
+
+hubUrl = lookupValue("bd_sst_page_navigation", "ss_home", "type", "cloudpage");
+surveyStageUrl = lookupValue("SST_SP_Survey_Url_DE", "create", "user", "admin");
+surveyAnalyticsUrl = lookupValue("SST_SP_Survey_Url_DE", "analytics", "user", "admin");
 
 function getAuthConfig() {
   var rows = Platform.Function.LookupRows("SFMC_AUTH", "User", "Admin");
@@ -401,18 +415,130 @@ Platform.Variable.SetValue("@emailHubResultStatus", resultStatus);
 Platform.Variable.SetValue("@emailHubResultMessage", resultMessage);
 Platform.Variable.SetValue("@emailHubAssetId", createdAssetId);
 Platform.Variable.SetValue("@emailHubCustomerKey", createdCustomerKey);
+Platform.Variable.SetValue("@emailHubHubUrl", hubUrl);
+Platform.Variable.SetValue("@emailHubSurveyStageUrl", surveyStageUrl);
+Platform.Variable.SetValue("@emailHubSurveyAnalyticsUrl", surveyAnalyticsUrl);
 </script>
 <style>
+  :root {
+    --primary-color: #0060f5;
+    --primary-dark: #0043ce;
+    --gray-50: #f9fafb;
+    --gray-100: #f3f4f6;
+    --gray-200: #e5e7eb;
+    --gray-500: #6b7280;
+    --gray-700: #374151;
+    --gray-900: #111827;
+    --bg-secondary: #f4f4f4;
+    --text-primary: #161616;
+    --text-secondary: #525252;
+    --text-muted: #6f6f6f;
+  }
   body {
     margin: 0;
-    background: #f4f4f4;
-    color: #161616;
-    font-family: Arial, Helvetica, sans-serif;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-family: Inter, Arial, Helvetica, sans-serif;
+  }
+  .dashboard-layout {
+    display: flex;
+    min-height: 100vh;
+  }
+  .maker-sidebar {
+    background: #ffffff;
+    border-right: 1px solid var(--gray-200);
+    flex: 0 0 280px;
+    min-height: 100vh;
+    padding-top: 18px;
+  }
+  .sidebar-logo {
+    align-items: center;
+    border-bottom: 1px solid #eee5e5;
+    display: flex;
+    margin-bottom: 12px;
+    padding: 0 20px 14px;
+  }
+  .sidebar-logo a {
+    display: inline-block;
+  }
+  .sidebar-logo img {
+    filter: invert(1);
+    height: 40px;
+  }
+  .nav-section {
+    margin-bottom: 8px;
+  }
+  .nav-section-title {
+    color: var(--gray-500);
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding: 0 32px;
+    text-transform: uppercase;
+  }
+  .sidebar-nav .nav-link {
+    align-items: center;
+    border-right: 3px solid transparent;
+    color: var(--gray-700);
+    display: flex;
+    font-size: 14px;
+    font-weight: 500;
+    gap: 12px;
+    padding: 14px 32px;
+    text-decoration: none;
+    transition: background 0.2s ease, color 0.2s ease;
+  }
+  .sidebar-nav .nav-link:hover {
+    background: var(--gray-50);
+    color: var(--gray-900);
+  }
+  .sidebar-nav .nav-link.active {
+    background: linear-gradient(90deg, rgb(119 120 196 / 10%) 0%, rgb(2 3 22 / 5%) 100%);
+    border-right-color: #2c2c31;
+    color: #000000;
+  }
+  .nav-icon {
+    height: 20px;
+    width: 20px;
+  }
+  .main-content {
+    flex: 1;
+    padding: 32px 20px;
   }
   .page {
-    max-width: 1180px;
     margin: 0 auto;
-    padding: 32px 20px;
+    max-width: 1180px;
+  }
+  .breadcrumb-section {
+    padding: 4px 0 20px;
+  }
+  .breadcrumb-nav {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 14px;
+    gap: 4px;
+  }
+  .breadcrumb-link {
+    align-items: center;
+    color: var(--primary-color);
+    display: inline-flex;
+    font-size: 16px;
+    font-weight: 500;
+    text-decoration: none;
+  }
+  .breadcrumb-link:hover {
+    color: var(--primary-dark);
+    text-decoration: underline;
+  }
+  .breadcrumb-separator {
+    color: var(--text-muted);
+    margin: 0 12px;
+  }
+  .breadcrumb-current {
+    color: var(--text-primary);
+    font-weight: 500;
   }
   .card {
     background: #ffffff;
@@ -504,15 +630,76 @@ Platform.Variable.SetValue("@emailHubCustomerKey", createdCustomerKey);
     width: 100%;
   }
   @media only screen and (max-width: 900px) {
+    .dashboard-layout {
+      display: block;
+    }
+    .maker-sidebar {
+      border-bottom: 1px solid var(--gray-200);
+      border-right: 0;
+      min-height: 0;
+    }
     .hub-grid {
       grid-template-columns: 1fr;
     }
   }
 </style>
-<main class="page">
-  <div class="card">
-    <h1>SST Email Hub</h1>
-    <p>Create the survey email layout without AMPscript first. Leave Category ID blank for this test.</p>
+<div class="dashboard-layout">
+  <aside class="maker-sidebar" aria-label="Primary">
+    <div class="sidebar-logo">
+      <script runat="server">
+        function navSafe(value) {
+          return String(value || "#")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+        }
+        var navHubUrl = Platform.Variable.GetValue("@emailHubHubUrl") || "#";
+        Write('<a href="' + navSafe(navHubUrl) + '"><img src="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" alt="MagMutual"></a>');
+      </script>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section"><span class="nav-section-title">MENU</span></div>
+      <script runat="server">
+        function navSafe(value) {
+          return String(value || "#")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+        }
+        var sideHubUrl = Platform.Variable.GetValue("@emailHubHubUrl") || "#";
+        var sideStageUrl = Platform.Variable.GetValue("@emailHubSurveyStageUrl") || "#";
+        var sideAnalyticsUrl = Platform.Variable.GetValue("@emailHubSurveyAnalyticsUrl") || "#";
+        Write('<a class="nav-link" href="' + navSafe(sideHubUrl) + '"><svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>Dashboard</a>');
+        Write('<a class="nav-link" href="' + navSafe(sideStageUrl) + '"><svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>Create Survey</a>');
+        Write('<span class="nav-link active" role="presentation"><svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z"/></svg>Email Hub</span>');
+        Write('<a class="nav-link" href="' + navSafe(sideAnalyticsUrl) + '"><svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4zM5 20h14V4H5v16zm14 2H5c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v16c0 1.1-.9 2-2 2z"/></svg>Analytics</a>');
+      </script>
+    </nav>
+  </aside>
+  <main class="main-content">
+    <div class="page">
+      <div class="breadcrumb-section">
+        <nav class="breadcrumb-nav" aria-label="Breadcrumb">
+          <script runat="server">
+            function navSafe(value) {
+              return String(value || "#")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;");
+            }
+            var crumbHubUrl = Platform.Variable.GetValue("@emailHubHubUrl") || "#";
+            Write('<a href="' + navSafe(crumbHubUrl) + '" class="breadcrumb-link"><svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>Back</a>');
+          </script>
+          <span class="breadcrumb-separator" aria-hidden="true">/</span>
+          <span class="breadcrumb-current">Email Hub</span>
+        </nav>
+      </div>
+      <div class="card">
+        <h1>SST Email Hub</h1>
+        <p>Create the survey email layout without AMPscript first. Leave Category ID blank for this test.</p>
     <script runat="server">
       function bodyHtmlSafe(value) {
         return String(value || "")
@@ -563,7 +750,9 @@ Platform.Variable.SetValue("@emailHubCustomerKey", createdCustomerKey);
     </div>
     <p class="small">Testing key is <strong>10</strong>. Keep Category ID blank unless you have a valid Content Builder folder ID from this BU.</p>
   </div>
-</main>
+    </div>
+  </main>
+</div>
 <script>
   (function () {
     function el(id) {
