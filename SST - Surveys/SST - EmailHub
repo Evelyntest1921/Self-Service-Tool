@@ -46,6 +46,21 @@ function htmlSafe(value) {
     .replace(/"/g, "&quot;");
 }
 
+function urlSafe(value) {
+  try {
+    return encodeURIComponent(String(value || ""));
+  } catch (e) {}
+  return String(value || "");
+}
+
+function takeSurveyUrl(surveyId, contactValue) {
+  var url = "https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=" + urlSafe(surveyId || "SURV_20260612_102301");
+  if (contactValue) {
+    url += "&contact=" + contactValue;
+  }
+  return url;
+}
+
 function textBodyParagraph(value) {
   var safeValue = htmlSafe(value).replace(/\r\n|\r|\n/g, "<br>");
   return "<p style=\"margin:0 0 20px;\">" + safeValue + "</p>";
@@ -285,7 +300,7 @@ function buildPreviewData(contactId, environment) {
   };
 }
 
-function minimalEmailHtml(headline, textBody) {
+function minimalEmailHtml(headline, textBody, surveyId) {
   var personalizationAmp = ampBlock([
     "SET @surveyContactId = AttributeValue(\"CampaignMember:Common:Id\")",
     "IF EMPTY(@surveyContactId) THEN",
@@ -431,6 +446,7 @@ function minimalEmailHtml(headline, textBody) {
     "SET @signature = Concat('<p style=\"margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">',IIF(NOT EMPTY(@senderAppointmentLink),Concat('<a href=\"https://cloud.go.magmutual.com/go-redirect-to-uat-link?url=',@senderAppointmentLink,'\" target=\"_blank\" style=\"text-decoration:underline;\">Book time to meet with me</a><br><br>'),''),'Best regards,<br>','<span style=\"font-style:italic;font-family:serif;font-size:20px;\">',@senderFirstName,'</span><br>',IIF(NOT EMPTY(@senderTitle),Concat(@senderTitle,'<br>'),''),@sendfromName,'<br>',@sendFromEmail,'<br>',@signaturePhone,'<br>',@senderLicense,' MagMutual Insurance','</p>')"
   ]);
   var surveyContactId = ampValue("v(@surveyContactId)");
+  var surveyUrl = takeSurveyUrl(surveyId, surveyContactId);
   var fullGreeting = ampValue("v(@fullGreeting)");
   var signatureOutput = ampValue("v(@signature)");
   var footerBlock = ampValue("ContentBlockByKey(\"Email_Footer_2407\")");
@@ -458,7 +474,7 @@ function minimalEmailHtml(headline, textBody) {
     "<div style=\"display:none;\">" + personalizationAmp + "</div>",
     "<p style=\"margin:0 0 20px;\">" + fullGreeting + "</p>",
     textBodyParagraph(textBody),
-    "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr><td bgcolor=\"#0060F5\" style=\"background:#0060F5;\"><a href=\"https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=SURV_20260612_102301&contact=" + surveyContactId + "\" target=\"_blank\" style=\"display:block;padding:10px 99px 10px 10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;text-decoration:none;\">Take Survey</a></td></tr></table>",
+    "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr><td bgcolor=\"#0060F5\" style=\"background:#0060F5;\"><a href=\"" + htmlSafe(surveyUrl) + "\" target=\"_blank\" style=\"display:block;padding:10px 99px 10px 10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;text-decoration:none;\">Take Survey</a></td></tr></table>",
     "<p style=\"margin:20px 0 0;\">If you have any questions or run into any issues, don't hesitate to reach out.</p>",
     "<p style=\"margin:20px 0 0;\">Thank you for sharing your thoughts &mdash; we truly value your feedback!</p>",
     signatureOutput,
@@ -490,10 +506,15 @@ if (formValue("createEmail") == "1") {
     if (!headline) {
       headline = "Got 2 minutes? Tell us what you think";
     }
+    var surveyId = clean(formValue("surveyId"));
+    if (!surveyId) {
+      surveyId = "SURV_20260612_102301";
+    }
     var textBody = clean(formValue("textBody"));
     if (!textBody) {
-      textBody = "We're always looking for ways to improve, and your input makes a big difference. Take Survey: https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=SURV_20260612_102301";
+      textBody = "We're always looking for ways to improve, and your input makes a big difference.";
     }
+    var surveyUrl = takeSurveyUrl(surveyId, "");
     createdCustomerKey = "sst-" + guidKey();
     var payload = {
       name: emailName,
@@ -508,10 +529,10 @@ if (formValue("createEmail") == "1") {
       },
       views: {
         html: {
-          content: minimalEmailHtml(headline, textBody)
+          content: minimalEmailHtml(headline, textBody, surveyId)
         },
         text: {
-          content: textBody
+          content: textBody + "\n\nTake Survey: " + surveyUrl
         },
         subjectline: {
           content: subject
@@ -528,16 +549,6 @@ if (formValue("createEmail") == "1") {
         }
       }
     };
-    var categoryId = clean(formValue("categoryId"));
-    if (categoryId) {
-      var parsedCategoryId = parseInt(categoryId, 10);
-      if (isNaN(parsedCategoryId)) {
-        throw "Category ID must be a number when provided.";
-      }
-      payload.category = {
-        id: parsedCategoryId
-      };
-    }
     var auth = getAuthConfig();
     var token = getAccessToken(auth);
     var created = createAsset(auth, token, payload);
@@ -974,7 +985,7 @@ Platform.Variable.SetValue("@emailHubPreviewDataJson", asJson(previewData));
       </div>
       <div class="card">
         <h1>SST Email Hub</h1>
-        <p>Create and preview the survey email layout. Leave Category ID blank unless you have a valid folder ID for this BU.</p>
+        <p>Create and preview the survey email layout. Set the Survey ID to control the Take Survey CTA.</p>
     <script runat="server">
       function bodyHtmlSafe(value) {
         return String(value || "")
@@ -1014,8 +1025,8 @@ Platform.Variable.SetValue("@emailHubPreviewDataJson", asJson(previewData));
           <input class="form-input" id="preheader" name="preheader" value="We would appreciate a few minutes of your time.">
         </div>
         <div class="form-group">
-          <label class="form-label" for="categoryId">Content Builder Category ID Optional</label>
-          <input class="form-input" id="categoryId" name="categoryId" value="">
+          <label class="form-label" for="surveyId">Survey ID</label>
+          <input class="form-input" id="surveyId" name="surveyId" value="SURV_20260612_102301">
         </div>
         <div class="form-group">
           <label class="form-label" for="headline">Headline</label>
@@ -1023,7 +1034,7 @@ Platform.Variable.SetValue("@emailHubPreviewDataJson", asJson(previewData));
         </div>
         <div class="form-group">
           <label class="form-label" for="textBody">Text Body</label>
-          <textarea class="form-textarea" id="textBody" name="textBody">We're always looking for ways to improve, and your input makes a big difference. Take Survey: https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=SURV_20260612_102301</textarea>
+          <textarea class="form-textarea" id="textBody" name="textBody">We're always looking for ways to improve, and your input makes a big difference.</textarea>
         </div>
         <button class="btn btn-create" type="submit">Create</button>
       </form>
@@ -1096,7 +1107,9 @@ Platform.Variable.SetValue("@emailHubPreviewDataJson", asJson(previewData));
       var headline = escapeHtml(el("headline").value || "Got 2 minutes? Tell us what you think");
       var greeting = escapeHtml(previewData.fullGreeting || "Hello,");
       var signatureHtml = previewData.signatureHtml || "<p style=\"margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">Best regards,<br><span style=\"font-style:italic;font-family:serif;font-size:20px;\">MagMutual</span><br>MagMutual Insurance</p>";
+      var surveyId = encodeURIComponent(el("surveyId").value || "SURV_20260612_102301");
       var surveyContactId = encodeURIComponent(previewData.contactId || el("previewContactId").value || "");
+      var surveyUrl = "https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=" + surveyId + "&contact=" + surveyContactId;
       var textBody = textToHtml(el("textBody").value);
       return [
         "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#eaeaea;margin:0;padding:0;\">",
@@ -1109,7 +1122,7 @@ Platform.Variable.SetValue("@emailHubPreviewDataJson", asJson(previewData));
         "<tr><td style=\"padding:30px;font-family:Arial,Helvetica,sans-serif;color:#161616;font-size:14px;line-height:20px;\">",
         "<p style=\"margin:0 0 20px;\">" + greeting + "</p>",
         "<p style=\"margin:0 0 20px;\">" + textBody + "</p>",
-        "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr><td bgcolor=\"#0060F5\" style=\"background:#0060F5;\"><a href=\"https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=SURV_20260612_102301&contact=" + surveyContactId + "\" target=\"_blank\" style=\"display:block;padding:10px 99px 10px 10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;text-decoration:none;\">Take Survey</a></td></tr></table>",
+        "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr><td bgcolor=\"#0060F5\" style=\"background:#0060F5;\"><a href=\"" + surveyUrl + "\" target=\"_blank\" style=\"display:block;padding:10px 99px 10px 10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;text-decoration:none;\">Take Survey</a></td></tr></table>",
         "<p style=\"margin:20px 0 0;\">If you have any questions or run into any issues, don't hesitate to reach out.</p>",
         "<p style=\"margin:20px 0 0;\">Thank you for sharing your thoughts &mdash; we truly value your feedback!</p>",
         signatureHtml,
@@ -1141,7 +1154,7 @@ Platform.Variable.SetValue("@emailHubPreviewDataJson", asJson(previewData));
       panel.className = isOpen ? "preview-contact-panel" : "preview-contact-panel open";
       toggle.setAttribute("aria-expanded", isOpen ? "false" : "true");
     }
-    ["subject", "preheader", "headline", "textBody"].forEach(function (id) {
+    ["subject", "preheader", "surveyId", "headline", "textBody"].forEach(function (id) {
       el(id).addEventListener("input", updatePreview);
     });
     el("previewContactToggle").addEventListener("click", togglePreviewContact);
