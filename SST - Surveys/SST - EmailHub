@@ -551,14 +551,8 @@ if (formValue("createEmail") == "1") {
 }
 
 var previewContactId = clean(requestValue("previewContactId")) || "0033l000037NLyuAAG";
-var previewEnvironment = clean(requestValue("previewEnvironment")).toLowerCase();
 var navigationEnvironment = clean(lookupValue("bd_sst_page_navigation", "environment", "type", "cloudpage")).toLowerCase();
-if (!previewEnvironment) {
-  previewEnvironment = navigationEnvironment == "uat" ? "uat" : "prod";
-}
-if (previewEnvironment != "uat") {
-  previewEnvironment = "prod";
-}
+var previewEnvironment = navigationEnvironment == "uat" ? "uat" : "prod";
 var previewData = buildPreviewData(previewContactId, previewEnvironment);
 
 Platform.Variable.SetValue("@emailHubResultStatus", resultStatus);
@@ -569,7 +563,6 @@ Platform.Variable.SetValue("@emailHubHubUrl", hubUrl);
 Platform.Variable.SetValue("@emailHubSurveyStageUrl", surveyStageUrl);
 Platform.Variable.SetValue("@emailHubSurveyAnalyticsUrl", surveyAnalyticsUrl);
 Platform.Variable.SetValue("@emailHubPreviewContactId", previewContactId);
-Platform.Variable.SetValue("@emailHubPreviewEnvironment", previewEnvironment);
 Platform.Variable.SetValue("@emailHubPreviewDataJson", asJson(previewData));
 </script>
 <style>
@@ -828,11 +821,19 @@ Platform.Variable.SetValue("@emailHubPreviewDataJson", asJson(previewData));
   #emailHubForm {
     min-width: 0;
   }
-  .preview-config-actions {
+  .preview-contact-panel {
+    background: #ffffff;
+    border-bottom: 1px solid var(--border-color);
+    display: none;
+    padding: 16px;
+  }
+  .preview-contact-panel.open {
+    display: block;
+  }
+  .preview-contact-actions {
     align-items: center;
     display: flex;
     gap: 12px;
-    margin-bottom: 20px;
   }
   .preview-panel {
     border: 1px solid var(--border-color);
@@ -851,15 +852,21 @@ Platform.Variable.SetValue("@emailHubPreviewDataJson", asJson(previewData));
   .preview-avatar {
     align-items: center;
     background: #e5e7eb;
+    border: 0;
     border-radius: 999px;
     color: var(--gray-700);
+    cursor: pointer;
     display: flex;
     flex: 0 0 40px;
     font-size: 16px;
     font-weight: 700;
     height: 40px;
     justify-content: center;
+    padding: 0;
     width: 40px;
+  }
+  .preview-avatar:hover {
+    background: var(--gray-200);
   }
   .preview-message-meta {
     align-items: center;
@@ -990,44 +997,6 @@ Platform.Variable.SetValue("@emailHubPreviewDataJson", asJson(previewData));
       <form method="post" id="emailHubForm">
         <input type="hidden" name="createEmail" value="1">
         <div class="form-group">
-          <label class="form-label" for="previewContactId">Preview Contact ID</label>
-          <script runat="server">
-            function previewFormSafe(value) {
-              return String(value || "")
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;");
-            }
-            Write('<input class="form-input" id="previewContactId" name="previewContactId" value="' + previewFormSafe(Platform.Variable.GetValue("@emailHubPreviewContactId") || "0033l000037NLyuAAG") + '">');
-          </script>
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="previewEnvironment">Preview Data Source</label>
-          <script runat="server">
-            var previewEnvValue = Platform.Variable.GetValue("@emailHubPreviewEnvironment") || "prod";
-            Write('<select class="form-input" id="previewEnvironment" name="previewEnvironment">');
-            Write('<option value="prod"' + (previewEnvValue == "prod" ? " selected" : "") + '>Production</option>');
-            Write('<option value="uat"' + (previewEnvValue == "uat" ? " selected" : "") + '>UAT</option>');
-            Write('</select>');
-          </script>
-        </div>
-        <div class="preview-config-actions">
-          <button class="btn btn-secondary" id="refreshPreviewData" type="button">Refresh Preview</button>
-          <script runat="server">
-            function previewStatusSafe(value) {
-              return String(value || "")
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;");
-            }
-            var previewDataForStatus = Platform.Function.ParseJSON(Platform.Variable.GetValue("@emailHubPreviewDataJson") || "{}");
-            var previewStatus = previewDataForStatus.contactFound ? "Using " + previewDataForStatus.contactTable : "Contact not found in " + previewDataForStatus.contactTable;
-            Write('<span class="small">' + previewStatusSafe(previewStatus) + '</span>');
-          </script>
-        </div>
-        <div class="form-group">
           <label class="form-label" for="emailName">Email Name</label>
           <input class="form-input" id="emailName" name="emailName" value="SST Survey Email">
         </div>
@@ -1055,13 +1024,43 @@ Platform.Variable.SetValue("@emailHubPreviewDataJson", asJson(previewData));
       </form>
       <section class="preview-panel" aria-label="Email preview">
         <div class="preview-header">
-          <div class="preview-avatar" aria-hidden="true">M</div>
+          <button class="preview-avatar" id="previewContactToggle" type="button" aria-expanded="false" aria-controls="previewContactPanel">M</button>
           <div class="preview-message-meta">
             <div class="preview-message-copy">
               <strong id="previewSubject">Got 2 minutes? Tell us what you think</strong>
               <span id="previewPreheader">We would appreciate a few minutes of your time.</span>
             </div>
             <div class="preview-date" id="previewDate"></div>
+          </div>
+        </div>
+        <div class="preview-contact-panel" id="previewContactPanel">
+          <div class="form-group">
+            <label class="form-label" for="previewContactId">Preview Contact ID</label>
+            <script runat="server">
+              function previewFormSafe(value) {
+                return String(value || "")
+                  .replace(/&/g, "&amp;")
+                  .replace(/</g, "&lt;")
+                  .replace(/>/g, "&gt;")
+                  .replace(/"/g, "&quot;");
+              }
+              Write('<input class="form-input" id="previewContactId" name="previewContactId" value="' + previewFormSafe(Platform.Variable.GetValue("@emailHubPreviewContactId") || "0033l000037NLyuAAG") + '">');
+            </script>
+          </div>
+          <div class="preview-contact-actions">
+            <button class="btn btn-secondary" id="refreshPreviewData" type="button">Refresh Preview</button>
+            <script runat="server">
+              function previewStatusSafe(value) {
+                return String(value || "")
+                  .replace(/&/g, "&amp;")
+                  .replace(/</g, "&lt;")
+                  .replace(/>/g, "&gt;")
+                  .replace(/"/g, "&quot;");
+              }
+              var previewDataForStatus = Platform.Function.ParseJSON(Platform.Variable.GetValue("@emailHubPreviewDataJson") || "{}");
+              var previewStatus = previewDataForStatus.contactFound ? "Using " + previewDataForStatus.contactTable : "Contact not found in " + previewDataForStatus.contactTable;
+              Write('<span class="small">' + previewStatusSafe(previewStatus) + '</span>');
+            </script>
           </div>
         </div>
         <iframe class="preview-frame" id="emailPreviewFrame" title="Email preview"></iframe>
@@ -1139,12 +1138,20 @@ Platform.Variable.SetValue("@emailHubPreviewDataJson", asJson(previewData));
     function refreshPreviewData() {
       var params = new URLSearchParams(window.location.search);
       params.set("previewContactId", el("previewContactId").value || "0033l000037NLyuAAG");
-      params.set("previewEnvironment", el("previewEnvironment").value || "prod");
+      params.delete("previewEnvironment");
       window.location.href = window.location.pathname + "?" + params.toString();
+    }
+    function togglePreviewContact() {
+      var panel = el("previewContactPanel");
+      var toggle = el("previewContactToggle");
+      var isOpen = panel.className.indexOf("open") > -1;
+      panel.className = isOpen ? "preview-contact-panel" : "preview-contact-panel open";
+      toggle.setAttribute("aria-expanded", isOpen ? "false" : "true");
     }
     ["subject", "preheader", "headline", "textBody"].forEach(function (id) {
       el(id).addEventListener("input", updatePreview);
     });
+    el("previewContactToggle").addEventListener("click", togglePreviewContact);
     el("refreshPreviewData").addEventListener("click", refreshPreviewData);
     updatePreview();
   })();
