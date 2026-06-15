@@ -1,0 +1,841 @@
+<script runat="server">
+Platform.Load("core", "1");
+
+var resultStatus = "";
+var resultMessage = "";
+var createdAssetId = "";
+var createdCustomerKey = "";
+var hubUrl = "";
+
+function formValue(name) {
+  var value = "";
+  try {
+    value = Platform.Request.GetFormField(name);
+  } catch (e) {}
+  return value || "";
+}
+
+function clean(value) {
+  return String(value || "").replace(/^\s+|\s+$/g, "");
+}
+
+function htmlSafe(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function textBodyParagraph(value) {
+  var safeValue = htmlSafe(value).replace(/\r\n|\r|\n/g, "<br>");
+  return "<p style=\"margin:0 0 18px;\">" + safeValue + "</p>";
+}
+
+function asJson(value) {
+  return Platform.Function.Stringify(value);
+}
+
+function fromJson(value) {
+  return Platform.Function.ParseJSON(String(value || "{}"));
+}
+
+function guidKey() {
+  return String(Platform.Function.GUID()).replace(/-/g, "");
+}
+
+function ampBlock(lines) {
+  var pct = String.fromCharCode(37, 37);
+  return pct + "[" + lines.join("\n") + "]" + pct;
+}
+
+function ampValue(value) {
+  var pct = String.fromCharCode(37, 37);
+  return pct + "=" + value + "=" + pct;
+}
+
+function ampToken(value) {
+  var pct = String.fromCharCode(37, 37);
+  return pct + value + pct;
+}
+
+function field(row, name) {
+  if (!row) return "";
+  return row[name] || row[String(name)] || "";
+}
+
+function lookupValue(deName, returnField, lookupField, lookupValue) {
+  try {
+    return clean(Platform.Function.Lookup(deName, returnField, lookupField, lookupValue));
+  } catch (e) {}
+  return "";
+}
+
+hubUrl = lookupValue("bd_sst_page_navigation", "ss_home", "type", "cloudpage");
+
+function getAuthConfig() {
+  var rows = Platform.Function.LookupRows("SFMC_AUTH", "User", "Admin");
+  if (!rows || rows.length < 1) {
+    throw "Missing SFMC_AUTH row for User=Admin.";
+  }
+  var row = rows[0];
+  var clientId = clean(field(row, "clientId"));
+  var clientSecret = clean(field(row, "clientSecret"));
+  var subdomain = clean(field(row, "subdomain"));
+  var accountId = clean(field(row, "accountId"));
+  if (!clientId || !clientSecret || !subdomain) {
+    throw "SFMC_AUTH must include clientId, clientSecret, and subdomain.";
+  }
+  return {
+    clientId: clientId,
+    clientSecret: clientSecret,
+    subdomain: subdomain,
+    accountId: accountId
+  };
+}
+
+function getAccessToken(auth) {
+  var payload = {
+    grant_type: "client_credentials",
+    client_id: auth.clientId,
+    client_secret: auth.clientSecret
+  };
+  if (auth.accountId) {
+    payload.account_id = auth.accountId;
+  }
+  var req = new Script.Util.HttpRequest("https://" + auth.subdomain + ".auth.marketingcloudapis.com/v2/token");
+  req.emptyContentHandling = 0;
+  req.retries = 2;
+  req.continueOnError = true;
+  req.contentType = "application/json";
+  req.method = "POST";
+  req.postData = asJson(payload);
+  var resp = req.send();
+  var body = String(resp.content || "");
+  if (resp.statusCode != 200) {
+    throw "Auth HTTP " + resp.statusCode + ": " + body;
+  }
+  var parsed = fromJson(body);
+  if (!parsed.access_token) {
+    throw "Auth response did not include access_token.";
+  }
+  return parsed.access_token;
+}
+
+function createAsset(auth, token, payload) {
+  var req = new Script.Util.HttpRequest("https://" + auth.subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets");
+  req.emptyContentHandling = 0;
+  req.retries = 2;
+  req.continueOnError = true;
+  req.contentType = "application/json";
+  req.setHeader("Authorization", "Bearer " + token);
+  req.method = "POST";
+  req.postData = asJson(payload);
+  var resp = req.send();
+  var body = String(resp.content || "");
+  if (resp.statusCode != 200 && resp.statusCode != 201) {
+    throw "Asset create HTTP " + resp.statusCode + ": " + body;
+  }
+  return fromJson(body);
+}
+
+function imageBlock(imageUrl, linkUrl) {
+  var safeImageUrl = clean(imageUrl);
+  if (!safeImageUrl) return "";
+  var safeLinkUrl = clean(linkUrl) || "https://www.magmutual.com/learning-center/";
+  return [
+    "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"margin:0 0 18px;\">",
+    "<tr><td align=\"center\">",
+    "<a href=\"" + htmlSafe(safeLinkUrl) + "\" target=\"_blank\"><img src=\"" + htmlSafe(safeImageUrl) + "\" alt=\"Learning Center resource\" border=\"0\" style=\"display:block;max-width:100%;height:auto;\"></a>",
+    "</td></tr>",
+    "</table>"
+  ].join("");
+}
+
+function quickSendEmailHtml(headline, introBody, primaryImageUrl, primaryImageLink, secondaryImageUrl, secondaryImageLink, closingBody) {
+  var personalizationAmp = ampBlock([
+    "SET @subscriberKey = _subscriberKey",
+    "SET @senderId = \"\"",
+    "IF EMPTY(@subscriberKey) THEN",
+    "  SET @subscriberKey = emailaddr",
+    "ENDIF",
+    "IF IndexOf(@subscriberKey,\"@\") > 0 THEN",
+    "  SET @contactRows = LookupRows(\"ent.Contact_Salesforce_1\",\"Email\",@subscriberKey)",
+    "ELSE",
+    "  SET @contactRows = LookupRows(\"ent.Contact_Salesforce_1\",\"Id\",@subscriberKey)",
+    "ENDIF",
+    "IF RowCount(@contactRows) > 0 THEN",
+    "  SET @contactRow = Row(@contactRows,1)",
+    "  SET @contactFirstName = Field(@contactRow,\"FirstName\")",
+    "  SET @contactLastName = Field(@contactRow,\"LastName\")",
+    "  SET @contactSalutation = Field(@contactRow,\"Salutation\")",
+    "  SET @contactAccountId = Field(@contactRow,\"AccountId\")",
+    "  SET @contactOwnerId = Field(@contactRow,\"OwnerId\")",
+    "ELSE",
+    "  IF IndexOf(@subscriberKey,\"@\") > 0 THEN",
+    "    SET @sfRows = RetrieveSalesforceObjects(\"Contact\",\"FirstName,LastName,Salutation,AccountId,OwnerId\",\"Email\",\"=\",@subscriberKey)",
+    "  ELSE",
+    "    SET @sfRows = RetrieveSalesforceObjects(\"Contact\",\"FirstName,LastName,Salutation,AccountId,OwnerId\",\"Id\",\"=\",@subscriberKey)",
+    "  ENDIF",
+    "  IF RowCount(@sfRows) > 0 THEN",
+    "    SET @sfRow = Row(@sfRows,1)",
+    "    SET @contactFirstName = Field(@sfRow,\"FirstName\")",
+    "    SET @contactLastName = Field(@sfRow,\"LastName\")",
+    "    SET @contactSalutation = Field(@sfRow,\"Salutation\")",
+    "    SET @contactAccountId = Field(@sfRow,\"AccountId\")",
+    "    SET @contactOwnerId = Field(@sfRow,\"OwnerId\")",
+    "  ENDIF",
+    "ENDIF",
+    "IF NOT EMPTY(@contactSalutation) AND NOT EMPTY(@contactLastName) THEN",
+    "  SET @fullGreeting = Concat(\"Hello \",@contactSalutation,\" \",@contactLastName,\",\")",
+    "ELSEIF NOT EMPTY(@contactFirstName) THEN",
+    "  SET @fullGreeting = Concat(\"Hello \",@contactFirstName,\",\")",
+    "ELSEIF NOT EMPTY(@contactLastName) THEN",
+    "  SET @fullGreeting = Concat(\"Hello Mr./Mrs. \",@contactLastName,\",\")",
+    "ELSE",
+    "  SET @fullGreeting = \"Hello,\"",
+    "ENDIF",
+    "SET @accountOwnerId = @contactOwnerId",
+    "IF EMPTY(@accountOwnerId) AND NOT EMPTY(@contactAccountId) THEN",
+    "  SET @accountRows = LookupRows(\"ent.Account_Salesforce_1\",\"Id\",@contactAccountId)",
+    "  IF RowCount(@accountRows) > 0 THEN",
+    "    SET @accountRow = Row(@accountRows,1)",
+    "    SET @accountOwnerId = Field(@accountRow,\"OwnerId\")",
+    "  ENDIF",
+    "ENDIF",
+    "IF EMPTY(@accountOwnerId) AND NOT EMPTY(@contactAccountId) THEN",
+    "  SET @sfAccountRows = RetrieveSalesforceObjects(\"Account\",\"OwnerId\",\"Id\",\"=\",@contactAccountId)",
+    "  IF RowCount(@sfAccountRows) > 0 THEN",
+    "    SET @sfAccountRow = Row(@sfAccountRows,1)",
+    "    SET @accountOwnerId = Field(@sfAccountRow,\"OwnerId\")",
+    "  ENDIF",
+    "ENDIF",
+    "SET @sendfromName = \"MagMutual\"",
+    "SET @sendFromEmail = \"info@magmutual.com\"",
+    "SET @senderTitle = \"\"",
+    "SET @signaturePhone = \"(800) 282-4882\"",
+    "SET @senderLicense = \"\"",
+    "SET @senderSalesLicenseNumber = \"\"",
+    "SET @senderAppointmentLink = \"\"",
+    "IF NOT EMPTY(@accountOwnerId) THEN",
+    "  SET @userRows = LookupRows(\"ent.User_Salesforce_1\",\"Id\",@accountOwnerId)",
+    "  IF RowCount(@userRows) > 0 THEN",
+    "    SET @userRow = Row(@userRows,1)",
+    "    SET @sendfromName = Field(@userRow,\"Name\")",
+    "    SET @sendFromEmail = Field(@userRow,\"Email\")",
+    "    SET @senderTitle = Field(@userRow,\"Title\")",
+    "    SET @signaturePhone = Field(@userRow,\"Phone\")",
+    "    SET @senderSalesLicenseNumber = Field(@userRow,\"Sales_License_Number__c\")",
+    "    SET @senderAppointmentLink = Field(@userRow,\"Appointment_Link__c\")",
+    "  ELSE",
+    "    SET @sfUserRows = RetrieveSalesforceObjects(\"User\",\"Name,Email,Title,Phone,Sales_License_Number__c,Appointment_Link__c\",\"Id\",\"=\",@accountOwnerId)",
+    "    IF RowCount(@sfUserRows) > 0 THEN",
+    "      SET @sfUserRow = Row(@sfUserRows,1)",
+    "      SET @sendfromName = Field(@sfUserRow,\"Name\")",
+    "      SET @sendFromEmail = Field(@sfUserRow,\"Email\")",
+    "      SET @senderTitle = Field(@sfUserRow,\"Title\")",
+    "      SET @signaturePhone = Field(@sfUserRow,\"Phone\")",
+    "      SET @senderSalesLicenseNumber = Field(@sfUserRow,\"Sales_License_Number__c\")",
+    "      SET @senderAppointmentLink = Field(@sfUserRow,\"Appointment_Link__c\")",
+    "    ENDIF",
+    "  ENDIF",
+    "ENDIF",
+    "IF EMPTY(@sendfromName) THEN",
+    "  SET @sendfromName = \"MagMutual\"",
+    "ENDIF",
+    "IF EMPTY(@sendFromEmail) THEN",
+    "  SET @sendFromEmail = \"info@magmutual.com\"",
+    "ENDIF",
+    "IF EMPTY(@signaturePhone) THEN",
+    "  SET @signaturePhone = \"(800) 282-4882\"",
+    "ENDIF",
+    "IF NOT EMPTY(@senderSalesLicenseNumber) THEN",
+    "  SET @senderLicense = Concat(\"License #: \",@senderSalesLicenseNumber,\"<br>\")",
+    "ENDIF",
+    "IF IndexOf(@sendfromName,\" \") > 0 THEN",
+    "  SET @senderFirstName = Substring(@sendfromName,1,Subtract(IndexOf(@sendfromName,\" \"),1))",
+    "ELSE",
+    "  SET @senderFirstName = @sendfromName",
+    "ENDIF",
+    "SET @signature = Concat('<p style=\"font-family:IBM Plex Sans,Arial,Helvetica,sans-serif;font-size:14px;color:#161616;line-height:20px;margin:20px 0 0;\">',IIF(NOT EMPTY(@senderAppointmentLink),Concat('<a href=\"https://cloud.go.magmutual.com/go-redirect-to-uat-link?url=',@senderAppointmentLink,'\" target=\"_blank\" style=\"text-decoration:underline;\">Book time to meet with me</a><br><br>'),''),'Best regards,<br><br>','<span style=\"font-style:italic;font-family:serif;font-size:20px;\">',@senderFirstName,'</span><br>',IIF(NOT EMPTY(@senderTitle),Concat(@senderTitle,'<br>'),''),@sendfromName,'<br>',@sendFromEmail,'<br>',@signaturePhone,'<br>',@senderLicense,' MagMutual Insurance</p><br><br>')"
+  ]);
+  var mainStyles = ampValue("ContentBlockByKey(\"DM_Main_Styles_DEV\")");
+  var fullGreeting = ampValue("v(@fullGreeting)");
+  var signatureOutput = ampValue("v(@signature)");
+  var trackingPixel = ampValue("ContentBlockByKey(\"DM_opens_tracking_pixel_DEV\")");
+  var unsubscribeUrl = ampValue("RedirectTo(CloudPagesURL(2962, \"subscriberKey\", _subscriberKey))");
+  var footerAddress = [
+    ampToken("Member_Busname") + " " + ampToken("Member_Addr") + "<br>",
+    ampToken("Member_City") + ", " + ampToken("Member_State") + ", " + ampToken("Member_PostalCode")
+  ].join("");
+  return [
+    "<!doctype html>",
+    "<html><head><title>MagMutual</title><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><meta name=\"format-detection\" content=\"telephone=no\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><div style=\"display:none;\">" + mainStyles + "</div></head>",
+    "<body bgcolor=\"#ffffff\" style=\"padding:0;margin:0;background:#ffffff;\">",
+    "<div style=\"display:none;\">" + personalizationAmp + "</div>",
+    "<table role=\"presentation\" width=\"100%\" border=\"0\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#ffffff;\">",
+    "<tr><td height=\"30\" style=\"height:30px;line-height:30px;font-size:30px;\">&nbsp;</td></tr>",
+    "<tr><td align=\"center\">",
+    "<table role=\"presentation\" width=\"600\" border=\"0\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#ffffff;max-width:100%;\">",
+    "<tr><td style=\"font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;padding:0 20px;\">",
+    "<p style=\"margin:0 0 18px;\">" + fullGreeting + "</p>",
+    "<h1 style=\"font-family:Arial,Helvetica,sans-serif;font-size:24px;line-height:30px;color:#161616;margin:0 0 18px;\">" + htmlSafe(headline) + "</h1>",
+    textBodyParagraph(introBody),
+    imageBlock(primaryImageUrl, primaryImageLink),
+    imageBlock(secondaryImageUrl, secondaryImageLink),
+    textBodyParagraph(closingBody),
+    signatureOutput,
+    "</td></tr>",
+    "<tr><td style=\"display:none;\">" + trackingPixel + "</td></tr>",
+    "<tr><td height=\"30\" style=\"height:30px;line-height:30px;font-size:30px;\">&nbsp;</td></tr>",
+    "<tr><td align=\"center\" style=\"font-family:Arial,Helvetica,sans-serif;font-size:9px;line-height:12px;color:#808080;\"><a alias=\"Unsubscribe\" href=\"" + unsubscribeUrl + "\" style=\"color:#808080;text-decoration:underline;\">Unsubscribe</a></td></tr>",
+    "<tr><td align=\"center\" style=\"font-family:Arial,Helvetica,sans-serif;font-size:9px;line-height:12px;color:#808080;padding-top:8px;\">" + footerAddress + "</td></tr>",
+    "<tr><td height=\"30\" style=\"height:30px;line-height:30px;font-size:30px;\">&nbsp;</td></tr>",
+    "</table>",
+    "</td></tr>",
+    "</table>",
+    "<custom name=\"opencounter\" type=\"tracking\" /><custom name=\"usermatch\" type=\"tracking\" />",
+    "</body></html>"
+  ].join("");
+}
+
+if (formValue("createEmail") == "1") {
+  try {
+    var emailName = clean(formValue("emailName"));
+    if (!emailName) {
+      emailName = "SST Quick Send Email " + guidKey().substring(0, 8);
+    }
+    var subject = clean(formValue("subject"));
+    if (!subject) {
+      subject = "Recommended Learning Center resources";
+    }
+    var preheader = clean(formValue("preheader"));
+    if (!preheader) {
+      preheader = "Helpful educational resources selected for your practice.";
+    }
+    var headline = clean(formValue("headline"));
+    if (!headline) {
+      headline = "Recommended Learning Center resources";
+    }
+    var introBody = clean(formValue("introBody"));
+    if (!introBody) {
+      introBody = "Thank you for your recent visit to our Learning Center. We hope you found our educational resources helpful in your practice of medicine. Based on your specialty, we thought you might be interested in more of our content.";
+    }
+    var primaryImageUrl = clean(formValue("primaryImageUrl"));
+    var primaryImageLink = clean(formValue("primaryImageLink"));
+    var secondaryImageUrl = clean(formValue("secondaryImageUrl"));
+    var secondaryImageLink = clean(formValue("secondaryImageLink"));
+    var closingBody = clean(formValue("closingBody"));
+    if (!closingBody) {
+      closingBody = "With our upgraded Learning Center, you can access educational content, including an extensive library offering CME credits, and manage your learning activities more effectively. We are committed to being your trusted partner for professional development and risk management advice.";
+    }
+    createdCustomerKey = "sst-" + guidKey();
+    var htmlContent = quickSendEmailHtml(headline, introBody, primaryImageUrl, primaryImageLink, secondaryImageUrl, secondaryImageLink, closingBody);
+    var payload = {
+      name: emailName,
+      customerKey: createdCustomerKey,
+      assetType: {
+        id: 208,
+        name: "htmlemail"
+      },
+      channels: {
+        email: true,
+        web: false
+      },
+      views: {
+        html: {
+          content: htmlContent
+        },
+        text: {
+          content: introBody + "\n\n" + closingBody
+        },
+        subjectline: {
+          content: subject
+        },
+        preheader: {
+          content: preheader
+        }
+      },
+      data: {
+        email: {
+          options: {
+            characterEncoding: "utf-8"
+          }
+        }
+      }
+    };
+    var auth = getAuthConfig();
+    var token = getAccessToken(auth);
+    var created = createAsset(auth, token, payload);
+    createdAssetId = String(created.id || "");
+    resultStatus = "success";
+    resultMessage = "Quick Send Content Builder email created.";
+  } catch (ex) {
+    resultStatus = "error";
+    resultMessage = String(ex);
+  }
+}
+
+Platform.Variable.SetValue("@quickSendEmailResultStatus", resultStatus);
+Platform.Variable.SetValue("@quickSendEmailResultMessage", resultMessage);
+Platform.Variable.SetValue("@quickSendEmailAssetId", createdAssetId);
+Platform.Variable.SetValue("@quickSendEmailCustomerKey", createdCustomerKey);
+Platform.Variable.SetValue("@quickSendEmailHubUrl", hubUrl);
+</script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+  :root {
+    --primary-color: #6366f1;
+    --primary-dark: #4f46e5;
+    --gray-100: #f3f4f6;
+    --gray-200: #e5e7eb;
+    --gray-500: #6b7280;
+    --gray-700: #374151;
+    --gray-900: #111827;
+    --bg-primary: #ffffff;
+    --bg-secondary: #f9fafb;
+    --border-color: #e5e7eb;
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    --radius-md: 0.5rem;
+    --text-primary: #111827;
+    --text-secondary: #6b7280;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    margin: 0;
+  }
+  .dashboard-layout {
+    display: flex;
+    min-height: 100vh;
+  }
+  .maker-sidebar {
+    background: #ffffff;
+    border-right: 1px solid var(--gray-200);
+    flex: 0 0 260px;
+    min-height: 100vh;
+  }
+  .sidebar-logo {
+    align-items: center;
+    display: flex;
+    height: 80px;
+    padding: 0 24px;
+  }
+  .sidebar-logo img {
+    height: 35px;
+    width: auto;
+  }
+  .sidebar-nav {
+    padding: 8px 16px 24px;
+  }
+  .nav-section-title {
+    color: var(--gray-500);
+    display: block;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    margin: 18px 8px 8px;
+  }
+  .nav-link {
+    align-items: center;
+    border-radius: var(--radius-md);
+    color: var(--gray-700);
+    display: flex;
+    font-size: 14px;
+    font-weight: 600;
+    gap: 12px;
+    padding: 10px 12px;
+  }
+  .nav-link.active {
+    background: var(--gray-100);
+    color: var(--gray-900);
+  }
+  .nav-icon {
+    flex: 0 0 auto;
+  }
+  .main-content {
+    flex: 1;
+    height: 100vh;
+    overflow: auto;
+    padding: 25px 40px 48px;
+  }
+  .page {
+    width: 100%;
+  }
+  .breadcrumb-section {
+    margin-bottom: 24px;
+  }
+  .breadcrumb-nav {
+    align-items: center;
+    color: var(--text-secondary);
+    display: flex;
+    font-size: 14px;
+    gap: 8px;
+  }
+  .breadcrumb-link {
+    align-items: center;
+    color: var(--primary-color);
+    display: inline-flex;
+    font-weight: 500;
+    text-decoration: none;
+  }
+  .breadcrumb-current {
+    color: var(--gray-900);
+    font-weight: 600;
+  }
+  .card {
+    background: #ffffff;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 24px;
+    width: 100%;
+  }
+  h1 {
+    margin: 0 0 8px;
+    font-size: 28px;
+    line-height: 34px;
+  }
+  p {
+    margin: 0 0 18px;
+    line-height: 22px;
+  }
+  .form-group {
+    margin-bottom: 20px;
+  }
+  .form-label {
+    color: var(--text-primary);
+    display: block;
+    font-weight: 500;
+    margin-bottom: 8px;
+  }
+  .form-input,
+  .form-textarea {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    padding: 12px 16px;
+    transition: all 0.2s ease;
+    width: 100%;
+  }
+  .form-input:focus,
+  .form-textarea:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+    outline: none;
+  }
+  .form-textarea {
+    min-height: 100px;
+    resize: vertical;
+  }
+  .btn {
+    border: 0;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 12px 24px;
+    transition: all 0.2s ease;
+  }
+  .btn-create {
+    background: #000000;
+    border-radius: 0;
+    color: #ffffff;
+  }
+  .btn-create:hover {
+    background: #000000;
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+  }
+  .notice {
+    margin-bottom: 20px;
+    padding: 14px 16px;
+    border: 1px solid;
+    background: #ffffff;
+  }
+  .success {
+    border-color: #24a148;
+    color: #0e6027;
+  }
+  .error {
+    border-color: #da1e28;
+    color: #a2191f;
+  }
+  .hub-grid {
+    align-items: start;
+    display: grid;
+    gap: 24px;
+    grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
+  }
+  .preview-panel {
+    border: 1px solid var(--border-color);
+    background: #f4f4f4;
+    min-height: calc(100vh - 220px);
+  }
+  .preview-header {
+    align-items: center;
+    background: #ffffff;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+    padding: 14px 16px;
+  }
+  .preview-avatar {
+    align-items: center;
+    background: #e5e7eb;
+    border-radius: 999px;
+    color: var(--gray-700);
+    display: flex;
+    flex: 0 0 40px;
+    font-size: 16px;
+    font-weight: 700;
+    height: 40px;
+    justify-content: center;
+    width: 40px;
+  }
+  .preview-message-meta {
+    align-items: center;
+    display: flex;
+    flex: 1;
+    gap: 12px;
+    justify-content: space-between;
+    min-width: 0;
+  }
+  .preview-message-copy {
+    min-width: 0;
+  }
+  .preview-header strong,
+  .preview-header span {
+    display: block;
+  }
+  .preview-header strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .preview-header span {
+    color: #525252;
+    font-size: 13px;
+    line-height: 18px;
+    margin-top: 4px;
+  }
+  .preview-date {
+    color: var(--gray-500);
+    flex: 0 0 auto;
+    font-size: 13px;
+    line-height: 18px;
+    white-space: nowrap;
+  }
+  .preview-frame {
+    border: 0;
+    display: block;
+    min-height: calc(100vh - 290px);
+    width: 100%;
+  }
+  @media only screen and (max-width: 900px) {
+    .dashboard-layout {
+      display: block;
+    }
+    .maker-sidebar {
+      border-bottom: 1px solid var(--gray-200);
+      border-right: 0;
+      min-height: 0;
+      width: 100%;
+    }
+    .main-content {
+      height: auto;
+      overflow: visible;
+      padding: 24px 16px 40px;
+    }
+    .hub-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+<div class="dashboard-layout">
+  <aside class="maker-sidebar" aria-label="Primary">
+    <div class="sidebar-logo">
+      <script runat="server">
+        function navSafe(value) {
+          return String(value || "#")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+        }
+        var navHubUrl = Platform.Variable.GetValue("@quickSendEmailHubUrl") || "#";
+        Write('<a href="' + navSafe(navHubUrl) + '"><img src="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" alt="MagMutual"></a>');
+      </script>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section"><span class="nav-section-title">MENU</span></div>
+      <span class="nav-link active" role="presentation"><svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17h2v-5H3v5zm8 5h2V6h-2v16zM13 9h8V7h-8v2zM3 5v4h14V5H3zm8 14h10v-2H11v2zM13 17h8v-2h-8v2z"/></svg>Quick Send Email</span>
+    </nav>
+  </aside>
+  <main class="main-content">
+    <div class="page">
+      <div class="breadcrumb-section">
+        <nav class="breadcrumb-nav" aria-label="Breadcrumb">
+          <script runat="server">
+            function crumbSafe(value) {
+              return String(value || "#")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;");
+            }
+            var crumbHubUrl = Platform.Variable.GetValue("@quickSendEmailHubUrl") || "#";
+            Write('<a href="' + crumbSafe(crumbHubUrl) + '" class="breadcrumb-link"><svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>Back</a>');
+          </script>
+          <span class="breadcrumb-separator" aria-hidden="true">/</span>
+          <span class="breadcrumb-current">Quick Send Email</span>
+        </nav>
+      </div>
+      <div class="card">
+        <h1>SST Quick Send Email</h1>
+        <p>Create and preview a Learning Center quick-send email based on the quick-send reference template.</p>
+        <script runat="server">
+          function bodyHtmlSafe(value) {
+            return String(value || "")
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;");
+          }
+          var bodyResultStatus = Platform.Variable.GetValue("@quickSendEmailResultStatus");
+          var bodyResultMessage = Platform.Variable.GetValue("@quickSendEmailResultMessage");
+          var bodyAssetId = Platform.Variable.GetValue("@quickSendEmailAssetId");
+          var bodyCustomerKey = Platform.Variable.GetValue("@quickSendEmailCustomerKey");
+          if (bodyResultStatus) {
+            Write('<div class="notice ' + bodyHtmlSafe(bodyResultStatus) + '"><strong>' + bodyHtmlSafe(bodyResultMessage) + '</strong>');
+            if (bodyAssetId) {
+              Write('<br>Asset ID: ' + bodyHtmlSafe(bodyAssetId));
+            }
+            if (bodyCustomerKey) {
+              Write('<br>Customer Key: ' + bodyHtmlSafe(bodyCustomerKey));
+            }
+            Write('</div>');
+          }
+        </script>
+        <div class="hub-grid">
+          <form method="post" id="quickSendEmailForm">
+            <input type="hidden" name="createEmail" value="1">
+            <div class="form-group">
+              <label class="form-label" for="emailName">Email Name</label>
+              <input class="form-input" id="emailName" name="emailName" value="SST Quick Send Learning Center Email">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="subject">Subject</label>
+              <input class="form-input" id="subject" name="subject" value="Recommended Learning Center resources">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="preheader">Preheader</label>
+              <input class="form-input" id="preheader" name="preheader" value="Helpful educational resources selected for your practice.">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="headline">Headline</label>
+              <input class="form-input" id="headline" name="headline" value="Recommended Learning Center resources">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="introBody">Intro Body</label>
+              <textarea class="form-textarea" id="introBody" name="introBody">Thank you for your recent visit to our Learning Center. We hope you found our educational resources helpful in your practice of medicine. Based on your specialty, we thought you might be interested in more of our content.</textarea>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="primaryImageUrl">Primary Image URL</label>
+              <input class="form-input" id="primaryImageUrl" name="primaryImageUrl" value="">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="primaryImageLink">Primary Image Link</label>
+              <input class="form-input" id="primaryImageLink" name="primaryImageLink" value="https://www.magmutual.com/learning-center/">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="secondaryImageUrl">Secondary Image URL</label>
+              <input class="form-input" id="secondaryImageUrl" name="secondaryImageUrl" value="">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="secondaryImageLink">Secondary Image Link</label>
+              <input class="form-input" id="secondaryImageLink" name="secondaryImageLink" value="https://www.magmutual.com/learning-center/">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="closingBody">Closing Body</label>
+              <textarea class="form-textarea" id="closingBody" name="closingBody">With our upgraded Learning Center, you can access educational content, including an extensive library offering CME credits, and manage your learning activities more effectively. We are committed to being your trusted partner for professional development and risk management advice.</textarea>
+            </div>
+            <button class="btn btn-create" type="submit">Create</button>
+          </form>
+          <section class="preview-panel" aria-label="Email preview">
+            <div class="preview-header">
+              <div class="preview-avatar" aria-hidden="true">M</div>
+              <div class="preview-message-meta">
+                <div class="preview-message-copy">
+                  <strong id="previewSubject">Recommended Learning Center resources</strong>
+                  <span id="previewPreheader">Helpful educational resources selected for your practice.</span>
+                </div>
+                <div class="preview-date" id="previewDate"></div>
+              </div>
+            </div>
+            <iframe class="preview-frame" id="emailPreviewFrame" title="Email preview"></iframe>
+          </section>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+<script>
+  (function () {
+    function el(id) {
+      return document.getElementById(id);
+    }
+    function escapeHtml(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+    function textToHtml(value) {
+      return escapeHtml(value).replace(/\r\n|\r|\n/g, "<br>");
+    }
+    function imageHtml(imageUrl, linkUrl) {
+      if (!imageUrl) return "";
+      return "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"margin:0 0 18px;\"><tr><td align=\"center\"><a href=\"" + escapeHtml(linkUrl || "https://www.magmutual.com/learning-center/") + "\" target=\"_blank\"><img src=\"" + escapeHtml(imageUrl) + "\" alt=\"Learning Center resource\" border=\"0\" style=\"display:block;max-width:100%;height:auto;\"></a></td></tr></table>";
+    }
+    function previewHtml() {
+      var headline = escapeHtml(el("headline").value || "Recommended Learning Center resources");
+      var introBody = textToHtml(el("introBody").value);
+      var closingBody = textToHtml(el("closingBody").value);
+      return [
+        "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;margin:0;padding:30px 0;\">",
+        "<tr><td align=\"center\">",
+        "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;max-width:100%;\">",
+        "<tr><td style=\"font-family:Arial,Helvetica,sans-serif;color:#161616;font-size:14px;line-height:20px;padding:0 20px;\">",
+        "<p style=\"margin:0 0 18px;\">Hello,</p>",
+        "<h1 style=\"font-size:24px;line-height:30px;margin:0 0 18px;color:#161616;\">" + headline + "</h1>",
+        "<p style=\"margin:0 0 18px;\">" + introBody + "</p>",
+        imageHtml(el("primaryImageUrl").value, el("primaryImageLink").value),
+        imageHtml(el("secondaryImageUrl").value, el("secondaryImageLink").value),
+        "<p style=\"margin:0 0 18px;\">" + closingBody + "</p>",
+        "<p style=\"margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">Best regards,<br><br><span style=\"font-style:italic;font-family:serif;font-size:20px;\">MagMutual</span><br>MagMutual Insurance</p>",
+        "</td></tr>",
+        "<tr><td align=\"center\" style=\"padding:30px 20px 0;font-family:Arial,Helvetica,sans-serif;font-size:9px;line-height:12px;color:#808080;\"><u>Unsubscribe</u><br>Member business address renders in SFMC send context.</td></tr>",
+        "</table>",
+        "</td></tr>",
+        "</table>"
+      ].join("");
+    }
+    function updatePreview() {
+      el("previewSubject").textContent = el("subject").value || "Recommended Learning Center resources";
+      el("previewPreheader").textContent = el("preheader").value || "Helpful educational resources selected for your practice.";
+      el("previewDate").textContent = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      el("emailPreviewFrame").srcdoc = previewHtml();
+    }
+    ["subject", "preheader", "headline", "introBody", "primaryImageUrl", "primaryImageLink", "secondaryImageUrl", "secondaryImageLink", "closingBody"].forEach(function (id) {
+      el(id).addEventListener("input", updatePreview);
+    });
+    updatePreview();
+  })();
+</script>
