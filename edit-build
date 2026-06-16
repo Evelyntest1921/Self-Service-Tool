@@ -50,7 +50,7 @@ VAR @surveyPurgeId, @surveyDelResponses, @surveyDelQuestions, @surveyDelMaster, 
 VAR @updRaw
 VAR @journeyActionRequested, @journeyAction, @attemptJourneyAction, @journeyActionOk, @journeyActionMsg, @journeyActionNewStatus
 VAR @automationActionRequested, @attemptAutomationAction, @automationActionOk, @automationActionMsg, @automationActionNewStatus, @automationActionConfirm
-VAR @automationFrequency, @automationStartDate, @automationStartOffset, @automationTimezoneId, @showAutomationActivate, @automationStatusLower
+VAR @automationAction, @automationFrequency, @automationStartDate, @automationStartOffset, @automationTimezoneId, @showAutomationActivate, @showAutomationPause, @automationStatusLower
 
 
 SET @purgeRequested = IIF(NOT Empty(RequestParameter("confirmPurgeBuild")),"1","0")
@@ -62,6 +62,7 @@ SET @deleteEmailFromPost = Trim(RequestParameter("deleteEmailId"))
 SET @journeyActionRequested = IIF(NOT Empty(RequestParameter("confirmJourneyAction")),"1","0")
 SET @journeyAction = Trim(RequestParameter("journeyAction"))
 SET @automationActionRequested = IIF(NOT Empty(RequestParameter("confirmAutomationAction")),"1","0")
+SET @automationAction = Lowercase(Trim(RequestParameter("automationAction")))
 SET @automationFrequency = Lowercase(Trim(RequestParameter("automationFrequency")))
 SET @automationStartDate = Trim(RequestParameter("automationStartDate"))
 SET @automationStartOffset = Trim(RequestParameter("automationStartOffset"))
@@ -121,6 +122,7 @@ SET @journeyBtnLabel = "Activate Journey"
 SET @journeyBtnClass = "btn-activate"
 SET @journeyActionConfirm = "Publish and activate this journey?"
 SET @showAutomationActivate = "false"
+SET @showAutomationPause = "false"
 SET @chkCampaignId = ""
 SET @chkCampaignStatus = "pending"
 SET @chkCampaignMsg = ""
@@ -240,6 +242,8 @@ IF @detailCount > 0 THEN
     SET @automationStatusLower = Lowercase(@dispAutomationStatus)
     IF Empty(@automationStatusLower) OR @automationStatusLower == "paused" OR @automationStatusLower == "ready" OR @automationStatusLower == "stopped" OR @automationStatusLower == "inactive" OR @automationStatusLower == "inactive trigger" OR @automationStatusLower == "unknown" THEN
       SET @showAutomationActivate = "true"
+    ELSEIF @automationStatusLower == "scheduled" THEN
+      SET @showAutomationPause = "true"
     ENDIF
   ENDIF
   IF NOT Empty(@updRaw) THEN
@@ -329,7 +333,7 @@ IF Empty(@postedJidDel) THEN
   SET @postedJidDel = @jid
 ENDIF
 IF (@automationActionRequested == "1") THEN
-  IF (@postedJidDel != @jid) OR (@isStackBuild != "true") THEN
+  IF (@postedJidDel != @jid) OR (@isStackBuild != "true") OR Empty(@automationAction) OR (@automationAction != "activate" AND @automationAction != "pause") THEN
     SET @pageStatus = "tamper"
     SET @resultText = "Automation action request did not match this stack build."
   ELSE
@@ -1059,7 +1063,35 @@ function buildScheduleEnvelope(sub, token, automationObjectId, customerKey, sche
 }
 
 
-function postSoapScheduleStart(sub, token, envelope) {
+function buildPauseEnvelope(sub, token, automationObjectId, customerKey) {
+ var envelope = [
+  '<?xml version="1.0" encoding="UTF-8"?>',
+  '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing">',
+  "<s:Header>",
+  '<a:Action s:mustUnderstand="1">Schedule</a:Action>',
+  '<a:To s:mustUnderstand="1">https://' + xmlSafe(sub) + ".soap.marketingcloudapis.com/Service.asmx</a:To>",
+  '<fueloauth xmlns="http://exacttarget.com">' + xmlSafe(token) + "</fueloauth>",
+  "</s:Header>",
+  '<s:Body xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">',
+  '<ScheduleRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI">',
+  "<Action>pause</Action>",
+  "<Schedule></Schedule>",
+  "<Interactions>",
+  '<Interaction xsi:type="Automation">',
+  '<PartnerKey xsi:nil="true" />',
+  "<ObjectID>" + xmlSafe(automationObjectId) + "</ObjectID>",
+  customerKey ? "<CustomerKey>" + xmlSafe(customerKey) + "</CustomerKey>" : "",
+  "</Interaction>",
+  "</Interactions>",
+  "</ScheduleRequestMsg>",
+  "</s:Body>",
+  "</s:Envelope>"
+ ].join("");
+ return envelope;
+}
+
+
+function postSoapScheduleAction(sub, token, envelope) {
  var req = new Script.Util.HttpRequest("https://" + sub + ".soap.marketingcloudapis.com/Service.asmx");
  req.emptyContentHandling = 0;
  req.retries = 2;
@@ -1234,7 +1266,7 @@ function activateStackAutomation(sub, token, autoId, customerKey, requestedSched
     statusInfo
   };
  }
- var scheduleResp = postSoapScheduleStart(sub, token, envelopeResult.envelope);
+ var scheduleResp = postSoapScheduleAction(sub, token, envelopeResult.envelope);
  var bodyLower = String(scheduleResp.body || "").toLowerCase();
  if (
   scheduleResp.status != 200 ||
@@ -1286,6 +1318,92 @@ function activateStackAutomation(sub, token, autoId, customerKey, requestedSched
 }
 
 
+function pauseStackAutomation(sub, token, autoId, customerKey) {
+ var prox = new Script.Util.WSProxy();
+ var resolvedId = resolveAutomationObjectId(prox, customerKey, autoId);
+ if (!resolvedId) {
+  resolvedId = resolveProgramObjectId(prox, customerKey, autoId);
+ }
+ if (!resolvedId) {
+  return { ok: false, msg: "No automation id on build log." };
+ }
+ var beforeAutomation = getAutomationById(prox, resolvedId);
+ var beforeStatus =
+  beforeAutomation &&
+  beforeAutomation.Status !== null &&
+  beforeAutomation.Status !== undefined
+   ? String(beforeAutomation.Status)
+   : "";
+ var beforeActive =
+  beforeAutomation &&
+  beforeAutomation.IsActive !== null &&
+  beforeAutomation.IsActive !== undefined
+   ? String(beforeAutomation.IsActive)
+   : "";
+ var statusInfo =
+  "Status before: " +
+  automationStatusLabel(beforeStatus) +
+  (beforeStatus ? " (" + beforeStatus + ")" : "") +
+  ", active=" +
+  (beforeActive || "unknown");
+ if (beforeStatus === "4") {
+  return {
+   ok: true,
+   msg: "Automation schedule is already paused. " + statusInfo,
+   newStatus: "Paused"
+  };
+ }
+ var pauseResp = postSoapScheduleAction(
+  sub,
+  token,
+  buildPauseEnvelope(sub, token, resolvedId, customerKey)
+ );
+ var bodyLower = String(pauseResp.body || "").toLowerCase();
+ if (
+  pauseResp.status != 200 ||
+  bodyLower.indexOf("<overallstatus>error</overallstatus>") >= 0 ||
+  bodyLower.indexOf("<statuscode>error</statuscode>") >= 0
+ ) {
+  return {
+   ok: false,
+   msg:
+    "SOAP schedule pause failed HTTP " +
+    pauseResp.status +
+    " - " +
+    (pauseResp.body ? pauseResp.body.substring(0, 240) : "No response body.") +
+    " " +
+    statusInfo
+  };
+ }
+ var afterAutomation = getAutomationById(prox, resolvedId);
+ var afterStatus =
+  afterAutomation &&
+  afterAutomation.Status !== null &&
+  afterAutomation.Status !== undefined
+   ? String(afterAutomation.Status)
+   : "";
+ var afterActive =
+  afterAutomation &&
+  afterAutomation.IsActive !== null &&
+  afterAutomation.IsActive !== undefined
+   ? String(afterAutomation.IsActive)
+   : "";
+ if (afterStatus !== "") {
+  statusInfo +=
+   " | after: " +
+   automationStatusLabel(afterStatus) +
+   (afterStatus ? " (" + afterStatus + ")" : "") +
+   ", active=" +
+   (afterActive || "unknown");
+ }
+ return {
+  ok: true,
+  msg: "Automation schedule pause requested. " + statusInfo,
+  newStatus: afterStatus ? automationStatusLabel(afterStatus) : "Paused"
+ };
+}
+
+
 var authOk = Platform.Variable.GetValue("@authOk") || "";
 var accessToken = Platform.Variable.GetValue("@accessToken") || "";
 var subdomain = Platform.Variable.GetValue("@subdomain") || "";
@@ -1297,6 +1415,7 @@ var attemptJourneyAction =
  Platform.Variable.GetValue("@attemptJourneyAction") || "";
 var attemptAutomationAction =
  Platform.Variable.GetValue("@attemptAutomationAction") || "";
+var automationAction = Platform.Variable.GetValue("@automationAction") || "";
 var journeyAction = Platform.Variable.GetValue("@journeyAction") || "";
 var deleteEmailFromPost =
   Platform.Variable.GetValue("@deleteEmailFromPost") || "";
@@ -1384,21 +1503,26 @@ try {
   if (!autoActKey && jidClean) {
    autoActKey = logDeField(jidClean, "automationCustomerKey");
   }
-  var scheduleInput = buildScheduleFromInput(
-   Platform.Variable.GetValue("@automationFrequency") || "",
-   Platform.Variable.GetValue("@automationStartDate") || "",
-   Platform.Variable.GetValue("@automationStartOffset") || "",
-   Platform.Variable.GetValue("@automationTimezoneId") || ""
-  );
-  var autoResult = scheduleInput.ok
-   ? activateStackAutomation(
-      subdomain,
-      accessToken,
-      autoActId,
-      autoActKey,
-      scheduleInput.schedule
-     )
-   : scheduleInput;
+  var autoResult = null;
+  if (automationAction == "pause") {
+   autoResult = pauseStackAutomation(subdomain, accessToken, autoActId, autoActKey);
+  } else {
+   var scheduleInput = buildScheduleFromInput(
+    Platform.Variable.GetValue("@automationFrequency") || "",
+    Platform.Variable.GetValue("@automationStartDate") || "",
+    Platform.Variable.GetValue("@automationStartOffset") || "",
+    Platform.Variable.GetValue("@automationTimezoneId") || ""
+   );
+   autoResult = scheduleInput.ok
+    ? activateStackAutomation(
+       subdomain,
+       accessToken,
+       autoActId,
+       autoActKey,
+       scheduleInput.schedule
+      )
+    : scheduleInput;
+  }
   Platform.Variable.SetValue("@automationActionOk", autoResult.ok ? "true" : "false");
   Platform.Variable.SetValue("@automationActionMsg", autoResult.msg || "");
   if (autoResult.ok && autoResult.newStatus) {
@@ -2238,9 +2362,13 @@ IF (@attemptAutomationAction == "true") AND (@automationActionOk == "true") AND 
  ELSEIF Lowercase(@dispAutomationStatus) == "ready" OR Lowercase(@dispAutomationStatus) == "scheduled" OR Lowercase(@dispAutomationStatus) == "running" OR Lowercase(@dispAutomationStatus) == "waiting" THEN
   SET @automationStatusColor = "#10b981"
  ENDIF
+ SET @showAutomationActivate = "false"
+ SET @showAutomationPause = "false"
  SET @automationStatusLower = Lowercase(@dispAutomationStatus)
- IF @automationStatusLower == "scheduled" OR @automationStatusLower == "running" OR @automationStatusLower == "waiting" THEN
-  SET @showAutomationActivate = "false"
+ IF @automationStatusLower == "scheduled" THEN
+  SET @showAutomationPause = "true"
+ ELSEIF @automationStatusLower == "paused" OR @automationStatusLower == "ready" OR @automationStatusLower == "stopped" OR @automationStatusLower == "inactive" OR @automationStatusLower == "inactive trigger" OR @automationStatusLower == "unknown" THEN
+  SET @showAutomationActivate = "true"
  ENDIF
 ENDIF
 
@@ -3091,6 +3219,7 @@ pre.log.show{display:block}
     <form method="post" action="" class="automation-schedule-form" onsubmit="return confirm('%%=Replace(v(@automationActionConfirm),'''','\\''')=%%');">
      <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
      <input type="hidden" name="postedJourneyId" value="%%=v(@jid)=%%">
+     <input type="hidden" name="automationAction" value="activate">
      <p class="schedule-note">Choose the schedule to activate. These values are sent in the SOAP Schedule request.</p>
      <div class="schedule-grid">
       <div class="schedule-field">
@@ -3118,8 +3247,18 @@ pre.log.show{display:block}
       <button type="submit" name="confirmAutomationAction" value="1" class="btn btn-activate btn-sm">Activate Schedule</button>
      </div>
     </form>
+%%[ ELSEIF @showAutomationPause == "true" THEN ]%%
+    <form method="post" action="" class="automation-schedule-form" onsubmit="return confirm('Pause this automation schedule?');">
+     <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
+     <input type="hidden" name="postedJourneyId" value="%%=v(@jid)=%%">
+     <input type="hidden" name="automationAction" value="pause">
+     <p class="schedule-note">This automation schedule is active. Pause it before changing and reactivating the schedule.</p>
+     <div class="schedule-submit">
+      <button type="submit" name="confirmAutomationAction" value="1" class="btn btn-stop btn-sm">Pause Schedule</button>
+     </div>
+    </form>
 %%[ ELSE ]%%
-    <p class="schedule-note">Automation schedule already appears active. Pause it first if you need to change and reactivate the schedule.</p>
+    <p class="schedule-note">No schedule action is available for the current automation status.</p>
 %%[ ENDIF ]%%
    </div>
   </div>
