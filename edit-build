@@ -776,6 +776,36 @@ function getProgramById(prox, objectId) {
 }
 
 
+function getAutomationById(prox, objectId) {
+ var id = String(objectId);
+ var resp = prox.retrieve(
+  "Automation",
+  ["ObjectID", "ProgramID", "CustomerKey", "Name", "Status"],
+  {
+   Property: "ObjectID",
+   SimpleOperator: "equals",
+   Value: id
+  }
+ );
+ if (resp && resp.Results && resp.Results.length > 0) {
+  return resp.Results[0];
+ }
+ resp = prox.retrieve(
+  "Automation",
+  ["ObjectID", "ProgramID", "CustomerKey", "Name", "Status"],
+  {
+   Property: "ProgramID",
+   SimpleOperator: "equals",
+   Value: id
+  }
+ );
+ if (resp && resp.Results && resp.Results.length > 0) {
+  return resp.Results[0];
+ }
+ return null;
+}
+
+
 function resolveProgramObjectId(prox, customerKey, restAutomationId) {
  var key = strTrim(customerKey);
  if (key && prox) {
@@ -805,7 +835,55 @@ function resolveProgramObjectId(prox, customerKey, restAutomationId) {
 }
 
 
-function performAutomationSoapStart(autoId, customerKey) {
+function resolveAutomationObjectId(prox, customerKey, restAutomationId) {
+ var key = strTrim(customerKey);
+ if (key && prox) {
+  var byKey = prox.retrieve(
+   "Automation",
+   ["ObjectID", "ProgramID", "CustomerKey"],
+   {
+    Property: "CustomerKey",
+    SimpleOperator: "equals",
+    Value: key
+   }
+  );
+  if (byKey && byKey.Results && byKey.Results.length > 0) {
+   if (byKey.Results[0].ObjectID) {
+    return String(byKey.Results[0].ObjectID);
+   }
+   if (byKey.Results[0].ProgramID) {
+    return String(byKey.Results[0].ProgramID);
+   }
+  }
+ }
+ var restId = strTrim(restAutomationId);
+ if (restId && prox) {
+  if (getAutomationById(prox, restId)) {
+   return restId;
+  }
+  var byProgram = prox.retrieve(
+   "Automation",
+   ["ObjectID", "ProgramID", "CustomerKey"],
+   {
+    Property: "ProgramID",
+    SimpleOperator: "equals",
+    Value: restId
+   }
+  );
+  if (byProgram && byProgram.Results && byProgram.Results.length > 0) {
+   if (byProgram.Results[0].ObjectID) {
+    return String(byProgram.Results[0].ObjectID);
+   }
+   if (byProgram.Results[0].ProgramID) {
+    return String(byProgram.Results[0].ProgramID);
+   }
+  }
+ }
+ return "";
+}
+
+
+function performProgramSoapStart(autoId, customerKey) {
  var prox = new Script.Util.WSProxy();
  var resolvedId = resolveProgramObjectId(prox, customerKey, autoId);
  if (!resolvedId) {
@@ -901,10 +979,121 @@ function performAutomationSoapStart(autoId, customerKey) {
   return {
    ok: false,
    msg:
-    "SOAP start failed: " +
+    "Program SOAP start failed: " +
     (soapEx.message || String(soapEx)) +
     ". " +
     statusInfo
+  };
+ }
+}
+
+
+function performAutomationSoapStart(autoId, customerKey) {
+ var prox = new Script.Util.WSProxy();
+ var resolvedId = resolveAutomationObjectId(prox, customerKey, autoId);
+ if (!resolvedId) {
+  return performProgramSoapStart(autoId, customerKey);
+ }
+ var beforeAutomation = getAutomationById(prox, resolvedId);
+ if (!beforeAutomation) {
+  return performProgramSoapStart(autoId, customerKey);
+ }
+ var beforeStatus =
+  beforeAutomation.Status !== null && beforeAutomation.Status !== undefined
+   ? String(beforeAutomation.Status)
+   : "";
+ var statusInfo =
+  "Status before: " +
+  automationStatusLabel(beforeStatus) +
+  " (" +
+  beforeStatus +
+  ")";
+ if (beforeStatus === "3") {
+  return {
+   ok: false,
+   msg: "Automation is already running. " + statusInfo
+  };
+ }
+ try {
+  var perform = prox.performItem(
+   "Automation",
+   { ObjectID: resolvedId },
+   "start",
+   {}
+  );
+  var topStatus = perform && perform.Status ? String(perform.Status) : "";
+  var itemCode =
+   perform &&
+   perform.Results &&
+   perform.Results.length > 0 &&
+   perform.Results[0].StatusCode
+    ? String(perform.Results[0].StatusCode)
+    : "";
+  var itemMsg =
+   perform &&
+   perform.Results &&
+   perform.Results.length > 0 &&
+   perform.Results[0].StatusMessage
+    ? String(perform.Results[0].StatusMessage)
+    : "";
+  var afterAutomation = getAutomationById(prox, resolvedId);
+  var afterStatus =
+   afterAutomation &&
+   afterAutomation.Status !== null &&
+   afterAutomation.Status !== undefined
+    ? String(afterAutomation.Status)
+    : "";
+  if (afterStatus !== "") {
+   statusInfo +=
+    " | after: " +
+    automationStatusLabel(afterStatus) +
+    " (" +
+    afterStatus +
+    ")";
+  }
+  if (topStatus === "OK" || itemCode === "OK") {
+   var newStatus = automationStatusLabel(afterStatus);
+   if (newStatus.indexOf("Unknown") === 0) {
+    newStatus = "Scheduled";
+   }
+   return {
+    ok: true,
+    msg: "Automation start requested. " + statusInfo,
+    newStatus: newStatus
+   };
+  }
+  var fallback = performProgramSoapStart(autoId, customerKey);
+  if (fallback.ok) {
+   return fallback;
+  }
+  return {
+   ok: false,
+   msg:
+    "Automation SOAP start rejected. topStatus=" +
+    topStatus +
+    " itemCode=" +
+    itemCode +
+    " itemMsg=" +
+    itemMsg +
+    ". " +
+    statusInfo +
+    " " +
+    fallback.msg
+  };
+ } catch (soapEx) {
+  var fallbackEx = performProgramSoapStart(autoId, customerKey);
+  if (fallbackEx.ok) {
+   return fallbackEx;
+  }
+  return {
+   ok: false,
+   msg:
+    "Automation SOAP start failed: " +
+    (soapEx.message || String(soapEx)) +
+    ". " +
+    statusInfo +
+    " " +
+    fallbackEx.msg
   };
  }
 }
