@@ -780,7 +780,7 @@ function getAutomationById(prox, objectId) {
  var id = String(objectId);
  var resp = prox.retrieve(
   "Automation",
-  ["ObjectID", "ProgramID", "CustomerKey", "Name", "Status"],
+  ["ObjectID", "ProgramID", "CustomerKey", "Name", "Status", "IsActive"],
   {
    Property: "ObjectID",
    SimpleOperator: "equals",
@@ -792,7 +792,7 @@ function getAutomationById(prox, objectId) {
  }
  resp = prox.retrieve(
   "Automation",
-  ["ObjectID", "ProgramID", "CustomerKey", "Name", "Status"],
+  ["ObjectID", "ProgramID", "CustomerKey", "Name", "Status", "IsActive"],
   {
    Property: "ProgramID",
    SimpleOperator: "equals",
@@ -1002,12 +1002,17 @@ function performAutomationSoapStart(autoId, customerKey) {
   beforeAutomation.Status !== null && beforeAutomation.Status !== undefined
    ? String(beforeAutomation.Status)
    : "";
+ var beforeActive =
+  beforeAutomation.IsActive !== null && beforeAutomation.IsActive !== undefined
+   ? String(beforeAutomation.IsActive)
+   : "";
  var statusInfo =
   "Status before: " +
   automationStatusLabel(beforeStatus) +
   " (" +
   beforeStatus +
-  ")";
+  "), active=" +
+  (beforeActive || "unknown");
  if (beforeStatus === "3") {
   return {
    ok: false,
@@ -1043,13 +1048,20 @@ function performAutomationSoapStart(autoId, customerKey) {
    afterAutomation.Status !== undefined
     ? String(afterAutomation.Status)
     : "";
+  var afterActive =
+   afterAutomation &&
+   afterAutomation.IsActive !== null &&
+   afterAutomation.IsActive !== undefined
+    ? String(afterAutomation.IsActive)
+    : "";
   if (afterStatus !== "") {
    statusInfo +=
     " | after: " +
     automationStatusLabel(afterStatus) +
     " (" +
     afterStatus +
-    ")";
+    "), active=" +
+    (afterActive || "unknown");
   }
   if (topStatus === "OK" || itemCode === "OK") {
    var newStatus = automationStatusLabel(afterStatus);
@@ -1099,48 +1111,12 @@ function performAutomationSoapStart(autoId, customerKey) {
 }
 
 
-function runAutomationOnceRest(sub, token, autoId) {
- var id = strTrim(autoId);
- var url =
-  "https://" +
-  sub +
-  ".rest.marketingcloudapis.com/automation/v1/automations/" +
-  encodeURIComponent(id) +
-  "/actions/runallonce";
- var resp = journeyHttpJson(token, "POST", url, "{}");
- if (resp.status == 200 || resp.status == 201 || resp.status == 202) {
-  return {
-   ok: true,
-   msg: "Automation queued to run once.",
-   newStatus: "Running"
-  };
- }
- var detail = resp.body ? resp.body.substring(0, 200) : "";
- return {
-  ok: false,
-  msg: "Run once HTTP " + resp.status + (detail ? " - " + detail : ".")
- };
-}
-
-
 function activateStackAutomation(sub, token, autoId, customerKey) {
  var soapResult = performAutomationSoapStart(autoId, customerKey);
- if (soapResult.ok) {
-  return soapResult;
- }
- if (
-  sub &&
-  token &&
-  soapResult.msg.indexOf("already running") < 0
- ) {
-  var restResult = runAutomationOnceRest(sub, token, autoId);
-  if (restResult.ok) {
-   return restResult;
-  }
-  return {
-   ok: false,
-   msg: soapResult.msg + " " + restResult.msg
-  };
+ if (!soapResult.ok && soapResult.msg.indexOf("already running") < 0) {
+  soapResult.msg =
+   soapResult.msg +
+   " REST run-once was not used because it executes immediately instead of activating the schedule.";
  }
  return soapResult;
 }
@@ -2928,7 +2904,7 @@ pre.log.show{display:block}
     <form method="post" action="" style="margin:0" onsubmit="return confirm('%%=Replace(v(@automationActionConfirm),'''','\\''')=%%');">
      <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
      <input type="hidden" name="postedJourneyId" value="%%=v(@jid)=%%">
-     <button type="submit" name="confirmAutomationAction" value="1" class="btn btn-activate btn-sm">Start Automation</button>
+     <button type="submit" name="confirmAutomationAction" value="1" class="btn btn-activate btn-sm">Activate Schedule</button>
     </form>
    </div>
   </div>
