@@ -776,6 +776,199 @@ function getProgramById(prox, objectId) {
 }
 
 
+function xmlSafe(value) {
+ return String(value || "")
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;")
+  .replace(/'/g, "&apos;");
+}
+
+
+function parseIcalValue(ical, keyName) {
+ var parts = String(ical || "").split(";");
+ var needle = String(keyName || "").toUpperCase() + "=";
+ for (var i = 0; i < parts.length; i++) {
+  var part = String(parts[i] || "");
+  if (part.toUpperCase().indexOf(needle) === 0) {
+   return part.substring(needle.length);
+  }
+ }
+ return "";
+}
+
+
+function addOneYearDateTime(value) {
+ var s = strTrim(value);
+ var match = s.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
+ if (!match) {
+  return s;
+ }
+ var year = parseInt(match[1], 10) + 1;
+ return (
+  year +
+  "-" +
+  match[2] +
+  "-" +
+  match[3] +
+  "T" +
+  match[4] +
+  ":" +
+  match[5] +
+  ":" +
+  (match[6] || "00")
+ );
+}
+
+
+function scheduleDateTime(value) {
+ var s = strTrim(value);
+ if (!s) {
+  return "";
+ }
+ if (s.length === 16) {
+  return s + ":00";
+ }
+ return s;
+}
+
+
+function buildSoapRecurrence(ical) {
+ var freq = parseIcalValue(ical, "FREQ").toUpperCase();
+ var interval = parseInt(parseIcalValue(ical, "INTERVAL") || "1", 10);
+ if (isNaN(interval) || interval < 1) {
+  interval = 1;
+ }
+ if (freq === "DAILY") {
+  return [
+   '<Recurrence xsi:type="DailyRecurrence">',
+   "<DailyRecurrencePatternType>Interval</DailyRecurrencePatternType>",
+   "<DayInterval>" + interval + "</DayInterval>",
+   "</Recurrence>",
+   "<RecurrenceType>Daily</RecurrenceType>"
+  ].join("");
+ }
+ if (freq === "WEEKLY") {
+  var byDay = parseIcalValue(ical, "BYDAY").toUpperCase() || "MO";
+  return [
+   '<Recurrence xsi:type="WeeklyRecurrence">',
+   "<WeeklyRecurrencePatternType>ByDay</WeeklyRecurrencePatternType>",
+   "<WeekInterval>" + interval + "</WeekInterval>",
+   "<Sunday>" + (byDay.indexOf("SU") >= 0 ? "true" : "false") + "</Sunday>",
+   "<Monday>" + (byDay.indexOf("MO") >= 0 ? "true" : "false") + "</Monday>",
+   "<Tuesday>" + (byDay.indexOf("TU") >= 0 ? "true" : "false") + "</Tuesday>",
+   "<Wednesday>" + (byDay.indexOf("WE") >= 0 ? "true" : "false") + "</Wednesday>",
+   "<Thursday>" + (byDay.indexOf("TH") >= 0 ? "true" : "false") + "</Thursday>",
+   "<Friday>" + (byDay.indexOf("FR") >= 0 ? "true" : "false") + "</Friday>",
+   "<Saturday>" + (byDay.indexOf("SA") >= 0 ? "true" : "false") + "</Saturday>",
+   "</Recurrence>",
+   "<RecurrenceType>Weekly</RecurrenceType>"
+  ].join("");
+ }
+ return [
+  '<Recurrence xsi:type="HourlyRecurrence">',
+  "<HourlyRecurrencePatternType>Interval</HourlyRecurrencePatternType>",
+  "<HourInterval>" + interval + "</HourInterval>",
+  "</Recurrence>",
+  "<RecurrenceType>Hourly</RecurrenceType>"
+ ].join("");
+}
+
+
+function getAutomationRestObject(sub, token, autoId, customerKey) {
+ var id = strTrim(autoId);
+ var key = strTrim(customerKey);
+ var endpoint = "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/automations/";
+ var resp = null;
+ if (id) {
+  resp = journeyHttpJson(token, "GET", endpoint + encodeURIComponent(id), null);
+  if (resp.status == 200 || resp.status == 201) {
+   return Platform.Function.ParseJSON(resp.body);
+  }
+ }
+ if (key) {
+  resp = journeyHttpJson(token, "GET", endpoint + "key:" + encodeURIComponent(key), null);
+  if (resp.status == 200 || resp.status == 201) {
+   return Platform.Function.ParseJSON(resp.body);
+  }
+ }
+ return null;
+}
+
+
+function buildScheduleEnvelope(sub, token, automationObjectId, customerKey, scheduleObj) {
+ var schedule = scheduleObj || {};
+ var ical = strTrim(schedule.icalRecur || schedule.iCalRecur || "");
+ var startDate = scheduleDateTime(schedule.startDate || schedule.startDateTime || "");
+ var endDate = scheduleDateTime(schedule.endDate || schedule.endDateTime || "");
+ var timezoneId = strTrim(schedule.timezoneId || schedule.timeZoneId || "");
+ if (!ical || !startDate) {
+  return { ok: false, msg: "Automation schedule details were not available from the REST automation record." };
+ }
+ if (!endDate || endDate === startDate) {
+  endDate = addOneYearDateTime(startDate);
+ }
+ if (!timezoneId) {
+  timezoneId = "1";
+ }
+ var recurrenceXml = buildSoapRecurrence(ical);
+ var envelope = [
+  '<?xml version="1.0" encoding="UTF-8"?>',
+  '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing">',
+  "<s:Header>",
+  '<a:Action s:mustUnderstand="1">Schedule</a:Action>',
+  '<a:To s:mustUnderstand="1">https://' + xmlSafe(sub) + ".soap.marketingcloudapis.com/Service.asmx</a:To>",
+  '<fueloauth xmlns="http://exacttarget.com">' + xmlSafe(token) + "</fueloauth>",
+  "</s:Header>",
+  '<s:Body xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">',
+  '<ScheduleRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI">',
+  "<Action>start</Action>",
+  "<Schedule>",
+  '<PartnerKey xsi:nil="true" />',
+  '<ObjectID xsi:nil="true" />',
+  recurrenceXml,
+  "<RecurrenceRangeType>EndOn</RecurrenceRangeType>",
+  "<StartDateTime>" + xmlSafe(startDate) + "</StartDateTime>",
+  "<EndDateTime>" + xmlSafe(endDate) + "</EndDateTime>",
+  "<TimeZone>",
+  '<PartnerKey xsi:nil="true" />',
+  "<ID>" + xmlSafe(timezoneId) + "</ID>",
+  '<ObjectID xsi:nil="true" />',
+  "</TimeZone>",
+  "</Schedule>",
+  "<Interactions>",
+  '<Interaction xsi:type="Automation">',
+  '<PartnerKey xsi:nil="true" />',
+  "<ObjectID>" + xmlSafe(automationObjectId) + "</ObjectID>",
+  customerKey ? "<CustomerKey>" + xmlSafe(customerKey) + "</CustomerKey>" : "",
+  "</Interaction>",
+  "</Interactions>",
+  "</ScheduleRequestMsg>",
+  "</s:Body>",
+  "</s:Envelope>"
+ ].join("");
+ return { ok: true, envelope: envelope, ical: ical, startDate: startDate, endDate: endDate };
+}
+
+
+function postSoapScheduleStart(sub, token, envelope) {
+ var req = new Script.Util.HttpRequest("https://" + sub + ".soap.marketingcloudapis.com/Service.asmx");
+ req.emptyContentHandling = 0;
+ req.retries = 2;
+ req.continueOnError = true;
+ req.contentType = "text/xml";
+ req.setHeader("SOAPAction", "Schedule");
+ req.method = "POST";
+ req.postData = envelope;
+ var resp = req.send();
+ return {
+  status: resp.statusCode,
+  body: resp.content ? String(resp.content) : ""
+ };
+}
+
+
 function getAutomationById(prox, objectId) {
  var id = String(objectId);
  var resp = prox.retrieve(
@@ -883,242 +1076,120 @@ function resolveAutomationObjectId(prox, customerKey, restAutomationId) {
 }
 
 
-function performProgramSoapStart(autoId, customerKey) {
- var prox = new Script.Util.WSProxy();
- var resolvedId = resolveProgramObjectId(prox, customerKey, autoId);
- if (!resolvedId) {
-  return { ok: false, msg: "No automation id on build log." };
- }
- var beforeProgram = getProgramById(prox, resolvedId);
- if (!beforeProgram) {
-  return {
-   ok: false,
-   msg:
-    "Could not retrieve automation Program (ObjectID " +
-    resolvedId +
-    "). Missing or stale automationCustomerKey on build log."
-  };
- }
- var beforeStatus =
-  beforeProgram.Status !== null && beforeProgram.Status !== undefined
-   ? String(beforeProgram.Status)
-   : "";
- var statusInfo =
-  "Status before: " +
-  automationStatusLabel(beforeStatus) +
-  " (" +
-  beforeStatus +
-  ")";
- if (beforeStatus === "3") {
-  return {
-   ok: false,
-   msg: "Automation is already running. " + statusInfo
-  };
- }
- try {
-  var perform = prox.performItem(
-   "Program",
-   { ObjectID: resolvedId },
-   "start",
-   {}
-  );
-  var topStatus = perform && perform.Status ? String(perform.Status) : "";
-  var itemCode =
-   perform &&
-   perform.Results &&
-   perform.Results.length > 0 &&
-   perform.Results[0].StatusCode
-    ? String(perform.Results[0].StatusCode)
-    : "";
-  var itemMsg =
-   perform &&
-   perform.Results &&
-   perform.Results.length > 0 &&
-   perform.Results[0].StatusMessage
-    ? String(perform.Results[0].StatusMessage)
-    : "";
-  var afterProgram = getProgramById(prox, resolvedId);
-  var afterStatus =
-   afterProgram &&
-   afterProgram.Status !== null &&
-   afterProgram.Status !== undefined
-    ? String(afterProgram.Status)
-    : "";
-  if (afterStatus !== "") {
-   statusInfo +=
-    " | after: " +
-    automationStatusLabel(afterStatus) +
-    " (" +
-    afterStatus +
-    ")";
-  }
-  if (topStatus === "OK" || itemCode === "OK") {
-   var newStatus = automationStatusLabel(afterStatus);
-   if (newStatus.indexOf("Unknown") === 0) {
-    newStatus = "Scheduled";
-   }
-   return {
-    ok: true,
-    msg: "Automation start requested. " + statusInfo,
-    newStatus: newStatus
-   };
-  }
-  return {
-   ok: false,
-   msg:
-    "SOAP start rejected. topStatus=" +
-    topStatus +
-    " itemCode=" +
-    itemCode +
-    " itemMsg=" +
-    itemMsg +
-    ". " +
-    statusInfo
-  };
- } catch (soapEx) {
-  return {
-   ok: false,
-   msg:
-    "Program SOAP start failed: " +
-    (soapEx.message || String(soapEx)) +
-    ". " +
-    statusInfo
-  };
- }
-}
-
-
-function performAutomationSoapStart(autoId, customerKey) {
+function activateStackAutomation(sub, token, autoId, customerKey) {
  var prox = new Script.Util.WSProxy();
  var resolvedId = resolveAutomationObjectId(prox, customerKey, autoId);
  if (!resolvedId) {
-  return performProgramSoapStart(autoId, customerKey);
+  resolvedId = resolveProgramObjectId(prox, customerKey, autoId);
+ }
+ if (!resolvedId) {
+  return { ok: false, msg: "No automation id on build log." };
  }
  var beforeAutomation = getAutomationById(prox, resolvedId);
- if (!beforeAutomation) {
-  return performProgramSoapStart(autoId, customerKey);
- }
  var beforeStatus =
-  beforeAutomation.Status !== null && beforeAutomation.Status !== undefined
+  beforeAutomation &&
+  beforeAutomation.Status !== null &&
+  beforeAutomation.Status !== undefined
    ? String(beforeAutomation.Status)
    : "";
  var beforeActive =
-  beforeAutomation.IsActive !== null && beforeAutomation.IsActive !== undefined
+  beforeAutomation &&
+  beforeAutomation.IsActive !== null &&
+  beforeAutomation.IsActive !== undefined
    ? String(beforeAutomation.IsActive)
    : "";
  var statusInfo =
   "Status before: " +
   automationStatusLabel(beforeStatus) +
   " (" +
-  beforeStatus +
+  (beforeStatus || "unknown") +
   "), active=" +
   (beforeActive || "unknown");
- if (beforeStatus === "3") {
+ if (beforeStatus === "6" || String(beforeActive).toLowerCase() === "true") {
   return {
-   ok: false,
-   msg: "Automation is already running. " + statusInfo
+   ok: true,
+   msg: "Automation schedule is already active. " + statusInfo,
+   newStatus: "Scheduled"
   };
  }
+ var restObj = null;
  try {
-  var perform = prox.performItem(
-   "Automation",
-   { ObjectID: resolvedId },
-   "start",
-   {}
-  );
-  var topStatus = perform && perform.Status ? String(perform.Status) : "";
-  var itemCode =
-   perform &&
-   perform.Results &&
-   perform.Results.length > 0 &&
-   perform.Results[0].StatusCode
-    ? String(perform.Results[0].StatusCode)
-    : "";
-  var itemMsg =
-   perform &&
-   perform.Results &&
-   perform.Results.length > 0 &&
-   perform.Results[0].StatusMessage
-    ? String(perform.Results[0].StatusMessage)
-    : "";
-  var afterAutomation = getAutomationById(prox, resolvedId);
-  var afterStatus =
-   afterAutomation &&
-   afterAutomation.Status !== null &&
-   afterAutomation.Status !== undefined
-    ? String(afterAutomation.Status)
-    : "";
-  var afterActive =
-   afterAutomation &&
-   afterAutomation.IsActive !== null &&
-   afterAutomation.IsActive !== undefined
-    ? String(afterAutomation.IsActive)
-    : "";
-  if (afterStatus !== "") {
-   statusInfo +=
-    " | after: " +
-    automationStatusLabel(afterStatus) +
-    " (" +
-    afterStatus +
-    "), active=" +
-    (afterActive || "unknown");
-  }
-  if (topStatus === "OK" || itemCode === "OK") {
-   var newStatus = automationStatusLabel(afterStatus);
-   if (newStatus.indexOf("Unknown") === 0) {
-    newStatus = "Scheduled";
-   }
-   return {
-    ok: true,
-    msg: "Automation start requested. " + statusInfo,
-    newStatus: newStatus
-   };
-  }
-  var fallback = performProgramSoapStart(autoId, customerKey);
-  if (fallback.ok) {
-   return fallback;
-  }
+  restObj = getAutomationRestObject(sub, token, autoId || resolvedId, customerKey);
+ } catch (restEx) {
+  restObj = null;
+ }
+ var scheduleObj =
+  restObj && restObj.startSource && restObj.startSource.schedule
+   ? restObj.startSource.schedule
+   : restObj && restObj.schedule
+     ? restObj.schedule
+     : null;
+ var envelopeResult = buildScheduleEnvelope(
+  sub,
+  token,
+  resolvedId,
+  customerKey,
+  scheduleObj
+ );
+ if (!envelopeResult.ok) {
   return {
    ok: false,
    msg:
-    "Automation SOAP start rejected. topStatus=" +
-    topStatus +
-    " itemCode=" +
-    itemCode +
-    " itemMsg=" +
-    itemMsg +
-    ". " +
-    statusInfo +
-    " " +
-    fallback.msg
+    envelopeResult.msg +
+    " REST run-once was not used because it executes immediately instead of activating the schedule. " +
+    statusInfo
   };
- } catch (soapEx) {
-  var fallbackEx = performProgramSoapStart(autoId, customerKey);
-  if (fallbackEx.ok) {
-   return fallbackEx;
-  }
+ }
+ var scheduleResp = postSoapScheduleStart(sub, token, envelopeResult.envelope);
+ var bodyLower = String(scheduleResp.body || "").toLowerCase();
+ if (
+  scheduleResp.status != 200 ||
+  bodyLower.indexOf("<overallstatus>error</overallstatus>") >= 0 ||
+  bodyLower.indexOf("<statuscode>error</statuscode>") >= 0
+ ) {
   return {
    ok: false,
    msg:
-    "Automation SOAP start failed: " +
-    (soapEx.message || String(soapEx)) +
-    ". " +
-    statusInfo +
+    "SOAP schedule activation failed HTTP " +
+    scheduleResp.status +
+    " - " +
+    (scheduleResp.body ? scheduleResp.body.substring(0, 240) : "No response body.") +
     " " +
-    fallbackEx.msg
+    statusInfo
   };
  }
-}
-
-
-function activateStackAutomation(sub, token, autoId, customerKey) {
- var soapResult = performAutomationSoapStart(autoId, customerKey);
- if (!soapResult.ok && soapResult.msg.indexOf("already running") < 0) {
-  soapResult.msg =
-   soapResult.msg +
-   " REST run-once was not used because it executes immediately instead of activating the schedule.";
+ var afterAutomation = getAutomationById(prox, resolvedId);
+ var afterStatus =
+  afterAutomation &&
+  afterAutomation.Status !== null &&
+  afterAutomation.Status !== undefined
+   ? String(afterAutomation.Status)
+   : "";
+ var afterActive =
+  afterAutomation &&
+  afterAutomation.IsActive !== null &&
+  afterAutomation.IsActive !== undefined
+   ? String(afterAutomation.IsActive)
+   : "";
+ if (afterStatus !== "") {
+  statusInfo +=
+   " | after: " +
+   automationStatusLabel(afterStatus) +
+   " (" +
+   afterStatus +
+   "), active=" +
+   (afterActive || "unknown");
  }
- return soapResult;
+ return {
+  ok: true,
+  msg:
+   "Automation schedule activation requested. " +
+   statusInfo +
+   " icalRecur=" +
+   envelopeResult.ical +
+   ".",
+  newStatus: afterStatus ? automationStatusLabel(afterStatus) : "Scheduled"
+ };
 }
 
 
