@@ -50,7 +50,7 @@ VAR @surveyPurgeId, @surveyDelResponses, @surveyDelQuestions, @surveyDelMaster, 
 VAR @updRaw
 VAR @journeyActionRequested, @journeyAction, @attemptJourneyAction, @journeyActionOk, @journeyActionMsg, @journeyActionNewStatus
 VAR @automationActionRequested, @attemptAutomationAction, @automationActionOk, @automationActionMsg, @automationActionNewStatus, @automationActionConfirm
-VAR @automationAction, @automationFrequency, @automationStartDate, @automationStartOffset, @automationTimezoneId, @showAutomationActivate, @showAutomationPause, @automationStatusLower
+VAR @automationAction, @automationFrequency, @automationMinuteInterval, @automationStartDate, @automationStartOffset, @automationTimezoneId, @dispAutomationActive, @showAutomationActivate, @showAutomationPause
 
 
 SET @purgeRequested = IIF(NOT Empty(RequestParameter("confirmPurgeBuild")),"1","0")
@@ -64,11 +64,15 @@ SET @journeyAction = Trim(RequestParameter("journeyAction"))
 SET @automationActionRequested = IIF(NOT Empty(RequestParameter("confirmAutomationAction")),"1","0")
 SET @automationAction = Lowercase(Trim(RequestParameter("automationAction")))
 SET @automationFrequency = Lowercase(Trim(RequestParameter("automationFrequency")))
+SET @automationMinuteInterval = Trim(RequestParameter("automationMinuteInterval"))
 SET @automationStartDate = Trim(RequestParameter("automationStartDate"))
 SET @automationStartOffset = Trim(RequestParameter("automationStartOffset"))
 SET @automationTimezoneId = Trim(RequestParameter("automationTimezoneId"))
 IF Empty(@automationFrequency) THEN
  SET @automationFrequency = "hourly"
+ENDIF
+IF Empty(@automationMinuteInterval) OR (@automationMinuteInterval != "15" AND @automationMinuteInterval != "30" AND @automationMinuteInterval != "45") THEN
+ SET @automationMinuteInterval = "15"
 ENDIF
 IF Empty(@automationStartOffset) THEN
  SET @automationStartOffset = "-05:00"
@@ -110,6 +114,7 @@ SET @dispQueryText = ""
 SET @dispAutomationGuid = ""
 SET @dispAutomationCustomerKey = ""
 SET @dispAutomationName = ""
+SET @dispAutomationActive = "false"
 SET @dispJourneyStatus = ""
 SET @dispAutomationStatus = ""
 SET @dispSentCount = ""
@@ -183,6 +188,10 @@ IF @detailCount > 0 THEN
     SET @dispAutomationGuid = Trim(Field(@detailRow,"automationGuid"))
     SET @dispAutomationCustomerKey = Trim(Field(@detailRow,"automationCustomerKey"))
     SET @dispAutomationName = Trim(Field(@detailRow,"automationName"))
+    SET @dispAutomationActive = Lowercase(Trim(Field(@detailRow,"automationActive")))
+    IF @dispAutomationActive != "true" THEN
+      SET @dispAutomationActive = "false"
+    ENDIF
   ENDIF
   SET @updRaw = Field(@detailRow,"updateDate")
   SET @dispJourneyStatus = Trim(Field(@detailRow,"journeyStatus"))
@@ -239,11 +248,10 @@ IF @detailCount > 0 THEN
     ENDIF
   ENDIF
   IF @isStackBuild == "true" THEN
-    SET @automationStatusLower = Lowercase(@dispAutomationStatus)
-    IF Empty(@automationStatusLower) OR @automationStatusLower == "paused" OR @automationStatusLower == "ready" OR @automationStatusLower == "stopped" OR @automationStatusLower == "inactive" OR @automationStatusLower == "inactive trigger" OR @automationStatusLower == "unknown" THEN
-      SET @showAutomationActivate = "true"
-    ELSEIF @automationStatusLower == "scheduled" THEN
+    IF @dispAutomationActive == "true" THEN
       SET @showAutomationPause = "true"
+    ELSE
+      SET @showAutomationActivate = "true"
     ENDIF
   ENDIF
   IF NOT Empty(@updRaw) THEN
@@ -919,8 +927,12 @@ function untilCompactFromStart(value) {
 }
 
 
-function buildScheduleFromInput(frequency, startDate, startOffset, timezoneId) {
+function buildScheduleFromInput(frequency, startDate, startOffset, timezoneId, minuteInterval) {
  var freq = strTrim(frequency).toLowerCase() || "hourly";
+ var minuteVal = parseInt(strTrim(minuteInterval) || "15", 10);
+ if (minuteVal != 15 && minuteVal != 30 && minuteVal != 45) {
+  minuteVal = 15;
+ }
  var off = strTrim(startOffset) || "-05:00";
  if (off.charAt(0) != "-" && off.charAt(0) != "+") {
   off = "-" + off;
@@ -939,7 +951,13 @@ function buildScheduleFromInput(frequency, startDate, startOffset, timezoneId) {
  var startLocal = stripTimezoneFromIso(startDateForApi);
  var untilCompact = untilCompactFromStart(startDateForApi);
  var recurRule = "";
- if (freq == "hourly") {
+ var endLocal = addOneYearDateTime(startLocal);
+ if (freq == "once") {
+  recurRule = "FREQ=HOURLY;INTERVAL=1;COUNT=1";
+  endLocal = startLocal;
+ } else if (freq == "minute") {
+  recurRule = "FREQ=MINUTELY;INTERVAL=" + minuteVal + ";UNTIL=" + untilCompact;
+ } else if (freq == "hourly") {
   recurRule = "FREQ=HOURLY;INTERVAL=1;UNTIL=" + untilCompact;
  } else if (freq == "daily") {
   recurRule = "FREQ=DAILY;INTERVAL=1;UNTIL=" + untilCompact;
@@ -957,7 +975,7 @@ function buildScheduleFromInput(frequency, startDate, startOffset, timezoneId) {
   schedule: {
    icalRecur: recurRule,
    startDate: startLocal,
-   endDate: addOneYearDateTime(startLocal),
+   endDate: endLocal,
    timezoneId: tzId
   },
   startDate: startLocal,
@@ -998,6 +1016,15 @@ function buildSoapRecurrence(ical) {
    "<RecurrenceType>Weekly</RecurrenceType>"
   ].join("");
  }
+ if (freq === "MINUTELY") {
+  return [
+   '<Recurrence xsi:type="MinutelyRecurrence">',
+   "<MinutelyRecurrencePatternType>Interval</MinutelyRecurrencePatternType>",
+   "<MinuteInterval>" + interval + "</MinuteInterval>",
+   "</Recurrence>",
+   "<RecurrenceType>Minutely</RecurrenceType>"
+  ].join("");
+ }
  return [
   '<Recurrence xsi:type="HourlyRecurrence">',
   "<HourlyRecurrencePatternType>Interval</HourlyRecurrencePatternType>",
@@ -1017,13 +1044,24 @@ function buildScheduleEnvelope(sub, token, automationObjectId, customerKey, sche
  if (!ical || !startDate) {
   return { ok: false, msg: "Automation schedule details were not submitted." };
  }
- if (!endDate || endDate === startDate) {
+ var countVal = parseIcalValue(ical, "COUNT");
+ var isOnce = countVal === "1";
+ if (!isOnce && (!endDate || endDate === startDate)) {
   endDate = addOneYearDateTime(startDate);
  }
  if (!timezoneId) {
   timezoneId = "1";
  }
  var recurrenceXml = buildSoapRecurrence(ical);
+ var rangeXml = isOnce
+  ? "<RecurrenceRangeType>EndAfter</RecurrenceRangeType><StartDateTime>" +
+    xmlSafe(startDate) +
+    "</StartDateTime><Occurrences>1</Occurrences>"
+  : "<RecurrenceRangeType>EndOn</RecurrenceRangeType><StartDateTime>" +
+    xmlSafe(startDate) +
+    "</StartDateTime><EndDateTime>" +
+    xmlSafe(endDate) +
+    "</EndDateTime>";
  var envelope = [
   '<?xml version="1.0" encoding="UTF-8"?>',
   '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing">',
@@ -1039,9 +1077,7 @@ function buildScheduleEnvelope(sub, token, automationObjectId, customerKey, sche
   '<PartnerKey xsi:nil="true" />',
   '<ObjectID xsi:nil="true" />',
   recurrenceXml,
-  "<RecurrenceRangeType>EndOn</RecurrenceRangeType>",
-  "<StartDateTime>" + xmlSafe(startDate) + "</StartDateTime>",
-  "<EndDateTime>" + xmlSafe(endDate) + "</EndDateTime>",
+  rangeXml,
   "<TimeZone>",
   '<PartnerKey xsi:nil="true" />',
   "<ID>" + xmlSafe(timezoneId) + "</ID>",
@@ -1511,7 +1547,8 @@ try {
     Platform.Variable.GetValue("@automationFrequency") || "",
     Platform.Variable.GetValue("@automationStartDate") || "",
     Platform.Variable.GetValue("@automationStartOffset") || "",
-    Platform.Variable.GetValue("@automationTimezoneId") || ""
+    Platform.Variable.GetValue("@automationTimezoneId") || "",
+    Platform.Variable.GetValue("@automationMinuteInterval") || ""
    );
    autoResult = scheduleInput.ok
     ? activateStackAutomation(
@@ -2353,9 +2390,11 @@ IF (@attemptAutomationAction == "true") AND (@automationActionOk == "true") AND 
   1,
   "journeyId", @jid,
   "automationStatus", Substring(@automationActionNewStatus,1,50),
+  "automationActive", IIF(@automationAction == "activate", "true", "false"),
   "updateDate", Now()
  )
  SET @dispAutomationStatus = @automationActionNewStatus
+ SET @dispAutomationActive = IIF(@automationAction == "activate", "true", "false")
  SET @automationStatusColor = "#6366f1"
  IF Lowercase(@dispAutomationStatus) == "paused" THEN
   SET @automationStatusColor = "#f59e0b"
@@ -2364,10 +2403,9 @@ IF (@attemptAutomationAction == "true") AND (@automationActionOk == "true") AND 
  ENDIF
  SET @showAutomationActivate = "false"
  SET @showAutomationPause = "false"
- SET @automationStatusLower = Lowercase(@dispAutomationStatus)
- IF @automationStatusLower == "scheduled" THEN
+ IF @dispAutomationActive == "true" THEN
   SET @showAutomationPause = "true"
- ELSEIF @automationStatusLower == "paused" OR @automationStatusLower == "ready" OR @automationStatusLower == "stopped" OR @automationStatusLower == "inactive" OR @automationStatusLower == "inactive trigger" OR @automationStatusLower == "unknown" THEN
+ ELSE
   SET @showAutomationActivate = "true"
  ENDIF
 ENDIF
@@ -2683,6 +2721,7 @@ dd{font-weight:600;font-size:1rem;margin:0;padding:0;color:var(--gray-900);word-
 .schedule-control:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,0.12)}
 .schedule-submit{display:flex;justify-content:flex-end;padding-top:8px;border-top:1px solid var(--border-color)}
 .schedule-note{font-size:13px;color:var(--text-secondary);margin:0}
+.schedule-field[hidden]{display:none}
 .act{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px;padding-top:22px;border-top:1px solid var(--border-color)}
 .act-open{display:flex;flex-wrap:wrap;gap:10px}
 .btn{padding:11px 18px;border-radius:var(--radius-md);font-weight:600;font-size:14px;cursor:pointer;border:1px solid transparent;font:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:6px;background:#fff}
@@ -3225,9 +3264,19 @@ pre.log.show{display:block}
       <div class="schedule-field">
        <label for="automationFrequency">Frequency</label>
        <select id="automationFrequency" name="automationFrequency" class="schedule-control">
+        <option value="once" %%[ IF @automationFrequency == "once" THEN ]%%selected%%[ ENDIF ]%%>Once</option>
+        <option value="minute" %%[ IF @automationFrequency == "minute" THEN ]%%selected%%[ ENDIF ]%%>Minute</option>
         <option value="hourly" %%[ IF @automationFrequency == "hourly" THEN ]%%selected%%[ ENDIF ]%%>Hourly</option>
         <option value="daily" %%[ IF @automationFrequency == "daily" THEN ]%%selected%%[ ENDIF ]%%>Daily</option>
         <option value="weekly" %%[ IF @automationFrequency == "weekly" THEN ]%%selected%%[ ENDIF ]%%>Weekly (Monday)</option>
+       </select>
+      </div>
+      <div class="schedule-field" id="automationMinuteIntervalWrap"%%[ IF @automationFrequency != "minute" THEN ]%% hidden%%[ ENDIF ]%%>
+       <label for="automationMinuteInterval">Every (minutes)</label>
+       <select id="automationMinuteInterval" name="automationMinuteInterval" class="schedule-control">
+        <option value="15" %%[ IF @automationMinuteInterval == "15" THEN ]%%selected%%[ ENDIF ]%%>15</option>
+        <option value="30" %%[ IF @automationMinuteInterval == "30" THEN ]%%selected%%[ ENDIF ]%%>30</option>
+        <option value="45" %%[ IF @automationMinuteInterval == "45" THEN ]%%selected%%[ ENDIF ]%%>45</option>
        </select>
       </div>
       <div class="schedule-field">
@@ -3358,6 +3407,18 @@ pre.log.show{display:block}
    pre.hidden = !show;
    btn.textContent = show ? "Hide query SQL" : "View query SQL";
   });
+ }
+ var scheduleFreq = document.getElementById("automationFrequency");
+ var minuteWrap = document.getElementById("automationMinuteIntervalWrap");
+ function syncMinuteIntervalField() {
+  if (!scheduleFreq || !minuteWrap) {
+   return;
+  }
+  minuteWrap.hidden = scheduleFreq.value !== "minute";
+ }
+ if (scheduleFreq) {
+  scheduleFreq.addEventListener("change", syncMinuteIntervalField);
+  syncMinuteIntervalField();
  }
  var scheduleStart = document.getElementById("automationStartDate");
  if (scheduleStart && !scheduleStart.value) {
