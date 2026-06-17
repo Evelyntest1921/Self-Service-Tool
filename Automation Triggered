@@ -24,10 +24,6 @@ ENDIF
 SET @builderPageLabel = "Journey + Automation"
 SET @stackCampaignName = Trim(RequestParameter("stackCampaignName"))
 SET @sfUserId = Trim(RequestParameter("sfUserId"))
-SET @frequency = Lowercase(Trim(RequestParameter("frequency")))
-SET @timezoneId = Trim(RequestParameter("timezoneId"))
-SET @startDate = Trim(RequestParameter("startDate"))
-SET @startOffset = Trim(RequestParameter("startOffset"))
 SET @automationId = ""
 SET @deCustomerKey = ""
 SET @entryDeObjectId = ""
@@ -36,15 +32,6 @@ SET @stackDeReady = "0"
 SET @assetKey = ""
 SET @queryKey = ""
 SET @automationKey = ""
-IF Empty(@timezoneId) THEN
- SET @timezoneId = "1"
-ENDIF
-IF Empty(@frequency) THEN
- SET @frequency = "hourly"
-ENDIF
-IF Empty(@startOffset) THEN
- SET @startOffset = "-05:00"
-ENDIF
 SET @emailSubjectLine = Trim(RequestParameter("emailSubjectLine"))
 SET @journeyDescription = Trim(RequestParameter("journeyDescription"))
 SET @bccEmail = Trim(RequestParameter("bccEmail"))
@@ -1364,10 +1351,6 @@ var postSubdomain = postVar("subdomain");
 var postQueryKey = postVar("queryKey");
 var postAutomationKey = postVar("automationKey");
 var postStackName = postVar("journeyName");
-var postFrequency = postVar("frequency");
-var postTimezoneId = postVar("timezoneId");
-var postStartDate = postVar("startDate");
-var postStartOffset = postVar("startOffset");
 var postAssetKey = postVar("assetKey");
 var postStackDeReady = postVar("stackDeReady");
 var postEntryDeObjectId = postVar("entryDeObjectId");
@@ -1935,10 +1918,10 @@ function postCreateAutomation(opts) {
   var automationName = opts.automationName;
   var automationKey = opts.automationKey;
   var queryObjectId = opts.queryObjectId;
-  var frequency = opts.frequency;
-  var timezoneId = opts.timezoneId;
-  var startDate = opts.startDate;
-  var startOffset = opts.startOffset;
+  var frequency = opts.frequency || "hourly";
+  var timezoneId = opts.timezoneId || "1";
+  var startDate = opts.startDate || "";
+  var startOffset = opts.startOffset || "-05:00";
 
   if (!startDate) {
     var nowVal = new Date();
@@ -1957,7 +1940,6 @@ function postCreateAutomation(opts) {
       pad(nowVal.getHours()) +
       ":" +
       pad(nowVal.getMinutes());
-    Platform.Variable.SetValue("@startDate", startDate);
   }
 
   var off = String(startOffset || "-05:00");
@@ -2004,6 +1986,9 @@ function postCreateAutomation(opts) {
 
   var endpoint = "https://" + subdomain + ".rest.marketingcloudapis.com/automation/v1/automations";
   var tzId = parseInt(String(timezoneId), 10);
+  if (isNaN(tzId) || tzId < 1) {
+    tzId = 1;
+  }
   var recurRule = "";
   if (frequency == "hourly") {
     recurRule = "FREQ=HOURLY;INTERVAL=1;UNTIL=" + untilCompact;
@@ -2259,11 +2244,7 @@ if (postDeleteRequested != "1") {
               subdomain: postSubdomain,
               automationName: postStackName,
               automationKey: postAutomationKey,
-              queryObjectId: queryObjectId,
-              frequency: postFrequency,
-              timezoneId: postTimezoneId,
-              startDate: postStartDate,
-              startOffset: postStartOffset
+              queryObjectId: queryObjectId
             });
             postSuffix = postSuffix + " " + autoResult.message;
             if (autoResult.ok && autoResult.automationId) {
@@ -3569,30 +3550,6 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
          %%[ NEXT @ti ELSE ]%%
          <div class="maker-alert" role="alert">Template config missing in `bd_sst_email_templates` (email_type=template).</div>
          %%[ ENDIF ]%%
-       </div>
-       <div class="question-header" style="margin-top: 24px;">
-         <div class="question-number">9</div>
-         <div class="question-text">Automation schedule</div>
-       </div>
-       <div class="form-group">
-         <label for="frequency" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Frequency</label>
-         <select id="frequency" name="frequency" class="select-control">
-           <option value="hourly" %%[ IF @frequency == "hourly" THEN ]%%selected%%[ ENDIF ]%%>Hourly</option>
-           <option value="daily" %%[ IF @frequency == "daily" THEN ]%%selected%%[ ENDIF ]%%>Daily</option>
-           <option value="weekly" %%[ IF @frequency == "weekly" THEN ]%%selected%%[ ENDIF ]%%>Weekly (Monday)</option>
-         </select>
-       </div>
-       <div class="form-group">
-         <label for="startDate" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Start date (local)</label>
-         <input id="startDate" type="datetime-local" class="textarea-control" name="startDate" value="%%=v(@startDate)=%%">
-       </div>
-       <div class="form-group">
-         <label for="startOffset" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">UTC offset (e.g. -05:00)</label>
-         <input id="startOffset" type="text" class="textarea-control" name="startOffset" value="%%=v(@startOffset)=%%" placeholder="-05:00">
-       </div>
-       <div class="form-group">
-         <label for="timezoneId" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Timezone ID</label>
-         <input id="timezoneId" type="text" class="textarea-control" name="timezoneId" value="%%=v(@timezoneId)=%%" placeholder="1">
        </div>
        <div class="submit-section">
          <input type="hidden" name="create" value="1">
