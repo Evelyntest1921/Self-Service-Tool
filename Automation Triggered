@@ -1524,18 +1524,21 @@ function postRandomGuid() {
 
 function postResolveAutomationProgramId(prox, automationKey, restAutomationId) {
   if (automationKey && prox) {
-    var lookup = prox.retrieve(
-      "Program",
-      ["ObjectID", "CustomerKey"],
-      {
-        Property: "CustomerKey",
-        SimpleOperator: "equals",
-        Value: String(automationKey)
+    try {
+      var lookup = prox.retrieve(
+        "Program",
+        ["ObjectID", "CustomerKey"],
+        {
+          Property: "CustomerKey",
+          SimpleOperator: "equals",
+          Value: String(automationKey)
+        }
+      );
+      var rows = stackNormalizeWsRows(lookup && lookup.Results ? lookup.Results : null);
+      if (rows.length > 0 && rows[0].ObjectID) {
+        return String(rows[0].ObjectID);
       }
-    );
-    if (lookup && lookup.Results && lookup.Results.length > 0 && lookup.Results[0].ObjectID) {
-      return String(lookup.Results[0].ObjectID);
-    }
+    } catch (programEx) {}
   }
   return String(restAutomationId || "");
 }
@@ -1950,9 +1953,17 @@ function postResolveQueryCategoryId(prox) {
     "DataFolder",
     ["ID", "Name", "ContentType"],
     {
-     Property: "ContentType",
-     SimpleOperator: "equals",
-     Value: "querydefinition"
+     LeftOperand: {
+      Property: "Name",
+      SimpleOperator: "equals",
+      Value: "Query"
+     },
+     LogicalOperator: "AND",
+     RightOperand: {
+      Property: "ContentType",
+      SimpleOperator: "equals",
+      Value: "queryactivity"
+     }
     }
    );
    var rows = stackNormalizeWsRows(folders && folders.Results ? folders.Results : null);
@@ -1962,130 +1973,173 @@ function postResolveQueryCategoryId(prox) {
      return categoryId;
     }
    }
+   folders = prox.retrieve(
+    "DataFolder",
+    ["ID", "Name", "ContentType"],
+    {
+     Property: "ContentType",
+     SimpleOperator: "equals",
+     Value: "queryactivity"
+    }
+   );
+   rows = stackNormalizeWsRows(folders && folders.Results ? folders.Results : null);
+   if (rows.length > 0) {
+    categoryId = parseInt(String(rows[0].ID), 10);
+    if (!isNaN(categoryId) && categoryId > 0) {
+     return categoryId;
+    }
+   }
   } catch (folderEx) {}
   return 0;
 }
 
-function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCustomerKey, deName) {
+function postCreateQueryDefinitionCore(queryKey, queryName, queryText, deCustomerKey, deName) {
+  try {
+   var config = {
+    Name: String(queryName),
+    CustomerKey: String(queryKey),
+    TargetUpdateType: "Overwrite",
+    TargetType: "DE",
+    Target: {
+     Name: String(deName),
+     CustomerKey: String(deCustomerKey)
+    },
+    QueryText: queryText
+   };
+   var status = QueryDefinition.Add(config);
+   if (String(status) === "OK") {
+    return { ok: true, status: "OK" };
+   }
+   return { ok: false, message: "QueryDefinition.Add returned " + String(status) };
+  } catch (coreEx) {
+   return {
+    ok: false,
+    message: "QueryDefinition.Add threw: " + (coreEx.message || String(coreEx))
+   };
+  }
+}
+
+function postCreateQueryDefinition(token, subdomain, prox, queryKey, queryName, queryText, deCustomerKey, deName) {
   try {
    var schemaCheck = stackValidateDeSchema(prox, deCustomerKey);
    if (!schemaCheck.ok) {
     return { ok: false, message: "Step 6 FAILED - " + schemaCheck.message };
    }
-   var existing = null;
-   try {
-    existing = prox.retrieve(
-     "QueryDefinition",
-     ["ObjectID", "CustomerKey", "Name"],
-     {
-      Property: "CustomerKey",
-      SimpleOperator: "equals",
-      Value: String(queryKey)
-     }
-    );
-   } catch (lookupEx) {
-    return {
-     ok: false,
-     message:
-      "Step 6 FAILED - QueryDefinition lookup threw: " +
-      (lookupEx.message || String(lookupEx))
-    };
-   }
-   var existingRows = stackNormalizeWsRows(existing && existing.Results ? existing.Results : null);
-   var queryPayload = {
-    Name: String(queryName),
-    CustomerKey: String(queryKey),
-    QueryText: queryText,
-    TargetType: "DE",
-    TargetUpdateType: "Overwrite",
-    DataExtensionTarget: {
-     CustomerKey: String(deCustomerKey)
-    }
-   };
    var categoryId = postResolveQueryCategoryId(prox);
+   var payload = {
+    name: String(queryName),
+    key: String(queryKey),
+    description: "Created via Journey Maker stack page",
+    queryText: queryText,
+    targetName: String(deName),
+    targetKey: String(deCustomerKey),
+    targetUpdateTypeId: 0,
+    targetUpdateTypeName: "Overwrite"
+   };
    if (categoryId > 0) {
-    queryPayload.CategoryID = categoryId;
+    payload.categoryId = categoryId;
    }
-   var createResponse = null;
-   if (existingRows.length > 0 && existingRows[0].ObjectID) {
-    createResponse = prox.updateItem("QueryDefinition", {
-     ObjectID: String(existingRows[0].ObjectID),
-     CustomerKey: String(queryKey),
-     QueryText: queryText,
-     TargetType: "DE",
-     TargetUpdateType: "Overwrite",
-     DataExtensionTarget: {
-      CustomerKey: String(deCustomerKey)
-     }
-    });
-   } else {
-    createResponse = prox.createItem("QueryDefinition", queryPayload);
+   var baseUrl =
+    "https://" + subdomain + ".rest.marketingcloudapis.com/automation/v1/queries";
+   var keyUrl = baseUrl + "/key:" + encodeURIComponent(String(queryKey));
+   var queryId = "";
+   var resp = null;
+   var existing = postHttpJson(token, subdomain, "GET", keyUrl, null);
+   if (existing.status == 200) {
+    var existingObj = postParseJson(existing.body);
+    queryId = existingObj && existingObj.id ? String(existingObj.id) : "";
+    if (queryId) {
+     resp = postHttpJson(
+      token,
+      subdomain,
+      "PATCH",
+      baseUrl + "/" + encodeURIComponent(queryId),
+      Platform.Function.Stringify(payload)
+     );
+    }
    }
-  var status =
-    createResponse && createResponse.Status ? String(createResponse.Status) : "UNKNOWN";
-  var resultRows = stackNormalizeWsRows(
-    createResponse && createResponse.Results ? createResponse.Results : null
-  );
-  var msg =
-    resultRows.length > 0 && resultRows[0].StatusMessage
-      ? String(resultRows[0].StatusMessage)
-      : "No status message returned.";
-  var objectId = "";
-  if (resultRows.length > 0) {
-    var qr = resultRows[0];
-    objectId = qr.ObjectID
-      ? String(qr.ObjectID)
-      : qr.NewObjectID
-      ? String(qr.NewObjectID)
-      : qr.NewID
-      ? String(qr.NewID)
+   if (!resp || !(resp.status == 200 || resp.status == 201 || resp.status == 202)) {
+    resp = postHttpJson(
+     token,
+     subdomain,
+     "POST",
+     baseUrl,
+     Platform.Function.Stringify(payload)
+    );
+   }
+   if (resp && (resp.status == 200 || resp.status == 201 || resp.status == 202)) {
+    var resultObj = postParseJson(resp.body);
+    if (!queryId && resultObj) {
+     queryId = resultObj.queryDefinitionId
+      ? String(resultObj.queryDefinitionId)
+      : resultObj.id
+      ? String(resultObj.id)
       : "";
-  }
-  if (!objectId && existingRows.length > 0 && existingRows[0].ObjectID) {
-    objectId = String(existingRows[0].ObjectID);
-  }
-  if (status === "OK" && !objectId) {
-    objectId = postResolveQueryObjectId(prox, queryKey);
-  }
-  if (status === "OK") {
-    if (objectId) {
-      return {
-        ok: true,
-        objectId: objectId,
-        message:
-          "Step 6 OK - QueryDefinition " +
-          (existingRows.length > 0 ? "updated" : "created") +
-          " (CustomerKey=" +
-          queryKey +
-          ", ObjectID=" +
-          objectId +
-          ")."
-      };
+    }
+    if (!queryId) {
+     queryId = postResolveQueryObjectId(prox, queryKey);
+    }
+    if (queryId) {
+     return {
+      ok: true,
+      objectId: queryId,
+      message:
+       "Step 6 OK - QueryDefinition saved via REST (CustomerKey=" +
+       queryKey +
+       ", ObjectID=" +
+       queryId +
+       ")."
+     };
     }
     return {
-      ok: true,
-      objectId: "",
-      message:
-        "Step 6 OK - QueryDefinition " +
-        (existingRows.length > 0 ? "updated" : "created") +
-        " (CustomerKey=" +
-        queryKey +
-        ") but ObjectID was not returned; automation will resolve by key."
+     ok: true,
+     objectId: "",
+     message:
+      "Step 6 OK - QueryDefinition saved via REST (CustomerKey=" +
+      queryKey +
+      ") but ObjectID was not returned; automation will resolve by key."
     };
-  }
-  return {
+   }
+   var coreResult = postCreateQueryDefinitionCore(
+    queryKey,
+    queryName,
+    queryText,
+    deCustomerKey,
+    deName
+   );
+   if (coreResult.ok) {
+    queryId = postResolveQueryObjectId(prox, queryKey);
+    if (queryId) {
+     return {
+      ok: true,
+      objectId: queryId,
+      message:
+       "Step 6 OK - QueryDefinition saved via Core API (CustomerKey=" +
+       queryKey +
+       ", ObjectID=" +
+       queryId +
+       ")."
+     };
+    }
+    return {
+     ok: true,
+     objectId: "",
+     message:
+      "Step 6 OK - QueryDefinition saved via Core API (CustomerKey=" +
+      queryKey +
+      ") but ObjectID was not returned; automation will resolve by key."
+    };
+   }
+   return {
     ok: false,
     message:
-      "Step 6 FAILED - QueryDefinition " +
-      (existingRows.length > 0 ? "update" : "create") +
-      " " +
-      status +
-      ": " +
-      msg +
-      (resultRows.length > 0 && resultRows[0].ErrorCode
-        ? " ErrorCode=" + resultRows[0].ErrorCode
-        : "")
-  };
+     "Step 6 FAILED - QueryDefinition REST HTTP " +
+     (resp ? resp.status : "none") +
+     " - " +
+     (resp && resp.body ? resp.body : "No response body.") +
+     "; Core fallback: " +
+     coreResult.message
+   };
   } catch (queryEx) {
    return {
     ok: false,
@@ -2279,6 +2333,8 @@ if (postDeleteRequested != "1") {
           postEnvironment
         );
         var queryResult = postCreateQueryDefinition(
+          postAccessToken,
+          postSubdomain,
           postProx,
           postQueryKey,
           postStackName,
@@ -2302,19 +2358,32 @@ if (postDeleteRequested != "1") {
           if (!queryObjectId) {
             postSuffix = postSuffix + " Step 7 FAILED - QueryDefinition ObjectID not found.";
           } else if (postSuffix.indexOf("Step 6 FAILED") < 0) {
-            var autoResult = postCreateAutomation({
+            var autoResult = null;
+            try {
+             autoResult = postCreateAutomation({
               token: postAccessToken,
               subdomain: postSubdomain,
               automationName: postStackName,
               automationKey: postAutomationKey,
               queryObjectId: queryObjectId
-            });
-            postSuffix = postSuffix + " " + autoResult.message;
-            if (autoResult.ok && autoResult.automationId) {
+             });
+            } catch (autoEx) {
+             postSuffix =
+              postSuffix +
+              " Step 7 FAILED - automation threw: " +
+              (autoEx.message || String(autoEx));
+             autoResult = null;
+            }
+            if (autoResult) {
+             postSuffix = postSuffix + " " + autoResult.message;
+            }
+            if (autoResult && autoResult.ok && autoResult.automationId) {
               Platform.Variable.SetValue("@automationId", autoResult.automationId);
               var audienceEventKey = "DEAudience-" + postRandomGuid();
               var deObjId = postEntryDeObjectId;
-              var audienceEvent = postCreateDeAudienceEvent(
+              var audienceEvent = null;
+              try {
+               audienceEvent = postCreateDeAudienceEvent(
                 postAccessToken,
                 postSubdomain,
                 postProx,
@@ -2326,8 +2395,16 @@ if (postDeleteRequested != "1") {
                   automationId: autoResult.automationId,
                   automationKey: postAutomationKey
                 }
-              );
-              postSuffix = postSuffix + " " + audienceEvent.message;
+               );
+              } catch (audienceEx) {
+               postSuffix =
+                postSuffix +
+                " Step 5 FAILED - DE audience event threw: " +
+                (audienceEx.message || String(audienceEx));
+              }
+              if (audienceEvent) {
+               postSuffix = postSuffix + " " + audienceEvent.message;
+              }
             }
           }
         }
