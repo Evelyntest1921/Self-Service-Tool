@@ -1685,13 +1685,13 @@ function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environme
     "COALESCE(NULLIF(RTRIM(ISNULL(cm.email, '')), ''), NULLIF(RTRIM(ISNULL(con.Email, '')), ''))";
   var sql =
     "SELECT\n" +
-    "  cm.id AS MemberId,\n" +
     "  cm.ContactId AS ContactId,\n" +
     "  " + emailExpr + " AS Email,\n" +
     "  cm.CampaignId AS CampaignId,\n" +
     "  con.AccountId AS AccountId,\n" +
     "  u.Name AS Account_Owner_Name,\n" +
     "  u.Email AS Account_Owner_Email,\n" +
+    "  cm.id AS MemberId,\n" +
     "  cm.Status AS Status,\n" +
     "  con.MailingState AS State,\n" +
     "  a.OwnerId AS AccountOwnerId\n" +
@@ -1733,90 +1733,66 @@ function postBuildScheduleWrite(recur, startLocal, endLocal, tzId) {
   };
 }
 
-function postBuildDefaultAutomationSchedule() {
-  var frequency = "hourly";
-  var timezoneId = "1";
-  var startOffset = "-05:00";
-  var nowVal = new Date();
-  nowVal.setMinutes(0, 0, 0);
-  nowVal.setHours(nowVal.getHours() + 1);
-  function pad(n) {
-    return (n < 10 ? "0" : "") + n;
+function postNormalizeStepsForWrite(steps) {
+  var stepItems = postNormalizeRestItems(steps);
+  if (stepItems.length === 0) {
+    return null;
   }
-  var startDate =
-    nowVal.getFullYear() +
-    "-" +
-    pad(nowVal.getMonth() + 1) +
-    "-" +
-    pad(nowVal.getDate()) +
-    "T" +
-    pad(nowVal.getHours()) +
-    ":" +
-    pad(nowVal.getMinutes());
-  var off = String(startOffset);
-  if (off.charAt(0) != "-" && off.charAt(0) != "+") {
-    off = "-" + off;
-  }
-  var startDateForApi = String(startDate) + ":00" + off;
-  var startDateLocal = postStripTimezoneFromIso(startDateForApi);
-  function pad2(n) {
-    return (n < 10 ? "0" : "") + n;
-  }
-  var untilCompact = "";
-  var endDateLocal = startDateLocal;
-  var dmatch = startDateForApi.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (dmatch) {
-    var y0 = parseInt(dmatch[1], 10);
-    var m0 = parseInt(dmatch[2], 10) - 1;
-    var d0 = parseInt(dmatch[3], 10);
-    var dUntil = new Date(y0, m0, d0);
-    dUntil.setDate(dUntil.getDate() + 365);
-    untilCompact =
-      String(dUntil.getFullYear()) +
-      pad2(dUntil.getMonth() + 1) +
-      pad2(dUntil.getDate());
-    var timePart = "00:00:00";
-    var tMatch = startDateLocal.match(/T(.+)$/);
-    if (tMatch) {
-      timePart = tMatch[1];
+  var out = [];
+  var si;
+  for (si = 0; si < stepItems.length; si++) {
+    var st = stepItems[si];
+    var stepNum = st.stepNumber;
+    if (stepNum === undefined || stepNum === null) {
+      stepNum = si;
     }
-    endDateLocal =
-      String(dUntil.getFullYear()) +
-      "-" +
-      pad2(dUntil.getMonth() + 1) +
-      "-" +
-      pad2(dUntil.getDate()) +
-      "T" +
-      timePart;
-  } else {
-    var fallback = new Date();
-    fallback.setDate(fallback.getDate() + 365);
-    untilCompact =
-      String(fallback.getFullYear()) +
-      pad2(fallback.getMonth() + 1) +
-      pad2(fallback.getDate());
+    var activityItems = postNormalizeRestItems(st.activities || null);
+    var acts = [];
+    var ai;
+    for (ai = 0; ai < activityItems.length; ai++) {
+      var a = activityItems[ai];
+      var act = {
+        name: a.name ? String(a.name) : "Activity",
+        description: a.description !== undefined && a.description !== null ? String(a.description) : "",
+        activityObjectId: String(a.activityObjectId || ""),
+        objectTypeId: a.objectTypeId,
+        displayOrder: a.displayOrder !== undefined ? a.displayOrder : ai,
+        serializedObject: a.serializedObject !== undefined && a.serializedObject !== null ? String(a.serializedObject) : ""
+      };
+      if (a.id) {
+        act.id = String(a.id);
+      }
+      acts.push(act);
+    }
+    out.push({
+      annotation: st.annotation !== undefined ? String(st.annotation) : "",
+      stepNumber: stepNum,
+      activities: acts
+    });
   }
-  var tzId = parseInt(String(timezoneId), 10);
-  if (isNaN(tzId) || tzId < 1) {
-    tzId = 1;
+  return out;
+}
+
+function postExtractIcalFromVerify(verifyObj) {
+  if (!verifyObj) {
+    return "";
   }
-  var recurRule = "FREQ=HOURLY;INTERVAL=1;UNTIL=" + untilCompact;
-  if (frequency == "daily") {
-    recurRule = "FREQ=DAILY;INTERVAL=1;UNTIL=" + untilCompact;
-  } else if (frequency == "weekly") {
-    recurRule = "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO;UNTIL=" + untilCompact;
+  var sch = null;
+  if (verifyObj.startSource && verifyObj.startSource.schedule) {
+    sch = verifyObj.startSource.schedule;
+  } else if (verifyObj.schedule && typeof verifyObj.schedule === "object") {
+    sch = verifyObj.schedule;
   }
-  var recurAttempts = [recurRule];
-  recurAttempts.push("FREQ=HOURLY;COUNT=1;INTERVAL=1");
-  recurAttempts.push("FREQ=MINUTELY;INTERVAL=60;UNTIL=" + untilCompact);
-  return {
-    frequency: frequency,
-    timezoneId: tzId,
-    startDateLocal: startDateLocal,
-    endDateLocal: endDateLocal,
-    recurRule: recurRule,
-    recurAttempts: recurAttempts
-  };
+  if (!sch) {
+    return "";
+  }
+  if (sch.iCalRecur) {
+    return String(sch.iCalRecur);
+  }
+  if (sch.icalRecur) {
+    return String(sch.icalRecur);
+  }
+  return "";
 }
 
 function postParseJsonSafe(s) {
@@ -1841,87 +1817,6 @@ function postNormalizeRestItems(items) {
   }
   out.push(items);
   return out;
-}
-
-function postJsonEscape(value) {
-  return String(value || "")
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"');
-}
-
-function postStringifySafe(obj) {
-  try {
-    return Platform.Function.Stringify(obj);
-  } catch (e0) {
-    return "";
-  }
-}
-
-function postBuildAutomationCreateBody(name, key, queryObjectId, scheduleObj) {
-  var scheduleJson = "";
-  if (scheduleObj) {
-    scheduleJson =
-      ',"startSource":{"typeId":1,"schedule":{' +
-      '"scheduleTypeId":2,' +
-      '"startDate":"' +
-      postJsonEscape(scheduleObj.startDate) +
-      '",' +
-      '"endDate":"' +
-      postJsonEscape(scheduleObj.endDate) +
-      '",' +
-      '"rangeTypeId":0,' +
-      '"occurrences":9999,' +
-      '"icalRecur":"' +
-      postJsonEscape(scheduleObj.icalRecur) +
-      '",' +
-      '"timezoneId":' +
-      parseInt(String(scheduleObj.timezoneId || "1"), 10) +
-      ',"statusId":0}}';
-  }
-  return (
-    "{" +
-    '"name":"' +
-    postJsonEscape(name) +
-    '",' +
-    '"description":"Created via Journey Maker stack page",' +
-    '"key":"' +
-    postJsonEscape(key) +
-    '",' +
-    '"steps":[{"annotation":"","stepNumber":0,"activities":[{' +
-    '"name":"Query Activity",' +
-    '"description":"",' +
-    '"objectTypeId":300,' +
-    '"displayOrder":0,' +
-    '"activityObjectId":"' +
-    postJsonEscape(String(queryObjectId || "")) +
-    '",' +
-    '"serializedObject":""}]}]' +
-    scheduleJson +
-    "}"
-  );
-}
-
-function postResolveQueryActivityObjectId(token, subdomain, queryKey, fallbackId) {
-  var resolved = String(fallbackId || "");
-  if (!queryKey || !token || !subdomain) {
-    return resolved;
-  }
-  var url =
-    "https://" +
-    subdomain +
-    ".rest.marketingcloudapis.com/automation/v1/queries/key:" +
-    encodeURIComponent(String(queryKey));
-  var resp = postHttpJson(token, subdomain, "GET", url, null);
-  if (resp.status == 200) {
-    var obj = postParseJsonSafe(resp.body);
-    if (obj && obj.id) {
-      return String(obj.id);
-    }
-    if (obj && obj.queryDefinitionId) {
-      return String(obj.queryDefinitionId);
-    }
-  }
-  return resolved;
 }
 
 function postFindAutomationInList(token, subdomain, endpoint, name, key) {
@@ -2269,169 +2164,266 @@ function postCreateQueryDefinition(token, subdomain, prox, queryKey, queryName, 
 }
 
 function postCreateAutomation(opts) {
-  try {
-    var token = opts.token;
-    var subdomain = opts.subdomain;
-    var automationName = opts.automationName;
-    var automationKey = opts.automationKey;
-    var queryKey = opts.queryKey;
-    var queryObjectId = postResolveQueryActivityObjectId(
-      token,
-      subdomain,
-      queryKey,
-      opts.queryObjectId
-    );
-    if (!queryObjectId) {
-      return { ok: false, message: "Step 7 FAILED - query activity ObjectID not available." };
+  var token = opts.token;
+  var subdomain = opts.subdomain;
+  var automationName = opts.automationName;
+  var automationKey = opts.automationKey;
+  var queryObjectId = String(opts.queryObjectId || "");
+  var frequency = opts.frequency || "hourly";
+  var timezoneId = opts.timezoneId || "1";
+  var startDate = opts.startDate || "";
+  var startOffset = opts.startOffset || "-05:00";
+
+  if (!queryObjectId) {
+    return { ok: false, message: "Step 7 FAILED - query activity ObjectID not available." };
+  }
+
+  if (!startDate) {
+    var nowVal = new Date();
+    nowVal.setMinutes(0, 0, 0);
+    nowVal.setHours(nowVal.getHours() + 1);
+    function pad(n) {
+      return (n < 10 ? "0" : "") + n;
     }
-    var scheduleDefaults = postBuildDefaultAutomationSchedule();
-    var startDateLocal = scheduleDefaults.startDateLocal;
-    var endDateLocal = scheduleDefaults.endDateLocal;
-    var tzId = scheduleDefaults.timezoneId;
-    var recurRule = scheduleDefaults.recurRule;
-    var recurAttempts = scheduleDefaults.recurAttempts;
+    startDate =
+      nowVal.getFullYear() +
+      "-" +
+      pad(nowVal.getMonth() + 1) +
+      "-" +
+      pad(nowVal.getDate()) +
+      "T" +
+      pad(nowVal.getHours()) +
+      ":" +
+      pad(nowVal.getMinutes());
+  }
 
-    var endpoint = "https://" + subdomain + ".rest.marketingcloudapis.com/automation/v1/automations";
-    var byKeyEndpoint = endpoint + "/key:" + encodeURIComponent(String(automationKey));
-    var keyLookup = postHttpJson(token, subdomain, "GET", byKeyEndpoint, null);
-    var existingObj = keyLookup.status == 200 ? postParseJsonSafe(keyLookup.body) : null;
-    var automationId = "";
-    var createdNow = false;
+  var off = String(startOffset || "-05:00");
+  if (off.charAt(0) != "-" && off.charAt(0) != "+") {
+    off = "-" + off;
+  }
+  var startDateForApi = String(startDate);
+  if (startDateForApi.length == 16) {
+    startDateForApi += ":00" + off;
+  } else if (
+    startDateForApi.indexOf("T") > 0 &&
+    startDateForApi.indexOf("+") < 0 &&
+    startDateForApi.indexOf("-", 11) < 0 &&
+    startDateForApi.length == 19
+  ) {
+    startDateForApi += off;
+  }
+  var startDateLocal = postStripTimezoneFromIso(startDateForApi);
+  var endDateLocal = startDateLocal;
 
-    if (existingObj && existingObj.id) {
-      automationId = String(existingObj.id);
+  function pad2(n) {
+    return (n < 10 ? "0" : "") + n;
+  }
+  var untilCompact = "";
+  var dmatch = startDateForApi.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (dmatch) {
+    var y0 = parseInt(dmatch[1], 10);
+    var m0 = parseInt(dmatch[2], 10) - 1;
+    var d0 = parseInt(dmatch[3], 10);
+    var dUntil = new Date(y0, m0, d0);
+    dUntil.setDate(dUntil.getDate() + 365);
+    untilCompact =
+      String(dUntil.getFullYear()) +
+      pad2(dUntil.getMonth() + 1) +
+      pad2(dUntil.getDate());
+  } else {
+    var fallback = new Date();
+    fallback.setDate(fallback.getDate() + 365);
+    untilCompact =
+      String(fallback.getFullYear()) +
+      pad2(fallback.getMonth() + 1) +
+      pad2(fallback.getDate());
+  }
+
+  var endpoint = "https://" + subdomain + ".rest.marketingcloudapis.com/automation/v1/automations";
+  var tzId = parseInt(String(timezoneId), 10);
+  if (isNaN(tzId) || tzId < 1) {
+    tzId = 1;
+  }
+  var recurRule = "";
+  if (frequency == "hourly") {
+    recurRule = "FREQ=HOURLY;INTERVAL=1;UNTIL=" + untilCompact;
+  } else if (frequency == "daily") {
+    recurRule = "FREQ=DAILY;INTERVAL=1;UNTIL=" + untilCompact;
+  } else if (frequency == "weekly") {
+    recurRule = "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO;UNTIL=" + untilCompact;
+  } else {
+    return { ok: false, message: "Step 7 FAILED - invalid frequency." };
+  }
+
+  var byKeyEndpoint = endpoint + "/key:" + encodeURIComponent(String(automationKey));
+  var keyLookup = postHttpJson(token, subdomain, "GET", byKeyEndpoint, null);
+  var existingObj = keyLookup.status == 200 ? postParseJson(keyLookup.body) : null;
+  var automationId = "";
+  var createdNow = false;
+
+  if (existingObj && existingObj.id) {
+    automationId = String(existingObj.id);
+  } else {
+    var listMatch = postFindAutomationInList(token, subdomain, endpoint, automationName, automationKey);
+    if (listMatch && listMatch.id) {
+      automationId = String(listMatch.id);
     } else {
-      var listMatch = postFindAutomationInList(token, subdomain, endpoint, automationName, automationKey);
-      if (listMatch && listMatch.id) {
-        automationId = String(listMatch.id);
-      } else {
-        var createStatus = 0;
-        var createBody = "";
-        var usedRecur = recurRule;
-        var ri;
-        for (ri = 0; ri < recurAttempts.length; ri++) {
-          usedRecur = recurAttempts[ri];
-          var scheduleObj = postBuildScheduleWrite(usedRecur, startDateLocal, endDateLocal, tzId);
-          var payloadObj = {
-            name: String(automationName),
-            description: "Created via Journey Maker stack page",
-            key: String(automationKey),
-            steps: [
-              {
-                annotation: "",
-                stepNumber: 0,
-                activities: [
-                  {
-                    name: "Query Activity",
-                    description: "",
-                    objectTypeId: 300,
-                    displayOrder: 0,
-                    activityObjectId: String(queryObjectId),
-                    serializedObject: ""
-                  }
-                ]
-              }
-            ],
-            startSource: {
-              typeId: 1,
-              schedule: scheduleObj
+      var recurAttempts = [recurRule];
+      if (frequency == "hourly") {
+        recurAttempts.push("FREQ=HOURLY;COUNT=1;INTERVAL=1");
+        recurAttempts.push("FREQ=MINUTELY;INTERVAL=60;UNTIL=" + untilCompact);
+      }
+      var createStatus = 0;
+      var createBody = "";
+      var usedRecur = recurRule;
+      var ri;
+      for (ri = 0; ri < recurAttempts.length; ri++) {
+        usedRecur = recurAttempts[ri];
+        var payloadObj = {
+          name: String(automationName),
+          description: "Created via Journey Maker stack page",
+          key: String(automationKey),
+          steps: [
+            {
+              annotation: "",
+              stepNumber: 0,
+              activities: [
+                {
+                  name: "Query Activity",
+                  description: "",
+                  objectTypeId: 300,
+                  displayOrder: 0,
+                  activityObjectId: queryObjectId,
+                  serializedObject: ""
+                }
+              ]
             }
-          };
-          var bodyStr = postStringifySafe(payloadObj);
-          if (!bodyStr) {
-            bodyStr = postBuildAutomationCreateBody(
-              automationName,
-              automationKey,
-              queryObjectId,
-              scheduleObj
-            );
+          ],
+          startSource: {
+            typeId: 1,
+            schedule: postBuildScheduleWrite(usedRecur, startDateLocal, endDateLocal, tzId)
           }
-          var cr = postHttpJson(token, subdomain, "POST", endpoint, bodyStr);
-          createStatus = cr.status;
-          createBody = cr.body;
-          if (createStatus == 200 || createStatus == 201 || createStatus == 202) {
-            recurRule = usedRecur;
-            break;
-          }
-          var dupName =
-            createBody.indexOf("Name already exists") >= 0 ||
-            createBody.indexOf("already exists") >= 0;
-          if (dupName) {
-            var recovered = postFindAutomationInList(
-              token,
-              subdomain,
-              endpoint,
-              automationName,
-              automationKey
-            );
-            if (recovered && recovered.id) {
-              automationId = String(recovered.id);
-              break;
-            }
-          }
+        };
+        var cr = postHttpJson(
+          token,
+          subdomain,
+          "POST",
+          endpoint,
+          Platform.Function.Stringify(payloadObj)
+        );
+        createStatus = cr.status;
+        createBody = cr.body;
+        if (createStatus == 200 || createStatus == 201 || createStatus == 202) {
+          recurRule = usedRecur;
+          break;
         }
-        if (!automationId && !(createStatus == 200 || createStatus == 201 || createStatus == 202)) {
-          return {
-            ok: false,
-            message:
-              "Step 7 FAILED - create automation HTTP " +
-              createStatus +
-              " - " +
-              createBody +
-              " (icalRecur tried: " +
-              usedRecur +
-              ", queryObjectId=" +
-              queryObjectId +
-              ")."
-          };
-        }
-        if (!automationId) {
-          var createObj = postParseJsonSafe(createBody);
-          automationId = createObj && createObj.id ? String(createObj.id) : "";
-          createdNow = true;
-        }
-        if (!automationId) {
-          var recoveredAfterCreate = postFindAutomationInList(
+        var dupName =
+          createBody.indexOf("Name already exists") >= 0 ||
+          createBody.indexOf("already exists") >= 0;
+        if (dupName) {
+          var recovered = postFindAutomationInList(
             token,
             subdomain,
             endpoint,
             automationName,
             automationKey
           );
-          if (recoveredAfterCreate && recoveredAfterCreate.id) {
-            automationId = String(recoveredAfterCreate.id);
+          if (recovered && recovered.id) {
+            automationId = String(recovered.id);
+            createdNow = false;
+            break;
           }
         }
       }
+      if (automationId) {
+      } else if (!(createStatus == 200 || createStatus == 201 || createStatus == 202)) {
+        return {
+          ok: false,
+          message:
+            "Step 7 FAILED - create automation HTTP " +
+            createStatus +
+            " - " +
+            createBody +
+            " (icalRecur tried: " +
+            usedRecur +
+            ", queryObjectId=" +
+            queryObjectId +
+            ")."
+        };
+      }
+      if (!automationId) {
+        var createObj = postParseJson(createBody);
+        automationId = createObj && createObj.id ? String(createObj.id) : "";
+        createdNow = true;
+      }
     }
-
-    if (!automationId) {
-      return { ok: false, message: "Step 7 FAILED - automation ID not available." };
-    }
-
-    return {
-      ok: true,
-      automationId: automationId,
-      message:
-        "Step 7 OK - automation " +
-        (createdNow ? "created" : "found existing") +
-        " with default inactive hourly schedule (key=" +
-        automationKey +
-        ", id=" +
-        automationId +
-        ", queryObjectId=" +
-        queryObjectId +
-        ", icalRecur=" +
-        recurRule +
-        "). Activate or change schedule in Edit Build."
-    };
-  } catch (autoEx) {
-    return {
-      ok: false,
-      message:
-        "Step 7 FAILED - automation threw: " + (autoEx.message || String(autoEx))
-    };
   }
+
+  if (!automationId) {
+    return { ok: false, message: "Step 7 FAILED - automation ID not available." };
+  }
+
+  var patchEndpoint = endpoint + "/" + encodeURIComponent(automationId);
+  var getCur = postHttpJson(token, subdomain, "GET", patchEndpoint, null);
+  var currentObj = getCur.status == 200 ? postParseJson(getCur.body) : null;
+  var normalizedSteps =
+    currentObj && currentObj.steps ? postNormalizeStepsForWrite(currentObj.steps) : null;
+  if (normalizedSteps && normalizedSteps.length > 0) {
+    postHttpJson(
+      token,
+      subdomain,
+      "PATCH",
+      patchEndpoint,
+      Platform.Function.Stringify({
+        id: currentObj.id,
+        name: currentObj.name,
+        description: currentObj.description || "Created via Journey Maker stack page",
+        key: currentObj.key,
+        categoryId: currentObj.categoryId,
+        steps: normalizedSteps,
+        startSource: {
+          typeId: 1,
+          schedule: postBuildScheduleWrite(recurRule, startDateLocal, endDateLocal, tzId)
+        }
+      })
+    );
+  } else {
+    postHttpJson(
+      token,
+      subdomain,
+      "PATCH",
+      patchEndpoint,
+      Platform.Function.Stringify({
+        startSource: {
+          typeId: 1,
+          schedule: postBuildScheduleWrite(recurRule, startDateLocal, endDateLocal, tzId)
+        }
+      })
+    );
+  }
+
+  var verify = postHttpJson(token, subdomain, "GET", patchEndpoint, null);
+  var verifyObj = verify.status == 200 ? postParseJson(verify.body) : null;
+  var finalRecur = postExtractIcalFromVerify(verifyObj);
+  var scheduleNote = finalRecur
+    ? " icalRecur=" + finalRecur + "."
+    : " Schedule not verified in API response; confirm in Automation Studio.";
+  return {
+    ok: true,
+    automationId: automationId,
+    message:
+      "Step 7 OK - automation " +
+      (createdNow ? "created" : "updated existing") +
+      ". key=" +
+      automationKey +
+      " id=" +
+      automationId +
+      " queryObjectId=" +
+      queryObjectId +
+      "." +
+      scheduleNote +
+      " Activate or change schedule in Edit Build."
+  };
 }
 
 if (postDeleteRequested != "1") {
@@ -2487,16 +2479,17 @@ if (postDeleteRequested != "1") {
         );
         postSuffix = " " + queryResult.message;
         if (queryResult.ok) {
-          var queryObjectId = queryResult.objectId;
-          if (!queryObjectId) {
-            try {
-             queryObjectId = postResolveQueryObjectId(postProx, postQueryKey);
-            } catch (qdLookupEx) {
-             postSuffix =
+          var queryObjectId = "";
+          try {
+            queryObjectId = postResolveQueryObjectId(postProx, postQueryKey);
+          } catch (qdLookupEx) {
+            postSuffix =
               postSuffix +
               " Step 6 FAILED - QueryDefinition ObjectID lookup threw: " +
               (qdLookupEx.message || String(qdLookupEx));
-            }
+          }
+          if (!queryObjectId && queryResult.objectId) {
+            queryObjectId = String(queryResult.objectId);
           }
           if (!queryObjectId) {
             postSuffix = postSuffix + " Step 7 FAILED - QueryDefinition ObjectID not found.";
@@ -2508,7 +2501,6 @@ if (postDeleteRequested != "1") {
               subdomain: postSubdomain,
               automationName: postStackName,
               automationKey: postAutomationKey,
-              queryKey: postQueryKey,
               queryObjectId: queryObjectId
              });
             } catch (autoEx) {
