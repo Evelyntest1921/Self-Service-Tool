@@ -1453,7 +1453,7 @@ function postCreateDeAudienceEvent(token, subdomain, prox, opts) {
       AutomationId: automationId,
       DataExtensionId: dataExtensionId,
       EventDefinitionKey: eventKey,
-      useHighWatermark: false
+      useHighWatermark: true
     },
     configurationArguments: {},
     metaData: {
@@ -1825,25 +1825,28 @@ function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCusto
       Value: String(queryKey)
     }
   );
+  var existingObjectId = "";
   if (existing && existing.Results && existing.Results.length > 0 && existing.Results[0].ObjectID) {
-    return {
-      ok: true,
-      skipped: true,
-      objectId: String(existing.Results[0].ObjectID),
-      message: "Step 6 OK - QueryDefinition already exists (CustomerKey=" + queryKey + ")."
-    };
+    existingObjectId = String(existing.Results[0].ObjectID);
   }
-  var createResponse = prox.createItem("QueryDefinition", {
+  var queryPayload = {
     Name: String(queryName),
     CustomerKey: String(queryKey),
     QueryText: queryText,
     TargetType: "DE",
-    TargetUpdateType: "Overwrite",
+    TargetUpdateType: "Update",
     DataExtensionTarget: {
       CustomerKey: String(deCustomerKey),
       Name: String(deName)
     }
-  });
+  };
+  var createResponse = null;
+  if (existingObjectId) {
+    queryPayload.ObjectID = existingObjectId;
+    createResponse = prox.updateItem("QueryDefinition", queryPayload);
+  } else {
+    createResponse = prox.createItem("QueryDefinition", queryPayload);
+  }
   var status =
     createResponse && createResponse.Status ? String(createResponse.Status) : "UNKNOWN";
   var msg =
@@ -1872,14 +1875,23 @@ function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCusto
       return {
         ok: true,
         objectId: objectId,
-        message: "Step 6 OK - QueryDefinition created (CustomerKey=" + queryKey + ", ObjectID=" + objectId + ")."
+        message:
+          "Step 6 OK - QueryDefinition " +
+          (existingObjectId ? "updated" : "created") +
+          " (CustomerKey=" +
+          queryKey +
+          ", ObjectID=" +
+          objectId +
+          ", TargetUpdateType=Update)."
       };
     }
     return {
       ok: true,
       objectId: "",
       message:
-        "Step 6 OK - QueryDefinition created (CustomerKey=" +
+        "Step 6 OK - QueryDefinition " +
+        (existingObjectId ? "updated" : "created") +
+        " (CustomerKey=" +
         queryKey +
         ") but ObjectID was not returned; automation will resolve by key."
     };
@@ -1887,7 +1899,9 @@ function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCusto
   return {
     ok: false,
     message:
-      "Step 6 FAILED - QueryDefinition create " +
+      "Step 6 FAILED - QueryDefinition " +
+      (existingObjectId ? "update" : "create") +
+      " " +
       status +
       ": " +
       msg +
