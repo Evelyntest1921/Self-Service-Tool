@@ -24,10 +24,6 @@ ENDIF
 SET @builderPageLabel = "Journey + Automation"
 SET @stackCampaignName = Trim(RequestParameter("stackCampaignName"))
 SET @sfUserId = Trim(RequestParameter("sfUserId"))
-SET @frequency = Lowercase(Trim(RequestParameter("frequency")))
-SET @timezoneId = Trim(RequestParameter("timezoneId"))
-SET @startDate = Trim(RequestParameter("startDate"))
-SET @startOffset = Trim(RequestParameter("startOffset"))
 SET @automationId = ""
 SET @deCustomerKey = ""
 SET @entryDeObjectId = ""
@@ -36,15 +32,6 @@ SET @stackDeReady = "0"
 SET @assetKey = ""
 SET @queryKey = ""
 SET @automationKey = ""
-IF Empty(@timezoneId) THEN
- SET @timezoneId = "1"
-ENDIF
-IF Empty(@frequency) THEN
- SET @frequency = "hourly"
-ENDIF
-IF Empty(@startOffset) THEN
- SET @startOffset = "-05:00"
-ENDIF
 SET @emailSubjectLine = Trim(RequestParameter("emailSubjectLine"))
 SET @journeyDescription = Trim(RequestParameter("journeyDescription"))
 SET @bccEmail = Trim(RequestParameter("bccEmail"))
@@ -1361,10 +1348,6 @@ var postSubdomain = postVar("subdomain");
 var postQueryKey = postVar("queryKey");
 var postAutomationKey = postVar("automationKey");
 var postStackName = postVar("journeyName");
-var postFrequency = postVar("frequency");
-var postTimezoneId = postVar("timezoneId");
-var postStartDate = postVar("startDate");
-var postStartOffset = postVar("startOffset");
 var postAssetKey = postVar("assetKey");
 var postStackDeReady = postVar("stackDeReady");
 var postEntryDeObjectId = postVar("entryDeObjectId");
@@ -1590,89 +1573,34 @@ function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environme
   return sql;
 }
 
-function postStripTimezoneFromIso(s) {
-  var str = String(s || "");
-  var m = str.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/);
-  if (m) {
-    return m[1];
+function postBuildEmptySchedule() {
+  var nowVal = new Date();
+  nowVal.setMinutes(0, 0, 0);
+  nowVal.setHours(nowVal.getHours() + 1);
+  function pad(n) {
+    return (n < 10 ? "0" : "") + n;
   }
-  m = str.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})/);
-  if (m) {
-    return m[1] + ":00";
-  }
-  return str;
-}
-
-function postBuildScheduleWrite(recur, startLocal, endLocal, tzId) {
+  var startLocal =
+    nowVal.getFullYear() +
+    "-" +
+    pad(nowVal.getMonth() + 1) +
+    "-" +
+    pad(nowVal.getDate()) +
+    "T" +
+    pad(nowVal.getHours()) +
+    ":" +
+    pad(nowVal.getMinutes()) +
+    ":00";
   return {
     scheduleTypeId: 2,
     startDate: startLocal,
-    endDate: endLocal,
+    endDate: startLocal,
     rangeTypeId: 0,
-    occurrences: 9999,
-    icalRecur: recur,
-    timezoneId: tzId,
+    occurrences: 1,
+    icalRecur: "FREQ=HOURLY;INTERVAL=1;COUNT=1",
+    timezoneId: 1,
     statusId: 0
   };
-}
-
-function postNormalizeStepsForWrite(steps) {
-  if (!steps || steps.length === 0) {
-    return null;
-  }
-  var out = [];
-  for (var si = 0; si < steps.length; si++) {
-    var st = steps[si];
-    var stepNum = st.stepNumber;
-    if (stepNum === undefined || stepNum === null) {
-      stepNum = si;
-    }
-    var activities = st.activities || [];
-    var acts = [];
-    for (var ai = 0; ai < activities.length; ai++) {
-      var a = activities[ai];
-      var act = {
-        name: a.name ? String(a.name) : "Activity",
-        description: a.description !== undefined && a.description !== null ? String(a.description) : "",
-        activityObjectId: String(a.activityObjectId || ""),
-        objectTypeId: a.objectTypeId,
-        displayOrder: a.displayOrder !== undefined ? a.displayOrder : ai,
-        serializedObject: a.serializedObject !== undefined && a.serializedObject !== null ? String(a.serializedObject) : ""
-      };
-      if (a.id) {
-        act.id = String(a.id);
-      }
-      acts.push(act);
-    }
-    out.push({
-      annotation: st.annotation !== undefined ? String(st.annotation) : "",
-      stepNumber: stepNum,
-      activities: acts
-    });
-  }
-  return out;
-}
-
-function postExtractIcalFromVerify(verifyObj) {
-  if (!verifyObj) {
-    return "";
-  }
-  var sch = null;
-  if (verifyObj.startSource && verifyObj.startSource.schedule) {
-    sch = verifyObj.startSource.schedule;
-  } else if (verifyObj.schedule && typeof verifyObj.schedule === "object") {
-    sch = verifyObj.schedule;
-  }
-  if (!sch) {
-    return "";
-  }
-  if (sch.iCalRecur) {
-    return String(sch.iCalRecur);
-  }
-  if (sch.icalRecur) {
-    return String(sch.icalRecur);
-  }
-  return "";
 }
 
 function postFindAutomationInList(token, subdomain, endpoint, name, key) {
@@ -1900,86 +1828,9 @@ function postCreateAutomation(opts) {
   var automationName = opts.automationName;
   var automationKey = opts.automationKey;
   var queryObjectId = opts.queryObjectId;
-  var frequency = opts.frequency;
-  var timezoneId = opts.timezoneId;
-  var startDate = opts.startDate;
-  var startOffset = opts.startOffset;
-
-  if (!startDate) {
-    var nowVal = new Date();
-    nowVal.setMinutes(0, 0, 0);
-    nowVal.setHours(nowVal.getHours() + 1);
-    function pad(n) {
-      return (n < 10 ? "0" : "") + n;
-    }
-    startDate =
-      nowVal.getFullYear() +
-      "-" +
-      pad(nowVal.getMonth() + 1) +
-      "-" +
-      pad(nowVal.getDate()) +
-      "T" +
-      pad(nowVal.getHours()) +
-      ":" +
-      pad(nowVal.getMinutes());
-    Platform.Variable.SetValue("@startDate", startDate);
-  }
-
-  var off = String(startOffset || "-05:00");
-  if (off.charAt(0) != "-" && off.charAt(0) != "+") {
-    off = "-" + off;
-  }
-  var startDateForApi = String(startDate);
-  if (startDateForApi.length == 16) {
-    startDateForApi += ":00" + off;
-  } else if (
-    startDateForApi.indexOf("T") > 0 &&
-    startDateForApi.indexOf("+") < 0 &&
-    startDateForApi.indexOf("-", 11) < 0 &&
-    startDateForApi.length == 19
-  ) {
-    startDateForApi += off;
-  }
-  var startDateLocal = postStripTimezoneFromIso(startDateForApi);
-  var endDateLocal = startDateLocal;
-
-  function pad2(n) {
-    return (n < 10 ? "0" : "") + n;
-  }
-  var untilCompact = "";
-  var dmatch = startDateForApi.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (dmatch) {
-    var y0 = parseInt(dmatch[1], 10);
-    var m0 = parseInt(dmatch[2], 10) - 1;
-    var d0 = parseInt(dmatch[3], 10);
-    var dUntil = new Date(y0, m0, d0);
-    dUntil.setDate(dUntil.getDate() + 365);
-    untilCompact =
-      String(dUntil.getFullYear()) +
-      pad2(dUntil.getMonth() + 1) +
-      pad2(dUntil.getDate());
-  } else {
-    var fallback = new Date();
-    fallback.setDate(fallback.getDate() + 365);
-    untilCompact =
-      String(fallback.getFullYear()) +
-      pad2(fallback.getMonth() + 1) +
-      pad2(fallback.getDate());
-  }
+  var emptySchedule = postBuildEmptySchedule();
 
   var endpoint = "https://" + subdomain + ".rest.marketingcloudapis.com/automation/v1/automations";
-  var tzId = parseInt(String(timezoneId), 10);
-  var recurRule = "";
-  if (frequency == "hourly") {
-    recurRule = "FREQ=HOURLY;INTERVAL=1;UNTIL=" + untilCompact;
-  } else if (frequency == "daily") {
-    recurRule = "FREQ=DAILY;INTERVAL=1;UNTIL=" + untilCompact;
-  } else if (frequency == "weekly") {
-    recurRule = "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO;UNTIL=" + untilCompact;
-  } else {
-    return { ok: false, message: "Step 7 FAILED - invalid frequency." };
-  }
-
   var byKeyEndpoint = endpoint + "/key:" + encodeURIComponent(String(automationKey));
   var keyLookup = postHttpJson(token, subdomain, "GET", byKeyEndpoint, null);
   var existingObj = keyLookup.status == 200 ? postParseJson(keyLookup.body) : null;
@@ -1993,57 +1844,46 @@ function postCreateAutomation(opts) {
     if (listMatch && listMatch.id) {
       automationId = String(listMatch.id);
     } else {
-      var recurAttempts = [recurRule];
-      if (frequency == "hourly") {
-        recurAttempts.push("FREQ=HOURLY;COUNT=1;INTERVAL=1");
-        recurAttempts.push("FREQ=MINUTELY;INTERVAL=60;UNTIL=" + untilCompact);
-      }
-      var createStatus = 0;
-      var createBody = "";
-      var usedRecur = recurRule;
-      for (var ri = 0; ri < recurAttempts.length; ri++) {
-        usedRecur = recurAttempts[ri];
-        var payloadObj = {
-          name: String(automationName),
-          description: "Created via Journey Maker stack page",
-          key: String(automationKey),
-          steps: [
-            {
-              annotation: "",
-              stepNumber: 0,
-              activities: [
-                {
-                  name: "Query Activity",
-                  description: "",
-                  objectTypeId: 300,
-                  displayOrder: 0,
-                  activityObjectId: queryObjectId,
-                  serializedObject: ""
-                }
-              ]
-            }
-          ],
-          startSource: {
-            typeId: 1,
-            schedule: postBuildScheduleWrite(usedRecur, startDateLocal, endDateLocal, tzId)
+      var payloadObj = {
+        name: String(automationName),
+        description: "Created via Journey Maker stack page",
+        key: String(automationKey),
+        steps: [
+          {
+            annotation: "",
+            stepNumber: 0,
+            activities: [
+              {
+                name: "Query Activity",
+                description: "",
+                objectTypeId: 300,
+                displayOrder: 0,
+                activityObjectId: queryObjectId,
+                serializedObject: ""
+              }
+            ]
           }
-        };
-        var cr = postHttpJson(
-          token,
-          subdomain,
-          "POST",
-          endpoint,
-          Platform.Function.Stringify(payloadObj)
-        );
-        createStatus = cr.status;
-        createBody = cr.body;
-        if (createStatus == 200 || createStatus == 201 || createStatus == 202) {
-          recurRule = usedRecur;
-          break;
+        ],
+        startSource: {
+          typeId: 1,
+          schedule: emptySchedule
         }
+      };
+      var cr = postHttpJson(
+        token,
+        subdomain,
+        "POST",
+        endpoint,
+        Platform.Function.Stringify(payloadObj)
+      );
+      if (cr.status == 200 || cr.status == 201 || cr.status == 202) {
+        var createObj = postParseJson(cr.body);
+        automationId = createObj && createObj.id ? String(createObj.id) : "";
+        createdNow = true;
+      } else {
         var dupName =
-          createBody.indexOf("Name already exists") >= 0 ||
-          createBody.indexOf("already exists") >= 0;
+          cr.body.indexOf("Name already exists") >= 0 ||
+          cr.body.indexOf("already exists") >= 0;
         if (dupName) {
           var recovered = postFindAutomationInList(
             token,
@@ -2054,29 +1894,31 @@ function postCreateAutomation(opts) {
           );
           if (recovered && recovered.id) {
             automationId = String(recovered.id);
-            createdNow = false;
-            break;
           }
         }
-      }
-      if (automationId) {
-      } else if (!(createStatus == 200 || createStatus == 201 || createStatus == 202)) {
-        return {
-          ok: false,
-          message:
-            "Step 7 FAILED - create automation HTTP " +
-            createStatus +
-            " - " +
-            createBody +
-            " (icalRecur tried: " +
-            usedRecur +
-            ")."
-        };
+        if (!automationId) {
+          return {
+            ok: false,
+            message:
+              "Step 7 FAILED - create automation HTTP " +
+              cr.status +
+              " - " +
+              cr.body +
+              "."
+          };
+        }
       }
       if (!automationId) {
-        var createObj = postParseJson(createBody);
-        automationId = createObj && createObj.id ? String(createObj.id) : "";
-        createdNow = true;
+        var recoveredAfterCreate = postFindAutomationInList(
+          token,
+          subdomain,
+          endpoint,
+          automationName,
+          automationKey
+        );
+        if (recoveredAfterCreate && recoveredAfterCreate.id) {
+          automationId = String(recoveredAfterCreate.id);
+        }
       }
     }
   }
@@ -2085,63 +1927,17 @@ function postCreateAutomation(opts) {
     return { ok: false, message: "Step 7 FAILED - automation ID not available." };
   }
 
-  var patchEndpoint = endpoint + "/" + encodeURIComponent(automationId);
-  var getCur = postHttpJson(token, subdomain, "GET", patchEndpoint, null);
-  var currentObj = getCur.status == 200 ? postParseJson(getCur.body) : null;
-  var normalizedSteps =
-    currentObj && currentObj.steps ? postNormalizeStepsForWrite(currentObj.steps) : null;
-  if (normalizedSteps && normalizedSteps.length > 0) {
-    postHttpJson(
-      token,
-      subdomain,
-      "PATCH",
-      patchEndpoint,
-      Platform.Function.Stringify({
-        id: currentObj.id,
-        name: currentObj.name,
-        description: currentObj.description || "Created via Journey Maker stack page",
-        key: currentObj.key,
-        categoryId: currentObj.categoryId,
-        steps: normalizedSteps,
-        startSource: {
-          typeId: 1,
-          schedule: postBuildScheduleWrite(recurRule, startDateLocal, endDateLocal, tzId)
-        }
-      })
-    );
-  } else {
-    postHttpJson(
-      token,
-      subdomain,
-      "PATCH",
-      patchEndpoint,
-      Platform.Function.Stringify({
-        startSource: {
-          typeId: 1,
-          schedule: postBuildScheduleWrite(recurRule, startDateLocal, endDateLocal, tzId)
-        }
-      })
-    );
-  }
-
-  var verify = postHttpJson(token, subdomain, "GET", patchEndpoint, null);
-  var verifyObj = verify.status == 200 ? postParseJson(verify.body) : null;
-  var finalRecur = postExtractIcalFromVerify(verifyObj);
-  var scheduleNote = finalRecur
-    ? " icalRecur=" + finalRecur + "."
-    : " Schedule not verified in API response; confirm in Automation Studio.";
   return {
     ok: true,
     automationId: automationId,
     message:
       "Step 7 OK - automation " +
-      (createdNow ? "created" : "updated existing") +
-      ". key=" +
+      (createdNow ? "created" : "found existing") +
+      " with inactive placeholder schedule (key=" +
       automationKey +
-      " id=" +
+      ", id=" +
       automationId +
-      "." +
-      scheduleNote
+      "). Activate schedule in Edit Build."
   };
 }
 
@@ -2224,11 +2020,7 @@ if (postDeleteRequested != "1") {
               subdomain: postSubdomain,
               automationName: postStackName,
               automationKey: postAutomationKey,
-              queryObjectId: queryObjectId,
-              frequency: postFrequency,
-              timezoneId: postTimezoneId,
-              startDate: postStartDate,
-              startOffset: postStartOffset
+              queryObjectId: queryObjectId
             });
             postSuffix = postSuffix + " " + autoResult.message;
             if (autoResult.ok && autoResult.automationId) {
@@ -3530,30 +3322,6 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
          %%[ NEXT @ti ELSE ]%%
          <div class="maker-alert" role="alert">Template config missing in `bd_sst_email_templates` (email_type=template).</div>
          %%[ ENDIF ]%%
-       </div>
-       <div class="question-header" style="margin-top: 24px;">
-         <div class="question-number">9</div>
-         <div class="question-text">Automation schedule</div>
-       </div>
-       <div class="form-group">
-         <label for="frequency" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Frequency</label>
-         <select id="frequency" name="frequency" class="select-control">
-           <option value="hourly" %%[ IF @frequency == "hourly" THEN ]%%selected%%[ ENDIF ]%%>Hourly</option>
-           <option value="daily" %%[ IF @frequency == "daily" THEN ]%%selected%%[ ENDIF ]%%>Daily</option>
-           <option value="weekly" %%[ IF @frequency == "weekly" THEN ]%%selected%%[ ENDIF ]%%>Weekly (Monday)</option>
-         </select>
-       </div>
-       <div class="form-group">
-         <label for="startDate" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Start date (local)</label>
-         <input id="startDate" type="datetime-local" class="textarea-control" name="startDate" value="%%=v(@startDate)=%%">
-       </div>
-       <div class="form-group">
-         <label for="startOffset" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">UTC offset (e.g. -05:00)</label>
-         <input id="startOffset" type="text" class="textarea-control" name="startOffset" value="%%=v(@startOffset)=%%" placeholder="-05:00">
-       </div>
-       <div class="form-group">
-         <label for="timezoneId" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Timezone ID</label>
-         <input id="timezoneId" type="text" class="textarea-control" name="timezoneId" value="%%=v(@timezoneId)=%%" placeholder="1">
        </div>
        <div class="submit-section">
          <input type="hidden" name="create" value="1">
