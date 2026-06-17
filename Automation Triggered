@@ -1770,7 +1770,44 @@ function postResolveEntryDe(prox, eventName, eventDefId, token, subdomain, asset
   return null;
 }
 
+function postNormalizeWsRows(results) {
+  var rows = [];
+  var i;
+  if (!results) {
+    return rows;
+  }
+  if (typeof results.length === "number") {
+    for (i = 0; i < results.length; i++) {
+      try {
+        rows.push(results[i]);
+      } catch (rowEx) {
+        break;
+      }
+    }
+    if (rows.length > 0) {
+      return rows;
+    }
+  }
+  try {
+    var parsed = Platform.Function.ParseJSON(Platform.Function.Stringify(results));
+    if (parsed && typeof parsed.length === "number") {
+      for (i = 0; i < parsed.length; i++) {
+        rows.push(parsed[i]);
+      }
+      return rows;
+    }
+    if (parsed) {
+      rows.push(parsed);
+    }
+  } catch (parseEx) {}
+  if (rows.length === 0 && (results.ObjectID || results.CustomerKey || results.Name || results.StatusMessage)) {
+    rows.push(results);
+  }
+  return rows;
+}
+
 function postResolveQueryObjectId(prox, queryKey) {
+  try {
   var lookup = prox.retrieve(
     "QueryDefinition",
     ["ObjectID", "CustomerKey"],
@@ -1780,8 +1817,9 @@ function postResolveQueryObjectId(prox, queryKey) {
       Value: String(queryKey)
     }
   );
-  if (lookup && lookup.Results && lookup.Results.length > 0 && lookup.Results[0].ObjectID) {
-    return String(lookup.Results[0].ObjectID);
+  var rows = postNormalizeWsRows(lookup && lookup.Results ? lookup.Results : null);
+  if (rows.length > 0 && rows[0].ObjectID) {
+    return String(rows[0].ObjectID);
   }
   lookup = prox.retrieve(
     "QueryDefinition",
@@ -1792,13 +1830,16 @@ function postResolveQueryObjectId(prox, queryKey) {
       Value: String(queryKey)
     }
   );
-  if (lookup && lookup.Results && lookup.Results.length > 0 && lookup.Results[0].ObjectID) {
-    return String(lookup.Results[0].ObjectID);
+  rows = postNormalizeWsRows(lookup && lookup.Results ? lookup.Results : null);
+  if (rows.length > 0 && rows[0].ObjectID) {
+    return String(rows[0].ObjectID);
   }
+  } catch (lookupEx) {}
   return "";
 }
 
 function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCustomerKey, deName) {
+  try {
   var existing = prox.retrieve(
     "QueryDefinition",
     ["ObjectID", "CustomerKey", "Name"],
@@ -1808,9 +1849,10 @@ function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCusto
       Value: String(queryKey)
     }
   );
+  var existingRows = postNormalizeWsRows(existing && existing.Results ? existing.Results : null);
   var existingObjectId = "";
-  if (existing && existing.Results && existing.Results.length > 0 && existing.Results[0].ObjectID) {
-    existingObjectId = String(existing.Results[0].ObjectID);
+  if (existingRows.length > 0 && existingRows[0].ObjectID) {
+    existingObjectId = String(existingRows[0].ObjectID);
   }
   var queryPayload = {
     Name: String(queryName),
@@ -1850,16 +1892,16 @@ function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCusto
   }
   var status =
     createResponse && createResponse.Status ? String(createResponse.Status) : "UNKNOWN";
+  var resultRows = postNormalizeWsRows(
+    createResponse && createResponse.Results ? createResponse.Results : null
+  );
   var msg =
-    createResponse &&
-    createResponse.Results &&
-    createResponse.Results.length > 0 &&
-    createResponse.Results[0].StatusMessage
-      ? String(createResponse.Results[0].StatusMessage)
+    resultRows.length > 0 && resultRows[0].StatusMessage
+      ? String(resultRows[0].StatusMessage)
       : "No status message returned.";
   var objectId = "";
-  if (createResponse && createResponse.Results && createResponse.Results.length > 0) {
-    var qr = createResponse.Results[0];
+  if (resultRows.length > 0) {
+    var qr = resultRows[0];
     objectId = qr.ObjectID
       ? String(qr.ObjectID)
       : qr.NewObjectID
@@ -1906,10 +1948,17 @@ function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCusto
       status +
       ": " +
       msg +
-      (createResponse && createResponse.Results && createResponse.Results[0] && createResponse.Results[0].ErrorCode
-        ? " ErrorCode=" + createResponse.Results[0].ErrorCode
+      (resultRows.length > 0 && resultRows[0].ErrorCode
+        ? " ErrorCode=" + resultRows[0].ErrorCode
         : "")
   };
+  } catch (queryEx) {
+    return {
+      ok: false,
+      message:
+        "Step 6 FAILED - QueryDefinition threw: " + (queryEx.message || String(queryEx))
+    };
+  }
 }
 
 function postCreateAutomation(opts) {
@@ -1925,8 +1974,8 @@ function postCreateAutomation(opts) {
 
   if (!startDate) {
     var nowVal = new Date();
-    nowVal.setMinutes(0, 0, 0);
-    nowVal.setHours(nowVal.getHours() + 1);
+    nowVal.setDate(nowVal.getDate() + 1);
+    nowVal.setHours(0, 0, 0, 0);
     function pad(n) {
       return (n < 10 ? "0" : "") + n;
     }
@@ -1936,10 +1985,7 @@ function postCreateAutomation(opts) {
       pad(nowVal.getMonth() + 1) +
       "-" +
       pad(nowVal.getDate()) +
-      "T" +
-      pad(nowVal.getHours()) +
-      ":" +
-      pad(nowVal.getMinutes());
+      "T00:00";
   }
 
   var off = String(startOffset || "-05:00");
@@ -2218,22 +2264,25 @@ if (postDeleteRequested != "1") {
         if (queryResult.ok) {
           var queryObjectId = queryResult.objectId;
           if (!queryObjectId) {
-            var qdLookup = postProx.retrieve(
-              "QueryDefinition",
-              ["ObjectID"],
-              {
-                Property: "CustomerKey",
-                SimpleOperator: "equals",
-                Value: String(postQueryKey)
+            try {
+              var qdLookup = postProx.retrieve(
+                "QueryDefinition",
+                ["ObjectID"],
+                {
+                  Property: "CustomerKey",
+                  SimpleOperator: "equals",
+                  Value: String(postQueryKey)
+                }
+              );
+              var qdRows = postNormalizeWsRows(qdLookup && qdLookup.Results ? qdLookup.Results : null);
+              if (qdRows.length > 0 && qdRows[0].ObjectID) {
+                queryObjectId = String(qdRows[0].ObjectID);
               }
-            );
-            if (
-              qdLookup &&
-              qdLookup.Results &&
-              qdLookup.Results.length > 0 &&
-              qdLookup.Results[0].ObjectID
-            ) {
-              queryObjectId = String(qdLookup.Results[0].ObjectID);
+            } catch (qdLookupEx) {
+              postSuffix =
+                postSuffix +
+                " Step 6 FAILED - QueryDefinition ObjectID lookup threw: " +
+                (qdLookupEx.message || String(qdLookupEx));
             }
           }
           if (!queryObjectId) {
