@@ -997,26 +997,111 @@ function stackMapSchemaFieldToSoap(fieldDef) {
    soapField.IsPrimaryKey = true;
    soapField.IsRequired = true;
    soapField.IsNillable = false;
+  } else if (name === "ContactId") {
+   soapField.IsRequired = true;
+   soapField.IsNillable = false;
   }
   return soapField;
+}
+
+
+function stackExpectedFieldNames() {
+  var schema = stackEventSchemaFields();
+  var expected = {};
+  var i;
+  for (i = 0; i < schema.length; i++) {
+   expected[String(schema[i].name).toLowerCase()] = schema[i].name;
+  }
+  return expected;
+}
+
+
+function stackNormalizeWsRows(results) {
+  var rows = [];
+  if (!results) {
+   return rows;
+  }
+  if (typeof results.length === "number") {
+   var i;
+   for (i = 0; i < results.length; i++) {
+    rows.push(results[i]);
+   }
+   return rows;
+  }
+  if (results.Name || results.ObjectID || results.CustomerKey) {
+   rows.push(results);
+  }
+  return rows;
+}
+
+
+function stackGetDeFieldNames(prox, customerKey) {
+  var names = {};
+  var resp = prox.retrieve("DataExtensionField", ["Name"], {
+   Property: "DataExtension.CustomerKey",
+   SimpleOperator: "equals",
+   Value: String(customerKey)
+  });
+  var rows = stackNormalizeWsRows(resp && resp.Results ? resp.Results : null);
+  var i;
+  for (i = 0; i < rows.length; i++) {
+   if (rows[i] && rows[i].Name) {
+    names[String(rows[i].Name).toLowerCase()] = String(rows[i].Name);
+   }
+  }
+  return names;
+}
+
+
+function stackValidateDeSchema(prox, customerKey) {
+  var actual = stackGetDeFieldNames(prox, customerKey);
+  var expected = stackExpectedFieldNames();
+  var missing = [];
+  var extra = [];
+  var name;
+  for (name in expected) {
+   if (expected.hasOwnProperty(name) && !actual[name]) {
+    missing.push(expected[name]);
+   }
+  }
+  for (name in actual) {
+   if (actual.hasOwnProperty(name) && !expected[name]) {
+    extra.push(actual[name]);
+   }
+  }
+  if (missing.length > 0 || extra.length > 0) {
+   var parts = [];
+   if (missing.length > 0) {
+    parts.push("missing " + missing.join(", "));
+   }
+   if (extra.length > 0) {
+    parts.push("legacy " + extra.join(", "));
+   }
+   return {
+    ok: false,
+    message:
+     "Entry DE schema mismatch (" +
+     parts.join("; ") +
+     "). Delete the existing DE or use a new build name."
+   };
+  }
+  return { ok: true };
 }
 
 
 function stackBuildSoapDeFields() {
   var schema = stackEventSchemaFields();
   var fields = [];
-  var uniqueField = null;
   var i;
   for (i = 0; i < schema.length; i++) {
-   var soapField = stackMapSchemaFieldToSoap(schema[i]);
    if (schema[i].name === "MemberId") {
-    uniqueField = soapField;
-   } else {
-    fields.push(soapField);
+    fields.push(stackMapSchemaFieldToSoap(schema[i]));
    }
   }
-  if (uniqueField) {
-   fields.unshift(uniqueField);
+  for (i = 0; i < schema.length; i++) {
+   if (schema[i].name !== "MemberId") {
+    fields.push(stackMapSchemaFieldToSoap(schema[i]));
+   }
   }
   return fields;
 }
@@ -1123,15 +1208,22 @@ function stackCreateEntryDeViaSoap(prox, customerKey, deName) {
   if (categoryId > 0) {
    deConfig.CategoryID = categoryId;
   }
-  var createResp = prox.createItem("DataExtension", deConfig);
+  var createResp = null;
+  try {
+   createResp = prox.createItem("DataExtension", deConfig);
+  } catch (createEx) {
+   return {
+    ok: false,
+    message:
+     "Entry DE SOAP create threw: " + (createEx.message || String(createEx))
+   };
+  }
+  var createRows = stackNormalizeWsRows(createResp && createResp.Results ? createResp.Results : null);
   var status =
    createResp && createResp.Status ? String(createResp.Status) : "UNKNOWN";
   var msg =
-   createResp &&
-   createResp.Results &&
-   createResp.Results.length > 0 &&
-   createResp.Results[0].StatusMessage
-    ? String(createResp.Results[0].StatusMessage)
+   createRows.length > 0 && createRows[0].StatusMessage
+    ? String(createRows[0].StatusMessage)
     : "No status message returned.";
   if (status !== "OK") {
    return {
@@ -1140,8 +1232,8 @@ function stackCreateEntryDeViaSoap(prox, customerKey, deName) {
    };
   }
   var objectId = "";
-  if (createResp && createResp.Results && createResp.Results.length > 0) {
-   var row = createResp.Results[0];
+  if (createRows.length > 0) {
+   var row = createRows[0];
    objectId = row.ObjectID
     ? String(row.ObjectID)
     : row.NewObjectID
@@ -1203,6 +1295,10 @@ function stackEnsureEntryDe(prox, token, subdomain, customerKey, deName) {
   var existing = stackResolveExistingDe(prox, customerKey, name);
   if (existing) {
    var repairKey = existing.customerKey || String(customerKey || "");
+   var schemaCheck = stackValidateDeSchema(prox, repairKey);
+   if (!schemaCheck.ok) {
+    return { ok: false, message: schemaCheck.message };
+   }
    return {
     ok: true,
     skipped: true,
@@ -1741,6 +1837,10 @@ function postResolveQueryObjectId(prox, queryKey) {
 }
 
 function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCustomerKey, deName) {
+  var schemaCheck = stackValidateDeSchema(prox, deCustomerKey);
+  if (!schemaCheck.ok) {
+    return { ok: false, message: "Step 6 FAILED - " + schemaCheck.message };
+  }
   var existing = prox.retrieve(
     "QueryDefinition",
     ["ObjectID", "CustomerKey", "Name"],
@@ -1750,15 +1850,8 @@ function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCusto
       Value: String(queryKey)
     }
   );
-  if (existing && existing.Results && existing.Results.length > 0 && existing.Results[0].ObjectID) {
-    return {
-      ok: true,
-      skipped: true,
-      objectId: String(existing.Results[0].ObjectID),
-      message: "Step 6 OK - QueryDefinition already exists (CustomerKey=" + queryKey + ")."
-    };
-  }
-  var createResponse = prox.createItem("QueryDefinition", {
+  var existingRows = stackNormalizeWsRows(existing && existing.Results ? existing.Results : null);
+  var queryPayload = {
     Name: String(queryName),
     CustomerKey: String(queryKey),
     QueryText: queryText,
@@ -1768,19 +1861,44 @@ function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCusto
       CustomerKey: String(deCustomerKey),
       Name: String(deName)
     }
-  });
+  };
+  var createResponse = null;
+  if (existingRows.length > 0 && existingRows[0].ObjectID) {
+    queryPayload.ObjectID = String(existingRows[0].ObjectID);
+    try {
+      createResponse = prox.updateItem("QueryDefinition", queryPayload);
+    } catch (updateEx) {
+      return {
+        ok: false,
+        message:
+          "Step 6 FAILED - QueryDefinition update threw: " +
+          (updateEx.message || String(updateEx))
+      };
+    }
+  } else {
+    try {
+      createResponse = prox.createItem("QueryDefinition", queryPayload);
+    } catch (createEx) {
+      return {
+        ok: false,
+        message:
+          "Step 6 FAILED - QueryDefinition create threw: " +
+          (createEx.message || String(createEx))
+      };
+    }
+  }
   var status =
     createResponse && createResponse.Status ? String(createResponse.Status) : "UNKNOWN";
+  var resultRows = stackNormalizeWsRows(
+    createResponse && createResponse.Results ? createResponse.Results : null
+  );
   var msg =
-    createResponse &&
-    createResponse.Results &&
-    createResponse.Results.length > 0 &&
-    createResponse.Results[0].StatusMessage
-      ? String(createResponse.Results[0].StatusMessage)
+    resultRows.length > 0 && resultRows[0].StatusMessage
+      ? String(resultRows[0].StatusMessage)
       : "No status message returned.";
   var objectId = "";
-  if (createResponse && createResponse.Results && createResponse.Results.length > 0) {
-    var qr = createResponse.Results[0];
+  if (resultRows.length > 0) {
+    var qr = resultRows[0];
     objectId = qr.ObjectID
       ? String(qr.ObjectID)
       : qr.NewObjectID
@@ -1788,6 +1906,9 @@ function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCusto
       : qr.NewID
       ? String(qr.NewID)
       : "";
+  }
+  if (!objectId && existingRows.length > 0 && existingRows[0].ObjectID) {
+    objectId = String(existingRows[0].ObjectID);
   }
   if (status === "OK" && !objectId) {
     objectId = postResolveQueryObjectId(prox, queryKey);
@@ -1797,14 +1918,23 @@ function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCusto
       return {
         ok: true,
         objectId: objectId,
-        message: "Step 6 OK - QueryDefinition created (CustomerKey=" + queryKey + ", ObjectID=" + objectId + ")."
+        message:
+          "Step 6 OK - QueryDefinition " +
+          (existingRows.length > 0 ? "updated" : "created") +
+          " (CustomerKey=" +
+          queryKey +
+          ", ObjectID=" +
+          objectId +
+          ")."
       };
     }
     return {
       ok: true,
       objectId: "",
       message:
-        "Step 6 OK - QueryDefinition created (CustomerKey=" +
+        "Step 6 OK - QueryDefinition " +
+        (existingRows.length > 0 ? "updated" : "created") +
+        " (CustomerKey=" +
         queryKey +
         ") but ObjectID was not returned; automation will resolve by key."
     };
@@ -1812,12 +1942,14 @@ function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCusto
   return {
     ok: false,
     message:
-      "Step 6 FAILED - QueryDefinition create " +
+      "Step 6 FAILED - QueryDefinition " +
+      (existingRows.length > 0 ? "update" : "create") +
+      " " +
       status +
       ": " +
       msg +
-      (createResponse && createResponse.Results && createResponse.Results[0] && createResponse.Results[0].ErrorCode
-        ? " ErrorCode=" + createResponse.Results[0].ErrorCode
+      (resultRows.length > 0 && resultRows[0].ErrorCode
+        ? " ErrorCode=" + resultRows[0].ErrorCode
         : "")
   };
 }
