@@ -1037,18 +1037,20 @@ function stackNormalizeWsRows(results) {
 
 function stackGetDeFieldNames(prox, customerKey) {
   var names = {};
-  var resp = prox.retrieve("DataExtensionField", ["Name"], {
-   Property: "DataExtension.CustomerKey",
-   SimpleOperator: "equals",
-   Value: String(customerKey)
-  });
-  var rows = stackNormalizeWsRows(resp && resp.Results ? resp.Results : null);
-  var i;
-  for (i = 0; i < rows.length; i++) {
-   if (rows[i] && rows[i].Name) {
-    names[String(rows[i].Name).toLowerCase()] = String(rows[i].Name);
+  try {
+   var resp = prox.retrieve("DataExtensionField", ["Name"], {
+    Property: "DataExtension.CustomerKey",
+    SimpleOperator: "equals",
+    Value: String(customerKey)
+   });
+   var rows = stackNormalizeWsRows(resp && resp.Results ? resp.Results : null);
+   var i;
+   for (i = 0; i < rows.length; i++) {
+    if (rows[i] && rows[i].Name) {
+     names[String(rows[i].Name).toLowerCase()] = String(rows[i].Name);
+    }
    }
-  }
+  } catch (fieldEx) {}
   return names;
 }
 
@@ -1059,6 +1061,21 @@ function stackValidateDeSchema(prox, customerKey) {
   var missing = [];
   var extra = [];
   var name;
+  var actualCount = 0;
+  for (name in actual) {
+   if (actual.hasOwnProperty(name)) {
+    actualCount++;
+   }
+  }
+  if (actualCount === 0) {
+   return {
+    ok: false,
+    message:
+     "Could not read entry DE fields for CustomerKey=" +
+     String(customerKey) +
+     "."
+   };
+  }
   for (name in expected) {
    if (expected.hasOwnProperty(name) && !actual[name]) {
     missing.push(expected[name]);
@@ -1089,18 +1106,36 @@ function stackValidateDeSchema(prox, customerKey) {
 }
 
 
-function stackBuildSoapDeFields() {
+function stackEventSchemaFieldOrder() {
   var schema = stackEventSchemaFields();
-  var fields = [];
+  var order = [];
   var i;
   for (i = 0; i < schema.length; i++) {
    if (schema[i].name === "MemberId") {
-    fields.push(stackMapSchemaFieldToSoap(schema[i]));
+    order.push(schema[i].name);
    }
   }
   for (i = 0; i < schema.length; i++) {
    if (schema[i].name !== "MemberId") {
-    fields.push(stackMapSchemaFieldToSoap(schema[i]));
+    order.push(schema[i].name);
+   }
+  }
+  return order;
+}
+
+
+function stackBuildSoapDeFields() {
+  var order = stackEventSchemaFieldOrder();
+  var schema = stackEventSchemaFields();
+  var byName = {};
+  var fields = [];
+  var i;
+  for (i = 0; i < schema.length; i++) {
+   byName[schema[i].name] = schema[i];
+  }
+  for (i = 0; i < order.length; i++) {
+   if (byName[order[i]]) {
+    fields.push(stackMapSchemaFieldToSoap(byName[order[i]]));
    }
   }
   return fields;
@@ -1647,13 +1682,13 @@ function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environme
     "COALESCE(NULLIF(RTRIM(ISNULL(cm.email, '')), ''), NULLIF(RTRIM(ISNULL(con.Email, '')), ''))";
   var sql =
     "SELECT\n" +
+    "  cm.id AS MemberId,\n" +
     "  cm.ContactId AS ContactId,\n" +
     "  " + emailExpr + " AS Email,\n" +
     "  cm.CampaignId AS CampaignId,\n" +
     "  con.AccountId AS AccountId,\n" +
     "  u.Name AS Account_Owner_Name,\n" +
     "  u.Email AS Account_Owner_Email,\n" +
-    "  cm.id AS MemberId,\n" +
     "  cm.Status AS Status,\n" +
     "  con.MailingState AS State,\n" +
     "  a.OwnerId AS AccountOwnerId\n" +
@@ -1809,7 +1844,8 @@ function postResolveEntryDe(prox, eventName, eventDefId, token, subdomain, asset
 }
 
 function postResolveQueryObjectId(prox, queryKey) {
-  var lookup = prox.retrieve(
+  try {
+   var lookup = prox.retrieve(
     "QueryDefinition",
     ["ObjectID", "CustomerKey"],
     {
@@ -1817,11 +1853,12 @@ function postResolveQueryObjectId(prox, queryKey) {
       SimpleOperator: "equals",
       Value: String(queryKey)
     }
-  );
-  if (lookup && lookup.Results && lookup.Results.length > 0 && lookup.Results[0].ObjectID) {
-    return String(lookup.Results[0].ObjectID);
-  }
-  lookup = prox.retrieve(
+   );
+   var rows = stackNormalizeWsRows(lookup && lookup.Results ? lookup.Results : null);
+   if (rows.length > 0 && rows[0].ObjectID) {
+    return String(rows[0].ObjectID);
+   }
+   lookup = prox.retrieve(
     "QueryDefinition",
     ["ObjectID", "Name"],
     {
@@ -1829,64 +1866,92 @@ function postResolveQueryObjectId(prox, queryKey) {
       SimpleOperator: "equals",
       Value: String(queryKey)
     }
-  );
-  if (lookup && lookup.Results && lookup.Results.length > 0 && lookup.Results[0].ObjectID) {
-    return String(lookup.Results[0].ObjectID);
-  }
+   );
+   rows = stackNormalizeWsRows(lookup && lookup.Results ? lookup.Results : null);
+   if (rows.length > 0 && rows[0].ObjectID) {
+    return String(rows[0].ObjectID);
+   }
+  } catch (lookupEx) {}
   return "";
 }
 
-function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCustomerKey, deName) {
-  var schemaCheck = stackValidateDeSchema(prox, deCustomerKey);
-  if (!schemaCheck.ok) {
-    return { ok: false, message: "Step 6 FAILED - " + schemaCheck.message };
-  }
-  var existing = prox.retrieve(
-    "QueryDefinition",
-    ["ObjectID", "CustomerKey", "Name"],
+function postResolveQueryCategoryId(prox) {
+  try {
+   var folders = prox.retrieve(
+    "DataFolder",
+    ["ID", "Name", "ContentType"],
     {
+     Property: "ContentType",
+     SimpleOperator: "equals",
+     Value: "querydefinition"
+    }
+   );
+   var rows = stackNormalizeWsRows(folders && folders.Results ? folders.Results : null);
+   if (rows.length > 0) {
+    var categoryId = parseInt(String(rows[0].ID), 10);
+    if (!isNaN(categoryId) && categoryId > 0) {
+     return categoryId;
+    }
+   }
+  } catch (folderEx) {}
+  return 0;
+}
+
+function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCustomerKey, deName) {
+  try {
+   var schemaCheck = stackValidateDeSchema(prox, deCustomerKey);
+   if (!schemaCheck.ok) {
+    return { ok: false, message: "Step 6 FAILED - " + schemaCheck.message };
+   }
+   var existing = null;
+   try {
+    existing = prox.retrieve(
+     "QueryDefinition",
+     ["ObjectID", "CustomerKey", "Name"],
+     {
       Property: "CustomerKey",
       SimpleOperator: "equals",
       Value: String(queryKey)
-    }
-  );
-  var existingRows = stackNormalizeWsRows(existing && existing.Results ? existing.Results : null);
-  var queryPayload = {
+     }
+    );
+   } catch (lookupEx) {
+    return {
+     ok: false,
+     message:
+      "Step 6 FAILED - QueryDefinition lookup threw: " +
+      (lookupEx.message || String(lookupEx))
+    };
+   }
+   var existingRows = stackNormalizeWsRows(existing && existing.Results ? existing.Results : null);
+   var queryPayload = {
     Name: String(queryName),
     CustomerKey: String(queryKey),
     QueryText: queryText,
     TargetType: "DE",
     TargetUpdateType: "Overwrite",
     DataExtensionTarget: {
-      CustomerKey: String(deCustomerKey),
-      Name: String(deName)
+     CustomerKey: String(deCustomerKey)
     }
-  };
-  var createResponse = null;
-  if (existingRows.length > 0 && existingRows[0].ObjectID) {
-    queryPayload.ObjectID = String(existingRows[0].ObjectID);
-    try {
-      createResponse = prox.updateItem("QueryDefinition", queryPayload);
-    } catch (updateEx) {
-      return {
-        ok: false,
-        message:
-          "Step 6 FAILED - QueryDefinition update threw: " +
-          (updateEx.message || String(updateEx))
-      };
-    }
-  } else {
-    try {
-      createResponse = prox.createItem("QueryDefinition", queryPayload);
-    } catch (createEx) {
-      return {
-        ok: false,
-        message:
-          "Step 6 FAILED - QueryDefinition create threw: " +
-          (createEx.message || String(createEx))
-      };
-    }
-  }
+   };
+   var categoryId = postResolveQueryCategoryId(prox);
+   if (categoryId > 0) {
+    queryPayload.CategoryID = categoryId;
+   }
+   var createResponse = null;
+   if (existingRows.length > 0 && existingRows[0].ObjectID) {
+    createResponse = prox.updateItem("QueryDefinition", {
+     ObjectID: String(existingRows[0].ObjectID),
+     CustomerKey: String(queryKey),
+     QueryText: queryText,
+     TargetType: "DE",
+     TargetUpdateType: "Overwrite",
+     DataExtensionTarget: {
+      CustomerKey: String(deCustomerKey)
+     }
+    });
+   } else {
+    createResponse = prox.createItem("QueryDefinition", queryPayload);
+   }
   var status =
     createResponse && createResponse.Status ? String(createResponse.Status) : "UNKNOWN";
   var resultRows = stackNormalizeWsRows(
@@ -1952,6 +2017,13 @@ function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCusto
         ? " ErrorCode=" + resultRows[0].ErrorCode
         : "")
   };
+  } catch (queryEx) {
+   return {
+    ok: false,
+    message:
+     "Step 6 FAILED - QueryDefinition threw: " + (queryEx.message || String(queryEx))
+   };
+  }
 }
 
 function postCreateAutomation(opts) {
@@ -2126,27 +2198,18 @@ if (postDeleteRequested != "1") {
         if (queryResult.ok) {
           var queryObjectId = queryResult.objectId;
           if (!queryObjectId) {
-            var qdLookup = postProx.retrieve(
-              "QueryDefinition",
-              ["ObjectID"],
-              {
-                Property: "CustomerKey",
-                SimpleOperator: "equals",
-                Value: String(postQueryKey)
-              }
-            );
-            if (
-              qdLookup &&
-              qdLookup.Results &&
-              qdLookup.Results.length > 0 &&
-              qdLookup.Results[0].ObjectID
-            ) {
-              queryObjectId = String(qdLookup.Results[0].ObjectID);
+            try {
+             queryObjectId = postResolveQueryObjectId(postProx, postQueryKey);
+            } catch (qdLookupEx) {
+             postSuffix =
+              postSuffix +
+              " Step 6 FAILED - QueryDefinition ObjectID lookup threw: " +
+              (qdLookupEx.message || String(qdLookupEx));
             }
           }
           if (!queryObjectId) {
             postSuffix = postSuffix + " Step 7 FAILED - QueryDefinition ObjectID not found.";
-          } else {
+          } else if (postSuffix.indexOf("Step 6 FAILED") < 0) {
             var autoResult = postCreateAutomation({
               token: postAccessToken,
               subdomain: postSubdomain,
