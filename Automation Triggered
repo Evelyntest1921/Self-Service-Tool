@@ -1532,11 +1532,11 @@ function postCreateDeAudienceEvent(token, subdomain, prox, opts) {
   Platform.Variable.SetValue("@deAudienceTriggerJson", Platform.Function.Stringify(trigObj));
   Platform.Variable.SetValue(
     "@defaultEmailExpr",
-    "{{Event." + eventKey + '."email"}}'
+    "{{Event." + eventKey + '."Email"}}'
   );
   Platform.Variable.SetValue(
     "@defaultEmailEscaped",
-    ("{{Event." + eventKey + '."email"}}').replace(/"/g, '\\"')
+    ("{{Event." + eventKey + '."Email"}}').replace(/"/g, '\\"')
   );
   return {
     ok: true,
@@ -1825,15 +1825,11 @@ function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCusto
       Value: String(queryKey)
     }
   );
+  var existingObjectId = "";
   if (existing && existing.Results && existing.Results.length > 0 && existing.Results[0].ObjectID) {
-    return {
-      ok: true,
-      skipped: true,
-      objectId: String(existing.Results[0].ObjectID),
-      message: "Step 6 OK - QueryDefinition already exists (CustomerKey=" + queryKey + ")."
-    };
+    existingObjectId = String(existing.Results[0].ObjectID);
   }
-  var createResponse = prox.createItem("QueryDefinition", {
+  var queryPayload = {
     Name: String(queryName),
     CustomerKey: String(queryKey),
     QueryText: queryText,
@@ -1843,7 +1839,32 @@ function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCusto
       CustomerKey: String(deCustomerKey),
       Name: String(deName)
     }
-  });
+  };
+  var createResponse = null;
+  if (existingObjectId) {
+    queryPayload.ObjectID = existingObjectId;
+    try {
+      createResponse = prox.updateItem("QueryDefinition", queryPayload);
+    } catch (updateEx) {
+      return {
+        ok: false,
+        message:
+          "Step 6 FAILED - QueryDefinition update threw: " +
+          (updateEx.message || String(updateEx))
+      };
+    }
+  } else {
+    try {
+      createResponse = prox.createItem("QueryDefinition", queryPayload);
+    } catch (createEx) {
+      return {
+        ok: false,
+        message:
+          "Step 6 FAILED - QueryDefinition create threw: " +
+          (createEx.message || String(createEx))
+      };
+    }
+  }
   var status =
     createResponse && createResponse.Status ? String(createResponse.Status) : "UNKNOWN";
   var msg =
@@ -1872,14 +1893,23 @@ function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCusto
       return {
         ok: true,
         objectId: objectId,
-        message: "Step 6 OK - QueryDefinition created (CustomerKey=" + queryKey + ", ObjectID=" + objectId + ")."
+        message:
+          "Step 6 OK - QueryDefinition " +
+          (existingObjectId ? "updated" : "created") +
+          " (CustomerKey=" +
+          queryKey +
+          ", ObjectID=" +
+          objectId +
+          ")."
       };
     }
     return {
       ok: true,
       objectId: "",
       message:
-        "Step 6 OK - QueryDefinition created (CustomerKey=" +
+        "Step 6 OK - QueryDefinition " +
+        (existingObjectId ? "updated" : "created") +
+        " (CustomerKey=" +
         queryKey +
         ") but ObjectID was not returned; automation will resolve by key."
     };
@@ -1887,7 +1917,9 @@ function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCusto
   return {
     ok: false,
     message:
-      "Step 6 FAILED - QueryDefinition create " +
+      "Step 6 FAILED - QueryDefinition " +
+      (existingObjectId ? "update" : "create") +
+      " " +
       status +
       ": " +
       msg +
@@ -2447,7 +2479,7 @@ function buildCmUpdateActivitySbU(opts) {
   var ek = opts.eventKey;
   var campId = opts.campaignId;
   var campLabel = opts.campaignLabel || campId;
-  var mergeContactId = '{{Event."' + ek + '"."id"}}';
+  var mergeContactId = '{{Event."' + ek + '"."ContactId"}}';
   return {
     id: randomGuidSbU(),
     key: "SALESCLOUDACTIVITY-1",
@@ -2480,7 +2512,7 @@ function buildCmUpdateActivitySbU(opts) {
                     {
                       FieldName: "ContactId",
                       FieldValue: mergeContactId,
-                      FieldValueLabel: "id",
+                      FieldValueLabel: "ContactId",
                       FieldType: "reference",
                       ReferenceObjectNames: ["CONTACT"],
                       AdditionalInfo: {
@@ -2527,7 +2559,7 @@ function buildCmUpdateActivitySbU(opts) {
                 FieldName: "ContactId",
                 FieldLabel: "Contact ID",
                 FieldValue: mergeContactId,
-                FieldValueLabel: "id",
+                FieldValueLabel: "ContactId",
                 Required: "false",
                 FieldType: "reference",
                 MappingType: "Constant",
@@ -2653,6 +2685,9 @@ if (
   sendClassificationId
 ) {
  try {
+   if (!defaultEmailEscaped && eventKey) {
+     defaultEmailEscaped = ('{{Event."' + eventKey + '"."Email"}}').replace(/"/g, '\\"');
+   }
    var scRow = lookupSendClassificationJpa(sendClassificationId);
    var spRowForJourney = lookupSenderProfileJpa(senderProfileId);
    var sendClassificationIdForJourney =
@@ -2708,8 +2743,8 @@ if (
    var cmActivity = Platform.Function.Stringify(cmObj);
    var taskSubject = "Email Sent: " + (emailName || "Email");
    var taskDescription = "Email name: " + (emailName || "Email");
-   var taskEvWho = '{{Event."' + eventKey + '"."id"}}';
-   var taskEvOwn = '{{Event."' + eventKey + '"."sfUserId"}}';
+   var taskEvWho = '{{Event."' + eventKey + '"."ContactId"}}';
+   var taskEvOwn = '{{Event."' + eventKey + '"."AccountOwnerId"}}';
    var taskActivityObj = {
      id: randomGuidSbU(),
      type: "SALESCLOUDACTIVITY",
@@ -2747,7 +2782,7 @@ if (
                  FieldName: "WhoId",
                  FieldLabel: "Name ID",
                  FieldValue: taskEvWho,
-                 FieldValueLabel: "id",
+                 FieldValueLabel: "ContactId",
                  Required: "false",
                  FieldType: "reference",
                  MappingType: "Constant",
@@ -2794,7 +2829,7 @@ if (
                  FieldName: "OwnerId",
                  FieldLabel: "Assigned To ID",
                  FieldValue: taskEvOwn,
-                 FieldValueLabel: "sfUserId",
+                 FieldValueLabel: "AccountOwnerId",
                  Required: "false",
                  FieldType: "reference",
                  MappingType: "Constant",
@@ -2894,6 +2929,7 @@ if (
 Platform.Variable.SetValue("@resultText", resultText + journeyResult);
 </script>
 <script runat="server">
+Platform.Load("core","1");
 var cleanupNeeded = Variable.GetValue("cleanupNeeded");
 var eventDefId = Variable.GetValue("eventDefId");
 var newEmailId = Variable.GetValue("newEmailId");
