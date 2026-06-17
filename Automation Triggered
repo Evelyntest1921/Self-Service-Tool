@@ -1555,6 +1555,7 @@ function postEscapeSql(value) {
 
 function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environment) {
   var camp = postEscapeSql(campaignId);
+  var userFilter = postEscapeSql(sfUserId);
   var env = String(environment || "").toLowerCase();
   var cmTable = "CampaignMember_Salesforce_1";
   var contactTable = "Contact_Salesforce";
@@ -1568,47 +1569,28 @@ function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environme
   }
   var emailExpr =
     "COALESCE(NULLIF(RTRIM(ISNULL(cm.email, '')), ''), NULLIF(RTRIM(ISNULL(con.Email, '')), ''))";
-  return (
+  var sql =
     "SELECT\n" +
-    "  '' AS greeting,\n" +
-    "  cm.ContactId AS id,\n" +
-    "  " + emailExpr + " AS email,\n" +
-    "  cm.id AS sfCampaignMemberId,\n" +
-    "  cm.CampaignId AS sfCampaignId,\n" +
-    "  '' AS sfQuickSendId,\n" +
+    "  cm.ContactId AS ContactId,\n" +
+    "  " + emailExpr + " AS Email,\n" +
+    "  cm.CampaignId AS CampaignId,\n" +
+    "  con.AccountId AS AccountId,\n" +
     "  u.Name AS Account_Owner_Name,\n" +
     "  u.Email AS Account_Owner_Email,\n" +
-    "  con.firstName,\n" +
-    "  con.lastName,\n" +
-    "  u.id AS sfUserId,\n" +
-    "  '' AS journeyID,\n" +
-    "  '' AS sfOrgId,\n" +
-    "  GETDATE() AS DateAdded,\n" +
-    "  '' AS smsValue,\n" +
-    "  con.MobilePhone AS mobilePhone,\n" +
-    "  '' AS EntryObjectId,\n" +
-    "  '' AS Role,\n" +
-    "  cm.Account_Owner__c AS OwnerId,\n" +
-    "  con.AccountName__c AS AccountName,\n" +
+    "  cm.id AS MemberId,\n" +
+    "  cm.Status AS Status,\n" +
     "  con.MailingState AS State,\n" +
-    "  con.Specialty__c AS Specialty,\n" +
-    "  con.Designation__c AS Designation,\n" +
-    "  u.Phone AS senderPhone,\n" +
-    "  u.Title AS senderTitle,\n" +
-    "  u.Sales_License_Number__c AS senderLicense,\n" +
-    "  '' AS senderMobile,\n" +
-    "  con.Salutation AS Salutation,\n" +
-    "  u.Appointment_Link__c AS AppointmentLink,\n" +
-    "  '' AS VAWP,\n" +
-    "  cm.Campaign_Name__c AS EmailName,\n" +
-    "  cm.id AS uniqueKey\n" +
+    "  a.OwnerId AS AccountOwnerId\n" +
     "FROM " + cmTable + " cm\n" +
     "LEFT JOIN " + contactTable + " con ON cm.ContactId = con.id\n" +
     "LEFT JOIN " + accountTable + " a ON con.AccountId = a.id\n" +
     "LEFT JOIN " + userTable + " u ON u.id = a.OwnerId\n" +
     "WHERE cm.CampaignId = '" + camp + "'\n" +
-    "  AND cm.ContactId IS NOT NULL"
-  );
+    "  AND cm.ContactId IS NOT NULL";
+  if (userFilter) {
+    sql += "\n  AND u.id = '" + userFilter + "'";
+  }
+  return sql;
 }
 
 function postStripTimezoneFromIso(s) {
