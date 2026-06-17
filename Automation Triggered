@@ -2032,206 +2032,122 @@ function postResolveQueryObjectId(prox, queryKey) {
   return "";
 }
 
-function postResolveQueryCategoryId(prox) {
-  try {
-   var folders = prox.retrieve(
-    "DataFolder",
-    ["ID", "Name", "ContentType"],
+function postCreateQueryDefinition(prox, queryKey, queryName, queryText, deCustomerKey, deName) {
+  var schemaCheck = stackValidateDeSchema(prox, deCustomerKey);
+  if (!schemaCheck.ok) {
+    return { ok: false, message: "Step 6 FAILED - " + schemaCheck.message };
+  }
+  var existing = prox.retrieve(
+    "QueryDefinition",
+    ["ObjectID", "CustomerKey", "Name"],
     {
-     LeftOperand: {
-      Property: "Name",
+      Property: "CustomerKey",
       SimpleOperator: "equals",
-      Value: "Query"
-     },
-     LogicalOperator: "AND",
-     RightOperand: {
-      Property: "ContentType",
-      SimpleOperator: "equals",
-      Value: "queryactivity"
-     }
+      Value: String(queryKey)
     }
-   );
-   var rows = stackNormalizeWsRows(folders && folders.Results ? folders.Results : null);
-   if (rows.length > 0) {
-    var categoryId = parseInt(String(rows[0].ID), 10);
-    if (!isNaN(categoryId) && categoryId > 0) {
-     return categoryId;
-    }
-   }
-   folders = prox.retrieve(
-    "DataFolder",
-    ["ID", "Name", "ContentType"],
-    {
-     Property: "ContentType",
-     SimpleOperator: "equals",
-     Value: "queryactivity"
-    }
-   );
-   rows = stackNormalizeWsRows(folders && folders.Results ? folders.Results : null);
-   if (rows.length > 0) {
-    categoryId = parseInt(String(rows[0].ID), 10);
-    if (!isNaN(categoryId) && categoryId > 0) {
-     return categoryId;
-    }
-   }
-  } catch (folderEx) {}
-  return 0;
-}
-
-function postCreateQueryDefinitionCore(queryKey, queryName, queryText, deCustomerKey, deName) {
-  try {
-   var config = {
+  );
+  var existingRows = stackNormalizeWsRows(existing && existing.Results ? existing.Results : null);
+  var queryPayload = {
     Name: String(queryName),
     CustomerKey: String(queryKey),
-    TargetUpdateType: "Overwrite",
+    QueryText: queryText,
     TargetType: "DE",
-    Target: {
-     Name: String(deName),
-     CustomerKey: String(deCustomerKey)
-    },
-    QueryText: queryText
-   };
-   var status = QueryDefinition.Add(config);
-   if (String(status) === "OK") {
-    return { ok: true, status: "OK" };
-   }
-   return { ok: false, message: "QueryDefinition.Add returned " + String(status) };
-  } catch (coreEx) {
-   return {
-    ok: false,
-    message: "QueryDefinition.Add threw: " + (coreEx.message || String(coreEx))
-   };
-  }
-}
-
-function postCreateQueryDefinition(token, subdomain, prox, queryKey, queryName, queryText, deCustomerKey, deName) {
-  try {
-   var schemaCheck = stackValidateDeSchema(prox, deCustomerKey);
-   if (!schemaCheck.ok) {
-    return { ok: false, message: "Step 6 FAILED - " + schemaCheck.message };
-   }
-   var categoryId = postResolveQueryCategoryId(prox);
-   var payload = {
-    name: String(queryName),
-    key: String(queryKey),
-    description: "Created via Journey Maker stack page",
-    queryText: queryText,
-    targetName: String(deName),
-    targetKey: String(deCustomerKey),
-    targetUpdateTypeId: 0,
-    targetUpdateTypeName: "Overwrite"
-   };
-   if (categoryId > 0) {
-    payload.categoryId = categoryId;
-   }
-   var baseUrl =
-    "https://" + subdomain + ".rest.marketingcloudapis.com/automation/v1/queries";
-   var keyUrl = baseUrl + "/key:" + encodeURIComponent(String(queryKey));
-   var queryId = "";
-   var resp = null;
-   var existing = postHttpJson(token, subdomain, "GET", keyUrl, null);
-   if (existing.status == 200) {
-    var existingObj = postParseJson(existing.body);
-    queryId = existingObj && existingObj.id ? String(existingObj.id) : "";
-    if (queryId) {
-     resp = postHttpJson(
-      token,
-      subdomain,
-      "PATCH",
-      baseUrl + "/" + encodeURIComponent(queryId),
-      Platform.Function.Stringify(payload)
-     );
+    TargetUpdateType: "Overwrite",
+    DataExtensionTarget: {
+      CustomerKey: String(deCustomerKey),
+      Name: String(deName)
     }
-   }
-   if (!resp || !(resp.status == 200 || resp.status == 201 || resp.status == 202)) {
-    resp = postHttpJson(
-     token,
-     subdomain,
-     "POST",
-     baseUrl,
-     Platform.Function.Stringify(payload)
-    );
-   }
-   if (resp && (resp.status == 200 || resp.status == 201 || resp.status == 202)) {
-    var resultObj = postParseJson(resp.body);
-    if (!queryId && resultObj) {
-     queryId = resultObj.queryDefinitionId
-      ? String(resultObj.queryDefinitionId)
-      : resultObj.id
-      ? String(resultObj.id)
+  };
+  var createResponse = null;
+  if (existingRows.length > 0 && existingRows[0].ObjectID) {
+    queryPayload.ObjectID = String(existingRows[0].ObjectID);
+    try {
+      createResponse = prox.updateItem("QueryDefinition", queryPayload);
+    } catch (updateEx) {
+      return {
+        ok: false,
+        message:
+          "Step 6 FAILED - QueryDefinition update threw: " +
+          (updateEx.message || String(updateEx))
+      };
+    }
+  } else {
+    try {
+      createResponse = prox.createItem("QueryDefinition", queryPayload);
+    } catch (createEx) {
+      return {
+        ok: false,
+        message:
+          "Step 6 FAILED - QueryDefinition create threw: " +
+          (createEx.message || String(createEx))
+      };
+    }
+  }
+  var status =
+    createResponse && createResponse.Status ? String(createResponse.Status) : "UNKNOWN";
+  var resultRows = stackNormalizeWsRows(
+    createResponse && createResponse.Results ? createResponse.Results : null
+  );
+  var msg =
+    resultRows.length > 0 && resultRows[0].StatusMessage
+      ? String(resultRows[0].StatusMessage)
+      : "No status message returned.";
+  var objectId = "";
+  if (resultRows.length > 0) {
+    var qr = resultRows[0];
+    objectId = qr.ObjectID
+      ? String(qr.ObjectID)
+      : qr.NewObjectID
+      ? String(qr.NewObjectID)
+      : qr.NewID
+      ? String(qr.NewID)
       : "";
-    }
-    if (!queryId) {
-     queryId = postResolveQueryObjectId(prox, queryKey);
-    }
-    if (queryId) {
-     return {
-      ok: true,
-      objectId: queryId,
-      message:
-       "Step 6 OK - QueryDefinition saved via REST (CustomerKey=" +
-       queryKey +
-       ", ObjectID=" +
-       queryId +
-       ")."
-     };
-    }
-    return {
-     ok: true,
-     objectId: "",
-     message:
-      "Step 6 OK - QueryDefinition saved via REST (CustomerKey=" +
-      queryKey +
-      ") but ObjectID was not returned; automation will resolve by key."
-    };
-   }
-   var coreResult = postCreateQueryDefinitionCore(
-    queryKey,
-    queryName,
-    queryText,
-    deCustomerKey,
-    deName
-   );
-   if (coreResult.ok) {
-    queryId = postResolveQueryObjectId(prox, queryKey);
-    if (queryId) {
-     return {
-      ok: true,
-      objectId: queryId,
-      message:
-       "Step 6 OK - QueryDefinition saved via Core API (CustomerKey=" +
-       queryKey +
-       ", ObjectID=" +
-       queryId +
-       ")."
-     };
-    }
-    return {
-     ok: true,
-     objectId: "",
-     message:
-      "Step 6 OK - QueryDefinition saved via Core API (CustomerKey=" +
-      queryKey +
-      ") but ObjectID was not returned; automation will resolve by key."
-    };
-   }
-   return {
-    ok: false,
-    message:
-     "Step 6 FAILED - QueryDefinition REST HTTP " +
-     (resp ? resp.status : "none") +
-     " - " +
-     (resp && resp.body ? resp.body : "No response body.") +
-     "; Core fallback: " +
-     coreResult.message
-   };
-  } catch (queryEx) {
-   return {
-    ok: false,
-    message:
-     "Step 6 FAILED - QueryDefinition threw: " + (queryEx.message || String(queryEx))
-   };
   }
+  if (!objectId && existingRows.length > 0 && existingRows[0].ObjectID) {
+    objectId = String(existingRows[0].ObjectID);
+  }
+  if (status === "OK" && !objectId) {
+    objectId = postResolveQueryObjectId(prox, queryKey);
+  }
+  if (status === "OK") {
+    if (objectId) {
+      return {
+        ok: true,
+        objectId: objectId,
+        message:
+          "Step 6 OK - QueryDefinition " +
+          (existingRows.length > 0 ? "updated" : "created") +
+          " (CustomerKey=" +
+          queryKey +
+          ", ObjectID=" +
+          objectId +
+          ")."
+      };
+    }
+    return {
+      ok: true,
+      objectId: "",
+      message:
+        "Step 6 OK - QueryDefinition " +
+        (existingRows.length > 0 ? "updated" : "created") +
+        " (CustomerKey=" +
+        queryKey +
+        ") but ObjectID was not returned; automation will resolve by key."
+    };
+  }
+  return {
+    ok: false,
+    message:
+      "Step 6 FAILED - QueryDefinition " +
+      (existingRows.length > 0 ? "update" : "create") +
+      " " +
+      status +
+      ": " +
+      msg +
+      (resultRows.length > 0 && resultRows[0].ErrorCode
+        ? " ErrorCode=" + resultRows[0].ErrorCode
+        : "")
+  };
 }
 
 function postCreateAutomation(opts) {
@@ -2503,8 +2419,6 @@ if (postDeleteRequested != "1") {
           postEnvironment
         );
         var queryResult = postCreateQueryDefinition(
-          postAccessToken,
-          postSubdomain,
           postProx,
           postQueryKey,
           postStackName,
@@ -2514,37 +2428,39 @@ if (postDeleteRequested != "1") {
         );
         postSuffix = " " + queryResult.message;
         if (queryResult.ok) {
-          var queryObjectId = "";
-          try {
-            queryObjectId = postResolveQueryObjectId(postProx, postQueryKey);
-          } catch (qdLookupEx) {
-            postSuffix =
-              postSuffix +
-              " Step 6 FAILED - QueryDefinition ObjectID lookup threw: " +
-              (qdLookupEx.message || String(qdLookupEx));
-          }
-          if (!queryObjectId && queryResult.objectId) {
-            queryObjectId = String(queryResult.objectId);
+          var queryObjectId = queryResult.objectId;
+          if (!queryObjectId) {
+            try {
+              var qdLookup = postProx.retrieve(
+                "QueryDefinition",
+                ["ObjectID"],
+                {
+                  Property: "CustomerKey",
+                  SimpleOperator: "equals",
+                  Value: String(postQueryKey)
+                }
+              );
+              var qdRows = stackNormalizeWsRows(qdLookup && qdLookup.Results ? qdLookup.Results : null);
+              if (qdRows.length > 0 && qdRows[0].ObjectID) {
+                queryObjectId = String(qdRows[0].ObjectID);
+              }
+            } catch (qdLookupEx) {
+              postSuffix =
+                postSuffix +
+                " Step 6 FAILED - QueryDefinition ObjectID lookup threw: " +
+                (qdLookupEx.message || String(qdLookupEx));
+            }
           }
           if (!queryObjectId) {
             postSuffix = postSuffix + " Step 7 FAILED - QueryDefinition ObjectID not found.";
           } else if (postSuffix.indexOf("Step 6 FAILED") < 0) {
-            var autoResult = null;
-            try {
-             autoResult = postCreateAutomation({
+            var autoResult = postCreateAutomation({
               token: postAccessToken,
               subdomain: postSubdomain,
               automationName: postStackName,
               automationKey: postAutomationKey,
               queryObjectId: queryObjectId
-             });
-            } catch (autoEx) {
-             postSuffix =
-              postSuffix +
-              " Step 7 FAILED - automation outer threw: " +
-              (autoEx.message || String(autoEx));
-             autoResult = null;
-            }
+            });
             if (autoResult) {
              postSuffix = postSuffix + " " + autoResult.message;
             }
