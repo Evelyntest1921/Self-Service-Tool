@@ -1,0 +1,317 @@
+%%[
+/*
+  Automation delete test — WSProxy deleteItem("Automation", …)
+
+  Per Stack Exchange: deletion works from an Automation Studio Script Activity,
+  NOT from a CloudPage (CloudPage returns "Delete Access is denied!").
+  https://salesforce.stackexchange.com/questions/75711/how-can-an-automation-be-deleted-using-exacttarget-soap-api/262131
+
+  HOW TO RUN (recommended):
+  1. Create a throwaway automation in Automation Studio (or pick one you can delete).
+  2. Copy everything inside the <script runat="server"> block below into a Script Activity.
+  3. Set TEST_OBJECT_ID and/or TEST_CUSTOMER_KEY at the top of that block.
+  4. Set DRY_RUN = false when ready to attempt delete.
+  5. Run the automation once and read the activity output / log DE if you add one.
+
+  CloudPage mode (this file): submits the form to run the same SSJS here — useful to
+  confirm CloudPage context still returns "Delete Access is denied!" vs Script Activity.
+*/
+SET @runRequested = RequestParameter("run")
+SET @showForm = "true"
+IF NOT Empty(@runRequested) THEN
+SET @showForm = "false"
+ENDIF
+SET @automationObjectId = Trim(RequestParameter("automationObjectId"))
+SET @automationCustomerKey = Trim(RequestParameter("automationCustomerKey"))
+SET @dryRun = Trim(RequestParameter("dryRun"))
+IF Empty(@dryRun) THEN
+SET @dryRun = "true"
+ENDIF
+SET @resultText = ""
+SET @debugLog = ""
+]%%
+<script runat="server">
+Platform.Load("core", "1");
+
+/* Script Activity: set these three lines, then paste this entire block. */
+var TEST_OBJECT_ID = "";
+var TEST_CUSTOMER_KEY = "";
+var DRY_RUN = true;
+
+var automationObjectId =
+  Variable.GetValue("automationObjectId") || TEST_OBJECT_ID || "";
+var automationCustomerKey =
+  Variable.GetValue("automationCustomerKey") || TEST_CUSTOMER_KEY || "";
+var dryRunParam = Variable.GetValue("dryRun");
+var dryRun =
+  dryRunParam === "true" || dryRunParam === "false"
+    ? dryRunParam !== "false"
+    : DRY_RUN;
+
+var resultLines = [];
+var debugLines = [];
+
+function strTrim(v) {
+  return v === null || v === undefined ? "" : String(v).replace(/^\s+|\s+$/g, "");
+}
+
+function soapDeleteStatus(result) {
+  if (!result || !result.Results || !result.Results.length) {
+    return { ok: false, detail: "deleteItem returned no Results." };
+  }
+  var row = result.Results[0];
+  var status = row.Status ? String(row.Status) : "";
+  var statusCode = row.StatusCode ? String(row.StatusCode) : "";
+  var statusMsg = row.StatusMessage ? String(row.StatusMessage) : "";
+  var errMsg = row.ErrorMessage ? String(row.ErrorMessage) : "";
+  if (status === "OK" || statusCode === "OK") {
+    return { ok: true, detail: statusMsg || "OK" };
+  }
+  var successText = (statusMsg + " " + errMsg).toLowerCase();
+  if (
+    successText.indexOf("deleted") >= 0 &&
+    successText.indexOf("denied") < 0 &&
+    successText.indexOf("could not find") < 0 &&
+    successText.indexOf("error") < 0
+  ) {
+    return { ok: true, detail: statusMsg || errMsg || "deleted" };
+  }
+  return {
+    ok: false,
+    detail: errMsg || statusMsg || row.ErrorCode || status || "deleteItem did not report OK."
+  };
+}
+
+function formatAutomationRow(row) {
+  if (!row) {
+    return "(not found)";
+  }
+  return [
+    "ObjectID=" + (row.ObjectID || ""),
+    "ProgramID=" + (row.ProgramID || ""),
+    "CustomerKey=" + (row.CustomerKey || ""),
+    "Name=" + (row.Name || ""),
+    "Status=" + (row.Status !== undefined && row.Status !== null ? row.Status : ""),
+    "IsActive=" + (row.IsActive !== undefined && row.IsActive !== null ? row.IsActive : "")
+  ].join(" | ");
+}
+
+function getAutomationById(prox, objectId) {
+  var id = String(objectId);
+  var resp = prox.retrieve(
+    "Automation",
+    ["ObjectID", "ProgramID", "CustomerKey", "Name", "Status", "IsActive"],
+    { Property: "ObjectID", SimpleOperator: "equals", Value: id }
+  );
+  if (resp && resp.Results && resp.Results.length > 0) {
+    return resp.Results[0];
+  }
+  resp = prox.retrieve(
+    "Automation",
+    ["ObjectID", "ProgramID", "CustomerKey", "Name", "Status", "IsActive"],
+    { Property: "ProgramID", SimpleOperator: "equals", Value: id }
+  );
+  if (resp && resp.Results && resp.Results.length > 0) {
+    return resp.Results[0];
+  }
+  return null;
+}
+
+function resolveAutomationObjectId(prox, customerKey, objectIdHint) {
+  var key = strTrim(customerKey);
+  if (key && prox) {
+    var byKey = prox.retrieve(
+      "Automation",
+      ["ObjectID", "ProgramID", "CustomerKey", "Name", "Status", "IsActive"],
+      { Property: "CustomerKey", SimpleOperator: "equals", Value: key }
+    );
+    if (byKey && byKey.Results && byKey.Results.length > 0) {
+      if (byKey.Results[0].ObjectID) {
+        return { row: byKey.Results[0], resolvedId: String(byKey.Results[0].ObjectID) };
+      }
+      if (byKey.Results[0].ProgramID) {
+        return { row: byKey.Results[0], resolvedId: String(byKey.Results[0].ProgramID) };
+      }
+    }
+  }
+  var hint = strTrim(objectIdHint);
+  if (hint && prox) {
+    var byObj = getAutomationById(prox, hint);
+    if (byObj) {
+      return {
+        row: byObj,
+        resolvedId: String(byObj.ObjectID || byObj.ProgramID || hint)
+      };
+    }
+    var byProgram = prox.retrieve(
+      "Automation",
+      ["ObjectID", "ProgramID", "CustomerKey", "Name", "Status", "IsActive"],
+      { Property: "ProgramID", SimpleOperator: "equals", Value: hint }
+    );
+    if (byProgram && byProgram.Results && byProgram.Results.length > 0) {
+      var progRow = byProgram.Results[0];
+      return {
+        row: progRow,
+        resolvedId: String(progRow.ObjectID || progRow.ProgramID || hint)
+      };
+    }
+  }
+  return { row: null, resolvedId: "" };
+}
+
+function tryDeleteAutomation(prox, resolvedId, customerKey, dryRunMode) {
+  var errors = [];
+  if (dryRunMode) {
+    return { ok: false, msg: "DRY RUN — deleteItem not called.", dryRun: true };
+  }
+  if (resolvedId) {
+    try {
+      var byObj = prox.deleteItem("Automation", { ObjectID: resolvedId });
+      var objStatus = soapDeleteStatus(byObj);
+      if (objStatus.ok) {
+        return { ok: true, msg: "DELETE OK (ObjectID " + resolvedId + ")." };
+      }
+      errors.push("ObjectID " + objStatus.detail);
+    } catch (objEx) {
+      errors.push("ObjectID " + (objEx.message || String(objEx)));
+    }
+  }
+  var key = strTrim(customerKey);
+  if (key) {
+    try {
+      var proxKey = new Script.Util.WSProxy();
+      var byKey = proxKey.deleteItem("Automation", { CustomerKey: key });
+      var keyStatus = soapDeleteStatus(byKey);
+      if (keyStatus.ok) {
+        return { ok: true, msg: "DELETE OK (CustomerKey " + key + ")." };
+      }
+      errors.push("CustomerKey " + keyStatus.detail);
+    } catch (keyEx) {
+      errors.push("CustomerKey " + (keyEx.message || String(keyEx)));
+    }
+  }
+  if (errors.length) {
+    return { ok: false, msg: errors.join(" | ") };
+  }
+  return { ok: false, msg: "No ObjectID or CustomerKey to delete." };
+}
+
+var objectId = strTrim(automationObjectId);
+var customerKey = strTrim(automationCustomerKey);
+
+if (!objectId && !customerKey) {
+  resultLines.push("Enter an automation ObjectID and/or CustomerKey.");
+} else {
+  try {
+    var prox = new Script.Util.WSProxy();
+    var resolved = resolveAutomationObjectId(prox, customerKey, objectId);
+    var resolvedId = resolved.resolvedId;
+    var beforeRow = resolved.row;
+
+    resultLines.push("Context: " + (Platform.Function.PageURL ? "CloudPage" : "Script Activity"));
+    resultLines.push("DRY_RUN: " + (dryRun ? "true (lookup only)" : "false (will delete)"));
+    debugLines.push("Lookup: " + formatAutomationRow(beforeRow));
+    debugLines.push("Resolved delete id: " + (resolvedId || "(none)"));
+
+    if (!beforeRow) {
+      resultLines.push("Automation NOT FOUND for supplied ObjectID/CustomerKey.");
+    } else if (dryRun) {
+      resultLines.push("Lookup OK. Set dryRun=false (form) or DRY_RUN=false (Script Activity) to attempt deleteItem.");
+    } else {
+      var delResult = tryDeleteAutomation(prox, resolvedId, customerKey, false);
+      if (delResult.ok) {
+        resultLines.push(delResult.msg);
+        var afterRow = resolvedId ? getAutomationById(prox, resolvedId) : null;
+        debugLines.push("After delete lookup: " + formatAutomationRow(afterRow));
+      } else {
+        resultLines.push("DELETE FAILED — " + delResult.msg);
+        if (delResult.msg.indexOf("Delete Access is denied") >= 0) {
+          debugLines.push(
+            "Hint: Stack Exchange reports this from CloudPages; retry inside Automation Studio Script Activity."
+          );
+        }
+      }
+    }
+  } catch (runEx) {
+    resultLines.push("ERROR: " + (runEx.message || String(runEx)));
+  }
+}
+
+Variable.SetValue("resultText", resultLines.join("\n"));
+Variable.SetValue("debugLog", debugLines.join("\n"));
+
+var output = resultLines.join("\n");
+if (debugLines.length) {
+  output += "\n\n" + debugLines.join("\n");
+}
+Write(output);
+</script>
+%%[
+SET @resultText = Concat(@resultText, IF NOT Empty(@debugLog) THEN Concat("\n\n", @debugLog) ELSE "" ENDIF)
+]%%
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stack Automation Delete Test</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+:root { --primary:#6366f1; --border:#e5e7eb; --text:#111827; --muted:#6b7280; --bg:#f9fafb; }
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:Inter,sans-serif; background:var(--bg); color:var(--text); line-height:1.5; }
+.wrap { max-width:820px; margin:40px auto; padding:0 20px 48px; }
+h1 { font-size:1.5rem; margin-bottom:8px; }
+.lead { color:var(--muted); margin-bottom:24px; font-size:.95rem; }
+.card { background:#fff; border:1px solid var(--border); border-radius:12px; padding:24px; margin-bottom:16px; }
+label { display:block; font-size:.85rem; font-weight:600; margin-bottom:6px; }
+input, select { width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:8px; font-size:.95rem; margin-bottom:16px; }
+button, .btn { display:inline-flex; align-items:center; padding:10px 16px; border-radius:8px; border:none; cursor:pointer; font-weight:600; font-size:.9rem; text-decoration:none; }
+.btn-primary { background:var(--primary); color:#fff; }
+.btn-secondary { background:#eef2ff; color:#3730a3; }
+.result { padding:16px; border-radius:8px; background:#f3f4f6; font-size:.85rem; white-space:pre-wrap; word-break:break-word; }
+.note { font-size:.85rem; color:var(--muted); margin-top:16px; }
+.note code { background:#f3f4f6; padding:2px 6px; border-radius:4px; }
+.note ul { margin:8px 0 0 20px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Stack automation delete test</h1>
+<p class="lead">Tests <code>WSProxy.deleteItem("Automation", …)</code> the same way as <code>edit-build</code> purge. Use a <strong>Script Activity</strong> for the real delete test — CloudPages often return <em>Delete Access is denied!</em></p>
+%%[IF @showForm == "true" THEN]%%
+<div class="card">
+<form method="get" action="%%=RequestParameter('PAGEURL')=%%">
+<input type="hidden" name="run" value="1">
+<label for="automationObjectId">Automation ObjectID (SOAP)</label>
+<input type="text" id="automationObjectId" name="automationObjectId" placeholder="e.g. 00000000-0000-0000-0000-000000000000">
+<label for="automationCustomerKey">Customer key (optional)</label>
+<input type="text" id="automationCustomerKey" name="automationCustomerKey" placeholder="Automation CustomerKey">
+<label for="dryRun">Mode</label>
+<select id="dryRun" name="dryRun">
+<option value="true" selected>DRY RUN — lookup only</option>
+<option value="false">DELETE — call deleteItem</option>
+</select>
+<button type="submit" class="btn-primary">Run test</button>
+</form>
+</div>
+<div class="note">
+<p><strong>Script Activity (recommended):</strong> open <code>stack-automation-delete-test</code> in the repo, copy the SSJS block, set:</p>
+<ul>
+<li><code>TEST_OBJECT_ID</code> — from Automation Studio or SOAP retrieve</li>
+<li><code>TEST_CUSTOMER_KEY</code> — optional</li>
+<li><code>DRY_RUN = false</code> when ready</li>
+</ul>
+<p>Reference: <a href="https://salesforce.stackexchange.com/questions/75711/how-can-an-automation-be-deleted-using-exacttarget-soap-api/262131" target="_blank" rel="noopener">Salesforce Stack Exchange — delete automation via WSProxy</a></p>
+</div>
+%%[ELSE]%%
+<div class="card">
+<div class="result">%%=v(@resultText)=%%</div>
+<div style="margin-top:16px;">
+<a class="btn btn-secondary" href="%%=RequestParameter('PAGEURL')=%%">Run another test</a>
+</div>
+</div>
+%%[ENDIF]%%
+</div>
+</body>
+</html>

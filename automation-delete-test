@@ -1,0 +1,342 @@
+%%[
+SET @runRequested = RequestParameter("run")
+SET @mode = Trim(RequestParameter("mode"))
+SET @customerKey = Trim(RequestParameter("customerKey"))
+SET @confirmDelete = IIF(RequestParameter("confirmDelete") == "1","1","0")
+SET @showForm = "true"
+IF NOT Empty(@runRequested) THEN
+ SET @showForm = "false"
+ENDIF
+SET @resultText = ""
+SET @detailLog = ""
+SET @authOk = "false"
+IF @showForm != "true" THEN
+ IF Empty(@customerKey) THEN
+  SET @resultText = "Enter an automation CustomerKey."
+ ELSEIF (@mode == "delete_key_plain" OR @mode == "delete_key_client" OR @mode == "delete_objectid_client") AND @confirmDelete != "1" THEN
+  SET @resultText = "Delete modes require confirmDelete=1."
+ ELSE
+  SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
+  IF RowCount(@authRow) > 0 THEN
+   SET @row = Row(@authRow,1)
+   SET @clientId = Field(@row,"clientId")
+   SET @clientSecret = Field(@row,"clientSecret")
+   SET @subdomain = Field(@row,"subdomain")
+   IF NOT Empty(@clientId) AND NOT Empty(@clientSecret) AND NOT Empty(@subdomain) THEN
+    SET @authUrl = Concat("https://",@subdomain,".auth.marketingcloudapis.com/v2/token")
+    SET @accountId = Trim(Field(@row,"accountId"))
+    SET @authPayload = Concat('{"grant_type":"client_credentials","client_id":"',@clientId,'","client_secret":"',@clientSecret,'"')
+    IF NOT Empty(@accountId) THEN
+     SET @authPayload = Concat(@authPayload,',"account_id":"',@accountId,'"')
+    ENDIF
+    SET @authPayload = Concat(@authPayload,'}')
+    SET @authStatus = HTTPPost2(@authUrl,"application/json",@authPayload,false,@authResponse,@authResponseHeader)
+    IF @authStatus == 200 THEN
+     SET @tokenPattern = '"access_token":"([^"]+)"'
+     SET @accessToken = RegExMatch(@authResponse,@tokenPattern,1)
+     IF NOT Empty(@accessToken) THEN
+      SET @resultText = "Auth OK."
+      SET @authOk = "true"
+     ELSE
+      SET @resultText = "Auth FAILED: No access token."
+     ENDIF
+    ELSE
+     SET @resultText = Concat("Auth FAILED: HTTP ",@authStatus)
+    ENDIF
+   ELSE
+    SET @resultText = "Auth FAILED: Missing SFMC_AUTH credentials."
+   ENDIF
+  ELSE
+   SET @resultText = "Auth FAILED: No SFMC_AUTH Admin row."
+  ENDIF
+ ENDIF
+ENDIF
+]%%
+<script runat="server">
+Platform.Load("core", "1");
+
+var authOk = Variable.GetValue("authOk");
+var mode = Variable.GetValue("mode") || "lookup";
+var customerKey = Variable.GetValue("customerKey") || "";
+var resultText = Variable.GetValue("resultText") || "";
+var detailLog = "";
+var memberId = "";
+var employeeId = "";
+
+function strTrim(v) {
+ return v === null || v === undefined ? "" : String(v).replace(/^\s+|\s+$/g, "");
+}
+
+function logLine(part) {
+ detailLog = detailLog ? detailLog + " | " + part : part;
+}
+
+function stringifySafe(obj) {
+ try {
+  return Platform.Function.Stringify(obj);
+ } catch (e0) {
+  return String(obj);
+ }
+}
+
+function configureWsProxyClient(prox) {
+ try {
+  if (!prox || typeof prox.setClientId !== "function") {
+   return { ok: false, msg: "setClientId not available on WSProxy." };
+  }
+  memberId = String(Platform.Function.AuthenticatedMemberID() || "");
+  employeeId = String(Platform.Function.AuthenticatedEmployeeID() || "");
+  if (!memberId) {
+   return { ok: false, msg: "AuthenticatedMemberID is empty on this page context." };
+  }
+  var clientConfig = { ID: memberId };
+  if (employeeId) {
+   clientConfig.UserID = employeeId;
+  }
+  prox.setClientId(clientConfig);
+  return {
+   ok: true,
+   msg: "setClientId OK (MID=" + memberId + (employeeId ? ", UserID=" + employeeId : "") + ")."
+  };
+ } catch (cfgEx) {
+  return { ok: false, msg: cfgEx.message || String(cfgEx) };
+ }
+}
+
+function soapRowSummary(result) {
+ if (!result || !result.Results || !result.Results.length) {
+  return "no Results";
+ }
+ var row = result.Results[0];
+ return stringifySafe({
+  Status: row.Status,
+  StatusCode: row.StatusCode,
+  StatusMessage: row.StatusMessage,
+  ErrorMessage: row.ErrorMessage,
+  ErrorCode: row.ErrorCode
+ });
+}
+
+function retrieveAutomation(prox, key) {
+ return prox.retrieve(
+  "Automation",
+  ["ObjectID", "CustomerKey", "Name", "Status", "IsActive"],
+  {
+   Property: "CustomerKey",
+   SimpleOperator: "equals",
+   Value: String(key)
+  }
+ );
+}
+
+function automationFromRetrieve(resp) {
+ if (!resp || !resp.Results || !resp.Results.length) {
+  return null;
+ }
+ return resp.Results[0];
+}
+
+function deleteAutomationByCustomerKey(prox, key, useClientId) {
+ var clientMsg = "setClientId skipped.";
+ if (useClientId) {
+  var clientResult = configureWsProxyClient(prox);
+  clientMsg = clientResult.msg;
+  if (!clientResult.ok) {
+   return {
+    ok: false,
+    msg: clientMsg,
+    raw: ""
+   };
+  }
+ }
+ var deleteResult = prox.deleteItem("Automation", { CustomerKey: String(key) });
+ return {
+  ok: false,
+  msg: clientMsg,
+  raw: soapRowSummary(deleteResult),
+  deleteResult: deleteResult
+ };
+}
+
+function deleteAutomationByObjectId(prox, objectId, useClientId) {
+ var clientMsg = "setClientId skipped.";
+ if (useClientId) {
+  var clientResult = configureWsProxyClient(prox);
+  clientMsg = clientResult.msg;
+  if (!clientResult.ok) {
+   return {
+    ok: false,
+    msg: clientMsg,
+    raw: ""
+   };
+  }
+ }
+ var deleteResult = prox.deleteItem("Automation", { ObjectID: String(objectId) });
+ return {
+  ok: false,
+  msg: clientMsg,
+  raw: soapRowSummary(deleteResult),
+  deleteResult: deleteResult
+ };
+}
+
+function deleteSucceeded(deleteResult) {
+ if (!deleteResult || !deleteResult.Results || !deleteResult.Results.length) {
+  return false;
+ }
+ var row = deleteResult.Results[0];
+ var statusCode = row.StatusCode ? String(row.StatusCode) : "";
+ var statusMsg = row.StatusMessage ? String(row.StatusMessage) : "";
+ if (statusCode === "OK") {
+  return true;
+ }
+ var lower = statusMsg.toLowerCase();
+ return lower.indexOf("deleted") >= 0 && lower.indexOf("denied") < 0;
+}
+
+if (authOk == "true" && customerKey) {
+ try {
+  var prox = new Script.Util.WSProxy();
+  var lookup = retrieveAutomation(prox, customerKey);
+  var autoRow = automationFromRetrieve(lookup);
+  if (!autoRow) {
+   resultText = resultText + " Automation not found for CustomerKey=" + customerKey + ".";
+  } else {
+   logLine(
+    "Lookup ObjectID=" +
+     (autoRow.ObjectID || "") +
+     " Name=" +
+     (autoRow.Name || "") +
+     " Status=" +
+     (autoRow.Status !== undefined ? autoRow.Status : "") +
+     " IsActive=" +
+     (autoRow.IsActive !== undefined ? autoRow.IsActive : "")
+   );
+   if (mode === "lookup") {
+    resultText = resultText + " Lookup OK.";
+   } else if (mode === "delete_key_plain") {
+    var plainDel = deleteAutomationByCustomerKey(prox, customerKey, false);
+    logLine("delete_key_plain client: " + plainDel.msg);
+    logLine("delete_key_plain result: " + plainDel.raw);
+    if (deleteSucceeded(plainDel.deleteResult)) {
+     resultText = resultText + " DELETE OK (CustomerKey, no setClientId).";
+    } else {
+     resultText = resultText + " DELETE FAILED (CustomerKey, no setClientId).";
+    }
+   } else if (mode === "delete_key_client") {
+    var clientDel = deleteAutomationByCustomerKey(prox, customerKey, true);
+    logLine("delete_key_client client: " + clientDel.msg);
+    logLine("delete_key_client result: " + clientDel.raw);
+    if (deleteSucceeded(clientDel.deleteResult)) {
+     resultText = resultText + " DELETE OK (CustomerKey + setClientId).";
+    } else {
+     resultText = resultText + " DELETE FAILED (CustomerKey + setClientId).";
+    }
+   } else if (mode === "delete_objectid_client") {
+    if (!autoRow.ObjectID) {
+     resultText = resultText + " DELETE FAILED: lookup returned no ObjectID.";
+    } else {
+     var objDel = deleteAutomationByObjectId(prox, autoRow.ObjectID, true);
+     logLine("delete_objectid_client client: " + objDel.msg);
+     logLine("delete_objectid_client result: " + objDel.raw);
+     if (deleteSucceeded(objDel.deleteResult)) {
+      resultText = resultText + " DELETE OK (ObjectID + setClientId).";
+     } else {
+      resultText = resultText + " DELETE FAILED (ObjectID + setClientId).";
+     }
+    }
+   } else {
+    resultText = resultText + " Unknown mode.";
+   }
+  }
+ } catch (runEx) {
+  resultText = resultText + " ERROR: " + (runEx.message || String(runEx));
+ }
+}
+
+Platform.Variable.SetValue("@resultText", resultText);
+Platform.Variable.SetValue("@detailLog", detailLog);
+Platform.Variable.SetValue("@memberId", memberId);
+Platform.Variable.SetValue("@employeeId", employeeId);
+</script>
+%%[
+IF NOT Empty(@detailLog) THEN
+ SET @resultText = Concat(@resultText," ",@detailLog)
+ENDIF
+IF NOT Empty(@memberId) THEN
+ SET @resultText = Concat(@resultText," AuthenticatedMemberID=",@memberId)
+ENDIF
+]%%
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Automation delete test</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+:root { --primary:#6366f1; --border:#e5e7eb; --text:#111827; --muted:#6b7280; --bg:#f9fafb; --danger:#b91c1c; --dangerbg:#fef2f2; }
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:Inter,sans-serif; background:var(--bg); color:var(--text); line-height:1.5; }
+.wrap { max-width:820px; margin:40px auto; padding:0 20px 48px; }
+h1 { font-size:1.5rem; margin-bottom:8px; }
+.lead { color:var(--muted); margin-bottom:24px; font-size:.95rem; }
+.card { background:#fff; border:1px solid var(--border); border-radius:12px; padding:24px; margin-bottom:16px; }
+label { display:block; font-size:.85rem; font-weight:600; margin-bottom:6px; }
+input, select { width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:8px; font-size:.95rem; margin-bottom:16px; }
+button, .btn { display:inline-flex; align-items:center; padding:10px 16px; border-radius:8px; border:none; cursor:pointer; font-weight:600; font-size:.9rem; text-decoration:none; }
+.btn-primary { background:var(--primary); color:#fff; }
+.btn-danger { background:var(--danger); color:#fff; }
+.btn-secondary { background:#eef2ff; color:#3730a3; }
+.result { padding:16px; border-radius:8px; background:#f3f4f6; font-size:.85rem; white-space:pre-wrap; word-break:break-word; }
+.warn { padding:14px 16px; border-radius:8px; background:var(--dangerbg); color:var(--danger); font-size:.875rem; margin-bottom:16px; border:1px solid #fecaca; }
+.note { font-size:.85rem; color:var(--muted); margin-top:16px; }
+.note code { background:#f3f4f6; padding:2px 6px; border-radius:4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Automation delete test</h1>
+<p class="lead">Tests WSProxy <code>deleteItem("Automation", {"CustomerKey": ...})</code> from a Cloud Page. Compare lookup vs delete with and without <code>setClientId</code>.</p>
+%%[ IF @showForm == "true" THEN ]%%
+<div class="warn">Delete modes permanently remove the automation. Use a disposable test automation only.</div>
+<div class="card">
+<form method="get" action="%%=RequestParameter('PAGEURL')=%%">
+<input type="hidden" name="run" value="1">
+<label for="customerKey">Automation CustomerKey</label>
+<input type="text" id="customerKey" name="customerKey" placeholder="Same key stored on Bd_journey_analytics automationCustomerKey" required>
+<label for="mode">Mode</label>
+<select id="mode" name="mode">
+<option value="lookup">Lookup only (safe)</option>
+<option value="delete_key_plain">Delete by CustomerKey (no setClientId)</option>
+<option value="delete_key_client">Delete by CustomerKey + setClientId</option>
+<option value="delete_objectid_client">Delete by ObjectID + setClientId</option>
+</select>
+<label for="confirmDelete">Confirm delete (required for delete modes)</label>
+<select id="confirmDelete" name="confirmDelete">
+<option value="0">No — lookup / dry run only</option>
+<option value="1">Yes — I understand this deletes the automation</option>
+</select>
+<button type="submit" class="btn-primary">Run test</button>
+</form>
+</div>
+<div class="note">
+<p><strong>What to compare</strong></p>
+<ul>
+<li><code>delete_key_plain</code> — matches early edit-build behavior</li>
+<li><code>delete_key_client</code> — <a href="https://www.ssjsdocs.xyz/automation-studio/automations/delete.html">SSJS Docs</a> pattern with <code>setClientId</code></li>
+<li><code>delete_objectid_client</code> — Stack Exchange ObjectID delete with client context</li>
+</ul>
+<p>Cloud Pages may still return <strong>Delete Access is denied</strong> even with <code>setClientId</code>. Script Activities in Automation Studio are the known working context.</p>
+</div>
+%%[ ELSE ]%%
+<div class="card">
+<div class="result">%%=v(@resultText)=%%</div>
+<div style="margin-top:16px;">
+<a class="btn btn-secondary" href="%%=RequestParameter('PAGEURL')=%%">Run another test</a>
+</div>
+</div>
+%%[ ENDIF ]%%
+</div>
+</body>
+</html>
