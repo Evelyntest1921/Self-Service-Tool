@@ -2532,6 +2532,10 @@ ENDIF
 IF NOT Empty(@surveyDeleteLog) THEN
 SET @combinedLog = Concat(@combinedLog, " ", @surveyDeleteLog)
 ENDIF
+SET @purgeResultHasFail = "0"
+IF IndexOf(@combinedLog,"FAILED") > 0 OR IndexOf(@combinedLog,"DELETE FAILED") > 0 THEN
+ SET @purgeResultHasFail = "1"
+ENDIF
 
 
 IF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk == "true") THEN
@@ -2542,6 +2546,9 @@ SET @pageStatus = "purge_partial"
 ELSEIF (@attemptDeleteAsset == "true") AND (@authOk == "true") AND (IndexOf(IIF(NOT Empty(@step3bResult), @step3bResult, ""),"OK - Email deleted") > 0) THEN
 SET @analyticsDelCnt = DeleteData(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
 SET @pageStatus = "deleted"
+ENDIF
+IF @pageStatus == "purge_partial" THEN
+ SET @purgeResultHasFail = "1"
 ENDIF
 VAR @jidIsJbGuid
 SET @jidIsJbGuid = IIF(Substring(IIF(NOT Empty(@jid), @jid, ""),1,7) == "email:", "false","true")
@@ -2840,6 +2847,26 @@ dd{font-weight:600;font-size:1rem;margin:0;padding:0;color:var(--gray-900);word-
 .small{font-size:13px;color:var(--text-secondary);margin-top:10px}
 pre.log{white-space:pre-wrap;background:#fafafa;padding:14px;border-radius:var(--radius-md);border:1px solid var(--border-color);font-size:12px;margin-top:16px;display:none;color:#374151}
 pre.log.show{display:block}
+.maker-page-heading{display:flex;align-items:flex-start;gap:14px;margin-bottom:10px}
+.maker-page-heading-icon{flex-shrink:0;width:44px;height:44px;border-radius:12px;background:#f3f4f6;border:1px solid var(--border-color);display:flex;align-items:center;justify-content:center;color:var(--gray-900)}
+.maker-page-heading-icon svg{width:26px;height:26px}
+.maker-page-heading-text{flex:1;min-width:0}
+.maker-page-title{font-size:1.75rem;font-weight:700;margin-bottom:0;color:var(--gray-900);line-height:1.25}
+.maker-page-subtitle{font-size:1rem;color:var(--text-secondary);max-width:720px;margin-bottom:20px;line-height:1.5}
+.maker-form-shell{background:#fff;border:1px solid var(--border-color);border-radius:12px;box-shadow:var(--shadow-sm)}
+.maker-result-inner{padding:28px 32px 32px}
+.maker-page-heading-icon.maker-result-status.is-success{background:#ecfdf5;border-color:#a7f3d0;color:#065f46}
+.maker-page-heading-icon.maker-result-status.is-error{background:#fef2f2;border-color:#fecaca;color:#991b1b}
+.maker-result-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;padding-top:24px;border-top:1px solid var(--border-color)}
+.maker-result-actions--footer{justify-content:flex-end}
+.maker-result-log-wrap{margin-top:0;padding-top:0;border-top:none}
+.maker-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 18px;font-size:14px;font-weight:600;border-radius:var(--radius-md);text-decoration:none;border:1px solid transparent;cursor:pointer;font-family:inherit;transition:background 0.2s ease,border-color 0.2s ease,color 0.2s ease}
+.maker-btn--secondary{background:#fff;color:var(--gray-900);border-color:var(--border-color)}
+.maker-btn--secondary:hover{background:var(--bg-secondary);border-color:var(--gray-400)}
+.maker-btn--ghost{background:var(--bg-secondary);color:var(--gray-600);border-color:var(--border-color)}
+.maker-btn--ghost:hover{color:var(--gray-900);border-color:var(--gray-400)}
+.maker-result-log{margin-top:12px;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-size:0.8125rem;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;white-space:pre-wrap;word-break:break-word;border-radius:var(--radius-md);max-height:280px;overflow-y:auto;display:none}
+.maker-result-log.is-visible{display:block;margin-top:20px}
 @media (max-width:768px){
 .maker-sidebar{width:100%;flex-direction:row;overflow-x:auto;align-items:center;min-height:0;padding:12px 0}
 .maker-sidebar .sidebar-logo{margin-bottom:0;flex-shrink:0;padding-right:16px}
@@ -2943,7 +2970,7 @@ pre.log.show{display:block}
 </div>
 <h1>This build was not found</h1>
 <p class="sub">There is no row in the log DE for journeyId <strong>%%=v(@jid)=%%</strong>.</p>
-%%[ ELSEIF @pageStatus == "deleted" THEN ]%%
+%%[ ELSEIF @pageStatus == "deleted" OR @pageStatus == "purged" OR @pageStatus == "purge_partial" THEN ]%%
 <div class="breadcrumb-section">
 <nav class="breadcrumb-nav" aria-label="Breadcrumb">
  <a href="%%=v(@HOME_URL)=%%" class="breadcrumb-link">
@@ -2954,49 +2981,46 @@ pre.log.show{display:block}
  <span class="breadcrumb-current">Manage build • Result</span>
 </nav>
 </div>
-<h1>Email deleted</h1>
-<p class="sub">The email asset was removed from Content Builder where the API succeeded%%[ IF @isSurveyBuild == "true" THEN ]%%, survey data was removed from the survey DEs%%[ ENDIF ]%%, and the log row was removed from recent builds. Returning home in 3 seconds.</p>
-<div class="banner good">%%[ IF @isSurveyBuild == "true" THEN ]%%Journey Builder assets are unchanged — delete or revise the journey there if still needed.%%[ ELSE ]%%Journeys themselves are unchanged in Journey Builder. Delete or revise the canvas there when still needed.%%[ ENDIF ]%%</div>
-<pre class="log show">%%=v(@combinedLog)=%%</pre>
-<div class="act">
-<a href="%%=v(@HOME_URL)=%%" class="btn btn-primary">Back to Journey home</a>
+<div class="maker-page-heading">
+ <div class="maker-page-heading-icon maker-result-status %%[ IF @purgeResultHasFail == "1" THEN ]%%is-error%%[ ELSE ]%%is-success%%[ ENDIF ]%%" aria-hidden="true">
+%%[ IF @purgeResultHasFail == "1" THEN ]%%
+  <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>
+%%[ ELSE ]%%
+  <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+%%[ ENDIF ]%%
+ </div>
+ <div class="maker-page-heading-text">
+  <h1 class="maker-page-title">%%=IIF(@pageStatus == "deleted","Email deleted",IIF(@pageStatus == "purged",IIF(@purgeResultHasFail == "1","Build deleted with warnings","Build successfully deleted"),"Purge incomplete"))=%%</h1>
+ </div>
 </div>
+<p class="maker-page-subtitle">
+%%[ IF @pageStatus == "deleted" THEN ]%%
+The email asset was removed from Content Builder where the API succeeded%%[ IF @isSurveyBuild == "true" THEN ]%%, survey data was removed from the survey DEs%%[ ENDIF ]%%, and the log row was removed from Recent builds. Returning home in 3 seconds.
 %%[ ELSEIF @pageStatus == "purged" THEN ]%%
-<div class="breadcrumb-section">
-<nav class="breadcrumb-nav" aria-label="Breadcrumb">
- <a href="%%=v(@HOME_URL)=%%" class="breadcrumb-link">
-  <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
-  Back
- </a>
- <span class="breadcrumb-separator" aria-hidden="true">/</span>
- <span class="breadcrumb-current">Manage build • Result</span>
-</nav>
-</div>
-<h1>Build successfully deleted</h1>
-<p class="sub">The page attempted deletes for journey, entry event definition, Content Builder email%%[ IF @isSurveyBuild == "true" THEN ]%%, and survey questions/responses/master data%%[ ENDIF ]%%. Returning home in 3 seconds.</p>
-<div class="banner good">If any step failed, you should manually remove the remaining remnants.</div>
-<!--<pre class="log show">%%=v(@combinedLog)=%%</pre> -->
-<div class="act">
-<a href="%%=v(@HOME_URL)=%%" class="btn btn-primary">Back to Journey home</a>
-</div>
+The page attempted deletes for journey, entry event definition, Content Builder email%%[ IF @isSurveyBuild == "true" THEN ]%%, and survey questions/responses/master data%%[ ENDIF ]%%. Returning home in 3 seconds.
+%%[ ELSE ]%%
+Something in the teardown chain blocked full removal — often the HTTP token scope, Journey publish state, or entry event locks. The Recent builds log row was kept so you can retry or clean up manually.
+%%[ ENDIF ]%%
+</p>
+<div class="maker-form-shell">
+ <div class="maker-result-inner">
+%%[ IF @pageStatus == "purged" AND @purgeResultHasFail != "1" THEN ]%%
+  <div class="banner good">If any step failed, review the technical log below and remove remaining assets manually.</div>
+%%[ ELSEIF @pageStatus == "deleted" AND @purgeResultHasFail != "1" THEN ]%%
+  <div class="banner good">%%[ IF @isSurveyBuild == "true" THEN ]%%Journey Builder assets are unchanged — delete or revise the journey there if still needed.%%[ ELSE ]%%Journeys themselves are unchanged in Journey Builder. Delete or revise the canvas there when still needed.%%[ ENDIF ]%%</div>
 %%[ ELSEIF @pageStatus == "purge_partial" THEN ]%%
-<div class="breadcrumb-section">
-<nav class="breadcrumb-nav" aria-label="Breadcrumb">
- <a href="%%=v(@HOME_URL)=%%" class="breadcrumb-link">
-  <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
-  Back
- </a>
- <span class="breadcrumb-separator" aria-hidden="true">/</span>
- <span class="breadcrumb-current">Manage build • Partial cleanup</span>
-</nav>
-</div>
-<h1>Purge incomplete</h1>
-<p class="sub">Something in the teardown chain blocked full removal — often the HTTP token scope, Journey publish state, or entry event locks.</p>
-<div class="banner warn">The Recent builds log row was kept so you can retry or clean up manually.</div>
-<pre class="log show">%%=v(@combinedLog)=%%</pre>
-<div class="act">
-<a href="%%=v(@HOME_URL)=%%" class="btn btn-primary">Journey home</a>
-<a href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%" class="btn btn-neutral">Try this page again</a>
+  <div class="banner warn">The Recent builds log row was kept so you can retry or clean up manually.</div>
+%%[ ENDIF ]%%
+  <div class="maker-result-log-wrap">
+   <pre class="maker-result-log" id="apiLog">%%=v(@combinedLog)=%%</pre>
+  </div>
+  <div class="maker-result-actions maker-result-actions--footer">
+%%[ IF @pageStatus == "purge_partial" THEN ]%%
+   <a href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%" class="maker-btn maker-btn--secondary">Try this page again</a>
+%%[ ENDIF ]%%
+   <button type="button" class="maker-btn maker-btn--ghost" id="showLogBtn">Show log</button>
+  </div>
+ </div>
 </div>
 %%[ ELSE ]%%
 <div class="breadcrumb-section">
@@ -3583,6 +3607,16 @@ pre.log.show{display:block}
     this.classList.add("is-open");
    }
   });
+ }
+})();
+(function(){
+ var showLogBtn = document.getElementById("showLogBtn");
+ var apiLog = document.getElementById("apiLog");
+ if (showLogBtn && apiLog) {
+  showLogBtn.onclick = function() {
+   apiLog.classList.toggle("is-visible");
+   showLogBtn.textContent = apiLog.classList.contains("is-visible") ? "Hide log" : "Show log";
+  };
  }
 })();
 </script>
