@@ -8,6 +8,9 @@
 
   Schedule this automation to run on a short interval (e.g. every 15 minutes).
   edit-build queues automations here during stack build purge (CloudPage cannot delete).
+
+  DE setup: external/customer key bd_sst_automation_purge, fields customerKey + automationName.
+  Mark customerKey as the Primary Key so row delete is reliable.
 */
 Platform.Load("core", "1");
 
@@ -63,37 +66,117 @@ function soapDeleteStatus(result) {
   };
 }
 
-function fetchPurgeQueueRows() {
-  var de = DataExtension.Init(PURGE_QUEUE_DE);
-  var rows = de.Rows.Retrieve(["customerKey", "automationName"]);
-  if (!rows || !rows.length) {
+function queueField(row, names) {
+  if (!row) {
+    return "";
+  }
+  for (var i = 0; i < names.length; i++) {
+    var val = row[names[i]];
+    if (val !== undefined && val !== null && String(val) !== "") {
+      return String(val);
+    }
+  }
+  return "";
+}
+
+function normalizeQueueRows(rawRows) {
+  if (!rawRows || !rawRows.length) {
     return [];
   }
   var out = [];
-  for (var i = 0; i < rows.length; i++) {
+  for (var i = 0; i < rawRows.length; i++) {
+    var row = rawRows[i];
     out.push({
-      customerKey: rows[i].customerKey ? String(rows[i].customerKey) : "",
-      automationName: rows[i].automationName ? String(rows[i].automationName) : ""
+      customerKey: queueField(row, ["customerKey", "CustomerKey"]),
+      automationName: queueField(row, ["automationName", "AutomationName", "Name"])
     });
   }
   return out;
 }
 
-function removePurgeQueueRow(customerKey, automationName) {
+function fetchPurgeQueueRows(prox) {
+  var errors = [];
+  var keyVariants = [PURGE_QUEUE_DE, String(PURGE_QUEUE_DE).toLowerCase()];
+
+  for (var v = 0; v < keyVariants.length; v++) {
+    var deKey = keyVariants[v];
+    if (!deKey) {
+      continue;
+    }
+    try {
+      var de = DataExtension.Init(deKey);
+      // No args = all rows. Do not pass ["customerKey", ...] alone — that is filter syntax.
+      var deRows = de.Rows.Retrieve();
+      return { rows: normalizeQueueRows(deRows), error: "" };
+    } catch (deEx) {
+      errors.push("DataExtension.Init(" + deKey + "): " + (deEx.message || String(deEx)));
+    }
+  }
+
+  var filters = [
+    { Property: "customerKey", SimpleOperator: "isNotNull" },
+    { Property: "automationName", SimpleOperator: "isNotNull" }
+  ];
+  for (var f = 0; f < filters.length; f++) {
+    for (var k = 0; k < keyVariants.length; k++) {
+      try {
+        var wsResp = prox.retrieve(
+          "DataExtensionObject[" + keyVariants[k] + "]",
+          ["customerKey", "automationName"],
+          filters[f]
+        );
+        if (wsResp && wsResp.Results && wsResp.Results.length) {
+          return { rows: normalizeQueueRows(wsResp.Results), error: "" };
+        }
+      } catch (wsEx) {
+        errors.push(
+          "WSProxy " +
+            keyVariants[k] +
+            " " +
+            filters[f].Property +
+            ": " +
+            (wsEx.message || String(wsEx))
+        );
+      }
+    }
+  }
+
+  return { rows: [], error: errors.join(" | ") };
+}
+
+function removePurgeQueueRow(prox, customerKey, automationName) {
   var key = strTrim(customerKey);
-  var name = strTrim(automationName);
+  if (!key) {
+    return { ok: false, error: "No customerKey for row removal (primary key)." };
+  }
   try {
-    if (key) {
-      Platform.Function.DeleteData(PURGE_QUEUE_DE, ["customerKey"], [key]);
-      return { ok: true };
-    }
-    if (name) {
-      Platform.Function.DeleteData(PURGE_QUEUE_DE, ["automationName"], [name]);
-      return { ok: true };
-    }
-    return { ok: false, error: "No customerKey or automationName for row removal." };
+    Platform.Function.DeleteData(PURGE_QUEUE_DE, ["customerKey"], [key]);
+    return { ok: true };
   } catch (delEx) {
-    return { ok: false, error: delEx.message || String(delEx) };
+    try {
+      var byKey = prox.deleteItem("DataExtensionObject[" + PURGE_QUEUE_DE + "]", {
+        customerKey: key
+      });
+      if (byKey && byKey.Results && byKey.Results.length && byKey.Results[0].Status === "OK") {
+        return { ok: true };
+      }
+      return {
+        ok: false,
+        error:
+          "DeleteData: " +
+          (delEx.message || String(delEx)) +
+          " | WSProxy delete did not return OK."
+      };
+    } catch (wsDelEx) {
+      return {
+        ok: false,
+        error:
+          "DeleteData: " +
+          (delEx.message || String(delEx)) +
+          " | WSProxy: " +
+          (wsDelEx.message || String(wsDelEx))
+      };
+    }
   }
 }
 
@@ -200,7 +283,7 @@ function processQueueRow(prox, queueRow) {
 
   var resolved = resolveAutomationForPurge(prox, customerKey, automationName);
   if (!resolved.row) {
-    var staleRemove = removePurgeQueueRow(customerKey, automationName);
+    var staleRemove = removePurgeQueueRow(prox, customerKey, automationName);
     if (staleRemove.ok) {
       return label + " — NOT FOUND, queue row removed.";
     }
@@ -216,7 +299,7 @@ function processQueueRow(prox, queueRow) {
     return label + " — DELETE FAILED: " + delResult.msg;
   }
 
-  var rowRemove = removePurgeQueueRow(customerKey, automationName);
+  var rowRemove = removePurgeQueueRow(prox, customerKey, automationName);
   if (!rowRemove.ok) {
     return (
       label +
@@ -230,14 +313,22 @@ function processQueueRow(prox, queueRow) {
 }
 
 try {
-  var queueRows = fetchPurgeQueueRows();
+  var prox = new Script.Util.WSProxy();
+  var queueFetch = fetchPurgeQueueRows(prox);
+  var queueRows = queueFetch.rows || [];
   resultLines.push(
     "bd_sst_automation_purge worker — " + queueRows.length + " row(s)."
   );
+  if (queueFetch.error) {
+    debugLines.push("Retrieve notes: " + queueFetch.error);
+  }
   if (!queueRows.length) {
-    resultLines.push("No queued automations.");
+    resultLines.push(
+      queueFetch.error
+        ? "No queued automations (retrieve failed — see notes)."
+        : "No queued automations."
+    );
   } else {
-    var prox = new Script.Util.WSProxy();
     for (var q = 0; q < queueRows.length; q++) {
       debugLines.push(processQueueRow(prox, queueRows[q]));
     }
