@@ -638,6 +638,156 @@ function resolveDeObjectIdByCustomerKey(customerKey) {
 }
 
 
+function isGuidLike(id) {
+ var value = strTrim(id);
+ if (!value) {
+   return false;
+ }
+ return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
+   value
+ );
+}
+
+
+function fetchEventDefinitionForPurge(sub, token, eventDefId) {
+ var id = strTrim(eventDefId);
+ if (!id || !sub || !token) {
+   return { ok: false, dataExtensionId: "", status: 0, body: "" };
+ }
+ try {
+   var getEventUrl =
+     "https://" +
+     sub +
+     ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
+     encodeURIComponent(id);
+   var getReq = new Script.Util.HttpRequest(getEventUrl);
+   getReq.emptyContentHandling = 0;
+   getReq.continueOnError = true;
+   getReq.setHeader("Authorization", "Bearer " + token);
+   getReq.method = "GET";
+   var getResp = getReq.send();
+   var body = getResp.content ? String(getResp.content) : "";
+   var dataExtensionId = "";
+   if (getResp.statusCode == 200 || getResp.statusCode == 201) {
+    var evtObj = Platform.Function.ParseJSON(body);
+    dataExtensionId =
+     evtObj.dataExtensionId || evtObj.dataExtensionID || "";
+    return {
+     ok: true,
+     dataExtensionId: dataExtensionId ? String(dataExtensionId) : "",
+     status: getResp.statusCode,
+     body: body
+    };
+   }
+   return { ok: false, dataExtensionId: "", status: getResp.statusCode, body: body };
+ } catch (fetchEvEx) {
+   return {
+    ok: false,
+    dataExtensionId: "",
+    status: 0,
+    body: fetchEvEx.message || String(fetchEvEx)
+   };
+ }
+}
+
+
+function deleteEntryDataExtension(prox, deObjId, deCustomerKey, deName) {
+ var errors = [];
+ var objId = strTrim(deObjId);
+ if (objId) {
+  try {
+   var byObj = prox.deleteItem("DataExtension", { ObjectID: objId });
+   var objStatus = soapDeleteStatus(byObj);
+   if (objStatus.ok) {
+    return { ok: true, msg: "DELETE OK (ObjectID)." };
+   }
+   errors.push("ObjectID " + objStatus.detail);
+  } catch (deObjEx) {
+   errors.push("ObjectID " + (deObjEx.message || String(deObjEx)));
+  }
+ }
+ var key = strTrim(deCustomerKey);
+ if (key && key.toUpperCase() !== "N/A") {
+  try {
+   var byKey = prox.deleteItem("DataExtension", { CustomerKey: key });
+   var keyStatus = soapDeleteStatus(byKey);
+   if (keyStatus.ok) {
+    return { ok: true, msg: "DELETE OK (CustomerKey)." };
+   }
+   errors.push("CustomerKey " + keyStatus.detail);
+  } catch (deKeyEx) {
+   errors.push("CustomerKey " + (deKeyEx.message || String(deKeyEx)));
+  }
+ }
+ var name = strTrim(deName);
+ if (name && name.toUpperCase() !== "N/A") {
+  try {
+   var byName = prox.deleteItem("DataExtension", { Name: name });
+   var nameStatus = soapDeleteStatus(byName);
+   if (nameStatus.ok) {
+    return { ok: true, msg: "DELETE OK (Name)." };
+   }
+   errors.push("Name " + nameStatus.detail);
+  } catch (deNameEx) {
+   errors.push("Name " + (deNameEx.message || String(deNameEx)));
+  }
+ }
+ if (errors.length) {
+  return { ok: false, msg: errors.join(" | ") };
+ }
+ return { ok: false, msg: "No data extension ObjectID or key resolved." };
+}
+
+
+function deleteQueryDefinition(prox, queryKey) {
+ var key = strTrim(queryKey);
+ if (!key) {
+  return { ok: false, msg: "No query key on build log." };
+ }
+ try {
+  var qdDelRes = prox.retrieve(
+   "QueryDefinition",
+   ["ObjectID"],
+   {
+    Property: "CustomerKey",
+    SimpleOperator: "equals",
+    Value: String(key)
+   }
+  );
+  if (
+   qdDelRes &&
+   qdDelRes.Results &&
+   qdDelRes.Results.length > 0 &&
+   qdDelRes.Results[0].ObjectID
+  ) {
+   var qDelResult = prox.deleteItem("QueryDefinition", {
+    ObjectID: String(qdDelRes.Results[0].ObjectID)
+   });
+   var qStatus = soapDeleteStatus(qDelResult);
+   if (qStatus.ok) {
+    return { ok: true, msg: "DELETE OK." };
+   }
+   return { ok: false, msg: qStatus.detail };
+  }
+  return { ok: false, msg: "Query not found for key " + key + "." };
+ } catch (qDelEx) {
+  return { ok: false, msg: qDelEx.message || String(qDelEx) };
+ }
+}
+
+
+function formatPurgeAccessHint(msg) {
+ var text = String(msg || "");
+ if (text.indexOf("Delete Access is denied") >= 0) {
+  return (
+   text +
+   " Grant Automation Studio delete/write permission on the API integration, or remove the asset manually."
+  );
+ }
+ return text;
+}
+
+
 function buildSentDisplay(sentCountRaw, deRowCount) {
  var sent = strTrim(sentCountRaw);
  var total = Number(deRowCount);
@@ -1516,7 +1666,7 @@ function deleteStackAutomation(sub, token, autoId, customerKey) {
   }
  }
  if (errors.length) {
-  return { ok: false, msg: errors.join(" | ") };
+  return { ok: false, msg: formatPurgeAccessHint(errors.join(" | ")) };
  }
  return { ok: false, msg: "Could not resolve automation for delete." };
 }
@@ -1704,10 +1854,13 @@ try {
 try {
  if (attemptPurgeBuild == "true" && authOk == "true" && accessToken && subdomain) {
    var isStackPurge = Platform.Variable.GetValue("@isStackBuild") || "";
+   var autoDelId = "";
+   var autoDelKey = "";
+   var queryDelKey = "";
    if (isStackPurge == "true") {
-     var autoDelId = strTrim(Platform.Variable.GetValue("@dispAutomationGuid") || "");
-     var autoDelKey = strTrim(Platform.Variable.GetValue("@dispAutomationCustomerKey") || "");
-     var queryDelKey = strTrim(Platform.Variable.GetValue("@dispQueryKey") || "");
+     autoDelId = strTrim(Platform.Variable.GetValue("@dispAutomationGuid") || "");
+     autoDelKey = strTrim(Platform.Variable.GetValue("@dispAutomationCustomerKey") || "");
+     queryDelKey = strTrim(Platform.Variable.GetValue("@dispQueryKey") || "");
      if (!autoDelId && jidClean) {
        autoDelId = logDeField(jidClean, "automationGuid");
      }
@@ -1718,61 +1871,52 @@ try {
        queryDelKey = logDeField(jidClean, "queryKey");
      }
      if (autoDelId || autoDelKey) {
-       var autoDelResult = deleteStackAutomation(
+       var pauseResult = pauseStackAutomation(
          subdomain,
          accessToken,
          autoDelId,
          autoDelKey
        );
-       if (autoDelResult.ok) {
-         truncLog("[Automation] " + autoDelResult.msg);
+       if (pauseResult.ok) {
+         truncLog("[Automation] Paused before purge.");
        } else {
-         truncLog("[Automation] DELETE FAILED - " + (autoDelResult.msg || "Unknown error."));
+         truncLog("[Automation] Pause before purge - " + (pauseResult.msg || "not paused."));
        }
-     } else {
-       truncLog("[Automation] SKIP - no id or customer key on build log.");
-     }
-     if (queryDelKey) {
-       try {
-         var proxQDel = new Script.Util.WSProxy();
-         var qdDelRes = proxQDel.retrieve(
-           "QueryDefinition",
-           ["ObjectID"],
-           {
-             Property: "CustomerKey",
-             SimpleOperator: "equals",
-             Value: String(queryDelKey)
-           }
-         );
-         if (
-           qdDelRes &&
-           qdDelRes.Results &&
-           qdDelRes.Results.length > 0 &&
-           qdDelRes.Results[0].ObjectID
-         ) {
-           var qDelResult = proxQDel.deleteItem("QueryDefinition", {
-             ObjectID: String(qdDelRes.Results[0].ObjectID)
-           });
-           if (
-             qDelResult &&
-             qDelResult.Results &&
-             qDelResult.Results.length > 0 &&
-             qDelResult.Results[0].Status == "OK"
-           ) {
-             truncLog("[Query] DELETE OK.");
-           } else {
-             truncLog("[Query] deleteItem did not report OK.");
-           }
-         } else {
-           truncLog("[Query] SKIP - not found for key " + queryDelKey + ".");
-         }
-       } catch (qDelEx) {
-         truncLog("[Query] FAILED: " + (qDelEx.message || String(qDelEx)));
-       }
-     } else {
-       truncLog("[Query] SKIP - no key on build log.");
      }
    }
+
+   var logEventDefId = jidClean ? logDeField(jidClean, "eventDefId") : "";
+   var evRaw = strTrim(logEventDefId);
+   if (!evRaw) {
+     evRaw = resolveJourneyEntryEventId(subdomain, accessToken, jidClean);
+   }
+   var dataExtensionId = "";
+   if (evRaw && evRaw.toUpperCase() != "N/A") {
+     if (isGuidLike(evRaw)) {
+       var eventBundle = fetchEventDefinitionForPurge(
+         subdomain,
+         accessToken,
+         evRaw
+       );
+       if (eventBundle.ok) {
+         dataExtensionId = eventBundle.dataExtensionId || "";
+       } else {
+         truncLog(
+           "[Entry event definition] lookup HTTP " +
+             eventBundle.status +
+             " before journey delete."
+         );
+       }
+     } else {
+       truncLog(
+         "[Entry event definition] SKIP - stored id is not an event definition GUID (" +
+           evRaw +
+           "). Resolve from journey before delete on future purges."
+       );
+       evRaw = "";
+     }
+   }
+
    var jStr = jidClean ? String(jidClean) : "";
    var pref = jStr.length >= 7 ? jStr.substring(0, 7).toLowerCase() : "";
    if (jStr && pref != "email:") {
@@ -1788,7 +1932,11 @@ try {
        jr.setHeader("Authorization", "Bearer " + accessToken);
        jr.method = "DELETE";
        var jrsp = jr.send();
-       truncLog("[Journey] DELETE HTTP " + jrsp.statusCode + ".");
+       if (jrsp.statusCode == 200 || jrsp.statusCode == 204) {
+         truncLog("[Journey] DELETE OK.");
+       } else {
+         truncLog("[Journey] DELETE HTTP " + jrsp.statusCode + ".");
+       }
      } catch (jex) {
        truncLog("[Journey] DELETE fault: " + (jex.message || String(jex)));
      }
@@ -1796,36 +1944,13 @@ try {
      truncLog("[Journey] SKIP - email-only build (no journey GUID in log key).");
    }
 
-
-   var evRaw = resolveJourneyEntryEventId(subdomain, accessToken, jidClean);
-   if (!evRaw && dispDeIdVal) {
-     evRaw = strTrim(dispDeIdVal);
-   }
-   var evU = evRaw ? evRaw.toUpperCase() : "";
-   if (evRaw && evU != "N/A") {
-     var dataExtensionId = null;
+   if (evRaw && evRaw.toUpperCase() != "N/A") {
      try {
-       var getEventUrl =
-         "https://" +
-         subdomain +
-         ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
-         evRaw;
-       var getReq = new Script.Util.HttpRequest(getEventUrl);
-       getReq.emptyContentHandling = 0;
-       getReq.continueOnError = true;
-       getReq.setHeader("Authorization", "Bearer " + accessToken);
-       getReq.method = "GET";
-       var getResp = getReq.send();
-       if ((getResp.statusCode == 200 || getResp.statusCode == 201) && getResp.content) {
-         var evtObj = Platform.Function.ParseJSON(String(getResp.content));
-         dataExtensionId =
-           evtObj.dataExtensionId || evtObj.dataExtensionID || null;
-       }
        var eventDeleteUrl =
          "https://" +
          subdomain +
          ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
-         evRaw;
+         encodeURIComponent(evRaw);
        var evDel = new Script.Util.HttpRequest(eventDeleteUrl);
        evDel.emptyContentHandling = 0;
        evDel.continueOnError = true;
@@ -1835,7 +1960,12 @@ try {
        if (evRsp.statusCode == 200 || evRsp.statusCode == 204) {
          truncLog("[Entry event definition] DELETE OK.");
        } else {
-         truncLog("[Entry event definition] DELETE HTTP " + evRsp.statusCode + ".");
+         var evBody = evRsp.content ? String(evRsp.content).substring(0, 180) : "";
+         truncLog(
+           "[Entry event definition] DELETE HTTP " +
+             evRsp.statusCode +
+             (evBody ? " - " + evBody : ".")
+         );
        }
      } catch (evEx) {
        truncLog("[Entry event definition] FAILED: " + (evEx.message || String(evEx)));
@@ -1862,32 +1992,60 @@ try {
            deObjId = rde.Results[0].ObjectID;
          }
        }
-       if (deObjId) {
-         var proxDel = new Script.Util.WSProxy();
-         var deResult = proxDel.deleteItem(
-           "DataExtension",
-           { ObjectID: deObjId }
-         );
-         if (
-           deResult &&
-           deResult.Results &&
-           deResult.Results.length > 0 &&
-           deResult.Results[0].Status == "OK"
-         ) {
-           truncLog("[Entry data extension] DELETED.");
-         } else {
-           truncLog("[Entry data extension] deleteItem did not report OK.");
-         }
+       var deDelResult = deleteEntryDataExtension(
+         new Script.Util.WSProxy(),
+         deObjId,
+         dispDeIdVal,
+         dispDeNameVal
+       );
+       if (deDelResult.ok) {
+         truncLog("[Entry data extension] " + deDelResult.msg);
        } else {
-         truncLog("[Entry data extension] SKIP - no ObjectID resolved.");
+         truncLog(
+           "[Entry data extension] DELETE FAILED - " +
+             formatPurgeAccessHint(deDelResult.msg || "Unknown error.")
+         );
        }
      } catch (deEx) {
        truncLog("[Entry data extension] FAILED: " + (deEx.message || String(deEx)));
      }
    } else {
-     truncLog("[Entry event] SKIP - none stored or N/A.");
+     truncLog("[Entry event] SKIP - no event definition id resolved before journey delete.");
    }
 
+   if (isStackPurge == "true") {
+     if (autoDelId || autoDelKey) {
+       var autoDelResult = deleteStackAutomation(
+         subdomain,
+         accessToken,
+         autoDelId,
+         autoDelKey
+       );
+       if (autoDelResult.ok) {
+         truncLog("[Automation] " + autoDelResult.msg);
+       } else {
+         truncLog("[Automation] DELETE FAILED - " + (autoDelResult.msg || "Unknown error."));
+       }
+     } else {
+       truncLog("[Automation] SKIP - no id or customer key on build log.");
+     }
+     if (queryDelKey) {
+       var queryDelResult = deleteQueryDefinition(
+         new Script.Util.WSProxy(),
+         queryDelKey
+       );
+       if (queryDelResult.ok) {
+         truncLog("[Query] " + queryDelResult.msg);
+       } else {
+         truncLog(
+           "[Query] DELETE FAILED - " +
+             formatPurgeAccessHint(queryDelResult.msg || "Unknown error.")
+         );
+       }
+     } else {
+       truncLog("[Query] SKIP - no key on build log.");
+     }
+   }
 
    var emailOk = deleteEmailAsset(subdomain, accessToken, deleteEmailFromPost);
    Platform.Variable.SetValue("@purgeEmailOk", emailOk ? "true" : "false");
