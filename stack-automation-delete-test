@@ -10,19 +10,35 @@
   2. Set TEST_OBJECT_ID and/or TEST_CUSTOMER_KEY below.
   3. Run with DRY_RUN = true first (lookup only).
   4. Set DRY_RUN = false to attempt deleteItem.
-  5. Read output in the Script Activity log.
+  5. Read rows in the test_log data extension (field: log).
 */
 Platform.Load("core", "1");
 
 var TEST_OBJECT_ID = "";
 var TEST_CUSTOMER_KEY = "";
 var DRY_RUN = true;
+var LOG_DE = "test_log";
+var LOG_FIELD = "log";
+var LOG_MAX_LEN = 4000;
 
 var resultLines = [];
 var debugLines = [];
 
 function strTrim(v) {
   return v === null || v === undefined ? "" : String(v).replace(/^\s+|\s+$/g, "");
+}
+
+function writeTestLog(text) {
+  var msg = text === null || text === undefined ? "" : String(text);
+  if (msg.length > LOG_MAX_LEN) {
+    msg = msg.substring(0, LOG_MAX_LEN - 3) + "...";
+  }
+  try {
+    Platform.Function.InsertData(LOG_DE, [LOG_FIELD], [msg]);
+    return { ok: true };
+  } catch (logEx) {
+    return { ok: false, error: logEx.message || String(logEx) };
+  }
 }
 
 function soapDeleteStatus(result) {
@@ -202,6 +218,11 @@ if (!objectId && !customerKey) {
 var output = resultLines.join("\n");
 if (debugLines.length) {
   output += "\n\n" + debugLines.join("\n");
+}
+
+var logResult = writeTestLog(output);
+if (!logResult.ok) {
+  output += "\n\n[test_log insert FAILED] " + logResult.error;
 }
 Write(output);
 </script>
