@@ -1443,6 +1443,85 @@ function pauseStackAutomation(sub, token, autoId, customerKey) {
 }
 
 
+function soapDeleteStatus(result) {
+ if (!result || !result.Results || !result.Results.length) {
+  return { ok: false, detail: "deleteItem returned no Results." };
+ }
+ var row = result.Results[0];
+ if (row.Status == "OK") {
+  return { ok: true, detail: "OK" };
+ }
+ var err =
+  row.ErrorMessage ||
+  row.StatusMessage ||
+  row.ErrorCode ||
+  row.Status ||
+  "deleteItem did not report OK.";
+ return { ok: false, detail: String(err) };
+}
+
+
+function deleteStackAutomation(sub, token, autoId, customerKey) {
+ var key = strTrim(customerKey);
+ var restId = strTrim(autoId);
+ if (!restId && !key) {
+  return { ok: false, msg: "No automation id or customer key on build log." };
+ }
+ var prox = new Script.Util.WSProxy();
+ var resolvedId = resolveAutomationObjectId(prox, key, restId);
+ if (!resolvedId) {
+  resolvedId = resolveProgramObjectId(prox, key, restId);
+ }
+ if (resolvedId && sub && token) {
+  try {
+   var before = getAutomationById(prox, resolvedId);
+   if (before) {
+    var st =
+     before.Status !== undefined && before.Status !== null
+      ? String(before.Status)
+      : "";
+    var active =
+     before.IsActive !== undefined && before.IsActive !== null
+      ? String(before.IsActive).toLowerCase()
+      : "";
+    if (st === "3" || st === "6" || st === "7" || active === "true") {
+     pauseStackAutomation(sub, token, restId, key);
+    }
+   }
+  } catch (prePauseEx) {}
+ }
+ var errors = [];
+ if (resolvedId) {
+  try {
+   var byObj = prox.deleteItem("Automation", { ObjectID: resolvedId });
+   var objStatus = soapDeleteStatus(byObj);
+   if (objStatus.ok) {
+    return { ok: true, msg: "DELETE OK (ObjectID)." };
+   }
+   errors.push("ObjectID " + objStatus.detail);
+  } catch (objDelEx) {
+   errors.push("ObjectID " + (objDelEx.message || String(objDelEx)));
+  }
+ }
+ if (key) {
+  try {
+   var byKey = prox.deleteItem("Automation", { CustomerKey: key });
+   var keyStatus = soapDeleteStatus(byKey);
+   if (keyStatus.ok) {
+    return { ok: true, msg: "DELETE OK (CustomerKey)." };
+   }
+   errors.push("CustomerKey " + keyStatus.detail);
+  } catch (keyDelEx) {
+   errors.push("CustomerKey " + (keyDelEx.message || String(keyDelEx)));
+  }
+ }
+ if (errors.length) {
+  return { ok: false, msg: errors.join(" | ") };
+ }
+ return { ok: false, msg: "Could not resolve automation for delete." };
+}
+
+
 var authOk = Platform.Variable.GetValue("@authOk") || "";
 var accessToken = Platform.Variable.GetValue("@accessToken") || "";
 var subdomain = Platform.Variable.GetValue("@subdomain") || "";
@@ -1627,27 +1706,31 @@ try {
    var isStackPurge = Platform.Variable.GetValue("@isStackBuild") || "";
    if (isStackPurge == "true") {
      var autoDelId = strTrim(Platform.Variable.GetValue("@dispAutomationGuid") || "");
+     var autoDelKey = strTrim(Platform.Variable.GetValue("@dispAutomationCustomerKey") || "");
      var queryDelKey = strTrim(Platform.Variable.GetValue("@dispQueryKey") || "");
      if (!autoDelId && jidClean) {
        autoDelId = logDeField(jidClean, "automationGuid");
      }
+     if (!autoDelKey && jidClean) {
+       autoDelKey = logDeField(jidClean, "automationCustomerKey");
+     }
      if (!queryDelKey && jidClean) {
        queryDelKey = logDeField(jidClean, "queryKey");
      }
-     if (autoDelId) {
-       var autoDelUrl =
-         "https://" +
-         subdomain +
-         ".rest.marketingcloudapis.com/automation/v1/automations/" +
-         encodeURIComponent(String(autoDelId));
-       var autoSt = purgeHttpDel(subdomain, accessToken, autoDelUrl);
-       if (autoSt == 200 || autoSt == 204) {
-         truncLog("[Automation] DELETE OK.");
+     if (autoDelId || autoDelKey) {
+       var autoDelResult = deleteStackAutomation(
+         subdomain,
+         accessToken,
+         autoDelId,
+         autoDelKey
+       );
+       if (autoDelResult.ok) {
+         truncLog("[Automation] " + autoDelResult.msg);
        } else {
-         truncLog("[Automation] DELETE HTTP " + autoSt + ".");
+         truncLog("[Automation] DELETE FAILED - " + (autoDelResult.msg || "Unknown error."));
        }
      } else {
-       truncLog("[Automation] SKIP - no id on build log.");
+       truncLog("[Automation] SKIP - no id or customer key on build log.");
      }
      if (queryDelKey) {
        try {
