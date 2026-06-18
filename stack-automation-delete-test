@@ -1,22 +1,17 @@
 <script runat="server">
 /*
-  Automation delete test — WSProxy deleteItem("Automation", …)
-  Paste into an Automation Studio Script Activity only (pure SSJS).
+  bd_sst_automation_purge worker — Automation Studio Script Activity only.
 
-  Per Stack Exchange, delete works from Script Activity, not CloudPages:
-  https://salesforce.stackexchange.com/questions/75711/how-can-an-automation-be-deleted-using-exacttarget-soap-api/262131
+  Reads rows from bd_sst_automation_purge (customerKey, automationName),
+  deletes each automation via WSProxy.deleteItem, removes the queue row on success,
+  and logs each run to test_log.
 
-  1. Create or pick a throwaway automation.
-  2. Set TEST_OBJECT_ID and/or TEST_CUSTOMER_KEY below.
-  3. Run with DRY_RUN = true first (lookup only).
-  4. Set DRY_RUN = false to attempt deleteItem.
-  5. Read rows in the test_log data extension (field: log).
+  Schedule this automation to run on a short interval (e.g. every 15 minutes).
+  edit-build queues automations here during stack build purge (CloudPage cannot delete).
 */
 Platform.Load("core", "1");
 
-var TEST_OBJECT_ID = "";
-var TEST_CUSTOMER_KEY = "";
-var DRY_RUN = true;
+var PURGE_QUEUE_DE = "bd_sst_automation_purge";
 var LOG_DE = "test_log";
 var LOG_FIELD = "log";
 var LOG_MAX_LEN = 4000;
@@ -68,18 +63,38 @@ function soapDeleteStatus(result) {
   };
 }
 
-function formatAutomationRow(row) {
-  if (!row) {
-    return "(not found)";
+function fetchPurgeQueueRows() {
+  var de = DataExtension.Init(PURGE_QUEUE_DE);
+  var rows = de.Rows.Retrieve(["customerKey", "automationName"]);
+  if (!rows || !rows.length) {
+    return [];
   }
-  return [
-    "ObjectID=" + (row.ObjectID || ""),
-    "ProgramID=" + (row.ProgramID || ""),
-    "CustomerKey=" + (row.CustomerKey || ""),
-    "Name=" + (row.Name || ""),
-    "Status=" + (row.Status !== undefined && row.Status !== null ? row.Status : ""),
-    "IsActive=" + (row.IsActive !== undefined && row.IsActive !== null ? row.IsActive : "")
-  ].join(" | ");
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    out.push({
+      customerKey: rows[i].customerKey ? String(rows[i].customerKey) : "",
+      automationName: rows[i].automationName ? String(rows[i].automationName) : ""
+    });
+  }
+  return out;
+}
+
+function removePurgeQueueRow(customerKey, automationName) {
+  var key = strTrim(customerKey);
+  var name = strTrim(automationName);
+  try {
+    if (key) {
+      Platform.Function.DeleteData(PURGE_QUEUE_DE, ["customerKey"], [key]);
+      return { ok: true };
+    }
+    if (name) {
+      Platform.Function.DeleteData(PURGE_QUEUE_DE, ["automationName"], [name]);
+      return { ok: true };
+    }
+    return { ok: false, error: "No customerKey or automationName for row removal." };
+  } catch (delEx) {
+    return { ok: false, error: delEx.message || String(delEx) };
+  }
 }
 
 function getAutomationById(prox, objectId) {
@@ -103,46 +118,40 @@ function getAutomationById(prox, objectId) {
   return null;
 }
 
-function resolveAutomationObjectId(prox, customerKey, objectIdHint) {
+function resolveAutomationForPurge(prox, customerKey, automationName) {
   var key = strTrim(customerKey);
-  if (key && prox) {
+  if (key) {
     var byKey = prox.retrieve(
       "Automation",
       ["ObjectID", "ProgramID", "CustomerKey", "Name", "Status", "IsActive"],
       { Property: "CustomerKey", SimpleOperator: "equals", Value: key }
     );
     if (byKey && byKey.Results && byKey.Results.length > 0) {
-      if (byKey.Results[0].ObjectID) {
-        return { row: byKey.Results[0], resolvedId: String(byKey.Results[0].ObjectID) };
-      }
-      if (byKey.Results[0].ProgramID) {
-        return { row: byKey.Results[0], resolvedId: String(byKey.Results[0].ProgramID) };
-      }
-    }
-  }
-  var hint = strTrim(objectIdHint);
-  if (hint && prox) {
-    var byObj = getAutomationById(prox, hint);
-    if (byObj) {
+      var row = byKey.Results[0];
       return {
-        row: byObj,
-        resolvedId: String(byObj.ObjectID || byObj.ProgramID || hint)
+        row: row,
+        resolvedId: String(row.ObjectID || row.ProgramID || ""),
+        deleteKey: key
       };
     }
-    var byProgram = prox.retrieve(
+  }
+  var name = strTrim(automationName);
+  if (name) {
+    var byName = prox.retrieve(
       "Automation",
       ["ObjectID", "ProgramID", "CustomerKey", "Name", "Status", "IsActive"],
-      { Property: "ProgramID", SimpleOperator: "equals", Value: hint }
+      { Property: "Name", SimpleOperator: "equals", Value: name }
     );
-    if (byProgram && byProgram.Results && byProgram.Results.length > 0) {
-      var progRow = byProgram.Results[0];
+    if (byName && byName.Results && byName.Results.length > 0) {
+      var nameRow = byName.Results[0];
       return {
-        row: progRow,
-        resolvedId: String(progRow.ObjectID || progRow.ProgramID || hint)
+        row: nameRow,
+        resolvedId: String(nameRow.ObjectID || nameRow.ProgramID || ""),
+        deleteKey: strTrim(nameRow.CustomerKey || key)
       };
     }
   }
-  return { row: null, resolvedId: "" };
+  return { row: null, resolvedId: "", deleteKey: key };
 }
 
 function tryDeleteAutomation(prox, resolvedId, customerKey) {
@@ -179,40 +188,62 @@ function tryDeleteAutomation(prox, resolvedId, customerKey) {
   return { ok: false, msg: "No ObjectID or CustomerKey to delete." };
 }
 
-var objectId = strTrim(TEST_OBJECT_ID);
-var customerKey = strTrim(TEST_CUSTOMER_KEY);
-var dryRun = DRY_RUN === true;
+function processQueueRow(prox, queueRow) {
+  var customerKey = strTrim(queueRow.customerKey);
+  var automationName = strTrim(queueRow.automationName);
+  var label =
+    (customerKey || "(no key)") + " / " + (automationName || "(no name)");
 
-if (!objectId && !customerKey) {
-  resultLines.push("Set TEST_OBJECT_ID and/or TEST_CUSTOMER_KEY at the top of this script.");
-} else {
-  try {
-    var prox = new Script.Util.WSProxy();
-    var resolved = resolveAutomationObjectId(prox, customerKey, objectId);
-    var resolvedId = resolved.resolvedId;
-    var beforeRow = resolved.row;
-
-    resultLines.push("DRY_RUN: " + (dryRun ? "true (lookup only)" : "false (will delete)"));
-    debugLines.push("Lookup: " + formatAutomationRow(beforeRow));
-    debugLines.push("Resolved delete id: " + (resolvedId || "(none)"));
-
-    if (!beforeRow) {
-      resultLines.push("Automation NOT FOUND for supplied ObjectID/CustomerKey.");
-    } else if (dryRun) {
-      resultLines.push("Lookup OK. Set DRY_RUN = false to attempt deleteItem.");
-    } else {
-      var delResult = tryDeleteAutomation(prox, resolvedId, customerKey);
-      if (delResult.ok) {
-        resultLines.push(delResult.msg);
-        var afterRow = resolvedId ? getAutomationById(prox, resolvedId) : null;
-        debugLines.push("After delete lookup: " + formatAutomationRow(afterRow));
-      } else {
-        resultLines.push("DELETE FAILED — " + delResult.msg);
-      }
-    }
-  } catch (runEx) {
-    resultLines.push("ERROR: " + (runEx.message || String(runEx)));
+  if (!customerKey && !automationName) {
+    return label + " — SKIP empty row.";
   }
+
+  var resolved = resolveAutomationForPurge(prox, customerKey, automationName);
+  if (!resolved.row) {
+    var staleRemove = removePurgeQueueRow(customerKey, automationName);
+    if (staleRemove.ok) {
+      return label + " — NOT FOUND, queue row removed.";
+    }
+    return (
+      label +
+      " — NOT FOUND, queue row remove FAILED: " +
+      (staleRemove.error || "unknown")
+    );
+  }
+
+  var delResult = tryDeleteAutomation(prox, resolved.resolvedId, resolved.deleteKey);
+  if (!delResult.ok) {
+    return label + " — DELETE FAILED: " + delResult.msg;
+  }
+
+  var rowRemove = removePurgeQueueRow(customerKey, automationName);
+  if (!rowRemove.ok) {
+    return (
+      label +
+      " — " +
+      delResult.msg +
+      " Queue row remove FAILED: " +
+      (rowRemove.error || "unknown")
+    );
+  }
+  return label + " — " + delResult.msg + " Queue row removed.";
+}
+
+try {
+  var queueRows = fetchPurgeQueueRows();
+  resultLines.push(
+    "bd_sst_automation_purge worker — " + queueRows.length + " row(s)."
+  );
+  if (!queueRows.length) {
+    resultLines.push("No queued automations.");
+  } else {
+    var prox = new Script.Util.WSProxy();
+    for (var q = 0; q < queueRows.length; q++) {
+      debugLines.push(processQueueRow(prox, queueRows[q]));
+    }
+  }
+} catch (runEx) {
+  resultLines.push("ERROR: " + (runEx.message || String(runEx)));
 }
 
 var output = resultLines.join("\n");

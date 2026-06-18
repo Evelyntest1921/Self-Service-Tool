@@ -1646,6 +1646,44 @@ function soapDeleteStatus(result) {
 }
 
 
+var AUTOMATION_PURGE_QUEUE_DE = "bd_sst_automation_purge";
+
+
+function queueAutomationPurge(customerKey, automationName) {
+ var key = strTrim(customerKey);
+ var name = strTrim(automationName);
+ if (!key && !name) {
+  return { ok: false, msg: "No customer key or automation name to queue." };
+ }
+ try {
+  if (key) {
+   var existing = Platform.Function.LookupRows(
+    AUTOMATION_PURGE_QUEUE_DE,
+    "customerKey",
+    key
+   );
+   if (existing && existing.length > 0) {
+    return {
+     ok: true,
+     msg: "Already queued for Script Activity delete (customerKey=" + key + ")."
+    };
+   }
+  }
+  Platform.Function.InsertData(
+   AUTOMATION_PURGE_QUEUE_DE,
+   ["customerKey", "automationName"],
+   [key, name]
+  );
+  return {
+   ok: true,
+   msg: "Queued for Script Activity delete (" + AUTOMATION_PURGE_QUEUE_DE + ")."
+  };
+ } catch (queueEx) {
+  return { ok: false, msg: queueEx.message || String(queueEx) };
+ }
+}
+
+
 function deleteStackAutomation(sub, token, autoId, customerKey) {
  var key = strTrim(customerKey);
  var restId = strTrim(autoId);
@@ -2053,16 +2091,20 @@ try {
 
    if (isStackPurge == "true") {
      if (autoDelId || autoDelKey) {
-       var autoDelResult = deleteStackAutomation(
-         subdomain,
-         accessToken,
-         autoDelId,
-         autoDelKey
+       var autoNameForQueue = strTrim(
+         Platform.Variable.GetValue("@dispAutomationName") || ""
        );
-       if (autoDelResult.ok) {
-         truncLog("[Automation] " + autoDelResult.msg);
+       if (!autoNameForQueue && jidClean) {
+         autoNameForQueue = logDeField(jidClean, "automationName");
+       }
+       var queueResult = queueAutomationPurge(autoDelKey, autoNameForQueue);
+       if (queueResult.ok) {
+         truncLog("[Automation] " + queueResult.msg);
        } else {
-         truncLog("[Automation] DELETE FAILED - " + (autoDelResult.msg || "Unknown error."));
+         truncLog(
+           "[Automation] QUEUE FAILED - " +
+             formatPurgeAccessHint(queueResult.msg || "Unknown error.")
+         );
        }
      } else {
        truncLog("[Automation] SKIP - no id or customer key on build log.");
