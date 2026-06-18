@@ -745,6 +745,7 @@ function deleteQueryDefinition(prox, queryKey) {
   return { ok: false, msg: "No query key on build log." };
  }
  try {
+  configureWsProxyClient(prox);
   var qdDelRes = prox.retrieve(
    "QueryDefinition",
    ["ObjectID"],
@@ -1593,19 +1594,53 @@ function pauseStackAutomation(sub, token, autoId, customerKey) {
 }
 
 
+function configureWsProxyClient(prox) {
+ try {
+  if (!prox || typeof prox.setClientId !== "function") {
+   return false;
+  }
+  var memberId = Platform.Function.AuthenticatedMemberID();
+  if (!memberId) {
+   return false;
+  }
+  var clientConfig = { ID: memberId };
+  var employeeId = Platform.Function.AuthenticatedEmployeeID();
+  if (employeeId) {
+   clientConfig.UserID = employeeId;
+  }
+  prox.setClientId(clientConfig);
+  return true;
+ } catch (cfgEx) {}
+ return false;
+}
+
+
 function soapDeleteStatus(result) {
  if (!result || !result.Results || !result.Results.length) {
   return { ok: false, detail: "deleteItem returned no Results." };
  }
  var row = result.Results[0];
- if (row.Status == "OK") {
-  return { ok: true, detail: "OK" };
+ var status = row.Status ? String(row.Status) : "";
+ var statusCode = row.StatusCode ? String(row.StatusCode) : "";
+ var statusMsg = row.StatusMessage ? String(row.StatusMessage) : "";
+ var errMsg = row.ErrorMessage ? String(row.ErrorMessage) : "";
+ if (status === "OK" || statusCode === "OK") {
+  return { ok: true, detail: statusMsg || "OK" };
+ }
+ var successText = (statusMsg + " " + errMsg).toLowerCase();
+ if (
+  successText.indexOf("deleted") >= 0 &&
+  successText.indexOf("denied") < 0 &&
+  successText.indexOf("could not find") < 0 &&
+  successText.indexOf("error") < 0
+ ) {
+  return { ok: true, detail: statusMsg || errMsg || "deleted" };
  }
  var err =
-  row.ErrorMessage ||
-  row.StatusMessage ||
+  errMsg ||
+  statusMsg ||
   row.ErrorCode ||
-  row.Status ||
+  status ||
   "deleteItem did not report OK.";
  return { ok: false, detail: String(err) };
 }
@@ -1618,6 +1653,7 @@ function deleteStackAutomation(sub, token, autoId, customerKey) {
   return { ok: false, msg: "No automation id or customer key on build log." };
  }
  var prox = new Script.Util.WSProxy();
+ configureWsProxyClient(prox);
  var resolvedId = resolveAutomationObjectId(prox, key, restId);
  if (!resolvedId) {
   resolvedId = resolveProgramObjectId(prox, key, restId);
@@ -1655,7 +1691,9 @@ function deleteStackAutomation(sub, token, autoId, customerKey) {
  }
  if (key) {
   try {
-   var byKey = prox.deleteItem("Automation", { CustomerKey: key });
+   var proxKey = new Script.Util.WSProxy();
+   configureWsProxyClient(proxKey);
+   var byKey = proxKey.deleteItem("Automation", { CustomerKey: key });
    var keyStatus = soapDeleteStatus(byKey);
    if (keyStatus.ok) {
     return { ok: true, msg: "DELETE OK (CustomerKey)." };
