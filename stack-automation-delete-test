@@ -79,13 +79,35 @@ function queueField(row, names) {
   return "";
 }
 
+function coerceQueueRows(raw) {
+  if (raw === null || raw === undefined) {
+    return [];
+  }
+  var rows = raw;
+  if (rows.Results) {
+    rows = rows.Results;
+  }
+  if (typeof rows.length === "number") {
+    var out = [];
+    for (var i = 0; i < rows.length; i++) {
+      out.push(rows[i]);
+    }
+    return out;
+  }
+  if (typeof rows === "object" && (queueField(rows, ["customerKey", "CustomerKey"]) || queueField(rows, ["automationName", "AutomationName", "Name"]))) {
+    return [rows];
+  }
+  return [];
+}
+
 function normalizeQueueRows(rawRows) {
-  if (!rawRows || !rawRows.length) {
+  var rows = coerceQueueRows(rawRows);
+  if (!rows.length) {
     return [];
   }
   var out = [];
-  for (var i = 0; i < rawRows.length; i++) {
-    var row = rawRows[i];
+  for (var j = 0; j < rows.length; j++) {
+    var row = rows[j];
     out.push({
       customerKey: queueField(row, ["customerKey", "CustomerKey"]),
       automationName: queueField(row, ["automationName", "AutomationName", "Name"])
@@ -105,9 +127,11 @@ function fetchPurgeQueueRows(prox) {
     }
     try {
       var de = DataExtension.Init(deKey);
-      // No args = all rows. Do not pass ["customerKey", ...] alone — that is filter syntax.
       var deRows = de.Rows.Retrieve();
-      return { rows: normalizeQueueRows(deRows), error: "" };
+      var normalized = normalizeQueueRows(deRows);
+      if (normalized.length) {
+        return { rows: normalized, error: "" };
+      }
     } catch (deEx) {
       errors.push("DataExtension.Init(" + deKey + "): " + (deEx.message || String(deEx)));
     }
