@@ -3,9 +3,6 @@ SET @createRequested = RequestParameter("create")
 SET @deleteRequested = IIF(RequestParameter("deleteEmail") == "1","1","0")
 SET @deleteEmailId = Trim(RequestParameter("deleteEmailId"))
 SET @campaignId = Trim(RequestParameter("campaignId"))
-SET @campaignName = ""
-SET @campaignNameSafe = ""
-SET @campaignNameForJson = ""
 SET @verifyCampaignRequested = IIF(RequestParameter("verifyCampaign") == "1","1","0")
 SET @emailId = RequestParameter("emailId")
 SET @senderProfileId = Trim(RequestParameter("senderProfileId"))
@@ -30,6 +27,22 @@ IF RowCount(@surveyUrlRows) > 0 THEN
  SET @surveyHomeUrl = Field(@surveyUrlRow,"dashboard")
  SET @surveyStageUrl = Field(@surveyUrlRow,"create")
 ENDIF
+SET @builderPageLabel = "Survey"
+SET @showForm = "true"
+IF NOT Empty(@createRequested) AND @verifyCampaignRequested != "1" THEN
+ SET @showForm = "false"
+ENDIF
+IF @deleteRequested == "1" THEN
+ SET @showForm = "false"
+ENDIF
+SET @resultText = ""
+SET @emailSubjectLine = Trim(RequestParameter("emailSubjectLine"))
+SET @journeyName = ""
+SET @eventName = ""
+SET @eventDefId = ""
+SET @deCustomerKey = ""
+SET @entryDeName = ""
+SET @journeyId = ""
 SET @templateConfigOk = "false"
 SET @templateCount = 0
 SET @defaultEmailId = ""
@@ -39,44 +52,31 @@ IF @templateCount > 0 THEN
  SET @templateConfigOk = "true"
  SET @defaultEmailId = Trim(Field(Row(@templateRows,1),"email_id"))
 ENDIF
-SET @builderPageLabel = "Survey"
-SET @showForm = "true"
-SET @buildValidationError = ""
-IF NOT Empty(@createRequested) AND @verifyCampaignRequested != "1" THEN
- IF Empty(@campaignId) OR Length(@campaignId) < 15 THEN
-  SET @buildValidationError = "Enter a valid Salesforce Campaign ID (15 or 18 characters) before creating a survey build."
- ELSEIF @templateConfigOk != "true" THEN
-  SET @buildValidationError = "Missing email templates in bd_sst_email_templates (email_type=survey-template)."
- ELSE
-  SET @showForm = "false"
- ENDIF
+IF Empty(@campaignId) OR Length(@campaignId) < 15 THEN
+ SET @createEmailOnly = "1"
+ELSE
+ SET @createEmailOnly = "0"
 ENDIF
-IF @deleteRequested == "1" THEN
- SET @showForm = "false"
-ENDIF
-SET @resultText = ""
-SET @emailSubjectLine = Trim(RequestParameter("emailSubjectLine"))
-SET @journeyName = ""
-SET @eventName = ""
-SET @emailName = ""
-SET @eventKey = ""
-SET @eventDefId = ""
-SET @deCustomerKey = ""
-SET @entryDeName = ""
-SET @journeyId = ""
-SET @analyticsJourneyId = ""
-SET @resultJourneyId = ""
-IF NOT Empty(@campaignId) AND Length(@campaignId) >= 15 THEN
+IF @createEmailOnly == "1" THEN
+ SET @dateStr = Concat(Format(Now(),"yyyy"),"_",Format(Now(),"MM"),"_",Format(Now(),"dd"))
+ SET @eventName = Concat("Email_Auto_Created_",@dateStr)
+ SET @journeyName = ""
+ SET @emailName = Concat(@eventName,"_Email")
+ SET @campaignName = ""
  IF Empty(@emailId) THEN
-  SET @emailId = @defaultEmailId
+   SET @emailId = @defaultEmailId
+ ENDIF
+ELSE
+ IF Empty(@emailId) THEN
+   SET @emailId = @defaultEmailId
  ENDIF
  SET @campaignLookup = RetrieveSalesforceObjects("Campaign","Id,Name","Id","=",@campaignId)
  IF RowCount(@campaignLookup) > 0 THEN
-  SET @campaignRow = Row(@campaignLookup,1)
-  SET @campaignName = Field(@campaignRow,"Name")
+   SET @campaignRow = Row(@campaignLookup,1)
+   SET @campaignName = Field(@campaignRow,"Name")
  ENDIF
  IF Empty(@campaignName) THEN
-  SET @campaignName = Concat("Campaign-",@campaignId)
+   SET @campaignName = Concat("Campaign-",@campaignId)
  ENDIF
  SET @campaignNameSafe = Replace(@campaignName,'"','')
  SET @campaignNameSafe = Replace(@campaignNameSafe," | ","_")
@@ -86,10 +86,6 @@ IF NOT Empty(@campaignId) AND Length(@campaignId) >= 15 THEN
  SET @eventName = Concat(@campaignNameSafe,"_Auto_Created_",@dateStr)
  SET @journeyName = Concat(@campaignNameSafe,"_Auto_Created_",@dateStr)
  SET @emailName = Concat(@eventName,"_Email")
-ELSE
- IF Empty(@emailId) THEN
-  SET @emailId = @defaultEmailId
- ENDIF
 ENDIF
 SET @campaignVerifyShow = "0"
 SET @campaignVerifyStatus = ""
@@ -223,19 +219,21 @@ IF @showForm != "true" THEN
            IF NOT Empty(@accessToken) THEN
              SET @resultText = Concat("Step 1 OK. Step 2 OK - Auth success.")
              SET @authOk = "true"
-             SET @randomKey = Substring(Replace(GUID(),"-",""),1,32)
-             SET @eventKey = Concat("SalesforceObj",@randomKey)
-             SET @schemaFields = '[{"name":"CampaignMember:Id","dataType":"Text","isNullable":false,"maxLength":18,"length":18},{"name":"CampaignMember:Common:Id","dataType":"Text","isNullable":false,"maxLength":18},{"name":"CampaignMember:CampaignId","dataType":"Text","isNullable":true,"maxLength":18,"defaultValue":"'
-             SET @schemaFields = Concat(@schemaFields,@campaignId,'"},{"name":"CampaignMember:CreatedDate","dataType":"Date","isNullable":true},{"name":"CampaignMember:Account_Owner__c","dataType":"Text","isNullable":true,"maxLength":18},{"name":"CampaignMember:Common:Email","dataType":"EmailAddress","isNullable":true,"maxLength":80},{"name":"CampaignMember:Common:HasOptedOutOfEmail","dataType":"Boolean","isNullable":true,"defaultValue":false},{"name":"CampaignMember:Common:FirstName","dataType":"Text","isNullable":true,"maxLength":40},{"name":"CampaignMember:Common:Name","dataType":"Text","isNullable":true,"maxLength":121},{"name":"CampaignMember:Common:LastName","dataType":"Text","isNullable":true,"maxLength":80},{"name":"CampaignMember:Common:Title","dataType":"Text","isNullable":true,"maxLength":80},{"name":"CampaignMember:Common:Salutation","dataType":"Text","isNullable":true,"maxLength":40},{"name":"CampaignMember:Campaign:Name","dataType":"Text","isNullable":true,"maxLength":80},{"name":"CampaignMember:Campaign:Id","dataType":"Text","isNullable":true,"maxLength":18},{"name":"CampaignMember:Account:Id","dataType":"Text","isNullable":true,"maxLength":18},{"name":"CampaignMember:Account:Name","dataType":"Text","isNullable":true,"maxLength":255},{"name":"CampaignMember:Account:OwnerId","dataType":"Text","isNullable":true,"maxLength":18},{"name":"CampaignMember:Account:Billing_State__c","dataType":"Text","isNullable":true,"maxLength":80},{"name":"MemberRecordType","dataType":"Text","isNullable":false,"maxLength":20},{"name":"type","dataType":"Text","isNullable":true,"maxLength":50,"defaultValue":"SST"}]'
-             SET @filterCriteria = '{"operand":"AND","conditions":[{"_length":18,"dataType":"reference","fieldName":"CampaignId","folderId":"CampaignMember-CampaignMember","id":"CampaignMember-CampaignMember-CampaignId","isPolymorphic":false,"name":"Campaign ID","operator":"EQUALS","precision":0,"referenceObjectName":"CampaignMember","relationshipIdName":"","relationshipName":"","scale":0,"text":"Campaign ID","value":"'
-             SET @filterCriteria = Concat(@filterCriteria,@campaignId,'"}]}')
-             SET @relatedFilter = '{"operand":"AND","conditions":[{"_length":18,"dataType":"id","fieldName":"Id","folderId":"Common-Contacts and Leads","id":"Common-Id","isPolymorphic":false,"name":"Contact ID/Lead ID","operator":"WASSET","precision":0,"referenceObjectName":"Contacts and Leads","relationshipIdName":"CommonId","relationshipName":"Common","scale":0,"text":"Contact ID/Lead ID"}]}'
-             SET @contactKeyObj = '{"relationshipIdName":"Id","relationshipName":"Common","isPolymorphic":false,"referenceObjectName":"Common"}'
-             SET @eventDataConfigObj = '{"objects":[{"dePrefix":"CampaignMember:","isPolymorphic":false,"relationshipName":"","referenceObject":"","relationshipIdName":"","fields":["Id","CreatedDate","Account_Owner__c"]},{"dePrefix":"CampaignMember:Common:","isPolymorphic":false,"referenceObject":"Contacts and Leads","relationshipName":"Common","fields":["Id","Email","HasOptedOutOfEmail","FirstName","Name","LastName","Title","Salutation"]},{"dePrefix":"CampaignMember:Campaign:","isPolymorphic":false,"referenceObject":"Campaign","relationshipName":"Campaign","fields":["Name","Id"]},{"dePrefix":"CampaignMember:Account:","isPolymorphic":false,"referenceObject":"Account","relationshipName":"Account","fields":["Id","Name","OwnerId","Billing_State__c"]}]}'
-             SET @passThroughArgObj = '{"fields":{"ContactKey":"CampaignMember:Common:Id","Email":"CampaignMember:Common:Email","HasOptedOutOfEmail":"CampaignMember:Common:HasOptedOutOfEmail"}}'
-             SET @filterEscaped = Replace(@filterCriteria,'"','\"')
-             SET @relatedEscaped = Replace(@relatedFilter,'"','\"')
-             SET @campaignNameForJson = Replace(@campaignName,'"','\"')
+             IF @createEmailOnly != "1" THEN
+               SET @randomKey = Substring(Replace(GUID(),"-",""),1,32)
+               SET @eventKey = Concat("SalesforceObj",@randomKey)
+               SET @schemaFields = '[{"name":"CampaignMember:Id","dataType":"Text","isNullable":false,"maxLength":18,"length":18},{"name":"CampaignMember:Common:Id","dataType":"Text","isNullable":false,"maxLength":18},{"name":"CampaignMember:CampaignId","dataType":"Text","isNullable":true,"maxLength":18,"defaultValue":"'
+               SET @schemaFields = Concat(@schemaFields,@campaignId,'"},{"name":"CampaignMember:CreatedDate","dataType":"Date","isNullable":true},{"name":"CampaignMember:Account_Owner__c","dataType":"Text","isNullable":true,"maxLength":18},{"name":"CampaignMember:Common:Email","dataType":"EmailAddress","isNullable":true,"maxLength":80},{"name":"CampaignMember:Common:HasOptedOutOfEmail","dataType":"Boolean","isNullable":true,"defaultValue":false},{"name":"CampaignMember:Common:FirstName","dataType":"Text","isNullable":true,"maxLength":40},{"name":"CampaignMember:Common:Name","dataType":"Text","isNullable":true,"maxLength":121},{"name":"CampaignMember:Common:LastName","dataType":"Text","isNullable":true,"maxLength":80},{"name":"CampaignMember:Common:Title","dataType":"Text","isNullable":true,"maxLength":80},{"name":"CampaignMember:Common:Salutation","dataType":"Text","isNullable":true,"maxLength":40},{"name":"CampaignMember:Campaign:Name","dataType":"Text","isNullable":true,"maxLength":80},{"name":"CampaignMember:Campaign:Id","dataType":"Text","isNullable":true,"maxLength":18},{"name":"CampaignMember:Account:Id","dataType":"Text","isNullable":true,"maxLength":18},{"name":"CampaignMember:Account:Name","dataType":"Text","isNullable":true,"maxLength":255},{"name":"CampaignMember:Account:OwnerId","dataType":"Text","isNullable":true,"maxLength":18},{"name":"CampaignMember:Account:Billing_State__c","dataType":"Text","isNullable":true,"maxLength":80},{"name":"MemberRecordType","dataType":"Text","isNullable":false,"maxLength":20},{"name":"type","dataType":"Text","isNullable":true,"maxLength":50,"defaultValue":"SST"}]')
+               SET @filterCriteria = '{"operand":"AND","conditions":[{"_length":18,"dataType":"reference","fieldName":"CampaignId","folderId":"CampaignMember-CampaignMember","id":"CampaignMember-CampaignMember-CampaignId","isPolymorphic":false,"name":"Campaign ID","operator":"EQUALS","precision":0,"referenceObjectName":"CampaignMember","relationshipIdName":"","relationshipName":"","scale":0,"text":"Campaign ID","value":"'
+               SET @filterCriteria = Concat(@filterCriteria,@campaignId,'"}]}')
+               SET @relatedFilter = '{"operand":"AND","conditions":[{"_length":18,"dataType":"id","fieldName":"Id","folderId":"Common-Contacts and Leads","id":"Common-Id","isPolymorphic":false,"name":"Contact ID/Lead ID","operator":"WASSET","precision":0,"referenceObjectName":"Contacts and Leads","relationshipIdName":"CommonId","relationshipName":"Common","scale":0,"text":"Contact ID/Lead ID"}]}'
+               SET @contactKeyObj = '{"relationshipIdName":"Id","relationshipName":"Common","isPolymorphic":false,"referenceObjectName":"Common"}'
+               SET @eventDataConfigObj = '{"objects":[{"dePrefix":"CampaignMember:","isPolymorphic":false,"relationshipName":"","referenceObject":"","relationshipIdName":"","fields":["Id","CreatedDate","Account_Owner__c"]},{"dePrefix":"CampaignMember:Common:","isPolymorphic":false,"referenceObject":"Contacts and Leads","relationshipName":"Common","fields":["Id","Email","HasOptedOutOfEmail","FirstName","Name","LastName","Title","Salutation"]},{"dePrefix":"CampaignMember:Campaign:","isPolymorphic":false,"referenceObject":"Campaign","relationshipName":"Campaign","fields":["Name","Id"]},{"dePrefix":"CampaignMember:Account:","isPolymorphic":false,"referenceObject":"Account","relationshipName":"Account","fields":["Id","Name","OwnerId","Billing_State__c"]}]}'
+               SET @passThroughArgObj = '{"fields":{"ContactKey":"CampaignMember:Common:Id","Email":"CampaignMember:Common:Email","HasOptedOutOfEmail":"CampaignMember:Common:HasOptedOutOfEmail"}}'
+               SET @filterEscaped = Replace(@filterCriteria,'"','\"')
+               SET @relatedEscaped = Replace(@relatedFilter,'"','\"')
+               SET @campaignNameForJson = Replace(@campaignName,'"','\"')
+             ENDIF
            ELSE
              SET @resultText = "Step 2 FAILED: No access token."
            ENDIF
@@ -1425,7 +1423,7 @@ ENDIF
 IF @showForm == "false" AND @deleteRequested != "1" AND @authOk == "true" AND @emailOk != "true" THEN
  SET @resultText = Concat(@resultText," Stopped: email was not created. Survey, entry event, and journey were skipped.")
 ENDIF
-IF @emailOk == "true" AND @authOk == "true" AND NOT Empty(@journeyEmailId) THEN
+IF @emailOk == "true" AND @authOk == "true" AND NOT Empty(@journeyEmailId) AND @createEmailOnly != "1" THEN
  SET @eventUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/eventDefinitions")
  SET @eventPayload = Concat('{"isVisibleInPicker":false,"type":"SalesforceObjectTriggerV2","sourceApplicationExtensionId":"597D9E4A-1C0D-4225-86B2-0A1E864B7CA3","schema":{"sendableCustomObjectField":"CampaignMember:Common:Id","sendableSubscriberField":"_SubscriberKey","fields":',@schemaFields,'},"name":"',@eventName,'","mode":1,"eventDefinitionKey":"',@eventKey,'","arguments":{"useHighWatermark":false},"configurationArguments":{"applicationExtensionKey":"SalesforceObjectTriggerV2","ContactKey":"{\"relationshipIdName\":\"Id\",\"relationshipName\":\"Common\",\"isPolymorphic\":false,\"referenceObjectName\":\"Common\"}","ContactPersonType":"CampaignMember","evaluationCriteriaSummary":"Created","eventDataConfig":"{\"objects\":[{\"dePrefix\":\"CampaignMember:\",\"isPolymorphic\":false,\"relationshipName\":\"\",\"referenceObject\":\"\",\"relationshipIdName\":\"\",\"fields\":[\"Id\",\"CreatedDate\",\"Account_Owner__c\"]},{\"dePrefix\":\"CampaignMember:Common:\",\"isPolymorphic\":false,\"referenceObject\":\"Contacts and Leads\",\"relationshipName\":\"Common\",\"fields\":[\"Id\",\"Email\",\"HasOptedOutOfEmail\",\"FirstName\",\"Name\",\"LastName\",\"Title\",\"Salutation\"]},{\"dePrefix\":\"CampaignMember:Campaign:\",\"isPolymorphic\":false,\"referenceObject\":\"Campaign\",\"relationshipName\":\"Campaign\",\"fields\":[\"Name\",\"Id\"]},{\"dePrefix\":\"CampaignMember:Account:\",\"isPolymorphic\":false,\"referenceObject\":\"Account\",\"relationshipName\":\"Account\",\"fields\":[\"Id\",\"Name\",\"OwnerId\",\"Billing_State__c\"]}]}","eventDataSummary":"CampaignMember:Id; CampaignMember:CreatedDate; CampaignMember:Account_Owner__c; CampaignMember:Common:Id; CampaignMember:Common:Email; CampaignMember:Common:HasOptedOutOfEmail; CampaignMember:Common:FirstName; CampaignMember:Common:Name; CampaignMember:Common:LastName; CampaignMember:Common:Title; CampaignMember:Common:Salutation; CampaignMember:Campaign:Name; CampaignMember:Campaign:Id; CampaignMember:Account:Id; CampaignMember:Account:Name; CampaignMember:Account:OwnerId; CampaignMember:Account:Billing_State__c","objectAPIName":"CampaignMember","passThroughArgument":"{\"fields\":{\"ContactKey\":\"CampaignMember:Common:Id\",\"Email\":\"CampaignMember:Common:Email\",\"HasOptedOutOfEmail\":\"CampaignMember:Common:HasOptedOutOfEmail\"}}","primaryObjectFilterCriteria":"',@filterEscaped,'","primaryObjectFilterSummary":"CampaignMember:CampaignId EQUALS ',@campaignNameForJson,' (',@campaignId,')","relatedObjectFilterCriteria":"',@relatedEscaped,'","relatedObjectFilterSummary":"Common:Contacts and Leads:Id WASSET","salesforceTriggerCriteria":"Created","version":"3.0","whoToInject":"Contact ID/Lead ID (Contacts and Leads)"}}')
  SET @eventStatus = HTTPPost2(@eventUrl,"application/json",@eventPayload,false,@eventResponse,@eventResponseHeader,"Authorization",Concat("Bearer ",@accessToken))
@@ -1471,6 +1469,7 @@ var accessToken = Variable.GetValue("accessToken");
 var resultText = Variable.GetValue("resultText") || "";
 var senderProfileId = Platform.Variable.GetValue("@senderProfileId") || "";
 var sendClassificationId = Platform.Variable.GetValue("@sendClassificationId") || "";
+var createEmailOnly = Variable.GetValue("createEmailOnly");
 var journeyResult = "";
 function jsonEscapeCj(s) {
   if (s === null || s === undefined) return "";
@@ -1942,7 +1941,8 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
   subdomain &&
   accessToken &&
   journeyEmailId &&
-  !senderProfileId
+  !senderProfileId &&
+  createEmailOnly != "1"
 ) {
  journeyResult = " Step 4 FAILED: Sender profile is required.";
  Platform.Variable.SetValue("cleanupNeeded", "1");
@@ -1953,7 +1953,8 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
   accessToken &&
   journeyEmailId &&
   senderProfileId &&
-  !sendClassificationId
+  !sendClassificationId &&
+  createEmailOnly != "1"
 ) {
  journeyResult = " Step 4 FAILED: Send classification is required.";
  Platform.Variable.SetValue("cleanupNeeded", "1");
@@ -2169,9 +2170,15 @@ IF @showForm == "false" AND @deleteRequested != "1" AND @emailOk == "true" AND I
  SET @analyticsJourneyName = IIF(NOT Empty(@journeyName), @journeyName, @emailName)
  SET @analyticsJourneyId = IIF(NOT Empty(@journeyId), @journeyId, Concat("email:",@newEmailId))
  SET @analyticsJourneyType = @builderPageLabel
+ IF @createEmailOnly == "1" THEN
+   SET @analyticsJourneyType = Concat(Substring(@builderPageLabel,1,32)," | email-only")
+ ENDIF
  SET @analyticsDeName = IIF(NOT Empty(@entryDeName), @entryDeName, IIF(NOT Empty(@deCustomerKey), @deCustomerKey, "N/A"))
  SET @analyticsDeId = IIF(NOT Empty(@deCustomerKey), @deCustomerKey, "N/A")
- SET @analyticsCampaignId = Substring(@campaignId,1,18)
+ SET @analyticsCampaignId = ""
+ IF @createEmailOnly != "1" AND NOT Empty(@campaignId) AND Length(@campaignId) >= 15 THEN
+  SET @analyticsCampaignId = Substring(@campaignId,1,18)
+ ENDIF
  SET @analyticsSurveyId = IIF(NOT Empty(@surveyId), @surveyId, "N/A")
  SET @analyticsBuildName = Substring(Trim(@surveyName),1,200)
  UpsertDE(
@@ -2768,12 +2775,7 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
         <h1 class="maker-page-title">Create Survey</h1>
       </div>
     </div>
-    <p class="maker-page-subtitle">Enter survey details, a Salesforce Campaign ID, and sender configuration. Marketing Cloud assets are created first; add questions afterward from Edit Survey.</p>
-%%[ IF NOT Empty(@buildValidationError) THEN ]%%
-    <div class="campaign-verify-panel campaign-verify-panel--invalid" role="alert" style="margin-bottom:16px;">
-      <p class="campaign-verify-message">%%=v(@buildValidationError)=%%</p>
-    </div>
-%%[ ENDIF ]%%
+    <p class="maker-page-subtitle">Enter survey details, target audience, and sender configuration. Marketing Cloud assets are created first; add questions afterward from Edit Survey.</p>
     <div class="maker-form-shell">
    <form method="post" action="" id="surveyForm">
      <div class="question-card">
@@ -2793,7 +2795,7 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
        </div>
        <div class="form-group campaign-id-group">
          <div class="campaign-id-row">
-           <input type="text" class="textarea-control" id="campaignId" name="campaignId" value="%%=v(@campaignId)=%%" placeholder="Paste Salesforce Campaign ID (701WL00000pFzUEYA0)" required>
+           <input type="text" class="textarea-control" id="campaignId" name="campaignId" value="%%=v(@campaignId)=%%" placeholder="e.g., Healthcare professionals, Risk managers — paste Salesforce Campaign ID (701WL00000pFzUEYA0)" required>
            <button type="submit" name="verifyCampaign" value="1" class="submit-button campaign-verify-btn" formnovalidate>Verify</button>
          </div>
 %%[ IF @campaignVerifyShow == "1" THEN ]%%
@@ -2892,6 +2894,8 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
     <p class="maker-page-subtitle">
 %%[ IF IndexOf(@resultText,"FAILED") > 0 OR (@showForm == "false" AND @deleteRequested != "1" AND @authOk == "true" AND @emailOk != "true") THEN ]%%
 Review the technical log below, adjust your inputs if needed, and try again.
+%%[ ELSEIF @createEmailOnly == "1" THEN ]%%
+Your email asset is in Content Builder. Use the link below when you are ready to edit or send tests.
 %%[ ELSE ]%%
 Your survey record is ready%%=IIF(@surveySaved == "true", Concat(" (", @surveyId, ")"), "")=%%. Your journey and email are in Marketing Cloud. Use Edit Survey to add questions, or open the links below.
 %%[ ENDIF ]%%
@@ -2899,14 +2903,16 @@ Your survey record is ready%%=IIF(@surveySaved == "true", Concat(" (", @surveyId
     <div class="maker-form-shell">
       <div class="maker-result-inner">
         <dl class="maker-result-dl">
+%%[ IF @createEmailOnly != "1" THEN ]%%
           <dt>Data extension</dt>
-          <dd>%%=IIF(NOT Empty(@eventName), @eventName, "N/A")=%%</dd>
+          <dd>%%=IIF(NOT Empty(@eventName), @eventName, "—")=%%</dd>
           <dt>Journey</dt>
-          <dd>%%=IIF(NOT Empty(@journeyName), @journeyName, "N/A")=%%</dd>
+          <dd>%%=IIF(NOT Empty(@journeyName), @journeyName, "—")=%%</dd>
+%%[ ENDIF ]%%
           <dt>Survey ID</dt>
-          <dd>%%=IIF(NOT Empty(@surveyId), @surveyId, "N/A")=%%</dd>
+          <dd>%%=IIF(NOT Empty(@surveyId), @surveyId, "—")=%%</dd>
           <dt>Email name</dt>
-          <dd>%%=IIF(NOT Empty(@emailName), @emailName, "N/A")=%%</dd>
+          <dd>%%=IIF(NOT Empty(@emailName), @emailName, "—")=%%</dd>
         </dl>
         <div class="maker-result-actions">
 %%[ IF @resultJourneyIsGuid == "true" THEN ]%%
