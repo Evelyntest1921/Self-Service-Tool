@@ -30,22 +30,6 @@ IF RowCount(@surveyUrlRows) > 0 THEN
  SET @surveyHomeUrl = Field(@surveyUrlRow,"dashboard")
  SET @surveyStageUrl = Field(@surveyUrlRow,"create")
 ENDIF
-SET @builderPageLabel = "Survey"
-SET @showForm = "true"
-IF NOT Empty(@createRequested) AND @verifyCampaignRequested != "1" THEN
- SET @showForm = "false"
-ENDIF
-IF @deleteRequested == "1" THEN
- SET @showForm = "false"
-ENDIF
-SET @resultText = ""
-SET @emailSubjectLine = Trim(RequestParameter("emailSubjectLine"))
-SET @journeyName = ""
-SET @eventName = ""
-SET @eventDefId = ""
-SET @deCustomerKey = ""
-SET @entryDeName = ""
-SET @journeyId = ""
 SET @templateConfigOk = "false"
 SET @templateCount = 0
 SET @defaultEmailId = ""
@@ -55,6 +39,33 @@ IF @templateCount > 0 THEN
  SET @templateConfigOk = "true"
  SET @defaultEmailId = Trim(Field(Row(@templateRows,1),"email_id"))
 ENDIF
+SET @builderPageLabel = "Survey"
+SET @showForm = "true"
+SET @buildValidationError = ""
+IF NOT Empty(@createRequested) AND @verifyCampaignRequested != "1" THEN
+ IF Empty(@campaignId) OR Length(@campaignId) < 15 THEN
+  SET @buildValidationError = "Enter a valid Salesforce Campaign ID (15 or 18 characters) before creating a survey build."
+ ELSEIF @templateConfigOk != "true" THEN
+  SET @buildValidationError = "Missing email templates in bd_sst_email_templates (email_type=survey-template)."
+ ELSE
+  SET @showForm = "false"
+ ENDIF
+ENDIF
+IF @deleteRequested == "1" THEN
+ SET @showForm = "false"
+ENDIF
+SET @resultText = ""
+SET @emailSubjectLine = Trim(RequestParameter("emailSubjectLine"))
+SET @journeyName = ""
+SET @eventName = ""
+SET @emailName = ""
+SET @eventKey = ""
+SET @eventDefId = ""
+SET @deCustomerKey = ""
+SET @entryDeName = ""
+SET @journeyId = ""
+SET @analyticsJourneyId = ""
+SET @resultJourneyId = ""
 IF NOT Empty(@campaignId) AND Length(@campaignId) >= 15 THEN
  IF Empty(@emailId) THEN
   SET @emailId = @defaultEmailId
@@ -186,9 +197,7 @@ IF @showForm != "true" THEN
      SET @resultText = "Step 1 FAILED: No SFMC_AUTH row for User=Admin."
    ENDIF
  ELSE
-   IF Empty(@campaignId) OR Length(@campaignId) < 15 THEN
-     SET @resultText = "Step 0 FAILED: Enter a valid Salesforce Campaign ID (15 or 18 characters) before creating a survey build."
-   ELSEIF @templateConfigOk != "true" THEN
+   IF @templateConfigOk != "true" THEN
      SET @resultText = "Step 0 FAILED: Missing email templates in bd_sst_email_templates (email_type=survey-template)."
    ELSE
      SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
@@ -2760,6 +2769,11 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
       </div>
     </div>
     <p class="maker-page-subtitle">Enter survey details, a Salesforce Campaign ID, and sender configuration. Marketing Cloud assets are created first; add questions afterward from Edit Survey.</p>
+%%[ IF NOT Empty(@buildValidationError) THEN ]%%
+    <div class="campaign-verify-panel campaign-verify-panel--invalid" role="alert" style="margin-bottom:16px;">
+      <p class="campaign-verify-message">%%=v(@buildValidationError)=%%</p>
+    </div>
+%%[ ENDIF ]%%
     <div class="maker-form-shell">
    <form method="post" action="" id="surveyForm">
      <div class="question-card">
@@ -2886,13 +2900,13 @@ Your survey record is ready%%=IIF(@surveySaved == "true", Concat(" (", @surveyId
       <div class="maker-result-inner">
         <dl class="maker-result-dl">
           <dt>Data extension</dt>
-          <dd>%%=IIF(NOT Empty(@eventName), @eventName, "—")=%%</dd>
+          <dd>%%=IIF(NOT Empty(@eventName), @eventName, "N/A")=%%</dd>
           <dt>Journey</dt>
-          <dd>%%=IIF(NOT Empty(@journeyName), @journeyName, "—")=%%</dd>
+          <dd>%%=IIF(NOT Empty(@journeyName), @journeyName, "N/A")=%%</dd>
           <dt>Survey ID</dt>
-          <dd>%%=IIF(NOT Empty(@surveyId), @surveyId, "—")=%%</dd>
+          <dd>%%=IIF(NOT Empty(@surveyId), @surveyId, "N/A")=%%</dd>
           <dt>Email name</dt>
-          <dd>%%=IIF(NOT Empty(@emailName), @emailName, "—")=%%</dd>
+          <dd>%%=IIF(NOT Empty(@emailName), @emailName, "N/A")=%%</dd>
         </dl>
         <div class="maker-result-actions">
 %%[ IF @resultJourneyIsGuid == "true" THEN ]%%
