@@ -23,7 +23,7 @@ SET @STACK_JOURNEY_TYPE = "Journey + Automation"
 SET @QUICK_SEND_JOURNEY_TYPE = "Quick Send"
 
 
-VAR @jid, @detailRows, @detailRow, @detailCount
+VAR @jid, @detailRows, @detailRow, @detailCount, @DETAIL_EXTERNAL_KEY_DE
 VAR @dispName, @dispType, @dispEmailName, @dispEmailId, @dispDeName, @dispDeId, @dispCampaignId, @dispSurveyId
 VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationCustomerKey, @dispAutomationName, @dispQueryText, @isStackBuild, @isQuickSendBuild, @isSurveyBuild, @showChecklist
 VAR @dispJourneyStatus, @dispAutomationStatus, @dispSentCount, @dispDeRowCount, @dispDeIdCount, @dispSentDisplay, @sentCountV, @lookupDeKey, @journeyStatusColor, @automationStatusColor, @journeyBtnLabel, @journeyBtnClass, @journeyActionConfirm
@@ -56,7 +56,7 @@ VAR @automationAction, @automationFrequency, @automationMinuteInterval, @automat
 
 SET @purgeRequested = IIF(NOT Empty(RequestParameter("confirmPurgeBuild")),"1","0")
 SET @showChecklist = IIF(NOT Empty(RequestParameter("checklist")),"1","0")
-SET @jid = Trim(RequestParameter("journeyId"))
+SET @jid = Concat(Trim(RequestParameter("journeyId")), "")
 SET @deleteRequested = IIF(NOT Empty(RequestParameter("confirmDeleteAsset")),"1","0")
 SET @removeLogOnly = IIF(NOT Empty(RequestParameter("confirmRemoveLog")),"1","0")
 SET @deleteEmailFromPost = Trim(RequestParameter("deleteEmailId"))
@@ -317,7 +317,7 @@ IF @postedJid != @jid THEN
   SET @pageStatus = "tamper"
   SET @resultText = "Journey identifier did not match."
 ELSE
-  SET @logDelCount = DeleteData(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
+  SET @logDelCount = DeleteData("Bd_journey_analytics","journeyId",@jid)
   IF @logDelCount > 0 THEN
     SET @pageStatus = "removed_log"
     Redirect(Concat(@HOME_URL,"?logRemoved=1"))
@@ -2681,7 +2681,25 @@ if (showChecklist == "1") {
 Platform.Variable.SetValue("@step3bResult", step3bResult);
 </script>
 %%[
-VAR @combinedLog, @trailBody
+VAR @combinedLog, @trailBody, @purgeSurveyId, @purgeDetailRows, @purgeDetailRow
+
+IF Empty(@DETAIL_EXTERNAL_KEY_DE) THEN
+ SET @DETAIL_EXTERNAL_KEY_DE = "Bd_journey_analytics"
+ENDIF
+SET @jid = Concat(Trim(RequestParameter("journeyId")), "")
+SET @purgeSurveyId = ""
+IF NOT Empty(@jid) THEN
+ SET @purgeDetailRows = LookupRows("Bd_journey_analytics", "journeyId", @jid)
+ IF RowCount(@purgeDetailRows) > 0 THEN
+  SET @purgeDetailRow = Row(@purgeDetailRows, 1)
+  SET @purgeSurveyId = Concat(Trim(Field(@purgeDetailRow, "surveyId")), "")
+ ENDIF
+ENDIF
+IF Empty(@dispSurveyId) AND NOT Empty(@purgeSurveyId) THEN
+ SET @dispSurveyId = @purgeSurveyId
+ELSE
+ SET @dispSurveyId = Concat(IIF(NOT Empty(@dispSurveyId), @dispSurveyId, ""), "")
+ENDIF
 
 
 IF (@attemptJourneyAction == "true") AND (@journeyActionOk == "true") AND NOT Empty(@journeyActionNewStatus) THEN
@@ -2761,11 +2779,11 @@ SET @willRemoveBuildLog = "true"
 ELSEIF (@attemptDeleteAsset == "true") AND (@authOk == "true") AND (IndexOf(IIF(NOT Empty(@step3bResult), @step3bResult, ""),"OK - Email deleted") > 0) THEN
 SET @willRemoveBuildLog = "true"
 ENDIF
-IF (@willRemoveBuildLog == "true") AND (@isSurveyBuild == "true") AND NOT Empty(@dispSurveyId) AND @dispSurveyId != "N/A" THEN
-SET @surveyPurgeId = Trim(@dispSurveyId)
-SET @surveyDelResponses = DeleteData("SST_SP_Survey_Responses_DE", "SurveyID", @surveyPurgeId)
-SET @surveyDelQuestions = DeleteData("SST_SP_Survey_Questions_DE", "SurveyID", @surveyPurgeId)
-SET @surveyDelMaster = DeleteData("SST_SP_Surveys_Master_DE", "SurveyID", @surveyPurgeId)
+IF (@willRemoveBuildLog == "true") AND (@isSurveyBuild == "true") AND NOT Empty(@purgeSurveyId) AND @purgeSurveyId != "N/A" THEN
+SET @surveyDelResponses = DeleteData("SST_SP_Survey_Responses_DE", "SurveyID", @purgeSurveyId)
+SET @surveyDelQuestions = DeleteData("SST_SP_Survey_Questions_DE", "SurveyID", @purgeSurveyId)
+SET @surveyDelMaster = DeleteData("SST_SP_Surveys_Master_DE", "SurveyID", @purgeSurveyId)
+SET @surveyPurgeId = Substring(@purgeSurveyId, 1, 50)
 SET @surveyDeleteLog = Concat("[Survey ", @surveyPurgeId, "] Responses=", @surveyDelResponses, " Questions=", @surveyDelQuestions, " Master=", @surveyDelMaster, ".")
 ELSEIF (@willRemoveBuildLog == "true") AND (@isSurveyBuild == "true") THEN
 SET @surveyDeleteLog = "[Survey] SKIP - no surveyId on build log."
@@ -2780,12 +2798,12 @@ ENDIF
 
 
 IF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk == "true") AND NOT Empty(@jid) THEN
-SET @analyticsDelCnt = DeleteData(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
+SET @analyticsDelCnt = DeleteData("Bd_journey_analytics","journeyId",@jid)
 SET @pageStatus = "purged"
 ELSEIF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk != "true") THEN
 SET @pageStatus = "purge_partial"
 ELSEIF (@attemptDeleteAsset == "true") AND (@authOk == "true") AND (IndexOf(IIF(NOT Empty(@step3bResult), @step3bResult, ""),"OK - Email deleted") > 0) AND NOT Empty(@jid) THEN
-SET @analyticsDelCnt = DeleteData(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
+SET @analyticsDelCnt = DeleteData("Bd_journey_analytics","journeyId",@jid)
 SET @pageStatus = "deleted"
 ENDIF
 IF @pageStatus == "purge_partial" THEN
