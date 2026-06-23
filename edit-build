@@ -41,13 +41,13 @@ VAR @chkSenderStatus, @chkSenderMsg, @chkSenderName, @chkSenderProfileId, @chkSe
 VAR @chkAutoNameStatus, @chkAutoNameMsg, @chkAutoNameIcon
 VAR @chkQueryStatus, @chkQueryMsg, @chkQueryText, @chkQueryIcon
 VAR @chkAutoStatusStatus, @chkAutoStatusMsg, @chkAutoStatusIcon
-VAR @deleteRequested, @removeLogOnly, @deleteEmailFromPost, @purgeRequested
+VAR @deleteRequested, @removeLogOnly, @deleteEmailFromPost, @purgeRequested, @attemptRemoveLog
 VAR @authOk, @accessToken, @subdomain
 VAR @resultText, @pageStatus
 VAR @logDelCount, @analyticsDelCnt
 VAR @attemptPurgeBuild, @purgeBuildLog, @purgeEmailOk
 VAR @attemptDeleteAsset, @step3bResult
-VAR @surveyPurgeId, @surveyDelResponses, @surveyDelQuestions, @surveyDelMaster, @surveyDeleteLog, @willRemoveBuildLog
+VAR @surveyPurgeId, @surveyDelResponses, @surveyDelQuestions, @surveyDelMaster, @surveyDeleteLog, @willRemoveBuildLog, @purgeSurveyId
 VAR @updRaw
 VAR @journeyActionRequested, @journeyAction, @attemptJourneyAction, @journeyActionOk, @journeyActionMsg, @journeyActionNewStatus
 VAR @automationActionRequested, @attemptAutomationAction, @automationActionOk, @automationActionMsg, @automationActionNewStatus, @automationActionConfirm
@@ -59,6 +59,7 @@ SET @showChecklist = IIF(NOT Empty(RequestParameter("checklist")),"1","0")
 SET @jid = Concat(Trim(RequestParameter("journeyId")), "")
 SET @deleteRequested = IIF(NOT Empty(RequestParameter("confirmDeleteAsset")),"1","0")
 SET @removeLogOnly = IIF(NOT Empty(RequestParameter("confirmRemoveLog")),"1","0")
+SET @attemptRemoveLog = "false"
 SET @deleteEmailFromPost = Trim(RequestParameter("deleteEmailId"))
 SET @journeyActionRequested = IIF(NOT Empty(RequestParameter("confirmJourneyAction")),"1","0")
 SET @journeyAction = Trim(RequestParameter("journeyAction"))
@@ -106,6 +107,8 @@ SET @dispUpdated = ""
 SET @attemptPurgeBuild = "false"
 SET @purgeBuildLog = ""
 SET @purgeEmailOk = "false"
+SET @surveyDeleteLog = ""
+SET @purgeSurveyId = ""
 SET @isStackBuild = "false"
 SET @isQuickSendBuild = "false"
 SET @isSurveyBuild = "false"
@@ -317,14 +320,7 @@ IF @postedJid != @jid THEN
   SET @pageStatus = "tamper"
   SET @resultText = "Journey identifier did not match."
 ELSE
-  SET @logDelCount = DeleteData("Bd_journey_analytics","journeyId",@jid)
-  IF @logDelCount > 0 THEN
-    SET @pageStatus = "removed_log"
-    Redirect(Concat(@HOME_URL,"?logRemoved=1"))
-  ELSE
-    SET @pageStatus = "drop_log_failed"
-    SET @resultText = Concat("DeleteData returned zero rows deleted. Typical causes: Cloud Page lacks delete rights on ",@DETAIL_EXTERNAL_KEY_DE,", the External Key or journeyId column differs from LookupRows expectations, or the row was removed already.")
-  ENDIF
+  SET @attemptRemoveLog = "true"
 ENDIF
 ENDIF
 
@@ -1685,6 +1681,169 @@ function queueAutomationPurge(customerKey, automationName) {
 }
 
 
+var ANALYTICS_LOG_DE = "Bd_journey_analytics";
+
+
+function deleteBuildLogRow(journeyId) {
+ var jid = strTrim(journeyId);
+ if (!jid) {
+  return 0;
+ }
+ try {
+  return Platform.Function.DeleteData(
+   ANALYTICS_LOG_DE,
+   ["journeyId"],
+   [String(jid)]
+  );
+ } catch (delEx) {
+  return 0;
+ }
+}
+
+
+function surveyIdForJourney(journeyId) {
+ var jid = strTrim(journeyId);
+ if (!jid) {
+  return "";
+ }
+ try {
+  var rows = Platform.Function.LookupRows(
+   ANALYTICS_LOG_DE,
+   "journeyId",
+   String(jid)
+  );
+  if (rows && rows.length > 0 && rows[0].surveyId) {
+   return strTrim(rows[0].surveyId);
+  }
+ } catch (lookupEx) {}
+ return "";
+}
+
+
+function deleteSurveyBuildRows(surveyId) {
+ var sid = strTrim(surveyId);
+ if (!sid || sid.toUpperCase() === "N/A") {
+  return null;
+ }
+ try {
+  return {
+   responses: Platform.Function.DeleteData(
+    "SST_SP_Survey_Responses_DE",
+    ["SurveyID"],
+    [String(sid)]
+   ),
+   questions: Platform.Function.DeleteData(
+    "SST_SP_Survey_Questions_DE",
+    ["SurveyID"],
+    [String(sid)]
+   ),
+   master: Platform.Function.DeleteData(
+    "SST_SP_Surveys_Master_DE",
+    ["SurveyID"],
+    [String(sid)]
+   )
+  };
+ } catch (surveyDelEx) {
+  return { error: surveyDelEx.message || String(surveyDelEx) };
+ }
+}
+
+
+function applyPostPurgeDataDeletes() {
+ var isSurveyBuild = Platform.Variable.GetValue("@isSurveyBuild") || "";
+ var purgeEmailOk = Platform.Variable.GetValue("@purgeEmailOk") || "";
+ var removeLogOnly = Platform.Variable.GetValue("@removeLogOnly") || "";
+ var attemptRemoveLog = Platform.Variable.GetValue("@attemptRemoveLog") || "";
+ var willRemoveBuildLog = false;
+ var surveyDeleteLog = "";
+ var step3b = step3bResult || "";
+
+ if (
+  attemptPurgeBuild == "true" &&
+  authOk == "true" &&
+  purgeEmailOk == "true"
+ ) {
+  willRemoveBuildLog = true;
+ } else if (
+  attemptDeleteAsset == "true" &&
+  authOk == "true" &&
+  String(step3b).indexOf("OK - Email deleted") >= 0
+ ) {
+  willRemoveBuildLog = true;
+ }
+
+ if (willRemoveBuildLog && isSurveyBuild == "true") {
+  var purgeSurveyId = surveyIdForJourney(jidClean);
+  if (purgeSurveyId && purgeSurveyId.toUpperCase() !== "N/A") {
+   Platform.Variable.SetValue("@purgeSurveyId", purgeSurveyId);
+   var surveyDel = deleteSurveyBuildRows(purgeSurveyId);
+   if (surveyDel && !surveyDel.error) {
+    surveyDeleteLog =
+     "[Survey " +
+     purgeSurveyId.substring(0, 50) +
+     "] Responses=" +
+     surveyDel.responses +
+     " Questions=" +
+     surveyDel.questions +
+     " Master=" +
+     surveyDel.master +
+     ".";
+   } else {
+    surveyDeleteLog =
+     "[Survey] DELETE FAILED - " +
+     (surveyDel && surveyDel.error ? surveyDel.error : "Unknown error.");
+   }
+  } else {
+   surveyDeleteLog = "[Survey] SKIP - no surveyId on build log.";
+  }
+ }
+
+ if (willRemoveBuildLog && jidClean) {
+  var analyticsDelCnt = deleteBuildLogRow(jidClean);
+  Platform.Variable.SetValue("@analyticsDelCnt", String(analyticsDelCnt));
+  if (
+   attemptPurgeBuild == "true" &&
+   authOk == "true" &&
+   purgeEmailOk == "true"
+  ) {
+   Platform.Variable.SetValue("@pageStatus", "purged");
+  } else if (
+   attemptDeleteAsset == "true" &&
+   authOk == "true" &&
+   String(step3b).indexOf("OK - Email deleted") >= 0
+  ) {
+   Platform.Variable.SetValue("@pageStatus", "deleted");
+  }
+ } else if (
+  attemptPurgeBuild == "true" &&
+  authOk == "true" &&
+  purgeEmailOk != "true"
+ ) {
+  Platform.Variable.SetValue("@pageStatus", "purge_partial");
+ }
+
+ if (surveyDeleteLog) {
+  Platform.Variable.SetValue("@surveyDeleteLog", surveyDeleteLog);
+ }
+
+ if (removeLogOnly == "1" && attemptRemoveLog == "true" && jidClean) {
+  var logDelCount = deleteBuildLogRow(jidClean);
+  Platform.Variable.SetValue("@logDelCount", String(logDelCount));
+  if (logDelCount > 0) {
+   Platform.Variable.SetValue("@pageStatus", "removed_log");
+  } else {
+   Platform.Variable.SetValue("@pageStatus", "drop_log_failed");
+   Platform.Variable.SetValue(
+    "@resultText",
+    "DeleteData returned zero rows deleted. Typical causes: Cloud Page lacks delete rights on " +
+     ANALYTICS_LOG_DE +
+     ", the External Key or journeyId column differs from LookupRows expectations, or the row was removed already."
+   );
+  }
+ }
+}
+
+
 function deleteStackAutomation(sub, token, autoId, customerKey) {
  var key = strTrim(customerKey);
  var restId = strTrim(autoId);
@@ -2678,27 +2837,18 @@ if (showChecklist == "1") {
 }
 
 
+applyPostPurgeDataDeletes();
 Platform.Variable.SetValue("@step3bResult", step3bResult);
 </script>
 %%[
-VAR @combinedLog, @trailBody, @purgeSurveyId, @purgeDetailRows, @purgeDetailRow
+VAR @combinedLog, @trailBody
+
+IF @pageStatus == "removed_log" THEN
+ Redirect(Concat(@HOME_URL,"?logRemoved=1"))
+ENDIF
 
 IF Empty(@DETAIL_EXTERNAL_KEY_DE) THEN
  SET @DETAIL_EXTERNAL_KEY_DE = "Bd_journey_analytics"
-ENDIF
-SET @jid = Concat(Trim(RequestParameter("journeyId")), "")
-SET @purgeSurveyId = ""
-IF NOT Empty(@jid) THEN
- SET @purgeDetailRows = LookupRows("Bd_journey_analytics", "journeyId", @jid)
- IF RowCount(@purgeDetailRows) > 0 THEN
-  SET @purgeDetailRow = Row(@purgeDetailRows, 1)
-  SET @purgeSurveyId = Concat(Trim(Field(@purgeDetailRow, "surveyId")), "")
- ENDIF
-ENDIF
-IF Empty(@dispSurveyId) AND NOT Empty(@purgeSurveyId) THEN
- SET @dispSurveyId = @purgeSurveyId
-ELSE
- SET @dispSurveyId = Concat(IIF(NOT Empty(@dispSurveyId), @dispSurveyId, ""), "")
 ENDIF
 
 
@@ -2771,23 +2921,6 @@ ENDIF
 
 SET @combinedLog = Concat(IIF(NOT Empty(@resultText), Concat(@resultText," "), ""), Substring(IIF(NOT Empty(@trailBody), @trailBody, ""),1,6200))
 
-
-SET @surveyDeleteLog = ""
-SET @willRemoveBuildLog = "false"
-IF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk == "true") THEN
-SET @willRemoveBuildLog = "true"
-ELSEIF (@attemptDeleteAsset == "true") AND (@authOk == "true") AND (IndexOf(IIF(NOT Empty(@step3bResult), @step3bResult, ""),"OK - Email deleted") > 0) THEN
-SET @willRemoveBuildLog = "true"
-ENDIF
-IF (@willRemoveBuildLog == "true") AND (@isSurveyBuild == "true") AND NOT Empty(@purgeSurveyId) AND @purgeSurveyId != "N/A" THEN
-SET @surveyDelResponses = DeleteData("SST_SP_Survey_Responses_DE", "SurveyID", @purgeSurveyId)
-SET @surveyDelQuestions = DeleteData("SST_SP_Survey_Questions_DE", "SurveyID", @purgeSurveyId)
-SET @surveyDelMaster = DeleteData("SST_SP_Surveys_Master_DE", "SurveyID", @purgeSurveyId)
-SET @surveyPurgeId = Substring(@purgeSurveyId, 1, 50)
-SET @surveyDeleteLog = Concat("[Survey ", @surveyPurgeId, "] Responses=", @surveyDelResponses, " Questions=", @surveyDelQuestions, " Master=", @surveyDelMaster, ".")
-ELSEIF (@willRemoveBuildLog == "true") AND (@isSurveyBuild == "true") THEN
-SET @surveyDeleteLog = "[Survey] SKIP - no surveyId on build log."
-ENDIF
 IF NOT Empty(@surveyDeleteLog) THEN
 SET @combinedLog = Concat(@combinedLog, " ", @surveyDeleteLog)
 ENDIF
@@ -2797,15 +2930,6 @@ IF IndexOf(@combinedLog,"FAILED") > 0 OR IndexOf(@combinedLog,"DELETE FAILED") >
 ENDIF
 
 
-IF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk == "true") AND NOT Empty(@jid) THEN
-SET @analyticsDelCnt = DeleteData("Bd_journey_analytics","journeyId",@jid)
-SET @pageStatus = "purged"
-ELSEIF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk != "true") THEN
-SET @pageStatus = "purge_partial"
-ELSEIF (@attemptDeleteAsset == "true") AND (@authOk == "true") AND (IndexOf(IIF(NOT Empty(@step3bResult), @step3bResult, ""),"OK - Email deleted") > 0) AND NOT Empty(@jid) THEN
-SET @analyticsDelCnt = DeleteData("Bd_journey_analytics","journeyId",@jid)
-SET @pageStatus = "deleted"
-ENDIF
 IF @pageStatus == "purge_partial" THEN
  SET @purgeResultHasFail = "1"
 ENDIF
@@ -3213,7 +3337,7 @@ pre.log.show{display:block}
 </nav>
 </div>
 <h1>Could not remove the log row</h1>
-<p class="sub">The page tried to delete the matching row via <strong>DeleteData()</strong>, which SFMC exposes for Cloud Pages (not DeleteDE).</p>
+<p class="sub">The page tried to delete the matching row via the Cloud Page delete function (not DeleteDE).</p>
 <div class="banner bad">%%=v(@resultText)=%%</div>
 <p class="sub">Confirm this Cloud Pages app/user can delete rows on <strong>%%=v(@DETAIL_EXTERNAL_KEY_DE)=%%</strong>.</p>
 <p class="sub"><a class="breadcrumb-link" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Back to manage this build</a></p>
