@@ -308,7 +308,7 @@ ENDIF
 ENDIF
 
 
-IF (@removeLogOnly == "1") AND (@detailCount > 0) THEN
+IF (@removeLogOnly == "1") AND (@detailCount > 0) AND NOT Empty(@jid) THEN
 SET @postedJid = Trim(RequestParameter("postedJourneyId"))
 IF Empty(@postedJid) THEN
   SET @postedJid = @jid
@@ -1652,27 +1652,28 @@ var AUTOMATION_PURGE_QUEUE_DE = "bd_sst_automation_purge";
 function queueAutomationPurge(customerKey, automationName) {
  var key = strTrim(customerKey);
  var name = strTrim(automationName);
- if (!key && !name) {
-  return { ok: false, msg: "No customer key or automation name to queue." };
+ if (!key) {
+  return {
+   ok: false,
+   msg: "No automation customerKey on build log (required for bd_sst_automation_purge)."
+  };
  }
  try {
-  if (key) {
-   var existing = Platform.Function.LookupRows(
-    AUTOMATION_PURGE_QUEUE_DE,
-    "customerKey",
-    key
-   );
-   if (existing && existing.length > 0) {
-    return {
-     ok: true,
-     msg: "Already queued for Script Activity delete (customerKey=" + key + ")."
-    };
-   }
+  var existing = Platform.Function.LookupRows(
+   AUTOMATION_PURGE_QUEUE_DE,
+   "customerKey",
+   String(key)
+  );
+  if (existing && existing.length > 0) {
+   return {
+    ok: true,
+    msg: "Already queued for Script Activity delete (customerKey=" + key + ")."
+   };
   }
   Platform.Function.InsertData(
    AUTOMATION_PURGE_QUEUE_DE,
    ["customerKey", "automationName"],
-   [key, name]
+   [String(key), String(name || "")]
   );
   return {
    ok: true,
@@ -2090,7 +2091,7 @@ try {
    }
 
    if (isStackPurge == "true") {
-     if (autoDelId || autoDelKey) {
+     if (autoDelKey) {
        var autoNameForQueue = strTrim(
          Platform.Variable.GetValue("@dispAutomationName") || ""
        );
@@ -2106,6 +2107,10 @@ try {
              formatPurgeAccessHint(queueResult.msg || "Unknown error.")
          );
        }
+     } else if (autoDelId) {
+       truncLog(
+         "[Automation] QUEUE SKIP - automationGuid present but automationCustomerKey missing on build log."
+       );
      } else {
        truncLog("[Automation] SKIP - no id or customer key on build log.");
      }
@@ -2756,16 +2761,14 @@ SET @willRemoveBuildLog = "true"
 ELSEIF (@attemptDeleteAsset == "true") AND (@authOk == "true") AND (IndexOf(IIF(NOT Empty(@step3bResult), @step3bResult, ""),"OK - Email deleted") > 0) THEN
 SET @willRemoveBuildLog = "true"
 ENDIF
-IF (@willRemoveBuildLog == "true") AND (@isSurveyBuild == "true") THEN
-SET @surveyPurgeId = @dispSurveyId
-IF NOT Empty(@surveyPurgeId) AND @surveyPurgeId != "N/A" THEN
+IF (@willRemoveBuildLog == "true") AND (@isSurveyBuild == "true") AND NOT Empty(@dispSurveyId) AND @dispSurveyId != "N/A" THEN
+SET @surveyPurgeId = Trim(@dispSurveyId)
 SET @surveyDelResponses = DeleteData("SST_SP_Survey_Responses_DE", "SurveyID", @surveyPurgeId)
 SET @surveyDelQuestions = DeleteData("SST_SP_Survey_Questions_DE", "SurveyID", @surveyPurgeId)
 SET @surveyDelMaster = DeleteData("SST_SP_Surveys_Master_DE", "SurveyID", @surveyPurgeId)
 SET @surveyDeleteLog = Concat("[Survey ", @surveyPurgeId, "] Responses=", @surveyDelResponses, " Questions=", @surveyDelQuestions, " Master=", @surveyDelMaster, ".")
-ELSE
+ELSEIF (@willRemoveBuildLog == "true") AND (@isSurveyBuild == "true") THEN
 SET @surveyDeleteLog = "[Survey] SKIP - no surveyId on build log."
-ENDIF
 ENDIF
 IF NOT Empty(@surveyDeleteLog) THEN
 SET @combinedLog = Concat(@combinedLog, " ", @surveyDeleteLog)
@@ -2776,12 +2779,12 @@ IF IndexOf(@combinedLog,"FAILED") > 0 OR IndexOf(@combinedLog,"DELETE FAILED") >
 ENDIF
 
 
-IF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk == "true") THEN
+IF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk == "true") AND NOT Empty(@jid) THEN
 SET @analyticsDelCnt = DeleteData(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
 SET @pageStatus = "purged"
 ELSEIF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk != "true") THEN
 SET @pageStatus = "purge_partial"
-ELSEIF (@attemptDeleteAsset == "true") AND (@authOk == "true") AND (IndexOf(IIF(NOT Empty(@step3bResult), @step3bResult, ""),"OK - Email deleted") > 0) THEN
+ELSEIF (@attemptDeleteAsset == "true") AND (@authOk == "true") AND (IndexOf(IIF(NOT Empty(@step3bResult), @step3bResult, ""),"OK - Email deleted") > 0) AND NOT Empty(@jid) THEN
 SET @analyticsDelCnt = DeleteData(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
 SET @pageStatus = "deleted"
 ENDIF
