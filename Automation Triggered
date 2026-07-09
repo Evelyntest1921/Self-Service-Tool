@@ -13,6 +13,7 @@ SET @emailId = RequestParameter("emailId")
 SET @senderProfileId = Trim(RequestParameter("senderProfileId"))
 SET @sendClassificationId = Trim(RequestParameter("sendClassificationId"))
 SET @addTaskActivity = IIF(RequestParameter("addTaskActivity") == "1","1","0")
+SET @addSTOActivity = IIF(RequestParameter("addSTOActivity") == "1","1","0")
 SET @flow = "stack"
 SET @hubUrl = ""
 SET @buildDetailUrl = ""
@@ -430,6 +431,8 @@ var authOk = Variable.GetValue("authOk");
 var accessToken = Variable.GetValue("accessToken");
 var subdomain = Variable.GetValue("subdomain");
 var emailName = Variable.GetValue("emailName");
+var addTaskActivity = Variable.GetValue("addTaskActivity");
+var addSTOActivity = Variable.GetValue("addSTOActivity");
 var sourceEmailId = Variable.GetValue("sourceEmailId");
 var deleteAllRequested = Variable.GetValue("deleteAllRequested");
 var deleteJourneyId = Variable.GetValue("deleteJourneyId");
@@ -2894,7 +2897,153 @@ if (
      }
    };
    var taskActivity = Platform.Function.Stringify(taskActivityObj);
-   var activitiesJson = emailActivity + "," + cmActivity + "," + taskActivity;
+   var stoActivityObj = {
+  "id": randomGuidSbU(),
+  "key": "STOWAIT-1",
+  "name": "Einstein STO - 4 Hours",
+  "description": "",
+  "type": "STOWAIT",
+  "outcomes": [
+    {
+      "key": randomGuidSbU(),
+      "next": "EMAILV2-1",
+      "arguments": {},
+      "metaData": {
+        "invalid": false
+      }
+    }
+  ],
+  "arguments": {},
+  "configurationArguments": {
+    "params": {
+      "slidingWindowHours": 4,
+      "enableRandomTime": false
+    },
+    "applicationExtensionKey": "F828061A-5F0E-46A9-975E-18C414192D17"
+  },
+  "metaData": {
+    "backgroundColor": "#032e61",
+    "category": "flow",
+    "icon": "https://sto.us.sfmc-einstein.com/activity/static/media/Einstein_STO.png",
+    "isConfigured": true,
+    "original_icon": "static/media/Einstein_STO.png",
+    "sections": {}
+  },
+  "schema": {
+    "arguments": {
+      "contactTagsOut": {
+        "dataType": "Text",
+        "isNullable": true,
+        "direction": "Out",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "scheduledExpireTimeOut": {
+        "dataType": "Date",
+        "isNullable": true,
+        "direction": "Out",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "endDate": {
+        "dataType": "Date",
+        "isNullable": false,
+        "direction": "Out",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "contactKey": {
+        "dataType": "Text",
+        "isNullable": false,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "contactTagsIn": {
+        "dataType": "Text",
+        "isNullable": true,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "scheduledExpireTimeIn": {
+        "dataType": "Date",
+        "isNullable": true,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "jbActivityId": {
+        "dataType": "Text",
+        "isNullable": true,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "jbJourneyId": {
+        "dataType": "Text",
+        "isNullable": true,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "jbJourneyVersion": {
+        "dataType": "Number",
+        "isNullable": true,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "waitDefinitionId": {
+        "dataType": "Text",
+        "isNullable": false,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "waitForEventId": {
+        "dataType": "Text",
+        "isNullable": true,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "executionMode": {
+        "dataType": "Text",
+        "isNullable": false,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "startActivityKey": {
+        "dataType": "Text",
+        "isNullable": true,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "waitQueueId": {
+        "dataType": "LongNumber",
+        "isNullable": true,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      }
+    }
+  }
+};
+   var stoActivity = Platform.Function.Stringify(stoActivityObj);
+   var activitiesJson = '';
+if (addSTOActivity == "1") {
+    activitiesJson = stoActivity;
+}
+activitiesJson = activitiesJson != ''
+    ? activitiesJson + ',' + emailActivity
+    : emailActivity;
+activitiesJson = activitiesJson + ',' + cmActivity;
+if (addTaskActivity == "1") {
+    activitiesJson = activitiesJson + ',' + taskActivity;
+}
    var journeyPayload =
      '{"name":"' +
      journeyNameEscaped +
@@ -3379,6 +3528,14 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 .question-number { color: black; width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 600; margin-right: 16px; flex-shrink: 0; border: 1px solid #0000001a;}
 .question-text { font-size: 1.125rem; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
 .form-group { margin-bottom: 16px; }
+.check-box {display: grid;
+  grid-template-columns: 1em auto;
+  gap: 0.5em;
+  padding-bottom: 10px;
+  margin-bottom: 15px;
+  width: max-content;
+  border-bottom: 1px solid #e5e7eb;
+}
 .campaign-id-row { display: flex; gap: 12px; align-items: stretch; }
 .campaign-id-row .textarea-control { flex: 1; min-width: 0; }
 .campaign-verify-btn { flex-shrink: 0; padding: 12px 24px; font-size: 1rem; white-space: nowrap; }
@@ -3649,6 +3806,20 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
        <div class="form-group">
          <label for="timezoneId" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Timezone ID</label>
          <input id="timezoneId" type="text" class="textarea-control" name="timezoneId" value="%%=v(@timezoneId)=%%" placeholder="1">
+       </div>
+        <div class="form-group">
+          <label for="timezoneId" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Create a task when an email is sent</label>
+         <label class="check-box">
+           <input type="checkbox" name="addTaskActivity" value="1" %%[ IF @addTaskActivity == "1" THEN ]%%checked%%[ ENDIF ]%%>
+           <span>Add task Activity</span>
+         </label>
+          
+          <label for="timezoneId" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Add send time optimization</label>
+          <label class="check-box">
+            
+           <input type="checkbox" name="addSTOActivity" value="1" %%[ IF @addSTOActivity == "1" THEN ]%%checked%%[ ENDIF ]%%>
+           <span>Add STO Activity</span>
+         </label>
        </div>
        <div class="submit-section">
          <input type="hidden" name="create" value="1">

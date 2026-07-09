@@ -5,10 +5,10 @@ SET @deleteEmailId = Trim(RequestParameter("deleteEmailId"))
 SET @emailId = RequestParameter("emailId")
 SET @itemBaseName = Trim(RequestParameter("itemBaseName"))
 SET @emailSubjectLine = Trim(RequestParameter("emailSubjectLine"))
-SET @hubUrl = ""
-SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
-IF RowCount(@navRows) > 0 THEN
-SET @hubUrl = Field(Row(@navRows,1),"ss_home")
+SET @navHomeRow = LookupRows("bd_sst_page_navigation","type","cloudpage")
+IF RowCount(@navHomeRow) > 0 THEN
+    SET @navBackHome = Row(@navHomeRow,1)
+    SET @hubUrl = Field(@navBackHome,"ss_home")
 ENDIF
 SET @builderPageLabel = "Create Email"
 SET @createEmailOnly = "1"
@@ -18,16 +18,32 @@ SET @showForm = "false"
 ENDIF
 SET @resultText = ""
 SET @templateConfigOk = "false"
-SET @templateCount = 0
-SET @defaultEmailId = ""
-SET @templateRows = LookupOrderedRows("bd_sst_email_templates",0,"email_id ASC","email_type","template")
-SET @templateCount = RowCount(@templateRows)
-IF @templateCount > 0 THEN
-SET @templateConfigOk = "true"
-SET @defaultEmailId = Trim(Field(Row(@templateRows,@templateCount),"email_id"))
+SET @templateRows = LookupRows("SFMC_TEMPLATES","User","Admin")
+IF RowCount(@templateRows) > 0 THEN
+SET @templateRow = Row(@templateRows,1)
+SET @emailIdLg = Trim(Field(@templateRow,"LG_BG_Header_Email_BD_Template"))
+SET @emailIdSm = Trim(Field(@templateRow,"SM_BG_Header_Email_BD_Template"))
+SET @emailIdNoBg = Trim(Field(@templateRow,"NO_BG_Header_Email_BD_Template"))
+IF NOT Empty(@emailIdLg) AND NOT Empty(@emailIdSm) AND NOT Empty(@emailIdNoBg) THEN
+  SET @templateConfigOk = "true"
+ENDIF
+ELSE
+SET @emailIdLg = ""
+SET @emailIdSm = ""
+SET @emailIdNoBg = ""
+ENDIF
+SET @defaultEmailId = @emailIdLg
+IF Empty(@defaultEmailId) THEN
+SET @defaultEmailId = @emailIdSm
+ENDIF
+IF Empty(@defaultEmailId) THEN
+SET @defaultEmailId = @emailIdNoBg
 ENDIF
 IF Empty(@emailId) THEN
 SET @emailId = @defaultEmailId
+ENDIF
+IF Empty(@emailSubjectLine) THEN
+SET @emailSubjectLine = "Campaign Event"
 ENDIF
 SET @emailName = ""
 IF NOT Empty(@itemBaseName) THEN
@@ -81,7 +97,7 @@ IF @deleteRequested == "1" THEN
   ENDIF
 ELSE
   IF @templateConfigOk != "true" THEN
-    SET @resultText = "Step 0 FAILED: Missing email templates in bd_sst_email_templates (email_type=template)."
+    SET @resultText = "Step 0 FAILED: Missing template IDs in SFMC_TEMPLATES for User=Admin."
   ELSEIF Empty(@itemBaseName) THEN
     SET @resultText = "Enter a Name for the email asset."
   ELSE
@@ -764,8 +780,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
  padding-top: 24px;
  border-top: 1px solid var(--border-color);
 }
-.maker-result-actions--footer { justify-content: flex-end; }
-.maker-result-log-wrap { margin-top: 0; padding-top: 0; border-top: none; }
+.maker-result-actions--tight { padding-top: 0; border-top: none; margin-top: 0; }
 .maker-btn {
  display: inline-flex;
  align-items: center;
@@ -805,6 +820,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
  border-color: #fecaca;
 }
 .maker-btn--danger:hover { background: #fef2f2; border-color: #f87171; }
+.maker-result-log-wrap { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border-color); }
 .maker-result-log {
  margin-top: 12px;
  padding: 14px 16px;
@@ -819,7 +835,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
  overflow-y: auto;
  display: none;
 }
-.maker-result-log.is-visible { display: block; margin-top: 20px; }
+.maker-result-log.is-visible { display: block; }
 
 
 .maker-alert {
@@ -877,7 +893,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
  padding: 0;
 }
 .email-card:hover { border-color: var(--primary-color); box-shadow: var(--shadow-md); }
-.email-card.selected { border: 2px solid #53575a; }
+.email-card.selected { border-color: var(--primary-color); }
 .email-card input { display: none; }
 .email-card-img {
  width: 100%;
@@ -1002,25 +1018,27 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
         <div class="question-text">Choose Email Template</div>
       </div>
       <div class="email-cards">
-        %%[ IF @templateConfigOk == "true" THEN
-          FOR @ti = 1 TO @templateCount DO
-            SET @templateRow = Row(@templateRows,@ti)
-            SET @cardEmailId = Trim(Field(@templateRow,"email_id"))
-            SET @cardEmailName = Field(@templateRow,"email_name")
-            SET @cardEmailPreview = Field(@templateRow,"email_preview")
-            SET @cardLabel = @cardEmailName
-            IF Length(@cardLabel) > 10 THEN
-              SET @cardLabel = Concat(Substring(@cardLabel,1,10),"...")
-            ENDIF
-        ]%%
-        <label class="email-card %%[ IF @emailId == @cardEmailId THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@cardEmailId)=%%">
-          <input type="radio" name="emailId" value="%%=v(@cardEmailId)=%%" %%[ IF @emailId == @cardEmailId THEN ]%%checked%%[ ENDIF ]%%>
-          <img class="email-card-img" src="%%=v(@cardEmailPreview)=%%" alt="%%=v(@cardEmailName)=%%">
-          <div class="email-card-label">%%=v(@cardLabel)=%%</div>
-          <div class="email-card-id">ID: %%=v(@cardEmailId)=%%</div>
+        %%[ IF @templateConfigOk == "true" THEN ]%%
+        <label class="email-card %%[ IF @emailId == @emailIdLg THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@emailIdLg)=%%">
+          <input type="radio" name="emailId" value="%%=v(@emailIdLg)=%%" %%[ IF @emailId == @emailIdLg THEN ]%%checked%%[ ENDIF ]%%>
+          <img class="email-card-img" src="https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/BG-LG-Header-templates.png" alt="Big header">
+          <div class="email-card-label">Big Header</div>
+          <div class="email-card-id">ID: %%=v(@emailIdLg)=%%</div>
         </label>
-        %%[ NEXT @ti ELSE ]%%
-        <div class="maker-alert" role="alert">Template config missing in `bd_sst_email_templates` (email_type=template).</div>
+        <label class="email-card %%[ IF @emailId == @emailIdSm THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@emailIdSm)=%%">
+          <input type="radio" name="emailId" value="%%=v(@emailIdSm)=%%" %%[ IF @emailId == @emailIdSm THEN ]%%checked%%[ ENDIF ]%%>
+          <img class="email-card-img" src="https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/BG-Header-templates.png" alt="Small header with background">
+          <div class="email-card-label">Small Header</div>
+          <div class="email-card-id">ID: %%=v(@emailIdSm)=%%</div>
+        </label>
+        <label class="email-card %%[ IF @emailId == @emailIdNoBg THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@emailIdNoBg)=%%">
+          <input type="radio" name="emailId" value="%%=v(@emailIdNoBg)=%%" %%[ IF @emailId == @emailIdNoBg THEN ]%%checked%%[ ENDIF ]%%>
+          <img class="email-card-img" src="https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/BG-NO-Header-templates.png" alt="No header with background">
+          <div class="email-card-label">No Header</div>
+          <div class="email-card-id">ID: %%=v(@emailIdNoBg)=%%</div>
+        </label>
+        %%[ ELSE ]%%
+        <div class="maker-alert" role="alert">Template config missing in `SFMC_TEMPLATES` for `User=Admin`.</div>
         %%[ ENDIF ]%%
       </div>
       <div class="submit-section">
@@ -1061,15 +1079,22 @@ Your email asset is in Content Builder. Use the link below when you are ready to
        </dl>
        <div class="maker-result-actions">
          <a href="https://mc.s13.exacttarget.com/cloud/#app/Content%20Builder/" target="_blank" rel="noopener noreferrer" class="maker-btn maker-btn--secondary">Open Content Builder</a>
+%%[ IF NOT Empty(@newEmailId) THEN ]%%
+         <form method="post" action="" style="margin:0;display:inline">
+           <input type="hidden" name="deleteEmail" value="1">
+           <input type="hidden" name="deleteEmailId" value="%%=v(@newEmailId)=%%">
+           <button type="submit" class="maker-btn maker-btn--danger">Delete email</button>
+         </form>
+%%[ ENDIF ]%%
        </div>
        <div class="maker-result-log-wrap">
+         <button type="button" class="maker-btn maker-btn--ghost" id="showLogBtn">Show log</button>
          <pre class="maker-result-log" id="apiLog">%%=v(@resultText)=%%</pre>
        </div>
-       <div class="maker-result-actions maker-result-actions--footer">
+       <div class="maker-result-actions maker-result-actions--tight">
          <form method="post" action="" style="margin:0">
            <button type="submit" class="maker-btn maker-btn--secondary">Back to builder</button>
          </form>
-         <button type="button" class="maker-btn maker-btn--ghost" id="showLogBtn">Show log</button>
        </div>
      </div>
    </div>
@@ -1114,6 +1139,7 @@ if (showLogBtn && apiLog) {
 </script>
 </body>
 </html>
+
 
 
 
