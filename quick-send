@@ -3,49 +3,47 @@ SET @createRequested = RequestParameter("create")
 SET @deleteRequested = IIF(RequestParameter("deleteEmail") == "1","1","0")
 SET @deleteEmailId = Trim(RequestParameter("deleteEmailId"))
 SET @campaignId = Trim(RequestParameter("campaignId"))
+SET @verifyCampaignRequested = IIF(RequestParameter("verifyCampaign") == "1","1","0")
 SET @emailId = RequestParameter("emailId")
 SET @addTaskActivity = IIF(RequestParameter("addTaskActivity") == "1","1","0")
 SET @flow = "sbu"
-SET @navHomeRow = LookupRows("bd_sst_page_navigation","type","cloudpage")
-IF RowCount(@navHomeRow) > 0 THEN
-    SET @navBackHome = Row(@navHomeRow,1)
-    SET @hubUrl = Field(@navBackHome,"ss_home")
+SET @hubUrl = ""
+SET @buildDetailUrl = ""
+SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
+IF RowCount(@navRows) > 0 THEN
+ SET @navRow = Row(@navRows,1)
+ SET @hubUrl = Field(@navRow,"ss_home")
+ SET @buildDetailUrl = Field(@navRow,"ss_edit")
 ENDIF
 SET @builderPageLabel = "Quick Send"
 SET @itemBaseName = Trim(RequestParameter("itemBaseName"))
 SET @emailSubjectLine = Trim(RequestParameter("emailSubjectLine"))
 SET @journeyDescription = Trim(RequestParameter("journeyDescription"))
 SET @bccEmail = Trim(RequestParameter("bccEmail"))
+SET @senderProfileId = Trim(RequestParameter("senderProfileId"))
+SET @sendClassificationId = Trim(RequestParameter("sendClassificationId"))
 SET @showForm = "true"
-IF NOT Empty(@createRequested) OR @deleteRequested == "1" THEN
+IF NOT Empty(@createRequested) AND @verifyCampaignRequested != "1" THEN
+ SET @showForm = "false"
+ENDIF
+IF @deleteRequested == "1" THEN
  SET @showForm = "false"
 ENDIF
 SET @resultText = ""
 SET @journeyName = ""
 SET @eventName = ""
 SET @eventDefId = ""
+SET @deCustomerKey = ""
+SET @entryDeName = ""
 SET @journeyId = ""
 SET @templateConfigOk = "false"
-SET @templateRows = LookupRows("SFMC_TEMPLATES","User","Admin")
-IF RowCount(@templateRows) > 0 THEN
- SET @templateRow = Row(@templateRows,1)
- SET @emailIdLg = Trim(Field(@templateRow,"LG_BG_Header_Email_BD_Template"))
- SET @emailIdSm = Trim(Field(@templateRow,"SM_BG_Header_Email_BD_Template"))
- SET @emailIdNoBg = Trim(Field(@templateRow,"NO_BG_Header_Email_BD_Template"))
- IF NOT Empty(@emailIdLg) AND NOT Empty(@emailIdSm) AND NOT Empty(@emailIdNoBg) THEN
-   SET @templateConfigOk = "true"
- ENDIF
-ELSE
- SET @emailIdLg = ""
- SET @emailIdSm = ""
- SET @emailIdNoBg = ""
-ENDIF
-SET @defaultEmailId = @emailIdLg
-IF Empty(@defaultEmailId) THEN
- SET @defaultEmailId = @emailIdSm
-ENDIF
-IF Empty(@defaultEmailId) THEN
- SET @defaultEmailId = @emailIdNoBg
+SET @templateCount = 0
+SET @defaultEmailId = ""
+SET @templateRows = LookupOrderedRows("bd_sst_email_templates",0,"email_id ASC","email_type","template")
+SET @templateCount = RowCount(@templateRows)
+IF @templateCount > 0 THEN
+ SET @templateConfigOk = "true"
+ SET @defaultEmailId = Trim(Field(Row(@templateRows,@templateCount),"email_id"))
 ENDIF
 IF Empty(@campaignId) OR Length(@campaignId) < 15 THEN
  SET @createEmailOnly = "1"
@@ -97,6 +95,51 @@ ENDIF
 IF Empty(@emailSubjectLine) THEN
  SET @emailSubjectLine = "Campaign Event"
 ENDIF
+SET @campaignVerifyShow = "0"
+SET @campaignVerifyStatus = ""
+SET @campaignVerifyMessage = ""
+SET @campaignVerifyListHtml = ""
+IF @verifyCampaignRequested == "1" THEN
+ SET @campaignVerifyShow = "1"
+ IF Empty(@campaignId) OR Length(@campaignId) < 15 THEN
+  SET @campaignVerifyStatus = "invalid"
+  SET @campaignVerifyMessage = "Enter a valid Salesforce Campaign ID (15 or 18 characters)."
+ ELSE
+  SET @campaignVerifyKey = Substring(@campaignId, 1, 18)
+  SET @campaignUsageRows = LookupRows("Bd_journey_analytics", "campaignId", @campaignVerifyKey)
+  SET @campaignUsageCount = RowCount(@campaignUsageRows)
+  IF @campaignUsageCount == 0 THEN
+   SET @campaignVerifyStatus = "clear"
+   SET @campaignVerifyMessage = "No other build uses this campaign."
+  ELSE
+   SET @campaignVerifyStatus = "used"
+   SET @campaignVerifyMessage = Concat("This campaign is already used by ", @campaignUsageCount, IIF(@campaignUsageCount == 1, " build:", " builds:"))
+   FOR @cvi = 1 TO @campaignUsageCount DO
+    SET @cvRow = Row(@campaignUsageRows, @cvi)
+    SET @cvJourneyId = Trim(Field(@cvRow, "journeyId"))
+    SET @cvJourneyName = Trim(Field(@cvRow, "journeyName"))
+    SET @cvJourneyType = Trim(Field(@cvRow, "journeyType"))
+    SET @cvBuildName = Trim(Field(@cvRow, "buildName"))
+    SET @cvLabel = @cvJourneyName
+    IF NOT Empty(@cvBuildName) THEN
+     SET @cvLabel = @cvBuildName
+    ENDIF
+    IF Empty(@cvLabel) THEN
+     SET @cvLabel = @cvJourneyId
+    ENDIF
+    SET @cvLine = Concat("<li><strong>", @cvLabel, "</strong>")
+    IF NOT Empty(@cvJourneyType) THEN
+     SET @cvLine = Concat(@cvLine, " (", @cvJourneyType, ")")
+    ENDIF
+    IF NOT Empty(@buildDetailUrl) AND NOT Empty(@cvJourneyId) THEN
+     SET @cvLine = Concat(@cvLine, ' — <a href="', @buildDetailUrl, '?journeyId=', @cvJourneyId, '">Open build</a>')
+    ENDIF
+    SET @cvLine = Concat(@cvLine, "</li>")
+    SET @campaignVerifyListHtml = Concat(@campaignVerifyListHtml, @cvLine)
+   NEXT @cvi
+  ENDIF
+ ENDIF
+ENDIF
 SET @authOk = "false"
 SET @step3bResult = ""
 IF @showForm != "true" THEN
@@ -139,7 +182,7 @@ IF @showForm != "true" THEN
    ENDIF
  ELSE
    IF @templateConfigOk != "true" THEN
-     SET @resultText = "Step 0 FAILED: Missing template IDs in SFMC_TEMPLATES for User=Admin."
+     SET @resultText = "Step 0 FAILED: Missing email templates in bd_sst_email_templates (email_type=template)."
    ELSE
     IF @createEmailOnly != "1" AND Empty(@itemBaseName) THEN
       SET @resultText = "Enter a Name. It drives the email asset name, entry event / DE name, and journey title."
@@ -184,6 +227,197 @@ IF @showForm != "true" THEN
  ENDIF
 ENDIF
 ]%%
+<script runat="server">
+Platform.Load("core","1");
+var senderProfileIdReq = Platform.Variable.GetValue("@senderProfileId") || "";
+var senderProfileConfigOk = "false";
+var senderProfileOptionsHtml = "";
+var defaultSenderProfileId = "";
+
+function escSenderOpt(s) {
+  if (s === null || s === undefined) return "";
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;");
+}
+
+function senderProfileIdFromRow(row) {
+  if (!row) return "";
+  if (row.ObjectID) {
+    var oid = String(row.ObjectID).replace(/^\s+|\s+$/g, "");
+    if (oid) return oid;
+  }
+  if (row.CustomerKey) {
+    var ck = String(row.CustomerKey).replace(/^\s+|\s+$/g, "");
+    if (ck) return ck;
+  }
+  return "";
+}
+
+function senderProfileLabelFromRow(row) {
+  if (!row) return "";
+  var name = row.Name ? String(row.Name).replace(/^\s+|\s+$/g, "") : "";
+  var fromName = row.FromName ? String(row.FromName).replace(/^\s+|\s+$/g, "") : "";
+  var fromAddress = row.FromAddress ? String(row.FromAddress).replace(/^\s+|\s+$/g, "") : "";
+  if (name) return name;
+  if (fromName && fromAddress) return fromName + " <" + fromAddress + ">";
+  if (fromName) return fromName;
+  if (fromAddress) return fromAddress;
+  return senderProfileIdFromRow(row);
+}
+
+function normalizeWsResults(results) {
+  var out = [];
+  if (!results) return out;
+  if (typeof results.length === "number") {
+    var i;
+    for (i = 0; i < results.length; i++) out.push(results[i]);
+    return out;
+  }
+  if (results.CustomerKey || results.ObjectID || results.Name) out.push(results);
+  return out;
+}
+
+function retrieveAllSenderProfiles() {
+  var prox = new Script.Util.WSProxy();
+  var props = ["Name", "FromName", "FromAddress", "CustomerKey", "ObjectID"];
+  var filter = {
+    Property: "CustomerKey",
+    SimpleOperator: "like",
+    Value: "%"
+  };
+  var rows = [];
+  var resp = prox.retrieve("SenderProfile", props, filter);
+  while (resp) {
+    rows = rows.concat(normalizeWsResults(resp.Results));
+    if (resp.HasMoreResults) {
+      resp = prox.retrieveMore();
+    } else {
+      break;
+    }
+  }
+  return rows;
+}
+
+try {
+  var senderRows = retrieveAllSenderProfiles();
+  senderRows.sort(function (a, b) {
+    return senderProfileLabelFromRow(a).localeCompare(senderProfileLabelFromRow(b));
+  });
+  var si;
+  for (si = 0; si < senderRows.length; si++) {
+    var spId = senderProfileIdFromRow(senderRows[si]);
+    if (!spId) continue;
+    if (!defaultSenderProfileId) defaultSenderProfileId = spId;
+    senderProfileConfigOk = "true";
+  }
+  var selectedSenderProfileId = senderProfileIdReq || defaultSenderProfileId;
+  for (si = 0; si < senderRows.length; si++) {
+    var spIdOpt = senderProfileIdFromRow(senderRows[si]);
+    if (!spIdOpt) continue;
+    var spLabel = senderProfileLabelFromRow(senderRows[si]);
+    var selectedAttr = spIdOpt === selectedSenderProfileId ? " selected" : "";
+    senderProfileOptionsHtml +=
+      '<option value="' +
+      escSenderOpt(spIdOpt) +
+      '"' +
+      selectedAttr +
+      ">" +
+      escSenderOpt(spLabel) +
+      "</option>";
+  }
+  Platform.Variable.SetValue("@senderProfileId", selectedSenderProfileId);
+} catch (senderLoadErr) {
+  senderProfileConfigOk = "false";
+  senderProfileOptionsHtml = "";
+}
+
+Platform.Variable.SetValue("@senderProfileConfigOk", senderProfileConfigOk);
+Platform.Variable.SetValue("@senderProfileOptionsHtml", senderProfileOptionsHtml);
+
+var sendClassificationIdReq = Platform.Variable.GetValue("@sendClassificationId") || "";
+var sendClassificationConfigOk = "false";
+var sendClassificationOptionsHtml = "";
+var defaultSendClassificationId = "";
+
+function sendClassificationIdFromRow(row) {
+  if (!row) return "";
+  if (row.ObjectID) {
+    var scOid = String(row.ObjectID).replace(/^\s+|\s+$/g, "");
+    if (scOid) return scOid;
+  }
+  if (row.CustomerKey) {
+    var scCk = String(row.CustomerKey).replace(/^\s+|\s+$/g, "");
+    if (scCk) return scCk;
+  }
+  return "";
+}
+
+function sendClassificationLabelFromRow(row) {
+  if (!row) return "";
+  var scName = row.Name ? String(row.Name).replace(/^\s+|\s+$/g, "") : "";
+  var scType = row.SendClassificationType
+    ? String(row.SendClassificationType).replace(/^\s+|\s+$/g, "")
+    : "";
+  if (scName && scType) return scName + " (" + scType + ")";
+  if (scName) return scName;
+  if (row.CustomerKey) return String(row.CustomerKey).replace(/^\s+|\s+$/g, "");
+  return sendClassificationIdFromRow(row);
+}
+
+function retrieveAllSendClassifications() {
+  var prox = new Script.Util.WSProxy();
+  var props = ["Name", "CustomerKey", "ObjectID", "SendClassificationType"];
+  var rows = [];
+  var resp = prox.retrieve("SendClassification", props);
+  while (resp) {
+    rows = rows.concat(normalizeWsResults(resp.Results));
+    if (resp.HasMoreResults) {
+      resp = prox.retrieveMore();
+    } else {
+      break;
+    }
+  }
+  return rows;
+}
+
+try {
+  var scRows = retrieveAllSendClassifications();
+  scRows.sort(function (a, b) {
+    return sendClassificationLabelFromRow(a).localeCompare(sendClassificationLabelFromRow(b));
+  });
+  var sci;
+  for (sci = 0; sci < scRows.length; sci++) {
+    var scId = sendClassificationIdFromRow(scRows[sci]);
+    if (!scId) continue;
+    if (!defaultSendClassificationId) defaultSendClassificationId = scId;
+    sendClassificationConfigOk = "true";
+  }
+  var selectedSendClassificationId = sendClassificationIdReq || defaultSendClassificationId;
+  for (sci = 0; sci < scRows.length; sci++) {
+    var scIdOpt = sendClassificationIdFromRow(scRows[sci]);
+    if (!scIdOpt) continue;
+    var scLabel = sendClassificationLabelFromRow(scRows[sci]);
+    var scSelectedAttr = scIdOpt === selectedSendClassificationId ? " selected" : "";
+    sendClassificationOptionsHtml +=
+      '<option value="' +
+      escSenderOpt(scIdOpt) +
+      '"' +
+      scSelectedAttr +
+      ">" +
+      escSenderOpt(scLabel) +
+      "</option>";
+  }
+  Platform.Variable.SetValue("@sendClassificationId", selectedSendClassificationId);
+} catch (scLoadErr) {
+  sendClassificationConfigOk = "false";
+  sendClassificationOptionsHtml = "";
+}
+
+Platform.Variable.SetValue("@sendClassificationConfigOk", sendClassificationConfigOk);
+Platform.Variable.SetValue("@sendClassificationOptionsHtml", sendClassificationOptionsHtml);
+</script>
 <script runat="server">
 Platform.Load("core","1");
 var authOk = Variable.GetValue("authOk");
@@ -598,18 +832,22 @@ IF NOT Empty(@journeyEmailId) THEN
  SET @resultText = Concat(@resultText," Journey Email ID: ",@journeyEmailId)
 ENDIF
 IF @authOk == "true" AND NOT Empty(@journeyEmailId) AND @createEmailOnly != "1" THEN
- SET @eventKeyRand = Substring(Replace(GUID(),"-",""),1,22)
- SET @eventKey = Concat("eventDef",@eventKeyRand)
- SET @eventNameForJson = Replace(@eventName,'"','\"')
- SET @eventNameForJson = Replace(Replace(Replace(@eventNameForJson,Char(10),' '),Char(13),' '),Char(9),' ')
- SET @eventSchemaFields = '[{"name":"greeting","dataType":"Text","maxLength":"50","isNullable":true},{"name":"id","dataType":"Text","maxLength":"50","isNullable":false},{"name":"email","dataType":"EmailAddress","maxLength":"254","isNullable":false},{"name":"sfCampaignId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfCampaignMemberId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfQuickSendId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Account_Owner_Name","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Account_Owner_Email","dataType":"Text","maxLength":"50","isNullable":true},{"name":"firstName","dataType":"Text","maxLength":"50","isNullable":true},{"name":"lastName","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfUserId","dataType":"Text","maxLength":"50","isNullable":false},{"name":"journeyID","dataType":"Text","maxLength":"50","isNullable":false},{"name":"sfOrgId","dataType":"Text","maxLength":"50","isNullable":false},{"name":"smsValue","dataType":"Text","maxLength":"50","isNullable":true},{"name":"mobilePhone","dataType":"Text","maxLength":"50","isNullable":true},{"name":"EntryObjectId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"DateAdded","dataType":"Date","isNullable":true},{"name":"Role","dataType":"Text","maxLength":"50","isNullable":true},{"name":"OwnerId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Specialty","dataType":"Text","maxLength":"100","isNullable":true},{"name":"AccountName","dataType":"Text","maxLength":"255","isNullable":true},{"name":"State","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Designation","dataType":"Text","maxLength":"50","isNullable":true},{"name":"senderPhone","dataType":"Text","maxLength":"50","isNullable":true},{"name":"senderTitle","dataType":"Text","maxLength":"255","isNullable":true},{"name":"senderLicense","dataType":"Text","maxLength":"255","isNullable":true},{"name":"senderMobile","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Salutation","dataType":"Text","maxLength":"50","isNullable":true},{"name":"AppointmentLink","dataType":"Text","maxLength":"4000","isNullable":true},{"name":"VAWP","dataType":"Text","maxLength":"4000","isNullable":true},{"name":"EmailName","dataType":"Text","maxLength":"255","isNullable":true}]'
- SET @eventPayload = Concat('{"name":"',@eventNameForJson,'","description":"","type":"APIEvent","mode":"Production","eventDefinitionKey":"',@eventKey,'","isVisibleInPicker":false,"schema":{"sendableCustomObjectField":"id","SendableSubscriberField":"SubscriberKey","fields":',@eventSchemaFields,'}}')
+ SET @eventKey = Concat("APIEvent-",GUID())
+ SET @journeyNameForJson = Replace(@journeyName,'"','\"')
+ SET @journeyNameForJson = Replace(Replace(Replace(@journeyNameForJson,Char(10),' '),Char(13),' '),Char(9),' ')
+ SET @eventSchemaFields = '[{"name":"greeting","dataType":"Text","maxLength":"50","isNullable":true},{"name":"id","dataType":"Text","maxLength":"50","isNullable":false},{"name":"email","dataType":"EmailAddress","maxLength":"254","isNullable":false},{"name":"sfCampaignId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfCampaignMemberId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfQuickSendId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Account_Owner_Name","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Account_Owner_Email","dataType":"Text","maxLength":"50","isNullable":true},{"name":"firstName","dataType":"Text","maxLength":"50","isNullable":true},{"name":"lastName","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfUserId","dataType":"Text","maxLength":"50","isNullable":false},{"name":"journeyID","dataType":"Text","maxLength":"50","isNullable":false},{"name":"sfOrgId","dataType":"Text","maxLength":"50","isNullable":false},{"name":"smsValue","dataType":"Text","maxLength":"50","isNullable":true},{"name":"mobilePhone","dataType":"Text","maxLength":"50","isNullable":true},{"name":"EntryObjectId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"DateAdded","dataType":"Date","isNullable":true},{"name":"Role","dataType":"Text","maxLength":"50","isNullable":true},{"name":"OwnerId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Specialty","dataType":"Text","maxLength":"100","isNullable":true},{"name":"AccountName","dataType":"Text","maxLength":"255","isNullable":true},{"name":"State","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Designation","dataType":"Text","maxLength":"50","isNullable":true},{"name":"senderPhone","dataType":"Text","maxLength":"50","isNullable":true},{"name":"senderTitle","dataType":"Text","maxLength":"255","isNullable":true},{"name":"senderLicense","dataType":"Text","maxLength":"255","isNullable":true},{"name":"senderMobile","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Salutation","dataType":"Text","maxLength":"50","isNullable":true},{"name":"AppointmentLink","dataType":"Text","maxLength":"4000","isNullable":true},{"name":"type","dataType":"Text","maxLength":"50","isNullable":true,"defaultValue":"SST"}]'
+ SET @eventPayload = Concat('{"name":"',@journeyNameForJson,'","description":"","type":"APIEvent","mode":"Production","eventDefinitionKey":"',@eventKey,'","isVisibleInPicker":false,"schema":{"sendableCustomObjectField":"id","sendableSubscriberField":"SubscriberKey","fields":',@eventSchemaFields,'}}')
  SET @eventUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/eventDefinitions")
  SET @eventStatus = HTTPPost2(@eventUrl,"application/json",@eventPayload,false,@eventResponse,@eventResponseHeader,"Authorization",Concat("Bearer ",@accessToken))
  IF @eventStatus == 200 OR @eventStatus == 201 THEN
    SET @eventIdPattern = '"id":"([^"]+)"'
    SET @eventDefId = RegExMatch(@eventResponse,@eventIdPattern,1)
    IF NOT Empty(@eventDefId) THEN
+     SET @eventKeyPattern = '"eventDefinitionKey":"([^"]+)"'
+     SET @eventKeyFromResponse = RegExMatch(@eventResponse,@eventKeyPattern,1)
+     IF NOT Empty(@eventKeyFromResponse) THEN
+       SET @eventKey = @eventKeyFromResponse
+     ENDIF
      SET @resultText = Concat(@resultText," Step 3 OK - API entry event created.")
      SET @journeyUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/interactions")
      SET @journeyKey = GUID()
@@ -637,50 +875,166 @@ var eventDefId = Platform.Variable.GetValue("@eventDefId") || "";
 var journeyNameAmp = Platform.Variable.GetValue("@journeyName") || "";
 var authOk = Platform.Variable.GetValue("@authOk") || "";
 var createEmailOnly = Platform.Variable.GetValue("@createEmailOnly") || "";
+var subdomain = Platform.Variable.GetValue("@subdomain") || "";
+var accessToken = Platform.Variable.GetValue("@accessToken") || "";
+var eventResponse = Platform.Variable.GetValue("@eventResponse") || "";
+var resultText = Platform.Variable.GetValue("@resultText") || "";
+
+function parseEventDefJson(text) {
+  try {
+    return Platform.Function.ParseJSON(String(text || ""));
+  } catch (parseEx) {
+    return null;
+  }
+}
+
+function readDataExtensionId(evObj) {
+  if (!evObj) {
+    return "";
+  }
+  return String(evObj.dataExtensionId || evObj.dataExtensionID || "");
+}
+
+function readEventDefinitionKey(evObj) {
+  if (!evObj) {
+    return "";
+  }
+  return String(evObj.eventDefinitionKey || "");
+}
+
+function resolveDeMetaByObjectId(objectId) {
+  if (!objectId) {
+    return { customerKey: "", name: "" };
+  }
+  try {
+    var prox = new Script.Util.WSProxy();
+    var rde = prox.retrieve("DataExtension", ["CustomerKey", "Name"], {
+      Property: "ObjectID",
+      SimpleOperator: "equals",
+      Value: String(objectId)
+    });
+    if (rde && rde.Results && rde.Results.length > 0) {
+      return {
+        customerKey: String(rde.Results[0].CustomerKey || ""),
+        name: String(rde.Results[0].Name || "")
+      };
+    }
+  } catch (deMetaEx) {}
+  return { customerKey: "", name: "" };
+}
+
+function resolveEventDefinition(evId, sub, token, createResponse) {
+  var createObj = parseEventDefJson(createResponse);
+  var dataExtensionId = readDataExtensionId(createObj);
+  var eventDefinitionKey = readEventDefinitionKey(createObj);
+  if (dataExtensionId && eventDefinitionKey) {
+    return {
+      dataExtensionId: dataExtensionId,
+      eventDefinitionKey: eventDefinitionKey
+    };
+  }
+  if (!evId || !sub || !token) {
+    return {
+      dataExtensionId: dataExtensionId,
+      eventDefinitionKey: eventDefinitionKey
+    };
+  }
+  var getUrl =
+    "https://" +
+    sub +
+    ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
+    encodeURIComponent(String(evId));
+  var getReq = new Script.Util.HttpRequest(getUrl);
+  getReq.emptyContentHandling = 0;
+  getReq.retries = 1;
+  getReq.continueOnError = true;
+  getReq.setHeader("Authorization", "Bearer " + token);
+  getReq.method = "GET";
+  var getResp = getReq.send();
+  if (getResp.statusCode != 200 && getResp.statusCode != 201) {
+    return {
+      dataExtensionId: dataExtensionId,
+      eventDefinitionKey: eventDefinitionKey
+    };
+  }
+  var getObj = parseEventDefJson(getResp.content);
+  return {
+    dataExtensionId: readDataExtensionId(getObj) || dataExtensionId,
+    eventDefinitionKey: readEventDefinitionKey(getObj) || eventDefinitionKey
+  };
+}
+
 if (
   authOk == "true" &&
   createEmailOnly != "1" &&
   eventKey &&
-  eventDefId
+  eventDefId &&
+  subdomain &&
+  accessToken
 ) {
-  var trigName = journeyNameAmp
-    ? String(journeyNameAmp).substring(0, 120)
-    : "API Entry";
-  var trigObj = {
-    key: "TRIGGER",
-    name: trigName,
-    description: "",
-    type: "APIEvent",
-    outcomes: [],
-    arguments: {
-      startActivityKey: "{{Context.StartActivityKey}}",
-      dequeueReason: "{{Context.DequeueReason}}",
-      lastExecutedActivityKey: "{{Context.LastExecutedActivityKey}}",
-      filterResult: "true"
-    },
-    configurationArguments: {
-      schemaVersionId: 0,
-      criteria: "",
-      filterDefinitionId: "00000000-0000-0000-0000-000000000000"
-    },
-    metaData: {
+  var eventResolved = resolveEventDefinition(
+    eventDefId,
+    subdomain,
+    accessToken,
+    eventResponse
+  );
+  var eventDataExtensionId = eventResolved.dataExtensionId || "";
+  if (eventResolved.eventDefinitionKey) {
+    eventKey = eventResolved.eventDefinitionKey;
+    Platform.Variable.SetValue("@eventKey", eventKey);
+    Platform.Variable.SetValue(
+      "@defaultEmailEscaped",
+      ("{{Event." + eventKey + '.\"email\"}}').replace(/"/g, '\\"')
+    );
+  }
+  if (!eventDataExtensionId) {
+    Platform.Variable.SetValue("@apiEventTriggerJson", "");
+    Platform.Variable.SetValue("@eventDataExtensionId", "");
+    Platform.Variable.SetValue("@eventKey", "");
+    Platform.Variable.SetValue("@eventDefId", "");
+    Platform.Variable.SetValue("@cleanupNeeded", "1");
+    Platform.Variable.SetValue(
+      "@resultText",
+      resultText +
+        " Step 3 FAILED: Could not resolve entry event dataExtensionId."
+    );
+  } else {
+    var trigName = journeyNameAmp
+      ? String(journeyNameAmp).substring(0, 120)
+      : "API Entry";
+    var trigMeta = {
       sourceInteractionId: "00000000-0000-0000-0000-000000000000",
       eventDefinitionId: eventDefId,
       eventDefinitionKey: eventKey,
       chainType: "None",
-      configurationRequired: false,
+      configurationRequired: true,
       iconUrl: "/images/icon_journeyBuilder-event-api-blue.svg",
       title: "",
       entrySourceGroupConfigUrl:
         "jb:///data/entry/api-event/entrysourcegroupconfig.json"
-    }
-  };
-  Platform.Variable.SetValue(
-    "@apiEventTriggerJson",
-    Platform.Function.Stringify(trigObj)
-  );
+    };
+    var trigObj = {
+      key: "TRIGGER",
+      name: trigName,
+      description: "",
+      type: "APIEvent",
+      outcomes: [],
+      arguments: {},
+      configurationArguments: {},
+      metaData: trigMeta
+    };
+    Platform.Variable.SetValue("@eventDataExtensionId", eventDataExtensionId);
+    var entryDeMeta = resolveDeMetaByObjectId(eventDataExtensionId);
+    Platform.Variable.SetValue("@deCustomerKey", entryDeMeta.customerKey);
+    Platform.Variable.SetValue("@entryDeName", entryDeMeta.name);
+    Platform.Variable.SetValue(
+      "@apiEventTriggerJson",
+      Platform.Function.Stringify(trigObj)
+    );
+  }
 } else {
   Platform.Variable.SetValue("@apiEventTriggerJson", "");
+  Platform.Variable.SetValue("@eventDataExtensionId", "");
 }
 </script>
 <script runat="server">
@@ -697,11 +1051,15 @@ var subdomain = Platform.Variable.GetValue("@subdomain") || "";
 var accessToken = Platform.Variable.GetValue("@accessToken") || "";
 var resultText = Platform.Variable.GetValue("@resultText") || "";
 var eventKey = Platform.Variable.GetValue("@eventKey") || "";
+var eventDefId = Platform.Variable.GetValue("@eventDefId") || "";
+var eventDataExtensionId = Platform.Variable.GetValue("@eventDataExtensionId") || "";
 var campaignId = Platform.Variable.GetValue("@campaignId") || "";
 var campaignName = Platform.Variable.GetValue("@campaignName") || "";
 var emailSubjectLine = Platform.Variable.GetValue("@emailSubjectLine") || "Campaign Event";
 var journeyDescription = Platform.Variable.GetValue("@journeyDescription") || "";
 var bccEmail = Platform.Variable.GetValue("@bccEmail") || "";
+var senderProfileId = Platform.Variable.GetValue("@senderProfileId") || "";
+var sendClassificationId = Platform.Variable.GetValue("@sendClassificationId") || "";
 var journeyResult = "";
 function jsonEscapeSbU(s) {
   if (s === null || s === undefined) {
@@ -716,6 +1074,498 @@ function randomGuidSbU() {
     var v = c == "x" ? r : (r & 0x3) | 0x8;
     return v.toString(16);
   });
+}
+function normalizeWsResultsQs(results) {
+  var out = [];
+  if (!results) return out;
+  if (typeof results.length === "number") {
+    var i;
+    for (i = 0; i < results.length; i++) out.push(results[i]);
+    return out;
+  }
+  if (results.CustomerKey || results.ObjectID || results.Name) out.push(results);
+  return out;
+}
+function wsNestedCustomerKey(row, propName) {
+  if (!row) return "";
+  if (row[propName] && row[propName].CustomerKey) {
+    return String(row[propName].CustomerKey).replace(/^\s+|\s+$/g, "");
+  }
+  var flat = propName + ".CustomerKey";
+  if (row[flat]) return String(row[flat]).replace(/^\s+|\s+$/g, "");
+  return "";
+}
+function wsNestedObjectId(row, propName) {
+  if (!row) return "";
+  if (row[propName] && row[propName].ObjectID) {
+    return String(row[propName].ObjectID).replace(/^\s+|\s+$/g, "");
+  }
+  var flat = propName + ".ObjectID";
+  if (row[flat]) return String(row[flat]).replace(/^\s+|\s+$/g, "");
+  return "";
+}
+function trimQs(v) {
+  return String(v || "").replace(/^\s+|\s+$/g, "");
+}
+function wsNestedIdForJourney(row, propName) {
+  var oid = wsNestedObjectId(row, propName);
+  if (oid) return oid;
+  return wsNestedCustomerKey(row, propName);
+}
+function wsRowIdForJourney(row) {
+  if (!row) return "";
+  if (row.ObjectID) return trimQs(row.ObjectID);
+  if (row.CustomerKey) return trimQs(row.CustomerKey);
+  return "";
+}
+function lookupSenderProfileQs(profileId) {
+  if (!profileId) return null;
+  try {
+    var prox = new Script.Util.WSProxy();
+    var props = ["Name", "FromName", "FromAddress", "CustomerKey", "ObjectID"];
+    var pid = String(profileId);
+    var byKey = prox.retrieve("SenderProfile", props, {
+      Property: "CustomerKey",
+      SimpleOperator: "equals",
+      Value: pid
+    });
+    var rows = normalizeWsResultsQs(byKey ? byKey.Results : null);
+    if (rows.length > 0) return rows[0];
+    var byObj = prox.retrieve("SenderProfile", props, {
+      Property: "ObjectID",
+      SimpleOperator: "equals",
+      Value: pid
+    });
+    rows = normalizeWsResultsQs(byObj ? byObj.Results : null);
+    if (rows.length > 0) return rows[0];
+  } catch (spErr) {}
+  return null;
+}
+function lookupSendClassificationQs(classificationId) {
+  if (!classificationId) return null;
+  try {
+    var prox = new Script.Util.WSProxy();
+    var props = [
+      "Name",
+      "CustomerKey",
+      "ObjectID",
+      "DeliveryProfile.CustomerKey",
+      "DeliveryProfile.ObjectID"
+    ];
+    var cid = String(classificationId);
+    var byKey = prox.retrieve("SendClassification", props, {
+      Property: "CustomerKey",
+      SimpleOperator: "equals",
+      Value: cid
+    });
+    var rows = normalizeWsResultsQs(byKey ? byKey.Results : null);
+    if (rows.length > 0) return rows[0];
+    var byObj = prox.retrieve("SendClassification", props, {
+      Property: "ObjectID",
+      SimpleOperator: "equals",
+      Value: cid
+    });
+    rows = normalizeWsResultsQs(byObj ? byObj.Results : null);
+    if (rows.length > 0) return rows[0];
+  } catch (scErr) {}
+  return null;
+}
+function parseJsonSafeSbU(text) {
+  try {
+    return Platform.Function.ParseJSON(String(text || ""));
+  } catch (parseEx) {
+    return null;
+  }
+}
+function httpJsonSbU(token, method, url, bodyStr) {
+  var req = new Script.Util.HttpRequest(url);
+  req.emptyContentHandling = 0;
+  req.continueOnError = true;
+  req.setHeader("Authorization", "Bearer " + token);
+  req.method = method;
+  if (bodyStr) {
+    req.contentType = "application/json";
+    req.postData = bodyStr;
+  }
+  var resp = req.send();
+  return {
+    status: resp.statusCode,
+    body: resp.content ? String(resp.content) : ""
+  };
+}
+function resolveApiEventSourceExtensionId(token, subdomain) {
+  var listUrl =
+    "https://" +
+    subdomain +
+    ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions?$page=1&$pagesize=200";
+  var resp = httpJsonSbU(token, "GET", listUrl, null);
+  if (resp.status != 200 && resp.status != 201) {
+    return "";
+  }
+  var data = parseJsonSafeSbU(resp.body);
+  var items =
+    data && data.items
+      ? data.items
+      : data && data.count !== undefined && data.items === undefined
+      ? []
+      : Array.isArray(data)
+      ? data
+      : [];
+  var i;
+  for (i = 0; i < items.length; i++) {
+    var item = items[i];
+    if (!item) {
+      continue;
+    }
+    var itemType = String(item.type || "");
+    if (
+      (itemType == "APIEvent" || itemType == "Event") &&
+      item.sourceApplicationExtensionId
+    ) {
+      return String(item.sourceApplicationExtensionId);
+    }
+  }
+  return "";
+}
+function replaceEventKeyInJourneyObject(jObj, oldKey, newKey) {
+  if (!jObj || !oldKey || !newKey || oldKey == newKey) {
+    return jObj;
+  }
+  var serialized = Platform.Function.Stringify(jObj);
+  serialized = serialized.split(oldKey).join(newKey);
+  return parseJsonSafeSbU(serialized);
+}
+function readTriggerEventDefIdSbU(trig) {
+  if (!trig) {
+    return "";
+  }
+  var meta = trig.metaData || {};
+  var args = trig.arguments || {};
+  return String(meta.eventDefinitionId || args.eventDefinitionId || "");
+}
+function readTriggerEventKeySbU(trig, fallbackKey) {
+  if (!trig) {
+    return String(fallbackKey || "");
+  }
+  var meta = trig.metaData || {};
+  var args = trig.arguments || {};
+  return String(
+    meta.eventDefinitionKey || args.eventDefinitionKey || fallbackKey || ""
+  );
+}
+function resolveEventDefinitionIdByKeySbU(token, subdomain, eventKey) {
+  if (!token || !subdomain || !eventKey) {
+    return "";
+  }
+  var listUrl =
+    "https://" +
+    subdomain +
+    ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions?$page=1&$pagesize=200";
+  var resp = httpJsonSbU(token, "GET", listUrl, null);
+  if (resp.status != 200 && resp.status != 201) {
+    return "";
+  }
+  var data = parseJsonSafeSbU(resp.body);
+  var items =
+    data && data.items
+      ? data.items
+      : data && data.count !== undefined && data.items === undefined
+      ? []
+      : Array.isArray(data)
+      ? data
+      : [];
+  var i;
+  for (i = 0; i < items.length; i++) {
+    var item = items[i];
+    if (item && String(item.eventDefinitionKey || "") == eventKey && item.id) {
+      return String(item.id);
+    }
+  }
+  return "";
+}
+function configureJourneyEntryEvent(opts) {
+  var oldEventKey = String(opts.oldEventKey || "");
+  var oldEventDefId = String(opts.oldEventDefId || "");
+  var dataExtensionId = String(opts.dataExtensionId || "");
+  var journeyId = String(opts.journeyId || "");
+  var journeyUrl = String(opts.journeyUrl || "");
+  var journeyName = String(opts.journeyName || "API Entry");
+  var subdomain = String(opts.subdomain || "");
+  var token = String(opts.accessToken || "");
+  if (
+    !oldEventKey ||
+    !oldEventDefId ||
+    !dataExtensionId ||
+    !journeyId ||
+    !journeyUrl ||
+    !subdomain ||
+    !token
+  ) {
+    return { ok: false, message: " Step 4b FAILED: Entry configure inputs missing." };
+  }
+  var eventBaseUrl =
+    "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions";
+  var getOldEv = httpJsonSbU(
+    token,
+    "GET",
+    eventBaseUrl + "/" + encodeURIComponent(oldEventDefId),
+    null
+  );
+  if (getOldEv.status != 200 && getOldEv.status != 201) {
+    return {
+      ok: false,
+      message:
+        " Step 4b FAILED: event GET HTTP " + getOldEv.status + " - " + getOldEv.body
+    };
+  }
+  var evObj = parseJsonSafeSbU(getOldEv.body);
+  if (!evObj || !evObj.schema) {
+    return { ok: false, message: " Step 4b FAILED: entry event schema missing." };
+  }
+  var srcAppExtId = resolveApiEventSourceExtensionId(token, subdomain);
+  if (!srcAppExtId && evObj.sourceApplicationExtensionId) {
+    srcAppExtId = String(evObj.sourceApplicationExtensionId);
+  }
+  var getJourneyUrl =
+    journeyUrl + "/" + encodeURIComponent(journeyId) + "?extras=all";
+  var getJ = httpJsonSbU(token, "GET", getJourneyUrl, null);
+  if (getJ.status != 200 && getJ.status != 201) {
+    return {
+      ok: false,
+      message:
+        " Step 4b FAILED: journey GET HTTP " + getJ.status + " - " + getJ.body
+    };
+  }
+  var jObj = parseJsonSafeSbU(getJ.body);
+  if (!jObj || !jObj.triggers || !jObj.triggers.length) {
+    return { ok: false, message: " Step 4b FAILED: journey triggers missing." };
+  }
+  var newEventKey = "APIEvent-" + randomGuidSbU();
+  var newEventPayload = {
+    name: journeyName,
+    description: "",
+    type: "APIEvent",
+    mode: "Production",
+    eventDefinitionKey: newEventKey,
+    isVisibleInPicker: false,
+    dataExtensionId: dataExtensionId
+  };
+  if (srcAppExtId) {
+    newEventPayload.sourceApplicationExtensionId = srcAppExtId;
+  }
+  var postEv = httpJsonSbU(
+    token,
+    "POST",
+    eventBaseUrl,
+    Platform.Function.Stringify(newEventPayload)
+  );
+  if (postEv.status != 200 && postEv.status != 201) {
+    return {
+      ok: false,
+      message:
+        " Step 4b FAILED: journey-bound event POST HTTP " +
+        postEv.status +
+        " - " +
+        postEv.body
+    };
+  }
+  var newEvObj = parseJsonSafeSbU(postEv.body);
+  var newEventDefId = newEvObj && newEvObj.id ? String(newEvObj.id) : "";
+  if (!newEventDefId) {
+    return {
+      ok: false,
+      message: " Step 4b FAILED: journey-bound event id missing from POST."
+    };
+  }
+  if (newEvObj && newEvObj.eventDefinitionKey) {
+    newEventKey = String(newEvObj.eventDefinitionKey);
+  }
+  var newDataExtensionId = dataExtensionId;
+  jObj = replaceEventKeyInJourneyObject(jObj, oldEventKey, newEventKey);
+  if (!jObj || !jObj.triggers || !jObj.triggers.length) {
+    httpJsonSbU(
+      token,
+      "DELETE",
+      eventBaseUrl + "/" + encodeURIComponent(newEventDefId),
+      null
+    );
+    return { ok: false, message: " Step 4b FAILED: journey key swap parse failed." };
+  }
+  var trig = jObj.triggers[0];
+  trig.arguments = {
+    serializedObjectType: 11,
+    eventDefinitionId: newEventDefId,
+    eventDefinitionKey: newEventKey,
+    dataExtensionId: newDataExtensionId
+  };
+  trig.configurationArguments = {
+    schema: evObj.schema,
+    name: journeyName,
+    eventDefinitionKey: newEventKey
+  };
+  if (srcAppExtId) {
+    trig.configurationArguments.sourceApplicationExtensionId = srcAppExtId;
+  }
+  trig.metaData = trig.metaData || {};
+  trig.metaData.eventDefinitionKey = newEventKey;
+  trig.metaData.eventDefinitionId = newEventDefId;
+  trig.metaData.configurationRequired = false;
+  var versionNum = jObj.version || 1;
+  var putUrl =
+    journeyUrl + "?versionNumber=" + encodeURIComponent(String(versionNum));
+  var putJ = httpJsonSbU(token, "PUT", putUrl, Platform.Function.Stringify(jObj));
+  if (putJ.status != 200 && putJ.status != 201) {
+    httpJsonSbU(
+      token,
+      "DELETE",
+      eventBaseUrl + "/" + encodeURIComponent(newEventDefId),
+      null
+    );
+    return {
+      ok: false,
+      message:
+        " Step 4b FAILED: journey configure PUT HTTP " +
+        putJ.status +
+        " - " +
+        putJ.body
+    };
+  }
+  var putJObj = parseJsonSafeSbU(putJ.body);
+  var getJ2 = httpJsonSbU(token, "GET", getJourneyUrl, null);
+  if (getJ2.status != 200 && getJ2.status != 201) {
+    return {
+      ok: false,
+      message:
+        " Step 4b FAILED: journey re-GET HTTP " + getJ2.status + " - " + getJ2.body
+    };
+  }
+  var jObj2 = parseJsonSafeSbU(getJ2.body);
+  if (!jObj2 || !jObj2.triggers || !jObj2.triggers.length) {
+    return {
+      ok: false,
+      message: " Step 4b FAILED: configured journey triggers missing."
+    };
+  }
+  var finalEventDefId = readTriggerEventDefIdSbU(jObj2.triggers[0]);
+  var finalEventKey = readTriggerEventKeySbU(jObj2.triggers[0], newEventKey);
+  if (!finalEventDefId && putJObj && putJObj.triggers && putJObj.triggers.length) {
+    finalEventDefId = readTriggerEventDefIdSbU(putJObj.triggers[0]);
+    finalEventKey = readTriggerEventKeySbU(putJObj.triggers[0], finalEventKey);
+  }
+  if (!finalEventDefId) {
+    finalEventDefId = resolveEventDefinitionIdByKeySbU(token, subdomain, finalEventKey);
+  }
+  if (!finalEventDefId) {
+    finalEventDefId = newEventDefId;
+  }
+  if (!finalEventDefId) {
+    httpJsonSbU(
+      token,
+      "DELETE",
+      eventBaseUrl + "/" + encodeURIComponent(newEventDefId),
+      null
+    );
+    return {
+      ok: false,
+      message: " Step 4b FAILED: journey-bound entry event id missing after configure."
+    };
+  }
+  if (finalEventKey != newEventKey) {
+    jObj2 = replaceEventKeyInJourneyObject(jObj2, newEventKey, finalEventKey);
+  }
+  if (!jObj2 || !jObj2.triggers || !jObj2.triggers.length) {
+    return {
+      ok: false,
+      message: " Step 4b FAILED: journey finalize parse failed."
+    };
+  }
+  jObj2.triggers[0].arguments = {};
+  jObj2.triggers[0].configurationArguments = {};
+  jObj2.triggers[0].metaData = jObj2.triggers[0].metaData || {};
+  jObj2.triggers[0].metaData.eventDefinitionId = finalEventDefId;
+  jObj2.triggers[0].metaData.eventDefinitionKey = finalEventKey;
+  jObj2.triggers[0].metaData.configurationRequired = false;
+  var versionNum2 = jObj2.version || versionNum;
+  var putUrl2 =
+    journeyUrl + "?versionNumber=" + encodeURIComponent(String(versionNum2));
+  var putJ2 = httpJsonSbU(
+    token,
+    "PUT",
+    putUrl2,
+    Platform.Function.Stringify(jObj2)
+  );
+  if (putJ2.status != 200 && putJ2.status != 201) {
+    return {
+      ok: false,
+      message:
+        " Step 4b FAILED: journey finalize PUT HTTP " +
+        putJ2.status +
+        " - " +
+        putJ2.body
+    };
+  }
+  httpJsonSbU(
+    token,
+    "DELETE",
+    eventBaseUrl + "/" + encodeURIComponent(oldEventDefId),
+    null
+  );
+  return {
+    ok: true,
+    message:
+      " Step 4b OK - Entry event configured (" +
+      finalEventKey +
+      ").",
+    newEventKey: finalEventKey,
+    newEventDefId: finalEventDefId,
+    newDataExtensionId: newDataExtensionId
+  };
+}
+function buildCampaignSecondaryLookupSbU(campId, campLabel) {
+  var lookupObj = {
+    label: "Campaign ID",
+    name: "CampaignId",
+    datatype: "reference",
+    length: 18,
+    nillable: false,
+    custom: false,
+    updateable: false,
+    createable: true,
+    defaultedoncreate: false,
+    externalid: false,
+    idlookup: false,
+    precision: 0,
+    scale: 0,
+    displaydatatype: "Lookup Relationship",
+    objectname: "CampaignMember",
+    relationname: "Campaign",
+    referenceto: ["Campaign"],
+    isnamefield: false,
+    id: "CampaignId",
+    config: {
+      uiComponent: "typeahead",
+      processors: ["static"],
+      validators: [{}],
+      relatedFields: [
+        {
+          fieldName: "Status",
+          routeConfig: {
+            objectType: "campaignmemberstatus",
+            fields: "campaignid,id,label,isdeleted",
+            sortField: "label",
+            filterParams: "isdeleted=false|campaignId="
+          }
+        }
+      ]
+    },
+    required: true,
+    multipleOptions: false,
+    attributeMatch: ["Text"],
+    value: { id: campId, name: campLabel },
+    valueLabel: campLabel,
+    referenceObject: "Campaign"
+  };
+  return Platform.Function.Stringify(lookupObj);
 }
 function buildCmUpdateActivitySbU(opts) {
   var ek = opts.eventKey;
@@ -737,6 +1587,7 @@ function buildCmUpdateActivitySbU(opts) {
       }
     ],
     arguments: {
+      version: "1.0",
       objectMap: {
         objects: [
           {
@@ -768,7 +1619,12 @@ function buildCmUpdateActivitySbU(opts) {
                       FieldValue: campId,
                       FieldValueLabel: campLabel,
                       FieldType: "reference",
-                      AdditionalInfo: { secondaryLookup: "{}" }
+                      AdditionalInfo: {
+                        secondaryLookup: buildCampaignSecondaryLookupSbU(
+                          campId,
+                          campLabel
+                        )
+                      }
                     }
                   ],
                   MultiOutComeOption: "DoNotUpdate",
@@ -817,23 +1673,95 @@ function buildCmUpdateActivitySbU(opts) {
             ]
           }
         ]
-      },
-      version: "1.0",
-      contactKey: "{{Context.ContactKey}}",
-      contactId: "{{Context.ContactId}}",
-      definitionId: "{{Context.DefinitionId}}",
-      activityId: "{{Activity.Id}}",
-      startActivityKey: "{{Context.StartActivityKey}}",
-      definitionInstanceId: "{{Context.DefinitionInstanceId}}",
-      requestObjectId: "{{Context.RequestObjectId}}"
+      }
     },
     configurationArguments: {
-      applicationExtensionKey: "Salesforce_Activity_CampaignMember",
-      applicationExtensionId: "00000000-0000-0000-0000-000000000000"
+      applicationExtensionKey: "Salesforce_Activity_CampaignMember"
     },
     metaData: {
       isConfigured: true,
       expressionBuilderPrefix: "Campaign Member"
+    },
+    schema: {
+      arguments: {
+        salesforceObjectID: {
+          dataType: "Text",
+          isNullable: true,
+          direction: "Out",
+          readOnly: false,
+          access: "Visible"
+        },
+        asyncDiscardDate: {
+          dataType: "Date",
+          isNullable: false,
+          direction: "Out",
+          readOnly: false,
+          access: "Visible"
+        },
+        objectMap: {
+          dataType: "Text",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        version: {
+          dataType: "Text",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        contactKey: {
+          dataType: "Text",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        contactId: {
+          dataType: "Number",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        definitionId: {
+          dataType: "Text",
+          isNullable: false,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        activityId: {
+          dataType: "Text",
+          isNullable: false,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        startActivityKey: {
+          dataType: "Text",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        definitionInstanceId: {
+          dataType: "Text",
+          isNullable: false,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        },
+        requestObjectId: {
+          dataType: "LongNumber",
+          isNullable: true,
+          direction: "In",
+          readOnly: false,
+          access: "Hidden"
+        }
+      }
     }
   };
 }
@@ -844,13 +1772,28 @@ if (
   accessToken &&
   journeyEmailId &&
   eventKey &&
-  apiEventTriggerJson
+  apiEventTriggerJson &&
+  senderProfileId &&
+  sendClassificationId
 ) {
  try {
+   var scRow = lookupSendClassificationQs(sendClassificationId);
+   var spRowForJourney = lookupSenderProfileQs(senderProfileId);
+   var sendClassificationIdForJourney =
+     wsRowIdForJourney(scRow) || trimQs(sendClassificationId);
+   var deliveryProfileId = wsNestedIdForJourney(scRow, "DeliveryProfile");
+   var senderProfileIdForJourney =
+     wsRowIdForJourney(spRowForJourney) || trimQs(senderProfileId);
+   if (!sendClassificationIdForJourney) {
+     throw new Error("Send classification is required.");
+   }
    var emailSubjectEscaped = jsonEscapeSbU(emailSubjectLine);
    var journeyNameEscaped = jsonEscapeSbU(journeyName);
    var journeyDescEscaped = jsonEscapeSbU(journeyDescription);
    var bccEsc = jsonEscapeSbU(bccEmail);
+   var senderProfileIdEsc = jsonEscapeSbU(senderProfileIdForJourney);
+   var sendClassificationIdEsc = jsonEscapeSbU(sendClassificationIdForJourney);
+   var deliveryProfileIdEsc = jsonEscapeSbU(deliveryProfileId);
    var triggerWithOutcomes = apiEventTriggerJson;
    var emailIdNum = journeyEmailId ? parseInt(String(journeyEmailId), 10) : 0;
    var emailArgs =
@@ -864,7 +1807,7 @@ if (
      emailNameEscaped +
      '","outcomes":[{"next":"SALESCLOUDACTIVITY-2","metaData":{"invalid":false}}],"arguments":' +
      emailArgs +
-     ',"metaData":{"isConfigured":true,"sections":{}},"configurationArguments":{"applicationExtensionKey":"jb-email-activity","isModified":false,"isSimulation":false,"fuelAgentRequested":true,"googleAnalyticsCampaignName":"","useLLTS":false,"isReconcilable":false,"triggeredSend":{"autoAddSubscribers":true,"autoUpdateSubscribers":true,"bccEmail":"' +
+     ',"metaData":{"isConfigured":true,"sections":{}},"configurationArguments":{"isModified":false,"isSimulation":false,"fuelAgentRequested":true,"googleAnalyticsCampaignName":"","useLLTS":false,"isReconcilable":false,"triggeredSend":{"autoAddSubscribers":true,"autoUpdateSubscribers":true,"bccEmail":"' +
      bccEsc +
      '","categoryId":58374,"ccEmail":"","created":{"name":"","date":""},"domainExclusions":[],"dynamicEmailSubject":"' +
      emailSubjectEscaped +
@@ -874,7 +1817,13 @@ if (
      emailSubjectEscaped +
      '","description":"' +
      tsDesc +
-     '","exclusionFilter":"","isSalesforceTracking":true,"isMultipart":true,"isSendLogging":true,"isStoppedOnJobError":false,"modified":{"name":"","date":""},"preHeader":"","priority":4,"replyToAddress":"","replyToDisplayName":"","sendClassificationId":"b50407e2-1b38-f111-a5f3-5cba2c61b268","suppressTracking":false,"throttleOpens":"1/1/0001 12:00:00 AM","throttleCloses":"1/1/0001 12:00:00 AM","deliveryProfileId":"f4340b58-db9a-ed11-a5b4-5cba2c1a5350","senderProfileId":"20c715b0-1b38-f111-a5f3-5cba2c61b268","isTrackingClicks":true,"publicationListId":1132}}}';
+     '","exclusionFilter":"","isSalesforceTracking":true,"isMultipart":true,"isSendLogging":true,"isStoppedOnJobError":false,"modified":{"name":"","date":""},"preHeader":"","priority":4,"replyToAddress":"","replyToDisplayName":"","sendClassificationId":"' +
+     sendClassificationIdEsc +
+     '","suppressTracking":false,"throttleOpens":"1/1/0001 12:00:00 AM","throttleCloses":"1/1/0001 12:00:00 AM","deliveryProfileId":"' +
+     deliveryProfileIdEsc +
+     '","senderProfileId":"' +
+     senderProfileIdEsc +
+     '","isTrackingClicks":true,"publicationListId":1132},"applicationExtensionKey":"jb-email-activity"}}';
    var cmObj = buildCmUpdateActivitySbU({
      eventKey: eventKey,
      campaignId: campaignId,
@@ -990,8 +1939,7 @@ if (
        requestObjectId: "{{Context.RequestObjectId}}"
      },
      configurationArguments: {
-       applicationExtensionKey: "Salesforce_Activity_Task",
-       applicationExtensionId: "00000000-0000-0000-0000-000000000000"
+       applicationExtensionKey: "Salesforce_Activity_Task"
      },
      metaData: {
        isConfigured: true,
@@ -1030,20 +1978,33 @@ if (
      var journeyId = idMatch ? idMatch[1] : "";
      if (journeyId) {
        Platform.Variable.SetValue("@journeyId", journeyId);
-       journeyResult = journeyResult + " Journey ID: " + journeyId;
-       var activateUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/interactions/publishAsync/" + journeyId + "?versionNumber=1";
-       var actReq = new Script.Util.HttpRequest(activateUrl);
-       actReq.emptyContentHandling = 0;
-       actReq.continueOnError = true;
-       actReq.setHeader("Authorization", "Bearer " + accessToken);
-       actReq.method = "POST";
-       actReq.contentType = "application/json";
-       actReq.postData = "{}";
-       var actResp = actReq.send();
-       if (actResp.statusCode == 200 || actResp.statusCode == 201 || actResp.statusCode == 202) {
-         journeyResult = journeyResult + " Step 5 OK - Activation requested.";
-       } else {
-         journeyResult = journeyResult + " Step 5 FAILED: HTTP " + actResp.statusCode + ".";
+       journeyResult = journeyResult + " Journey ID: " + journeyId + " (draft).";
+       if (eventDefId && eventKey && eventDataExtensionId) {
+         var bindResult = configureJourneyEntryEvent({
+           oldEventKey: eventKey,
+           oldEventDefId: eventDefId,
+           dataExtensionId: eventDataExtensionId,
+           journeyId: journeyId,
+           journeyUrl: journeyUrl,
+           journeyName: journeyName,
+           subdomain: subdomain,
+           accessToken: accessToken
+         });
+         journeyResult = journeyResult + bindResult.message;
+         if (bindResult.ok && bindResult.newEventKey && bindResult.newEventDefId) {
+           Platform.Variable.SetValue("@eventKey", bindResult.newEventKey);
+           Platform.Variable.SetValue("@eventDefId", bindResult.newEventDefId);
+           if (bindResult.newDataExtensionId) {
+             Platform.Variable.SetValue(
+               "@eventDataExtensionId",
+               bindResult.newDataExtensionId
+             );
+           }
+           Platform.Variable.SetValue(
+             "@defaultEmailEscaped",
+             ("{{Event." + bindResult.newEventKey + '.\"email\"}}').replace(/"/g, '\\"')
+           );
+         }
        }
      }
    } else {
@@ -1054,6 +2015,33 @@ if (
    journeyResult = " Step 4 FAILED: " + (e.message || String(e));
    Platform.Variable.SetValue("@cleanupNeeded", "1");
  }
+} else if (
+  journeyKey &&
+  journeyUrl &&
+  subdomain &&
+  accessToken &&
+  journeyEmailId &&
+  eventKey &&
+  apiEventTriggerJson &&
+  !senderProfileId &&
+  Platform.Variable.GetValue("@createEmailOnly") != "1"
+) {
+ journeyResult = " Step 4 FAILED: Sender profile is required.";
+ Platform.Variable.SetValue("@cleanupNeeded", "1");
+} else if (
+  journeyKey &&
+  journeyUrl &&
+  subdomain &&
+  accessToken &&
+  journeyEmailId &&
+  eventKey &&
+  apiEventTriggerJson &&
+  senderProfileId &&
+  !sendClassificationId &&
+  Platform.Variable.GetValue("@createEmailOnly") != "1"
+) {
+ journeyResult = " Step 4 FAILED: Send classification is required.";
+ Platform.Variable.SetValue("@cleanupNeeded", "1");
 }
 Platform.Variable.SetValue("@resultText", resultText + journeyResult);
 </script>
@@ -1141,6 +2129,36 @@ if (cleanupNeeded == "1" && (eventDefId || newEmailId) && subdomain && accessTok
  }
  Platform.Variable.SetValue("@resultText", resultText + cleanupLog);
 }
+
+function refreshAnalyticsDeMeta(objectId) {
+ if (!objectId) {
+   return;
+ }
+ try {
+   var prox = new Script.Util.WSProxy();
+   var rde = prox.retrieve("DataExtension", ["CustomerKey", "Name"], {
+     Property: "ObjectID",
+     SimpleOperator: "equals",
+     Value: String(objectId)
+   });
+   if (rde && rde.Results && rde.Results.length > 0) {
+     if (rde.Results[0].CustomerKey) {
+       Platform.Variable.SetValue(
+         "@deCustomerKey",
+         String(rde.Results[0].CustomerKey)
+       );
+     }
+     if (rde.Results[0].Name) {
+       Platform.Variable.SetValue("@entryDeName", String(rde.Results[0].Name));
+     }
+   }
+ } catch (refreshDeMetaEx) {}
+}
+
+var finalDeExtId = Platform.Variable.GetValue("@eventDataExtensionId") || "";
+if (finalDeExtId) {
+ refreshAnalyticsDeMeta(finalDeExtId);
+}
 </script>
 %%[
 IF @showForm == "false" AND @deleteRequested != "1" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@newEmailId) THEN
@@ -1150,8 +2168,8 @@ IF @showForm == "false" AND @deleteRequested != "1" AND IndexOf(@resultText,"FAI
  IF @createEmailOnly == "1" THEN
    SET @analyticsJourneyType = Concat(Substring(@builderPageLabel,1,32)," | email-only")
  ENDIF
- SET @analyticsDeName = IIF(NOT Empty(@eventName), @eventName, "N/A")
- SET @analyticsDeId = IIF(NOT Empty(@eventDefId), @eventDefId, "N/A")
+ SET @analyticsDeName = IIF(NOT Empty(@entryDeName), @entryDeName, IIF(NOT Empty(@deCustomerKey), @deCustomerKey, "N/A"))
+ SET @analyticsDeId = IIF(NOT Empty(@deCustomerKey), @deCustomerKey, "N/A")
  SET @analyticsCampaignId = ""
  IF @createEmailOnly != "1" AND NOT Empty(@campaignId) AND Length(@campaignId) >= 15 THEN
   SET @analyticsCampaignId = Substring(@campaignId,1,18)
@@ -1165,7 +2183,7 @@ IF @showForm == "false" AND @deleteRequested != "1" AND IndexOf(@resultText,"FAI
   "journeyType", Substring(@analyticsJourneyType,1,50),
   "emailName", Substring(@emailName,1,50),
   "emailId", Substring(@newEmailId,1,50),
-  "deName", Substring(@analyticsDeName,1,50),
+  "deName", Substring(@analyticsDeName,1,200),
   "deId", Substring(@analyticsDeId,1,50),
   "campaignId", Substring(@analyticsCampaignId,1,18),
   "updateDate", Now()
@@ -1376,7 +2394,8 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   padding-top: 24px;
   border-top: 1px solid var(--border-color);
 }
-.maker-result-actions--tight { padding-top: 0; border-top: none; margin-top: 0; }
+.maker-result-actions--footer { justify-content: flex-end; }
+.maker-result-log-wrap { margin-top: 0; padding-top: 0; border-top: none; }
 .maker-btn {
   display: inline-flex;
   align-items: center;
@@ -1416,7 +2435,6 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   border-color: #fecaca;
 }
 .maker-btn--danger:hover { background: #fef2f2; border-color: #f87171; }
-.maker-result-log-wrap { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border-color); }
 .maker-result-log {
   margin-top: 12px;
   padding: 14px 16px;
@@ -1431,7 +2449,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   overflow-y: auto;
   display: none;
 }
-.maker-result-log.is-visible { display: block; }
+.maker-result-log.is-visible { display: block; margin-top: 20px; }
 
 .maker-alert {
   width: 100%;
@@ -1463,6 +2481,17 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 .question-number { color: black; width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 600; margin-right: 16px; flex-shrink: 0; border: 1px solid #0000001a;}
 .question-text { font-size: 1.125rem; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
 .form-group { margin-bottom: 16px; }
+.campaign-id-row { display: flex; gap: 12px; align-items: stretch; }
+.campaign-id-row .textarea-control { flex: 1; min-width: 0; }
+.campaign-verify-btn { flex-shrink: 0; padding: 12px 24px; font-size: 1rem; white-space: nowrap; }
+.campaign-verify-panel { margin-top: 12px; padding: 12px 16px; border: 1px solid var(--border-color); font-size: 0.9375rem; }
+.campaign-verify-panel--clear { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
+.campaign-verify-panel--used { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+.campaign-verify-panel--invalid { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+.campaign-verify-message { margin: 0; }
+.campaign-verify-list { margin: 8px 0 0 0; padding-left: 1.25rem; }
+.campaign-verify-list li { margin: 4px 0; }
+.campaign-verify-list a { color: inherit; font-weight: 600; }
 .select-control, .textarea-control { width: 100%; padding: 12px 16px; border: 1px solid var(--border-color); border-radius: 0px); font-size: 1rem; background: var(--bg-primary); transition: all 0.2s ease; font-family: inherit; }
 .select-control:focus, .textarea-control:focus { outline: none; border-color: var(--primary-color); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1); }
 .submit-section { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border-color); }
@@ -1487,7 +2516,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   padding: 0;
 }
 .email-card:hover { border-color: var(--primary-color); box-shadow: var(--shadow-md); }
-.email-card.selected { border-color: var(--primary-color); }
+.email-card.selected { border: 2px solid #53575a; }
 .email-card input { display: none; }
 .email-card-img {
   width: 100%;
@@ -1602,7 +2631,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
          <div class="question-text">Name</div>
        </div>
        <div class="form-group">
-         <input type="text" class="textarea-control" name="itemBaseName" value="%%=v(@itemBaseName)=%%" placeholder="e.g. SBU | Cross-sell (also used as journey title; file-safe slug uses underscores)">
+         <input type="text" class="textarea-control" name="itemBaseName" value="%%=v(@itemBaseName)=%%" placeholder="e.g. SBU | Cross-sell (also used as journey title; file-safe slug uses underscores)" required>
        </div>
        <div class="question-header" style="margin-top: 24px;">
          <div class="question-number">2</div>
@@ -1624,37 +2653,72 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
        </div>
        <div class="question-header" style="margin-top: 24px;">
          <div class="question-number">4</div>
-         <div class="question-text">Campaign ID</div>
+         <div class="question-text">Sender profile</div>
        </div>
        <div class="form-group">
-         <input type="text" class="textarea-control" name="campaignId" value="%%=v(@campaignId)=%%" placeholder="e.g. 701WL00000pFzUEYA0 — used to update Campaign Member status">
+%%[ IF @senderProfileConfigOk == "true" THEN ]%%
+         <select id="senderProfileId" class="select-control" name="senderProfileId">
+           %%=TreatAsContent(@senderProfileOptionsHtml)=%%
+         </select>
+%%[ ELSE ]%%
+         <div class="maker-alert" role="alert">Could not load sender profiles from Marketing Cloud.</div>
+%%[ ENDIF ]%%
        </div>
        <div class="question-header" style="margin-top: 24px;">
          <div class="question-number">5</div>
+         <div class="question-text">Send classification</div>
+       </div>
+       <div class="form-group">
+%%[ IF @sendClassificationConfigOk == "true" THEN ]%%
+         <select id="sendClassificationId" class="select-control" name="sendClassificationId">
+           %%=TreatAsContent(@sendClassificationOptionsHtml)=%%
+         </select>
+%%[ ELSE ]%%
+         <div class="maker-alert" role="alert">Could not load send classifications from Marketing Cloud.</div>
+%%[ ENDIF ]%%
+       </div>
+       <div class="question-header" style="margin-top: 24px;">
+         <div class="question-number">6</div>
+         <div class="question-text">Campaign ID</div>
+       </div>
+       <div class="form-group campaign-id-group">
+         <div class="campaign-id-row">
+           <input type="text" class="textarea-control" id="campaignId" name="campaignId" value="%%=v(@campaignId)=%%" placeholder="e.g. 701WL00000pFzUEYA0 — used to update Campaign Member status" required>
+           <button type="submit" name="verifyCampaign" value="1" class="submit-button campaign-verify-btn" formnovalidate>Verify</button>
+         </div>
+%%[ IF @campaignVerifyShow == "1" THEN ]%%
+         <div class="campaign-verify-panel campaign-verify-panel--%%=v(@campaignVerifyStatus)=%%" role="status">
+           <p class="campaign-verify-message">%%=v(@campaignVerifyMessage)=%%</p>
+%%[ IF @campaignVerifyStatus == "used" THEN ]%%
+           <ul class="campaign-verify-list">%%=TreatAsContent(@campaignVerifyListHtml)=%%</ul>
+%%[ ENDIF ]%%
+         </div>
+%%[ ENDIF ]%%
+       </div>
+       <div class="question-header" style="margin-top: 24px;">
+         <div class="question-number">7</div>
          <div class="question-text">Choose Email Template</div>
        </div>
        <div class="email-cards">
-         %%[ IF @templateConfigOk == "true" THEN ]%%
-         <label class="email-card %%[ IF @emailId == @emailIdLg THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@emailIdLg)=%%">
-           <input type="radio" name="emailId" value="%%=v(@emailIdLg)=%%" %%[ IF @emailId == @emailIdLg THEN ]%%checked%%[ ENDIF ]%%>
-           <img class="email-card-img" src="https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/BG-LG-Header-templates.png" alt="Big header">
-           <div class="email-card-label">Big Header</div>
-           <div class="email-card-id">ID: %%=v(@emailIdLg)=%%</div>
+         %%[ IF @templateConfigOk == "true" THEN
+           FOR @ti = 1 TO @templateCount DO
+             SET @templateRow = Row(@templateRows,@ti)
+             SET @cardEmailId = Trim(Field(@templateRow,"email_id"))
+             SET @cardEmailName = Field(@templateRow,"email_name")
+             SET @cardEmailPreview = Field(@templateRow,"email_preview")
+             SET @cardLabel = @cardEmailName
+             IF Length(@cardLabel) > 10 THEN
+               SET @cardLabel = Concat(Substring(@cardLabel,1,10),"...")
+             ENDIF
+         ]%%
+         <label class="email-card %%[ IF @emailId == @cardEmailId THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@cardEmailId)=%%">
+           <input type="radio" name="emailId" value="%%=v(@cardEmailId)=%%" %%[ IF @emailId == @cardEmailId THEN ]%%checked%%[ ENDIF ]%%>
+           <img class="email-card-img" src="%%=v(@cardEmailPreview)=%%" alt="%%=v(@cardEmailName)=%%">
+           <div class="email-card-label">%%=v(@cardLabel)=%%</div>
+           <div class="email-card-id">ID: %%=v(@cardEmailId)=%%</div>
          </label>
-         <label class="email-card %%[ IF @emailId == @emailIdSm THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@emailIdSm)=%%">
-           <input type="radio" name="emailId" value="%%=v(@emailIdSm)=%%" %%[ IF @emailId == @emailIdSm THEN ]%%checked%%[ ENDIF ]%%>
-           <img class="email-card-img" src="https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/BG-Header-templates.png" alt="Small header with background">
-           <div class="email-card-label">Small Header</div>
-           <div class="email-card-id">ID: %%=v(@emailIdSm)=%%</div>
-         </label>
-         <label class="email-card %%[ IF @emailId == @emailIdNoBg THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@emailIdNoBg)=%%">
-           <input type="radio" name="emailId" value="%%=v(@emailIdNoBg)=%%" %%[ IF @emailId == @emailIdNoBg THEN ]%%checked%%[ ENDIF ]%%>
-           <img class="email-card-img" src="https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/BG-NO-Header-templates.png" alt="No header with background">
-           <div class="email-card-label">No Header</div>
-           <div class="email-card-id">ID: %%=v(@emailIdNoBg)=%%</div>
-         </label>
-         %%[ ELSE ]%%
-         <div class="maker-alert" role="alert">Template config missing in `SFMC_TEMPLATES` for `User=Admin`.</div>
+         %%[ NEXT @ti ELSE ]%%
+         <div class="maker-alert" role="alert">Template config missing in `bd_sst_email_templates` (email_type=template).</div>
          %%[ ENDIF ]%%
        </div>
        <div class="submit-section">
@@ -1706,28 +2770,18 @@ Your journey and email are in Marketing Cloud. Open them below or return to the 
           <a href="https://mc.s13.exacttarget.com/cloud/#app/Journey%20Builder/%23%%=v(@journeyId)=%%/1" target="_blank" rel="noopener noreferrer" class="maker-btn maker-btn--primary">Open journey</a>
 %%[ ENDIF ]%%
           <a href="https://mc.s13.exacttarget.com/cloud/#app/Content%20Builder/" target="_blank" rel="noopener noreferrer" class="maker-btn maker-btn--secondary">Open Content Builder</a>
-%%[ IF NOT Empty(@newEmailId) THEN ]%%
-          <form method="post" action="" style="margin:0;display:inline">
-            <input type="hidden" name="deleteEmail" value="1">
-            <input type="hidden" name="deleteEmailId" value="%%=v(@newEmailId)=%%">
-%%[ IF NOT Empty(@flow) THEN ]%%
-            <input type="hidden" name="flow" value="%%=v(@flow)=%%">
-%%[ ENDIF ]%%
-            <button type="submit" class="maker-btn maker-btn--danger">Delete email</button>
-          </form>
-%%[ ENDIF ]%%
         </div>
         <div class="maker-result-log-wrap">
-          <button type="button" class="maker-btn maker-btn--ghost" id="showLogBtn">Show log</button>
           <pre class="maker-result-log" id="apiLog">%%=v(@resultText)=%%</pre>
         </div>
-        <div class="maker-result-actions maker-result-actions--tight">
+        <div class="maker-result-actions maker-result-actions--footer">
           <form method="post" action="" style="margin:0">
 %%[ IF NOT Empty(@flow) THEN ]%%
             <input type="hidden" name="flow" value="%%=v(@flow)=%%">
 %%[ ENDIF ]%%
             <button type="submit" class="maker-btn maker-btn--secondary">Back to builder</button>
           </form>
+          <button type="button" class="maker-btn maker-btn--ghost" id="showLogBtn">Show log</button>
         </div>
       </div>
     </div>
@@ -1772,7 +2826,6 @@ Your journey and email are in Marketing Cloud. Open them below or return to the 
 </script>
 </body>
 </html>
-
 
 
 
