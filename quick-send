@@ -5,7 +5,12 @@ SET @deleteEmailId = Trim(RequestParameter("deleteEmailId"))
 SET @campaignId = Trim(RequestParameter("campaignId"))
 SET @verifyCampaignRequested = IIF(RequestParameter("verifyCampaign") == "1","1","0")
 SET @emailId = RequestParameter("emailId")
-SET @addTaskActivity = IIF(RequestParameter("addTaskActivity") == "1","1","0")
+SET @addTaskActivity = "1"
+SET @addSTOActivity = "0"
+IF NOT Empty(@createRequested) OR @verifyCampaignRequested == "1" OR NOT Empty(RequestParameter("addTaskActivity")) OR NOT Empty(RequestParameter("addSTOActivity")) THEN
+ SET @addTaskActivity = IIF(RequestParameter("addTaskActivity") == "1","1","0")
+ SET @addSTOActivity = IIF(RequestParameter("addSTOActivity") == "1","1","0")
+ENDIF
 SET @flow = "sbu"
 SET @hubUrl = ""
 SET @buildDetailUrl = ""
@@ -1060,6 +1065,8 @@ var journeyDescription = Platform.Variable.GetValue("@journeyDescription") || ""
 var bccEmail = Platform.Variable.GetValue("@bccEmail") || "";
 var senderProfileId = Platform.Variable.GetValue("@senderProfileId") || "";
 var sendClassificationId = Platform.Variable.GetValue("@sendClassificationId") || "";
+var addTaskActivity = Platform.Variable.GetValue("@addTaskActivity") || "1";
+var addSTOActivity = Platform.Variable.GetValue("@addSTOActivity") || "0";
 var journeyResult = "";
 function jsonEscapeSbU(s) {
   if (s === null || s === undefined) {
@@ -1572,20 +1579,23 @@ function buildCmUpdateActivitySbU(opts) {
   var campId = opts.campaignId;
   var campLabel = opts.campaignLabel || campId;
   var mergeContactId = '{{Event."' + ek + '"."id"}}';
+  var cmOutcome = {
+    key: randomGuidSbU(),
+    arguments: {},
+    metaData: { invalid: false }
+  };
+  if (opts.taskNext) {
+    cmOutcome.next = opts.taskNext;
+  } else {
+    cmOutcome.next = null;
+  }
   return {
     id: randomGuidSbU(),
     key: "SALESCLOUDACTIVITY-2",
     name: "Update Campaign Member Activity",
     description: "",
     type: "SALESCLOUDACTIVITY",
-    outcomes: [
-      {
-        key: randomGuidSbU(),
-        next: "SALESCLOUDACTIVITY-8",
-        arguments: {},
-        metaData: { invalid: false }
-      }
-    ],
+    outcomes: [cmOutcome],
     arguments: {
       version: "1.0",
       objectMap: {
@@ -1827,7 +1837,8 @@ if (
    var cmObj = buildCmUpdateActivitySbU({
      eventKey: eventKey,
      campaignId: campaignId,
-     campaignLabel: campaignName
+     campaignLabel: campaignName,
+     taskNext: addTaskActivity == "1" ? "SALESCLOUDACTIVITY-8" : null
    });
    var cmActivity = Platform.Function.Stringify(cmObj);
    var taskSubject = "Email Sent: " + (emailName || "Email");
@@ -1947,7 +1958,153 @@ if (
      }
    };
    var taskActivity = Platform.Function.Stringify(taskActivityObj);
-   var activitiesJson = emailActivity + "," + cmActivity + "," + taskActivity;
+   var stoActivityObj = {
+  "id": randomGuidSbU(),
+  "key": "STOWAIT-1",
+  "name": "Einstein STO - 4 Hours",
+  "description": "",
+  "type": "STOWAIT",
+  "outcomes": [
+    {
+      "key": randomGuidSbU(),
+      "next": "EMAILV2-1",
+      "arguments": {},
+      "metaData": {
+        "invalid": false
+      }
+    }
+  ],
+  "arguments": {},
+  "configurationArguments": {
+    "params": {
+      "slidingWindowHours": 4,
+      "enableRandomTime": false
+    },
+    "applicationExtensionKey": "F828061A-5F0E-46A9-975E-18C414192D17"
+  },
+  "metaData": {
+    "backgroundColor": "#032e61",
+    "category": "flow",
+    "icon": "https://sto.us.sfmc-einstein.com/activity/static/media/Einstein_STO.png",
+    "isConfigured": true,
+    "original_icon": "static/media/Einstein_STO.png",
+    "sections": {}
+  },
+  "schema": {
+    "arguments": {
+      "contactTagsOut": {
+        "dataType": "Text",
+        "isNullable": true,
+        "direction": "Out",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "scheduledExpireTimeOut": {
+        "dataType": "Date",
+        "isNullable": true,
+        "direction": "Out",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "endDate": {
+        "dataType": "Date",
+        "isNullable": false,
+        "direction": "Out",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "contactKey": {
+        "dataType": "Text",
+        "isNullable": false,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "contactTagsIn": {
+        "dataType": "Text",
+        "isNullable": true,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "scheduledExpireTimeIn": {
+        "dataType": "Date",
+        "isNullable": true,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "jbActivityId": {
+        "dataType": "Text",
+        "isNullable": true,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "jbJourneyId": {
+        "dataType": "Text",
+        "isNullable": true,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "jbJourneyVersion": {
+        "dataType": "Number",
+        "isNullable": true,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "waitDefinitionId": {
+        "dataType": "Text",
+        "isNullable": false,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "waitForEventId": {
+        "dataType": "Text",
+        "isNullable": true,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "executionMode": {
+        "dataType": "Text",
+        "isNullable": false,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "startActivityKey": {
+        "dataType": "Text",
+        "isNullable": true,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      },
+      "waitQueueId": {
+        "dataType": "LongNumber",
+        "isNullable": true,
+        "direction": "In",
+        "readOnly": false,
+        "access": "Hidden"
+      }
+    }
+  }
+};
+   var stoActivity = Platform.Function.Stringify(stoActivityObj);
+   var activitiesJson = "";
+   if (addSTOActivity == "1") {
+    activitiesJson = stoActivity;
+   }
+   activitiesJson = activitiesJson != ""
+    ? activitiesJson + "," + emailActivity
+    : emailActivity;
+   activitiesJson = activitiesJson + "," + cmActivity;
+   if (addTaskActivity == "1") {
+    activitiesJson = activitiesJson + "," + taskActivity;
+   }
    var journeyPayload =
      '{"name":"' +
      journeyNameEscaped +
@@ -2481,6 +2638,14 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 .question-number { color: black; width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 600; margin-right: 16px; flex-shrink: 0; border: 1px solid #0000001a;}
 .question-text { font-size: 1.125rem; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
 .form-group { margin-bottom: 16px; }
+.check-box {display: grid;
+  grid-template-columns: 1em auto;
+  gap: 0.5em;
+  padding-bottom: 10px;
+  margin-bottom: 15px;
+  width: max-content;
+  border-bottom: 1px solid #e5e7eb;
+}
 .journey-preview {
   margin-top: 8px;
   padding: 20px 12px;
@@ -2504,6 +2669,28 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   min-width: 120px;
   flex-shrink: 0;
 }
+.journey-preview .step.journey-preview-step--sto,
+.journey-preview .step.journey-preview-step--task {
+  min-width: 0;
+  max-width: 0;
+  opacity: 0;
+  transform: scale(0.92);
+  overflow: hidden;
+  pointer-events: none;
+  transition: max-width 0.4s ease, min-width 0.4s ease, opacity 0.3s ease, transform 0.4s ease;
+}
+.journey-preview .step.journey-preview-step--sto.is-visible,
+.journey-preview .step.journey-preview-step--task.is-visible {
+  min-width: 120px;
+  max-width: 120px;
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+.journey-preview .step.journey-preview-step--sto:not(.is-visible)::after,
+.journey-preview .step.journey-preview-step--task:not(.is-visible)::after {
+  opacity: 0;
+}
 .journey-preview .step:not(:last-child)::after {
   content: '';
   position: absolute;
@@ -2525,6 +2712,23 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   position: relative;
   z-index: 1;
   margin-bottom: 10px;
+}
+.journey-preview .diamond {
+  width: 56px;
+  height: 56px;
+  background: linear-gradient(135deg, #0b5cab, #1a8fc4);
+  transform: rotate(45deg);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #e5e7eb;
+}
+.journey-preview .diamond .icon-inner {
+  transform: rotate(-45deg);
+  font-size: 24px;
+  color: #fff;
+  display: flex;
 }
 .journey-preview .rounded-square {
   width: 56px;
@@ -2796,10 +3000,40 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
        </div>
        <div class="question-header" style="margin-top: 24px;">
          <div class="question-number">8</div>
+         <div class="question-text">Journey options</div>
+       </div>
+       <div class="form-group">
+         <label style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Create a task when an email is sent</label>
+         <label class="check-box">
+           <input type="checkbox" name="addTaskActivity" value="1" %%[ IF @addTaskActivity == "1" THEN ]%%checked%%[ ENDIF ]%%>
+           <span>Add task activity</span>
+         </label>
+         <label style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Add send time optimization - 4 hours</label>
+         <label class="check-box">
+           <input type="checkbox" name="addSTOActivity" value="1" %%[ IF @addSTOActivity == "1" THEN ]%%checked%%[ ENDIF ]%%>
+           <span>Add STO activity</span>
+         </label>
+       </div>
+       <div class="question-header" style="margin-top: 24px;">
+         <div class="question-number">9</div>
          <div class="question-text">Preview</div>
        </div>
        <div class="journey-preview">
          <div class="journey-flow" id="journeyPreviewFlow">
+           <div class="step journey-preview-step journey-preview-step--sto%%[ IF @addSTOActivity == "1" THEN ]%% is-visible%%[ ENDIF ]%%">
+             <div class="icon-wrapper">
+               <div class="diamond">
+                 <div class="icon-inner">
+                   <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="#fff" stroke-width="1.5">
+                     <circle cx="12" cy="12" r="4"/>
+                     <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+                     <path d="M15 9l-3 3-1.5-1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                   </svg>
+                 </div>
+               </div>
+             </div>
+             <span class="step-label">Einstein STO - 4 Hours</span>
+           </div>
            <div class="step journey-preview-step">
              <div class="icon-wrapper">
                <div class="rounded-square bg-light-blue">
@@ -2824,7 +3058,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
              </div>
              <span class="step-label">Update Campaign Member Status to Sent</span>
            </div>
-           <div class="step journey-preview-step">
+           <div class="step journey-preview-step journey-preview-step--task%%[ IF @addTaskActivity == "1" THEN ]%% is-visible%%[ ENDIF ]%%">
              <div class="icon-wrapper">
                <div class="rounded-square bg-blue">
                  <svg viewBox="0 0 24 24" fill="none" stroke="#1976d2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2932,8 +3166,19 @@ Your journey and email are in Marketing Cloud. Open them below or return to the 
      if (btnText) btnText.textContent = 'Creating...';
      if (btnSpinner) btnSpinner.style.display = 'inline-block';
    });
+   var stoToggle = form.querySelector('input[name="addSTOActivity"]');
+   var taskToggle = form.querySelector('input[name="addTaskActivity"]');
+   var stoSteps = document.querySelectorAll('.journey-preview-step--sto');
+   var taskSteps = document.querySelectorAll('.journey-preview-step--task');
    var emailLabel = document.getElementById('journeyPreviewEmailLabel');
    var nameInput = form.querySelector('input[name="itemBaseName"]');
+   function setPreviewStepVisible(step, visible) {
+    if (visible) {
+     step.classList.add('is-visible');
+    } else {
+     step.classList.remove('is-visible');
+    }
+   }
    function formatPreviewEmailLabel(text) {
     var value = String(text || '').trim();
     if (!value) {
@@ -2950,11 +3195,20 @@ Your journey and email are in Marketing Cloud. Open them below or return to the 
     return parts.join('\n');
    }
    function syncJourneyPreview() {
+    var si;
+    for (si = 0; si < stoSteps.length; si++) {
+     setPreviewStepVisible(stoSteps[si], !!(stoToggle && stoToggle.checked));
+    }
+    for (si = 0; si < taskSteps.length; si++) {
+     setPreviewStepVisible(taskSteps[si], !!(taskToggle && taskToggle.checked));
+    }
     if (emailLabel) {
      var previewName = (nameInput && nameInput.value.trim()) || emailLabel.textContent.trim() || 'Send Email';
      emailLabel.textContent = formatPreviewEmailLabel(previewName);
     }
    }
+   if (stoToggle) stoToggle.addEventListener('change', syncJourneyPreview);
+   if (taskToggle) taskToggle.addEventListener('change', syncJourneyPreview);
    if (nameInput) nameInput.addEventListener('input', syncJourneyPreview);
    syncJourneyPreview();
  }
