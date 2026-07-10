@@ -1,13 +1,14 @@
 %%[
-VAR @HOME_URL, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @navRows, @navRow, @BU, @configError, @dashboardRows, @firstRow, @jid
+VAR @HOME_URL, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @SURVEY_STAGE_URL, @SURVEY_ANALYTICS_URL, @navRows, @navRow, @BU, @configError, @dashboardRows, @firstRow, @jid
+VAR @detailRows, @detailRow, @dispSurveyId, @isSurveyBuild, @buildNavContext, @buildNavActive, @surveyUrlRows, @surveyUrlRow
 VAR @emailPreviewUrl, @articlePreviewUrl, @automationId, @syncAutomationId, @homeUrl, @switchEnvironment
 VAR @contactIdToAdd, @triggerAutomationId, @triggerAutomationStatus, @triggerAutomationResult
 VAR @syncAutomationIdVar, @syncAutomationStatus, @syncAutomationResult, @unregisteredOpenedCount, @engagementTrimmed
 VAR @email, @contactId, @primarySpecialty, @state, @jobId, @accountName, @firstName, @lastName, @designation, @role
-VAR @mobile, @auth0UserId, @openDate, @campaignType, @emailHistory, @courseHistory, @viewEmailUrl, @responseEntry
+VAR @mobile, @auth0UserId, @openDate, @campaignType, @emailName, @contactUrl, @viewEmailUrl, @responseEntry
 VAR @responseContactId, @responseEmail, @responseDate, @responseEngagement, @responsePrimarySpecialty, @responseState
 VAR @responseJobId, @responseAccountName, @responseFirstName, @responseLastName, @responseDesignation, @responseRole
-VAR @responseMobile, @responseAuth0UserId, @responseOpenDate, @responseViewEmailUrl, @responseEmailHistory, @responseCourseHistory
+VAR @responseMobile, @responseAuth0UserId, @responseOpenDate, @responseViewEmailUrl, @responseEmailName, @responseContactUrl
 VAR @openedArray, @openedArrayCount, @openedRow, @openedValue, @openedUniqueArray, @openedCountArray, @newCounts
 VAR @bouncedArray, @bouncedArrayCount, @bouncedRow, @bouncedValue, @bouncedUniqueArray, @found2, @foundIndex2, @uniqueRow2, @uniqueValue2
 VAR @bouncedCountArray, @newCounts2, @countRow2, @countValue2, @didNotOpenArray, @didNotOpenArrayCount, @didNotOpenRow, @didNotOpenValue
@@ -18,23 +19,45 @@ VAR @clickedCountArray, @newCounts4, @countRow4, @countValue4, @n, @o, @p, @q, @
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
 SET @PERFORMANCE_URL = ""
+SET @SURVEY_STAGE_URL = ""
+SET @SURVEY_ANALYTICS_URL = ""
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
  SET @navRow = Row(@navRows,1)
  SET @HOME_URL = Field(@navRow,"ss_home")
  SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit")
  SET @PERFORMANCE_URL = Field(@navRow,"ss_performance")
- SET @ENV = Field(@navRow,"Environment")
+ENDIF
+SET @surveyUrlRows = LookupRows("SST_SP_Survey_Url_DE","user","admin")
+IF RowCount(@surveyUrlRows) > 0 THEN
+ SET @surveyUrlRow = Row(@surveyUrlRows,1)
+ SET @SURVEY_STAGE_URL = Field(@surveyUrlRow,"create")
+ SET @SURVEY_ANALYTICS_URL = Field(@surveyUrlRow,"analytics")
 ENDIF
 
 SET @jid = Trim(RequestParameter("journeyId"))
+SET @dispSurveyId = ""
+SET @isSurveyBuild = "false"
+SET @buildNavContext = "false"
+SET @buildNavActive = "performance"
+IF NOT Empty(@jid) THEN
+ SET @buildNavContext = "true"
+ SET @detailRows = LookupRows("Bd_journey_analytics","journeyId",@jid)
+ IF RowCount(@detailRows) > 0 THEN
+   SET @detailRow = Row(@detailRows,1)
+   SET @dispSurveyId = Trim(Field(@detailRow,"surveyId"))
+   IF IndexOf(Field(@detailRow,"journeyType"),"Survey") > 0 THEN
+     SET @isSurveyBuild = "true"
+   ENDIF
+ ENDIF
+ENDIF
 SET @BU = memberid
 SET @configError = ""
 
-IF @ENV == "PROD" THEN
- SET @BU = "PROD"
-ELSE
+IF IndexOf(@BU, "546") > 0 THEN
  SET @BU = "UAT"
+ELSE
+ SET @BU = "PROD"
 ENDIF
 
 SET @dashboardRows = LookupRows("SFMC_SS_DASHBOARD", "Environment", @BU)
@@ -153,15 +176,15 @@ SET @mobile = Field(@row, "Mobile")
 SET @auth0UserId = Field(@row, "Auth0UserId")
 SET @openDate = Field(@row, "campaign_type")
 SET @campaignType = Field(@row, "campaign_type")
-
-IF @BU == "UAT" THEN
-SET @contactLink = "https://magmutual--uat.sandbox.lightning.force.com/lightning/r/Contact/"
-ELSE
-SET @contactLink = "https://magmutual.lightning.force.com/lightning/r/Contact/"
+SET @emailName = Field(@row, "email_name")
+SET @contactUrl = ""
+IF NOT Empty(@contactId) THEN
+ IF @BU == "UAT" THEN
+  SET @contactUrl = Concat("https://magmutual--uat.sandbox.lightning.force.com/lightning/r/Contact/", @contactId, "/view")
+ ELSE
+  SET @contactUrl = Concat("https://magmutual.lightning.force.com/lightning/r/Contact/", @contactId, "/view")
+ ENDIF
 ENDIF
-
-SET @emailHistory = Concat(@contactLink, Field(@row, "Contact_Id"),"/view")
-SET @courseHistory = Field(@row, "email_name")
 SET @viewEmailUrl = Field(@row, "view_email_url") 
 IF NOT Empty(@engagement) THEN
 SET @engagementTrimmed = Trim(@engagement) 
@@ -381,12 +404,12 @@ SET @responseMobile = IIF(Empty(@mobile), "N/A", @mobile)
 SET @responseAuth0UserId = IIF(Empty(@auth0UserId), "N/A", @auth0UserId)
 SET @responseOpenDate = IIF(Empty(@openDate), "N/A", @openDate)
 SET @responseViewEmailUrl = IIF(Empty(@viewEmailUrl), "N/A", @viewEmailUrl)
-SET @responseEmailHistory = IIF(Empty(@emailHistory), "N/A", @emailHistory) 
-SET @responseCourseHistory = IIF(Empty(@courseHistory), "N/A", @courseHistory) 
+SET @responseEmailName = IIF(Empty(@emailName), "N/A", @emailName)
+SET @responseContactUrl = IIF(Empty(@contactUrl), "N/A", @contactUrl)
 SET @responseEntry = Concat(@responseContactId, ":::", @responseEmail, ":::", @responseDate, ":::", @responseEngagement,
 ":::", @responsePrimarySpecialty, ":::", @responseState, ":::", @responseJobId, ":::", @responseAccountName, ":::",
 @responseFirstName, ":::", @responseLastName, ":::", @responseDesignation, ":::", @responseRole, ":::", @responseMobile,
-":::", @responseAuth0UserId, ":::", @responseOpenDate, ":::", @responseViewEmailUrl, ":::", @responseEmailHistory, ":::",@responseCourseHistory, ":::")
+":::", @responseAuth0UserId, ":::", @responseOpenDate, ":::", @responseViewEmailUrl, ":::", @responseEmailName, ":::", @responseContactUrl, ":::")
 SET @responsesData = Concat(@responsesData, @responseEntry, "|||")
 NEXT @i
 ENDIF 
@@ -1713,7 +1736,20 @@ pre.log.show{display:block}
       <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17h2v-5H3v5zm8 5h2V6h-2v16zM13 9h8V7h-8v2zM3 5v4h14V5H3zm8 14h10v-2H11v2zM13 17h8v-2h-8v2z"/></svg>
       Manage build
     </a>
-    <span class="nav-link active" role="presentation">
+  
+    %%[ IF @isSurveyBuild == "true" AND NOT Empty(@dispSurveyId) AND @dispSurveyId != "N/A" AND NOT Empty(@SURVEY_STAGE_URL) THEN ]%%
+    <a class="nav-link" href="%%=Concat(@SURVEY_STAGE_URL,"?mode=edit&surveyid=",@dispSurveyId,IIF(NOT Empty(@jid),Concat("&journeyId=",@jid),""))=%%">
+      <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.003 1.003 0 0 0 0-1.42l-2.34-2.34a1.003 1.003 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z"/></svg>
+      Edit Survey
+    </a>
+    %%[ ENDIF ]%%
+    %%[ IF @isSurveyBuild == "true" AND NOT Empty(@dispSurveyId) AND @dispSurveyId != "N/A" AND NOT Empty(@SURVEY_ANALYTICS_URL) THEN ]%%
+    <a class="nav-link" href="%%=Concat(@SURVEY_ANALYTICS_URL,"?surveyid=",@dispSurveyId,IIF(NOT Empty(@jid),Concat("&journeyId=",@jid),""))=%%">
+      <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/></svg>
+      Results
+    </a>
+    %%[ ENDIF ]%%
+      <span class="nav-link active" role="presentation">
       <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 11H7v6h2v-6zm4 0h-2v6h2v-6zm4 0h-2v6h2v-6zM5 20h14V4H5v16zm14 2H5c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v16c0 1.1-.9 2-2 2z"/></svg>
       Performance
     </span>
@@ -1746,7 +1782,7 @@ pre.log.show{display:block}
 ">Build perfomance</h1>
         <p style="
     padding: 0px 10px 0px 24px;
-">See how your build perfomed, measure your metrics, and gain insights into your audience</p>
+">See how your build perfomed, measure your metrics, and gaing insights into your audience</p>
            <div class="chart-container">
                <div class="chart-header">
                    <div class="chart-number">☈</div>
@@ -1860,14 +1896,10 @@ pre.log.show{display:block}
                   <button id="downloadBtn" class="download-button" onclick="downloadFilteredData()">
                       Download
                   </button>
-                 <!--
                    <button type="button" id="syncBtn" class="sync-btn" onclick="toggleSyncSection()" title="Sync automation" %%[ IF NOT Empty(@configError) OR Empty(@syncAutomationIdVar) THEN ]%%disabled style="opacity: 0.5; cursor: not-allowed;"%%[ ENDIF ]%%>↻</button>
-                   <button type="button" id="triggerBtn" class="trigger-btn" onclick="toggleTriggerSection()" title="Trigger automation" %%[ IF NOT Empty(@configError) THEN ]%%disabled style="opacity: 0.5; cursor: not-allowed;"%%[ ENDIF ]%%>⚡</button> 
--->
-                   <button type="button" id="addContactBtn" class="add-contact-btn" onclick="toggleAddContactSection()" title="Search Contact In %%=v(@BU)=%% Emails" %%[ IF NOT Empty(@configError) THEN ]%%disabled style="opacity: 0.5; cursor: not-allowed;"%%[ ENDIF ]%%>🔍</button> 
+                   <button type="button" id="triggerBtn" class="trigger-btn" onclick="toggleTriggerSection()" title="Trigger automation" %%[ IF NOT Empty(@configError) THEN ]%%disabled style="opacity: 0.5; cursor: not-allowed;"%%[ ENDIF ]%%>⚡</button>
+                   <button type="button" id="addContactBtn" class="add-contact-btn" onclick="toggleAddContactSection()" title="Search Contact In %%=v(@BU)=%% Emails" %%[ IF NOT Empty(@configError) THEN ]%%disabled style="opacity: 0.5; cursor: not-allowed;"%%[ ENDIF ]%%>🔍</button>
               </div>
-             
-              <!--
                <div id="triggerSection" class="trigger-section %%[ IF NOT Empty(@triggerAutomationStatus) THEN ]%% visible %%[ ENDIF ]%%">
                    <form id="triggerForm" method="post" action="">
                        <input type="hidden" name="do" value="triggerAutomation" />
@@ -1893,7 +1925,6 @@ pre.log.show{display:block}
                     </div>
                   %%[ ENDIF ]%%
               </div>
-             
               <div id="syncSection" class="sync-section %%[ IF NOT Empty(@syncAutomationStatus) THEN ]%% visible %%[ ENDIF ]%%">
                   <form id="syncForm" method="post" action="">
                       <input type="hidden" name="do" value="syncAutomation" />
@@ -1919,7 +1950,6 @@ pre.log.show{display:block}
                     </div>
                   %%[ ENDIF ]%%
               </div>
-             -->
               <div id="addContactSection" class="add-contact-section %%[ IF RequestParameter("added") == "1" THEN ]%% visible show-success %%[ ENDIF ]%%">
                    <form id="addContactForm" method="get" action="">
                        <input type="hidden" name="do" value="addContact" />
@@ -1939,20 +1969,20 @@ pre.log.show{display:block}
                    <table class="responses-table">
                        <thead>
                            <tr>
-                               <th>ID</th>
+                               <th>Contact Id</th>
                                <th>Email</th>
-                               <th>Sent</th>
+                               <th>Last Sent</th>
                                <th>Engagement</th>
-                               <th>Specialty</th>
+                               <th>Primary Specialty</th>
                                <th>State</th>
                                <th>Job ID</th>
                                <th>Account Name</th>
                                <th>First Name</th>
                                <th>Last Name</th>
                                <th>Campaign Type</th>
-                               <th>Email Name</th>
+                               <th>Name</th>
                                <th>Contact</th>
-                               <th>Email Preview</th>
+                             <th>Last Email</th>
                            </tr>
                        </thead>
                        <tbody id="responsesTableBody">
@@ -2871,8 +2901,8 @@ pre.log.show{display:block}
                    auth0UserId: parts[13] && parts[13] !== 'N/A' ? parts[13] : '',
                    openDate: parts[14] && parts[14] !== 'N/A' ? parts[14] : '',
                    viewEmailUrl: parts[15] && parts[15] !== 'N/A' ? parts[15] : '',
-                   emailHistory: parts[16] && parts[16] !== 'N/A' ? parts[16] : '',
-                   courseHistory: parts[17] && parts[17] !== 'N/A' ? parts[17] : ''
+                   emailName: parts[16] && parts[16] !== 'N/A' ? parts[16] : '',
+                   contactUrl: parts[17] && parts[17] !== 'N/A' ? parts[17] : ''
                };
            });
            return responses.sort((a, b) => {
@@ -3055,7 +3085,7 @@ pre.log.show{display:block}
                alert('No data to download');
                return;
            }
-           const headers = ['Contact_Id', 'Email', 'LastSent', 'Engagement', 'Primary_Specialty', 'Related_Account_Primary_State', 'JobID', 'Related_Account_Name', 'First_Name', 'Last_Name', 'Designation', 'Role', 'Mobile', 'Auth0UserId', 'Campaign', 'Email_Name', 'Contact', 'Preview'];
+           const headers = ['Contact_Id', 'Email', 'LastSent', 'Engagement', 'Primary_Specialty', 'Related_Account_Primary_State', 'JobID', 'Related_Account_Name', 'First_Name', 'Last_Name', 'Designation', 'Role', 'Mobile', 'Auth0UserId', 'Campaign', 'view_email_url', 'email_name', 'contact_url'];
            const csvRows = [headers.join(',')];
            dataToDownload.forEach(response => {
                const row = [
@@ -3075,8 +3105,8 @@ pre.log.show{display:block}
                    `"${(response.auth0UserId || '').replace(/"/g, '""')}"`,
                    `"${(response.openDate || '').replace(/"/g, '""')}"`,
                    `"${(response.viewEmailUrl || '').replace(/"/g, '""')}"`,
-                   `"${(response.emailHistory || '').replace(/"/g, '""')}"`,
-                   `"${(response.courseHistory || '').replace(/"/g, '""')}"`
+                   `"${(response.emailName || '').replace(/"/g, '""')}"`,
+                   `"${(response.contactUrl || '').replace(/"/g, '""')}"`
                ];
                csvRows.push(row.join(','));
            });
@@ -3100,7 +3130,7 @@ pre.log.show{display:block}
            const endIndex = startIndex + rowsPerPage;
            const pageData = dataToShow.slice(startIndex, endIndex);
            if (pageData.length === 0) {
-               tbody.innerHTML = '<tr><td colspan="12" style="text-align: center; padding: 24px; color: var(--text-secondary);">No records found</td></tr>';
+               tbody.innerHTML = '<tr><td colspan="14" style="text-align: center; padding: 24px; color: var(--text-secondary);">No records found</td></tr>';
                return;
            }
            tbody.innerHTML = pageData.map(response => {
@@ -3109,8 +3139,7 @@ pre.log.show{display:block}
                const engagementDisplay = response.engagement && response.engagement.trim() !== '' ? response.engagement : '-';
                const engagementClass = engagementDisplay.toLowerCase().replace(/\s+/g, '-');
                const hasViewEmailUrl = response.viewEmailUrl && response.viewEmailUrl !== 'N/A' && response.viewEmailUrl.trim() !== '';
-             const hasEmailHistory = response.emailHistory && response.emailHistory !== 'N/A' && response.emailHistory.trim() !== '';
-             const hasCourseHistory = response.courseHistory && response.courseHistory !== 'N/A' && response.courseHistory.trim() !== '';
+             const hasContactUrl = response.contactUrl && response.contactUrl !== 'N/A' && response.contactUrl.trim() !== '';
                return `
                     <tr style="${response.lastName === 'SMS' ? 'background: #000000;' : ''}">
                     <td>${response.contactId}</td>
@@ -3124,9 +3153,8 @@ pre.log.show{display:block}
                     <td>${response.firstName || '-'}</td>
                     <td>${response.lastName || '-'}</td>
                     <td>${formattedOpenDate}</td>
-                    <td>${response.courseHistory}</td>
-
-                    <td>${hasEmailHistory ? `<button class="history-button" onclick="window.open('${response.emailHistory}', '_blank')">Open Contact</button>` : '-'}</td>
+                   <td>${response.emailName || '-'}</td>
+                    <td>${hasContactUrl ? `<a href="${response.contactUrl}" target="_blank" rel="noopener noreferrer" class="history-button">Contact</a>` : '-'}</td>
                      <td>${hasViewEmailUrl ? `<button class="open-button" onclick="window.open('${response.viewEmailUrl}', '_blank')">Preview</button>` : '-'}</td>
                 </tr>
             `;
@@ -3256,7 +3284,7 @@ background-color: #ff0000;
        }
 
 .history-button {
-
+    display: inline-block;
     padding: 6px 12px;
     border: 1px solid #454555;
     background: #454555;
@@ -3268,7 +3296,13 @@ background-color: #ff0000;
     cursor: pointer;
     transition: all 0.2s ease;
     white-space: nowrap;
-     }
+    text-decoration: none;
+}
+.history-button:hover,
+.history-button:visited {
+    color: white;
+    text-decoration: none;
+}
 
        .open-button {
            padding: 6px 12px;
@@ -3299,5 +3333,6 @@ background-color: #ff0000;
 </div>
 </body>
 </html>
+
 
 
