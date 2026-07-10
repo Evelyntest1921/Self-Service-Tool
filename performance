@@ -6,9 +6,11 @@ VAR @contactIdToAdd, @triggerAutomationId, @triggerAutomationStatus, @triggerAut
 VAR @syncAutomationIdVar, @syncAutomationStatus, @syncAutomationResult, @unregisteredOpenedCount, @engagementTrimmed
 VAR @email, @contactId, @primarySpecialty, @state, @jobId, @accountName, @firstName, @lastName, @designation, @role
 VAR @mobile, @auth0UserId, @openDate, @campaignType, @emailName, @contactUrl, @viewEmailUrl, @responseEntry
+VAR @clickCount, @botOrHuman
 VAR @responseContactId, @responseEmail, @responseDate, @responseEngagement, @responsePrimarySpecialty, @responseState
 VAR @responseJobId, @responseAccountName, @responseFirstName, @responseLastName, @responseDesignation, @responseRole
 VAR @responseMobile, @responseAuth0UserId, @responseOpenDate, @responseViewEmailUrl, @responseEmailName, @responseContactUrl
+VAR @responseClickCount, @responseBotOrHuman
 VAR @openedArray, @openedArrayCount, @openedRow, @openedValue, @openedUniqueArray, @openedCountArray, @newCounts
 VAR @bouncedArray, @bouncedArrayCount, @bouncedRow, @bouncedValue, @bouncedUniqueArray, @found2, @foundIndex2, @uniqueRow2, @uniqueValue2
 VAR @bouncedCountArray, @newCounts2, @countRow2, @countValue2, @didNotOpenArray, @didNotOpenArrayCount, @didNotOpenRow, @didNotOpenValue
@@ -185,7 +187,9 @@ IF NOT Empty(@contactId) THEN
   SET @contactUrl = Concat("https://magmutual.lightning.force.com/lightning/r/Contact/", @contactId, "/view")
  ENDIF
 ENDIF
-SET @viewEmailUrl = Field(@row, "view_email_url") 
+SET @viewEmailUrl = Field(@row, "view_email_url")
+SET @clickCount = Field(@row, "ClickCount")
+SET @botOrHuman = Field(@row, "BotOrHuman")
 IF NOT Empty(@engagement) THEN
 SET @engagementTrimmed = Trim(@engagement) 
 
@@ -406,10 +410,13 @@ SET @responseOpenDate = IIF(Empty(@openDate), "N/A", @openDate)
 SET @responseViewEmailUrl = IIF(Empty(@viewEmailUrl), "N/A", @viewEmailUrl)
 SET @responseEmailName = IIF(Empty(@emailName), "N/A", @emailName)
 SET @responseContactUrl = IIF(Empty(@contactUrl), "N/A", @contactUrl)
+SET @responseClickCount = IIF(Empty(@clickCount), "N/A", @clickCount)
+SET @responseBotOrHuman = IIF(Empty(@botOrHuman), "N/A", @botOrHuman)
 SET @responseEntry = Concat(@responseContactId, ":::", @responseEmail, ":::", @responseDate, ":::", @responseEngagement,
 ":::", @responsePrimarySpecialty, ":::", @responseState, ":::", @responseJobId, ":::", @responseAccountName, ":::",
 @responseFirstName, ":::", @responseLastName, ":::", @responseDesignation, ":::", @responseRole, ":::", @responseMobile,
-":::", @responseAuth0UserId, ":::", @responseOpenDate, ":::", @responseViewEmailUrl, ":::", @responseEmailName, ":::", @responseContactUrl, ":::")
+":::", @responseAuth0UserId, ":::", @responseOpenDate, ":::", @responseViewEmailUrl, ":::", @responseEmailName, ":::", @responseContactUrl, ":::",
+@responseClickCount, ":::", @responseBotOrHuman)
 SET @responsesData = Concat(@responsesData, @responseEntry, "|||")
 NEXT @i
 ENDIF 
@@ -1983,6 +1990,8 @@ pre.log.show{display:block}
                                <th>Name</th>
                                <th>Contact</th>
                              <th>Last Email</th>
+                               <th>Click Count</th>
+                               <th>Bot Or Human</th>
                            </tr>
                        </thead>
                        <tbody id="responsesTableBody">
@@ -2902,7 +2911,9 @@ pre.log.show{display:block}
                    openDate: parts[14] && parts[14] !== 'N/A' ? parts[14] : '',
                    viewEmailUrl: parts[15] && parts[15] !== 'N/A' ? parts[15] : '',
                    emailName: parts[16] && parts[16] !== 'N/A' ? parts[16] : '',
-                   contactUrl: parts[17] && parts[17] !== 'N/A' ? parts[17] : ''
+                   contactUrl: parts[17] && parts[17] !== 'N/A' ? parts[17] : '',
+                   clickCount: parts[18] && parts[18] !== 'N/A' ? parts[18] : '',
+                   botOrHuman: parts[19] && parts[19] !== 'N/A' ? parts[19] : ''
                };
            });
            return responses.sort((a, b) => {
@@ -3085,7 +3096,7 @@ pre.log.show{display:block}
                alert('No data to download');
                return;
            }
-           const headers = ['Contact_Id', 'Email', 'LastSent', 'Engagement', 'Primary_Specialty', 'Related_Account_Primary_State', 'JobID', 'Related_Account_Name', 'First_Name', 'Last_Name', 'Designation', 'Role', 'Mobile', 'Auth0UserId', 'Campaign', 'view_email_url', 'email_name', 'contact_url'];
+           const headers = ['Contact_Id', 'Email', 'LastSent', 'Engagement', 'Primary_Specialty', 'Related_Account_Primary_State', 'JobID', 'Related_Account_Name', 'First_Name', 'Last_Name', 'Designation', 'Role', 'Mobile', 'Auth0UserId', 'Campaign', 'view_email_url', 'email_name', 'contact_url', 'ClickCount', 'BotOrHuman'];
            const csvRows = [headers.join(',')];
            dataToDownload.forEach(response => {
                const row = [
@@ -3106,7 +3117,9 @@ pre.log.show{display:block}
                    `"${(response.openDate || '').replace(/"/g, '""')}"`,
                    `"${(response.viewEmailUrl || '').replace(/"/g, '""')}"`,
                    `"${(response.emailName || '').replace(/"/g, '""')}"`,
-                   `"${(response.contactUrl || '').replace(/"/g, '""')}"`
+                   `"${(response.contactUrl || '').replace(/"/g, '""')}"`,
+                   `"${(response.clickCount || '').replace(/"/g, '""')}"`,
+                   `"${(response.botOrHuman || '').replace(/"/g, '""')}"`
                ];
                csvRows.push(row.join(','));
            });
@@ -3130,7 +3143,7 @@ pre.log.show{display:block}
            const endIndex = startIndex + rowsPerPage;
            const pageData = dataToShow.slice(startIndex, endIndex);
            if (pageData.length === 0) {
-               tbody.innerHTML = '<tr><td colspan="14" style="text-align: center; padding: 24px; color: var(--text-secondary);">No records found</td></tr>';
+               tbody.innerHTML = '<tr><td colspan="16" style="text-align: center; padding: 24px; color: var(--text-secondary);">No records found</td></tr>';
                return;
            }
            tbody.innerHTML = pageData.map(response => {
@@ -3156,6 +3169,8 @@ pre.log.show{display:block}
                    <td>${response.emailName || '-'}</td>
                     <td>${hasContactUrl ? `<a href="${response.contactUrl}" target="_blank" rel="noopener noreferrer" class="history-button">Contact</a>` : '-'}</td>
                      <td>${hasViewEmailUrl ? `<button class="open-button" onclick="window.open('${response.viewEmailUrl}', '_blank')">Preview</button>` : '-'}</td>
+                     <td>${response.clickCount || '-'}</td>
+                     <td>${response.botOrHuman || '-'}</td>
                 </tr>
             `;
            }).join('');
