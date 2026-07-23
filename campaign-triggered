@@ -880,8 +880,8 @@ var waitActivity = Variable.GetValue("waitActivity");
 var newEmailId = Variable.GetValue("newEmailId");
 var journeyEmailId = Variable.GetValue("journeyEmailId");
 var emailName = Variable.GetValue("emailName");
-var addTaskActivity = Variable.GetValue("addTaskActivity");
-var addSTOActivity = Variable.GetValue("addSTOActivity");
+var addTaskActivity = String(Platform.Variable.GetValue("@addTaskActivity") || Variable.GetValue("addTaskActivity") || "0").replace(/^\s+|\s+$/g, "");
+var addSTOActivity = String(Platform.Variable.GetValue("@addSTOActivity") || Variable.GetValue("addSTOActivity") || "0").replace(/^\s+|\s+$/g, "");
 var subdomain = Variable.GetValue("subdomain");
 var accessToken = Variable.GetValue("accessToken");
 var resultText = Variable.GetValue("resultText") || "";
@@ -988,6 +988,14 @@ function lookupSendClassificationCj(classificationId) {
   } catch (scErr) {}
   return null;
 }
+function randomGuidCj() {
+  var tpl = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx";
+  return tpl.replace(/[xy]/g, function (c) {
+    var r = (Math.random() * 16) | 0;
+    var v = c == "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
 if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && senderProfileId && sendClassificationId) {
  try {
    var scRow = lookupSendClassificationCj(sendClassificationId);
@@ -1003,7 +1011,8 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
    var emailSubject = Platform.Variable.GetValue("@emailSubjectLine") || "Campaign Event";
    var emailSubjectEscaped = jsonEscapeCj(emailSubject);
    var journeyNameEscaped = jsonEscapeCj(journeyName || "");
-   var triggerWithOutcomes = '{"key":"TRIGGER","name":"TRIGGER","type":"SalesforceObjectTriggerV2","outcomes":[],"configurationArguments":' + triggerConfig + ',"metaData":' + triggerMeta + '}';
+   var entryActivityKey = addSTOActivity == "1" ? "STOWAIT-1" : "EMAILV2-1";
+   var triggerWithOutcomes = '{"key":"TRIGGER","name":"TRIGGER","type":"SalesforceObjectTriggerV2","outcomes":[{"next":"' + entryActivityKey + '","metaData":{"invalid":false}}],"configurationArguments":' + triggerConfig + ',"metaData":' + triggerMeta + '}';
    var emailIdNum = journeyEmailId ? parseInt(String(journeyEmailId), 10) : 0;
    var emailArgs = '{"activityId":"{{Activity.Id}}","definitionId":"{{Context.DefinitionId}}","emailSubjectDataBound":"' + emailSubjectEscaped + '","contactId":"{{Contact.Id}}","contactKey":"{{Contact.Key}}","emailAddress":"{{InteractionDefaults.Email}}","sourceCustomObjectId":"{{Contact.AddressInfo.Email.SourceCustomObjectId}}","sourceCustomObjectKey":"{{Contact.AddressInfo.Email.SourceCustomObjectKey}}","fieldType":"{{Contact.AddressInfo.Email.FieldType}}","eventData":"{{Event}}","obfuscationProperties":"{{InteractionDefaults.Email.ObfuscationProperties}}","customObjectKey":"","definitionInstanceId":"{{Context.DefinitionInstanceId}}"}';
    var emailNameEscaped = jsonEscapeCj(emailName || "PreEventEmail1");
@@ -1134,15 +1143,17 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
      };
      taskActivity = Platform.Function.Stringify(taskActivityObj);
    }
+   var stoActivity = "";
+   if (addSTOActivity == "1") {
     var stoActivityObj = {
-  "id": randomGuidSbU(),
+  "id": randomGuidCj(),
   "key": "STOWAIT-1",
   "name": "Einstein STO - 4 Hours",
   "description": "",
   "type": "STOWAIT",
   "outcomes": [
     {
-      "key": randomGuidSbU(),
+      "key": randomGuidCj(),
       "next": "EMAILV2-1",
       "arguments": {},
       "metaData": {
@@ -1269,7 +1280,8 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
     }
   }
 };
-   var stoActivity = Platform.Function.Stringify(stoActivityObj);
+    stoActivity = Platform.Function.Stringify(stoActivityObj);
+   }
  var activitiesJson = '';
 
 if (addSTOActivity == "1") {
