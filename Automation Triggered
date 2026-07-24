@@ -992,37 +992,16 @@ Platform.Load("core","1");
 
 function stackEventSchemaFields() {
   return [
-    { name: "greeting", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "id", dataType: "Text", maxLength: "50", isNullable: false },
-    { name: "email", dataType: "EmailAddress", maxLength: "254", isNullable: false },
-    { name: "sfCampaignId", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "sfCampaignMemberId", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "sfQuickSendId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "ContactId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "Email", dataType: "EmailAddress", maxLength: "254", isNullable: true },
+    { name: "CampaignId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "AccountId", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "Account_Owner_Name", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "Account_Owner_Email", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "firstName", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "lastName", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "sfUserId", dataType: "Text", maxLength: "50", isNullable: false },
-    { name: "journeyID", dataType: "Text", maxLength: "50", isNullable: false },
-    { name: "sfOrgId", dataType: "Text", maxLength: "50", isNullable: false },
-    { name: "smsValue", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "mobilePhone", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "EntryObjectId", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "DateAdded", dataType: "Date", isNullable: true },
-    { name: "Role", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "OwnerId", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "Specialty", dataType: "Text", maxLength: "100", isNullable: true },
-    { name: "AccountName", dataType: "Text", maxLength: "255", isNullable: true },
+    { name: "Account_Owner_Email", dataType: "Text", maxLength: "254", isNullable: true },
+    { name: "MemberId", dataType: "Text", maxLength: "50", isNullable: true },
+    { name: "Status", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "State", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "Designation", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "senderPhone", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "senderTitle", dataType: "Text", maxLength: "255", isNullable: true },
-    { name: "senderLicense", dataType: "Text", maxLength: "255", isNullable: true },
-    { name: "senderMobile", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "Salutation", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "AppointmentLink", dataType: "Text", maxLength: "4000", isNullable: true },
-    { name: "VAWP", dataType: "Text", maxLength: "4000", isNullable: true },
-    { name: "EmailName", dataType: "Text", maxLength: "255", isNullable: true },
+    { name: "AccountOwnerId", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "type", dataType: "Text", maxLength: "50", isNullable: true, defaultValue: "SST" }
   ];
 }
@@ -1067,106 +1046,260 @@ function stackParseJsonSafe(text) {
   }
 }
 
+function stackMapSchemaFieldToSoap(fieldDef) {
+  var name = fieldDef.name;
+  var fieldType = "Text";
+  if (fieldDef.dataType === "EmailAddress") {
+   fieldType = "EmailAddress";
+  } else if (fieldDef.dataType === "Date") {
+   fieldType = "Date";
+  }
+  var soapField = {
+   Name: name,
+   FieldType: fieldType,
+   IsNillable: true,
+   IsRequired: false
+  };
+  if (fieldDef.maxLength) {
+   soapField.MaxLength = parseInt(String(fieldDef.maxLength), 10);
+  }
+  if (fieldDef.defaultValue !== undefined && fieldDef.defaultValue !== null && String(fieldDef.defaultValue) !== "") {
+   soapField.DefaultValue = String(fieldDef.defaultValue);
+  }
+  if (name === "MemberId") {
+   soapField.IsPrimaryKey = true;
+   soapField.IsRequired = true;
+   soapField.IsNillable = false;
+  } else if (name === "ContactId") {
+   soapField.IsRequired = true;
+   soapField.IsNillable = false;
+  }
+  return soapField;
+}
+
+
+function stackBuildSoapDeFields() {
+  var schema = stackEventSchemaFields();
+  var fields = [];
+  var uniqueField = null;
+  var i;
+  for (i = 0; i < schema.length; i++) {
+   var soapField = stackMapSchemaFieldToSoap(schema[i]);
+   if (schema[i].name === "MemberId") {
+    uniqueField = soapField;
+   } else {
+    fields.push(soapField);
+   }
+  }
+  if (uniqueField) {
+   fields.unshift(uniqueField);
+  }
+  return fields;
+}
+
+
+function stackResolveDeCategoryId(prox) {
+ var categoryId = 0;
+ try {
+  var rows = Platform.Function.LookupRows(
+   "bd_journey_analytics",
+   "journeyType",
+   "Journey + Automation"
+  );
+  if (rows && rows.length > 0) {
+   var ri;
+   for (ri = 0; ri < rows.length; ri++) {
+    var deKey = rows[ri].deId;
+    if (!deKey) {
+     continue;
+    }
+    deKey = String(deKey);
+    if (deKey.toUpperCase() === "N/A") {
+     continue;
+    }
+    var rde = prox.retrieve(
+     "DataExtension",
+     ["CategoryID"],
+     {
+      Property: "CustomerKey",
+      SimpleOperator: "equals",
+      Value: deKey
+     }
+    );
+    if (
+     rde &&
+     rde.Results &&
+     rde.Results.length > 0 &&
+     rde.Results[0].CategoryID !== null &&
+     rde.Results[0].CategoryID !== undefined
+    ) {
+     categoryId = parseInt(String(rde.Results[0].CategoryID), 10);
+     if (!isNaN(categoryId) && categoryId > 0) {
+      return categoryId;
+     }
+    }
+   }
+  }
+ } catch (lookupEx) {}
+
+ try {
+  var folders = prox.retrieve(
+   "DataFolder",
+   ["ID", "Name", "ContentType"],
+   {
+    Property: "ContentType",
+    SimpleOperator: "equals",
+    Value: "dataextension"
+   }
+  );
+  if (folders && folders.Results && folders.Results.length > 0) {
+   var fi;
+   for (fi = 0; fi < folders.Results.length; fi++) {
+    var fname = String(folders.Results[fi].Name || "");
+    if (fname === "Data Extensions") {
+     categoryId = parseInt(String(folders.Results[fi].ID), 10);
+     if (!isNaN(categoryId) && categoryId > 0) {
+      return categoryId;
+     }
+    }
+   }
+   categoryId = parseInt(String(folders.Results[0].ID), 10);
+   if (!isNaN(categoryId) && categoryId > 0) {
+    return categoryId;
+   }
+  }
+ } catch (folderEx) {}
+
+ return 0;
+}
+
+
+function stackCreateEntryDeViaSoap(prox, customerKey, deName) {
+  var ck = String(customerKey || "");
+  var name = String(deName || ck || "Entry DE");
+  if (!ck) {
+   return { ok: false, message: "Entry DE CustomerKey is required." };
+  }
+  var categoryId = stackResolveDeCategoryId(prox);
+  var deConfig = {
+   Name: name,
+   CustomerKey: ck,
+   Description: "Stack entry DE created via Journey Maker",
+   Fields: stackBuildSoapDeFields(),
+   IsSendable: true,
+   IsTestable: true,
+   SendableDataExtensionField: {
+    Name: "ContactId",
+    FieldType: "Text"
+   },
+   SendableSubscriberField: {
+    Name: "Subscriber Key"
+   }
+  };
+  if (categoryId > 0) {
+   deConfig.CategoryID = categoryId;
+  }
+  var createResp = prox.createItem("DataExtension", deConfig);
+  var status =
+   createResp && createResp.Status ? String(createResp.Status) : "UNKNOWN";
+  var msg =
+   createResp &&
+   createResp.Results &&
+   createResp.Results.length > 0 &&
+   createResp.Results[0].StatusMessage
+    ? String(createResp.Results[0].StatusMessage)
+    : "No status message returned.";
+  if (status !== "OK") {
+   return {
+    ok: false,
+    message: "Entry DE SOAP create failed. " + msg
+   };
+  }
+  var objectId = "";
+  if (createResp && createResp.Results && createResp.Results.length > 0) {
+   var row = createResp.Results[0];
+   objectId = row.ObjectID
+    ? String(row.ObjectID)
+    : row.NewObjectID
+    ? String(row.NewObjectID)
+    : row.NewID
+    ? String(row.NewID)
+    : "";
+  }
+  if (!objectId) {
+   var resolved = stackResolveExistingDe(prox, ck, name);
+   if (resolved && resolved.objectId) {
+    objectId = resolved.objectId;
+   }
+  }
+  if (!objectId) {
+   return {
+    ok: false,
+    message:
+     "Entry DE created but ObjectID was not returned. CustomerKey=" + ck + "."
+   };
+  }
+  var verified = stackRetrieveDeByFilter(prox, {
+   Property: "ObjectID",
+   SimpleOperator: "equals",
+   Value: objectId
+  });
+  if (!verified || !verified.customerKey) {
+   verified = stackResolveExistingDe(prox, ck, name);
+  }
+  if (!verified || !verified.customerKey) {
+   return {
+    ok: false,
+    message:
+     "Entry DE created but CustomerKey could not be verified. ObjectID=" +
+     objectId +
+     "."
+   };
+  }
+  var keyNote =
+   verified.customerKey !== ck
+    ? " Actual CustomerKey=" +
+      verified.customerKey +
+      " (requested " +
+      ck +
+      ")."
+    : "";
+  return {
+   ok: true,
+   objectId: verified.objectId || objectId,
+   customerKey: verified.customerKey,
+   name: verified.name || name,
+   message: keyNote + " MemberId is primary key; ContactId is sendable contact key."
+  };
+}
+
+
 function stackEnsureEntryDe(prox, token, subdomain, customerKey, deName) {
   var name = String(deName || customerKey || "Entry DE");
   var existing = stackResolveExistingDe(prox, customerKey, name);
   if (existing) {
-    var repairKey = existing.customerKey || String(customerKey || "");
-    return {
-      ok: true,
-      skipped: true,
-      objectId: existing.objectId,
-      customerKey: repairKey,
-      name: existing.name || name,
-      message: ""
-    };
-  }
-
-  var tempEventKey =
-    "eventDef" + String(stackRandomGuid()).replace(/-/g, "").substring(0, 22);
-  var createUrl =
-    "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions";
-  var createPayload = {
-    name: name,
-    description: "",
-    type: "APIEvent",
-    mode: "Production",
-    eventDefinitionKey: tempEventKey,
-    isVisibleInPicker: false,
-    schema: {
-      sendableCustomObjectField: "id",
-      sendableSubscriberField: "_SubscriberKey",
-      fields: stackEventSchemaFields()
-    }
-  };
-  var createResp = stackHttpJson(token, subdomain, "POST", createUrl, createPayload);
-  if (createResp.status != 200 && createResp.status != 201) {
-    return {
-      ok: false,
-      message:
-        "entry DE bootstrap HTTP " +
-        createResp.status +
-        " - " +
-        (createResp.body || "No response body.")
-    };
-  }
-
-  var createObj = stackParseJsonSafe(createResp.body);
-  var tempEventDefId =
-    createObj && createObj.id ? String(createObj.id) : "";
-  var dataExtensionId =
-    createObj && (createObj.dataExtensionId || createObj.dataExtensionID)
-      ? String(createObj.dataExtensionId || createObj.dataExtensionID)
-      : "";
-
-  if (!dataExtensionId && tempEventDefId) {
-    var getEvUrl = createUrl + "/" + encodeURIComponent(tempEventDefId);
-    var getEvResp = stackHttpJson(token, subdomain, "GET", getEvUrl, null);
-    if (getEvResp.status == 200) {
-      var getEvObj = stackParseJsonSafe(getEvResp.body);
-      if (getEvObj && (getEvObj.dataExtensionId || getEvObj.dataExtensionID)) {
-        dataExtensionId = String(getEvObj.dataExtensionId || getEvObj.dataExtensionID);
-      }
-    }
-  }
-
-  if (tempEventDefId) {
-    var deleteUrl = createUrl + "/" + encodeURIComponent(tempEventDefId);
-    stackHttpJson(token, subdomain, "DELETE", deleteUrl, null);
-  }
-
-  if (!dataExtensionId) {
-    return {
-      ok: false,
-      message: "entry DE bootstrap succeeded but dataExtensionId was not resolved."
-    };
-  }
-
-  var resolved = stackRetrieveDeByFilter(prox, {
-    Property: "ObjectID",
-    SimpleOperator: "equals",
-    Value: dataExtensionId
-  });
-  if (!resolved) {
-    resolved = stackResolveExistingDe(prox, customerKey, name);
-  }
-  if (!resolved) {
-    return {
-      ok: false,
-      message:
-        "entry DE bootstrap created dataExtensionId " +
-        dataExtensionId +
-        " but CustomerKey lookup failed."
-    };
-  }
-
-  return {
+   var repairKey = existing.customerKey || String(customerKey || "");
+   return {
     ok: true,
-    skipped: false,
-    objectId: dataExtensionId,
-    customerKey: resolved.customerKey || String(customerKey || ""),
-    name: resolved.name || name,
+    skipped: true,
+    objectId: existing.objectId,
+    customerKey: repairKey,
+    name: existing.name || name,
     message: ""
+   };
+  }
+
+  var created = stackCreateEntryDeViaSoap(prox, customerKey, name);
+  if (!created.ok) {
+   return created;
+  }
+  return {
+   ok: true,
+   skipped: false,
+   objectId: created.objectId,
+   customerKey: created.customerKey,
+   name: created.name,
+   message: created.message || ""
   };
 }
 
@@ -1379,7 +1512,7 @@ function postCreateDeAudienceEvent(token, subdomain, prox, opts) {
       AutomationId: automationId,
       DataExtensionId: dataExtensionId,
       EventDefinitionKey: eventKey,
-      useHighWatermark: false
+      useHighWatermark: true
     },
     configurationArguments: {},
     metaData: {
@@ -1458,11 +1591,11 @@ function postCreateDeAudienceEvent(token, subdomain, prox, opts) {
   Platform.Variable.SetValue("@deAudienceTriggerJson", Platform.Function.Stringify(trigObj));
   Platform.Variable.SetValue(
     "@defaultEmailExpr",
-    "{{Event." + eventKey + '."email"}}'
+    "{{Event." + eventKey + '."Email"}}'
   );
   Platform.Variable.SetValue(
     "@defaultEmailEscaped",
-    ("{{Event." + eventKey + '."email"}}').replace(/"/g, '\\"')
+    ("{{Event." + eventKey + '."Email"}}').replace(/"/g, '\\"')
   );
   return {
     ok: true,
@@ -1481,6 +1614,7 @@ function postEscapeSql(value) {
 
 function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environment) {
   var camp = postEscapeSql(campaignId);
+  var userFilter = postEscapeSql(sfUserId);
   var env = String(environment || "").toLowerCase();
   var cmTable = "CampaignMember_Salesforce_1";
   var contactTable = "Contact_Salesforce";
@@ -1494,48 +1628,29 @@ function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environme
   }
   var emailExpr =
     "COALESCE(NULLIF(RTRIM(ISNULL(cm.email, '')), ''), NULLIF(RTRIM(ISNULL(con.Email, '')), ''))";
-  return (
+  var sql =
     "SELECT\n" +
-    "  '' AS greeting,\n" +
-    "  cm.ContactId AS id,\n" +
-    "  " + emailExpr + " AS email,\n" +
-    "  cm.id AS sfCampaignMemberId,\n" +
-    "  cm.CampaignId AS sfCampaignId,\n" +
-    "  '' AS sfQuickSendId,\n" +
+    "  cm.id AS MemberId,\n" +
+    "  cm.ContactId AS ContactId,\n" +
+    "  " + emailExpr + " AS Email,\n" +
+    "  cm.CampaignId AS CampaignId,\n" +
+    "  con.AccountId AS AccountId,\n" +
     "  u.Name AS Account_Owner_Name,\n" +
     "  u.Email AS Account_Owner_Email,\n" +
-    "  con.firstName,\n" +
-    "  con.lastName,\n" +
-    "  u.id AS sfUserId,\n" +
-    "  '' AS journeyID,\n" +
-    "  '' AS sfOrgId,\n" +
-    "  GETDATE() AS DateAdded,\n" +
-    "  '' AS smsValue,\n" +
-    "  con.MobilePhone AS mobilePhone,\n" +
-    "  '' AS EntryObjectId,\n" +
-    "  '' AS Role,\n" +
-    "  cm.Account_Owner__c AS OwnerId,\n" +
-    "  con.AccountName__c AS AccountName,\n" +
+    "  cm.Status AS Status,\n" +
     "  con.MailingState AS State,\n" +
-    "  con.Specialty__c AS Specialty,\n" +
-    "  con.Designation__c AS Designation,\n" +
-    "  u.Phone AS senderPhone,\n" +
-    "  u.Title AS senderTitle,\n" +
-    "  u.Sales_License_Number__c AS senderLicense,\n" +
-    "  '' AS senderMobile,\n" +
-    "  con.Salutation AS Salutation,\n" +
-    "  u.Appointment_Link__c AS AppointmentLink,\n" +
-    "  '' AS VAWP,\n" +
-    "  cm.Campaign_Name__c AS EmailName,\n" +
+    "  a.OwnerId AS AccountOwnerId,\n" +
     "  'SST' AS type\n" +
     "FROM " + cmTable + " cm\n" +
     "LEFT JOIN " + contactTable + " con ON cm.ContactId = con.id\n" +
     "LEFT JOIN " + accountTable + " a ON con.AccountId = a.id\n" +
     "LEFT JOIN " + userTable + " u ON u.id = a.OwnerId\n" +
     "WHERE cm.CampaignId = '" + camp + "'\n" +
-    "  AND cm.ContactId IS NOT NULL\n" +
-    "  AND " + emailExpr + " <> ''"
-  );
+    "  AND cm.ContactId IS NOT NULL";
+  if (userFilter) {
+    sql += "\n  AND u.id = '" + userFilter + "'";
+  }
+  return sql;
 }
 
 function postStripTimezoneFromIso(s) {
@@ -2408,7 +2523,7 @@ function buildCmUpdateActivitySbU(opts) {
   var ek = opts.eventKey;
   var campId = opts.campaignId;
   var campLabel = opts.campaignLabel || campId;
-  var mergeContactId = '{{Event."' + ek + '"."id"}}';
+  var mergeContactId = '{{Event."' + ek + '"."ContactId"}}';
   var cmOutcome = {
     key: randomGuidSbU(),
     arguments: {},
@@ -2419,7 +2534,7 @@ function buildCmUpdateActivitySbU(opts) {
   }
   return {
     id: randomGuidSbU(),
-    key: "SALESCLOUDACTIVITY-2",
+    key: "SALESCLOUDACTIVITY-1",
     name: "Update Campaign Member Activity",
     description: "",
     type: "SALESCLOUDACTIVITY",
@@ -2442,7 +2557,7 @@ function buildCmUpdateActivitySbU(opts) {
                     {
                       FieldName: "ContactId",
                       FieldValue: mergeContactId,
-                      FieldValueLabel: "id",
+                      FieldValueLabel: "ContactId",
                       FieldType: "reference",
                       ReferenceObjectNames: ["CONTACT"],
                       AdditionalInfo: {
@@ -2641,8 +2756,8 @@ if (
      '","contactId":"{{Contact.Id}}","contactKey":"{{Contact.Key}}","emailAddress":"{{InteractionDefaults.Email}}","sourceCustomObjectId":"{{Contact.AddressInfo.Email.SourceCustomObjectId}}","sourceCustomObjectKey":"{{Contact.AddressInfo.Email.SourceCustomObjectKey}}","fieldType":"{{Contact.AddressInfo.Email.FieldType}}","eventData":"{{Event}}","obfuscationProperties":"{{InteractionDefaults.Email.ObfuscationProperties}}","customObjectKey":"","definitionInstanceId":"{{Context.DefinitionInstanceId}}"}';
    var emailNameEscaped = jsonEscapeSbU(emailName || "PreEventEmail1");
    var tsDesc = jsonEscapeSbU(emailName || "Journey Maker email");
-   var cmActivityKey = "SALESCLOUDACTIVITY-2";
-   var taskActivityKey = "XTASK-1";
+   var cmActivityKey = "SALESCLOUDACTIVITY-1";
+   var taskActivityKey = "SALESCLOUDACTIVITY-8";
    var emailActivity =
      '{"type":"EMAILV2","key":"EMAILV2-1","name":"' +
      emailNameEscaped +
@@ -2678,8 +2793,8 @@ if (
    if (addTaskActivity == "1") {
    var taskSubject = "Email Sent: " + (emailName || "Email");
    var taskDescription = "Email name: " + (emailName || "Email");
-   var taskEvWho = '{{Event."' + eventKey + '"."id"}}';
-   var taskEvOwn = '{{Event."' + eventKey + '"."sfUserId"}}';
+   var taskEvWho = '{{Event."' + eventKey + '"."ContactId"}}';
+   var taskEvOwn = '{{Event."' + eventKey + '"."AccountOwnerId"}}';
    var taskActivityObj = {
      id: randomGuidSbU(),
      type: "SALESCLOUDACTIVITY",
@@ -2717,7 +2832,7 @@ if (
                  FieldName: "WhoId",
                  FieldLabel: "Name ID",
                  FieldValue: taskEvWho,
-                 FieldValueLabel: "id",
+                 FieldValueLabel: "ContactId",
                  Required: "false",
                  FieldType: "reference",
                  MappingType: "Constant",
@@ -2764,7 +2879,7 @@ if (
                  FieldName: "OwnerId",
                  FieldLabel: "Assigned To ID",
                  FieldValue: taskEvOwn,
-                 FieldValueLabel: "sfUserId",
+                 FieldValueLabel: "AccountOwnerId",
                  Required: "false",
                  FieldType: "reference",
                  MappingType: "Constant",
