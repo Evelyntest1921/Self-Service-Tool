@@ -854,9 +854,7 @@ IF @authOk == "true" AND NOT Empty(@journeyEmailId) AND @createEmailOnly != "1" 
  SET @defaultEmailEscaped = Replace(@defaultEmailExpr,'"','\"')
  SET @triggerConfig = Concat('{"applicationExtensionKey":"SalesforceObjectTriggerV2","version":"3.0","objectAPIName":"CampaignMember","salesforceTriggerCriteria":"Created","contactKey":',@contactKeyObj,',"eventDataConfig":',@eventDataConfigObj,',"eventDataSummary":"CampaignMember:Id; CampaignMember:CreatedDate; CampaignMember:Account_Owner__c; CampaignMember:Common:Id; CampaignMember:Common:Email; CampaignMember:Common:HasOptedOutOfEmail; CampaignMember:Common:FirstName; CampaignMember:Common:Name; CampaignMember:Common:LastName; CampaignMember:Common:Title; CampaignMember:Common:Salutation; CampaignMember:Campaign:Name; CampaignMember:Campaign:Id; CampaignMember:Account:Id; CampaignMember:Account:Name; CampaignMember:Account:OwnerId; CampaignMember:Account:Billing_State__c","primaryObjectFilterCriteria":',@filterCriteria,',"primaryObjectFilterSummary":"CampaignMember:CampaignId EQUALS ',@campaignNameForJson,' (',@campaignId,')","relatedObjectFilterCriteria":',@relatedFilter,',"relatedObjectFilterSummary":"Common:Contacts and Leads:Id WASSET","additionalObjectFilterCriteria":"","passThroughArgument":',@passThroughArgObj,',"contactPersonType":"CampaignMember","evaluationCriteriaSummary":"Created","whoToInject":"Contact ID/Lead ID (Contacts and Leads)"}')
  SET @triggerMeta = Concat('{"eventDefinitionId":"',@eventDefId,'","eventDefinitionKey":"',@eventKey,'","chainType":"None","configurationRequired":false,"iconUrl":"/events/js/salesforce-event/events/NetworkMember/images/SF-Event-Icon.svg","title":"","entrySourceGroupConfigUrl":"jb:///data/entry/salesforce-event/entrysourcegroupconfig.json"}')
- IF @addSTOActivity == "1" THEN
-   SET @waitActivity = '{"type":"WAIT","key":"WAIT-1","name":"1 min","outcomes":[{"next":"STOWAIT-1","metaData":{"invalid":false}}],"metaData":{"isConfigured":true,"isExtended":false,"waitType":"duration","guidanceCardKey":null,"uiType":"WAITBYDURATION"},"configurationArguments":{"waitDuration":1,"waitUnit":"MINUTES","timeZone":"America/New_York","specifiedTime":"00:00"}}'
- ELSEIF @addTaskActivity == "1" THEN
+ IF @addTaskActivity == "1" THEN
    SET @waitActivity = '{"type":"WAIT","key":"WAIT-1","name":"1 min","outcomes":[{"next":"XTASK-1","metaData":{"invalid":false}}],"metaData":{"isConfigured":true,"isExtended":false,"waitType":"duration","guidanceCardKey":null,"uiType":"WAITBYDURATION"},"configurationArguments":{"waitDuration":1,"waitUnit":"MINUTES","timeZone":"America/New_York","specifiedTime":"00:00"}}'
  ELSE
    SET @waitActivity = '{"type":"WAIT","key":"WAIT-1","name":"1 min","outcomes":[{"next":null,"metaData":{"invalid":false}}],"metaData":{"isConfigured":true,"isExtended":false,"waitType":"duration","guidanceCardKey":null,"uiType":"WAITBYDURATION"},"configurationArguments":{"waitDuration":1,"waitUnit":"MINUTES","timeZone":"America/New_York","specifiedTime":"00:00"}}'
@@ -1151,27 +1149,22 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
    }
    var stoActivity = "";
    if (addSTOActivity == "1") {
-    var stoNext = addTaskActivity == "1" ? taskActivityKey : null;
     var stoOutcomeObj = {
       key: randomGuidCj(),
+      next: "EMAILV2-1",
       arguments: {},
       metaData: { invalid: false }
     };
-    if (stoNext) {
-     stoOutcomeObj.next = stoNext;
-    }
     var stoParams = {
       slidingWindowHours: 4,
       enableRandomTime: false,
+      nextActivity: {
+        key: "EMAILV2-1",
+        type: "EMAILV2"
+      },
       version: 2,
       definitionType: "Multistep"
     };
-    if (stoNext) {
-     stoParams.nextActivity = {
-      key: stoNext,
-      type: "SALESCLOUDACTIVITY"
-     };
-    }
     var stoActivityObj = {
   "id": randomGuidCj(),
   "key": "STOWAIT-1",
@@ -1199,7 +1192,7 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
     "params": stoParams,
     "overrideDateTime": "0001-01-01T06:00:00Z",
     "disableStoRestValidation": false,
-    "disableFollowedByEmailValidation": true,
+    "disableFollowedByEmailValidation": false,
     "disableFollowedByPushNValidation": false,
     "waitForEventKey": ""
   },
@@ -1316,12 +1309,7 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
 };
     stoActivity = Platform.Function.Stringify(stoActivityObj);
    }
-   var waitNext = null;
-   if (addSTOActivity == "1") {
-    waitNext = "STOWAIT-1";
-   } else if (addTaskActivity == "1") {
-    waitNext = taskActivityKey;
-   }
+   var waitNext = addTaskActivity == "1" ? taskActivityKey : null;
    var waitActivityJson =
      '{"type":"WAIT","key":"WAIT-1","name":"1 min","outcomes":[{"next":' +
      (waitNext ? '"' + waitNext + '"' : "null") +
@@ -1330,7 +1318,7 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
      '","waitForEventId":"","executionMode":"{{Context.ExecutionMode}}","startActivityKey":"{{Context.StartActivityKey}}","waitQueueId":"{{Context.WaitQueueId}}"},"metaData":{"isConfigured":true,"isExtended":false,"waitType":"duration","guidanceCardKey":"","uiType":"WAITBYDURATION"},"configurationArguments":{"waitDuration":1,"waitUnit":"MINUTES","specifiedTime":"00:00","timeZone":"America/New_York","description":"","waitEndDateAttributeExpression":"","specificDate":"","waitForEventKey":""}}';
    var activitiesJson = emailActivity1 + "," + waitActivityJson;
    if (addSTOActivity == "1") {
-    activitiesJson = activitiesJson + "," + stoActivity;
+    activitiesJson = stoActivity + "," + activitiesJson;
    }
    if (addTaskActivity == "1") {
     activitiesJson = activitiesJson + "," + taskActivity;
@@ -2215,6 +2203,20 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
        </div>
        <div class="journey-preview">
          <div class="journey-flow" id="journeyPreviewFlow">
+           <div class="step journey-preview-step journey-preview-step--sto%%[ IF @addSTOActivity == "1" THEN ]%% is-visible%%[ ENDIF ]%%">
+             <div class="icon-wrapper">
+               <div class="diamond">
+                 <div class="icon-inner">
+                   <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="#fff" stroke-width="1.5">
+                     <circle cx="12" cy="12" r="4"/>
+                     <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+                     <path d="M15 9l-3 3-1.5-1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                   </svg>
+                 </div>
+               </div>
+             </div>
+             <span class="step-label">Einstein STO - 4 Hours</span>
+           </div>
            <div class="step journey-preview-step">
              <div class="icon-wrapper">
                <div class="rounded-square bg-light-blue">
@@ -2236,20 +2238,6 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
                </div>
              </div>
              <span class="step-label">Wait 1 min</span>
-           </div>
-           <div class="step journey-preview-step journey-preview-step--sto%%[ IF @addSTOActivity == "1" THEN ]%% is-visible%%[ ENDIF ]%%">
-             <div class="icon-wrapper">
-               <div class="diamond">
-                 <div class="icon-inner">
-                   <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="#fff" stroke-width="1.5">
-                     <circle cx="12" cy="12" r="4"/>
-                     <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
-                     <path d="M15 9l-3 3-1.5-1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                   </svg>
-                 </div>
-               </div>
-             </div>
-             <span class="step-label">Einstein STO - 4 Hours</span>
            </div>
            <div class="step journey-preview-step journey-preview-step--task%%[ IF @addTaskActivity == "1" THEN ]%% is-visible%%[ ENDIF ]%%">
              <div class="icon-wrapper">
