@@ -854,7 +854,9 @@ IF @authOk == "true" AND NOT Empty(@journeyEmailId) AND @createEmailOnly != "1" 
  SET @defaultEmailEscaped = Replace(@defaultEmailExpr,'"','\"')
  SET @triggerConfig = Concat('{"applicationExtensionKey":"SalesforceObjectTriggerV2","version":"3.0","objectAPIName":"CampaignMember","salesforceTriggerCriteria":"Created","contactKey":',@contactKeyObj,',"eventDataConfig":',@eventDataConfigObj,',"eventDataSummary":"CampaignMember:Id; CampaignMember:CreatedDate; CampaignMember:Account_Owner__c; CampaignMember:Common:Id; CampaignMember:Common:Email; CampaignMember:Common:HasOptedOutOfEmail; CampaignMember:Common:FirstName; CampaignMember:Common:Name; CampaignMember:Common:LastName; CampaignMember:Common:Title; CampaignMember:Common:Salutation; CampaignMember:Campaign:Name; CampaignMember:Campaign:Id; CampaignMember:Account:Id; CampaignMember:Account:Name; CampaignMember:Account:OwnerId; CampaignMember:Account:Billing_State__c","primaryObjectFilterCriteria":',@filterCriteria,',"primaryObjectFilterSummary":"CampaignMember:CampaignId EQUALS ',@campaignNameForJson,' (',@campaignId,')","relatedObjectFilterCriteria":',@relatedFilter,',"relatedObjectFilterSummary":"Common:Contacts and Leads:Id WASSET","additionalObjectFilterCriteria":"","passThroughArgument":',@passThroughArgObj,',"contactPersonType":"CampaignMember","evaluationCriteriaSummary":"Created","whoToInject":"Contact ID/Lead ID (Contacts and Leads)"}')
  SET @triggerMeta = Concat('{"eventDefinitionId":"',@eventDefId,'","eventDefinitionKey":"',@eventKey,'","chainType":"None","configurationRequired":false,"iconUrl":"/events/js/salesforce-event/events/NetworkMember/images/SF-Event-Icon.svg","title":"","entrySourceGroupConfigUrl":"jb:///data/entry/salesforce-event/entrysourcegroupconfig.json"}')
- IF @addTaskActivity == "1" THEN
+ IF @addSTOActivity == "1" THEN
+   SET @waitActivity = '{"type":"WAIT","key":"WAIT-1","name":"1 min","outcomes":[{"next":"STOWAIT-1","metaData":{"invalid":false}}],"metaData":{"isConfigured":true,"isExtended":false,"waitType":"duration","guidanceCardKey":null,"uiType":"WAITBYDURATION"},"configurationArguments":{"waitDuration":1,"waitUnit":"MINUTES","timeZone":"America/New_York","specifiedTime":"00:00"}}'
+ ELSEIF @addTaskActivity == "1" THEN
    SET @waitActivity = '{"type":"WAIT","key":"WAIT-1","name":"1 min","outcomes":[{"next":"XTASK-1","metaData":{"invalid":false}}],"metaData":{"isConfigured":true,"isExtended":false,"waitType":"duration","guidanceCardKey":null,"uiType":"WAITBYDURATION"},"configurationArguments":{"waitDuration":1,"waitUnit":"MINUTES","timeZone":"America/New_York","specifiedTime":"00:00"}}'
  ELSE
    SET @waitActivity = '{"type":"WAIT","key":"WAIT-1","name":"1 min","outcomes":[{"next":null,"metaData":{"invalid":false}}],"metaData":{"isConfigured":true,"isExtended":false,"waitType":"duration","guidanceCardKey":null,"uiType":"WAITBYDURATION"},"configurationArguments":{"waitDuration":1,"waitUnit":"MINUTES","timeZone":"America/New_York","specifiedTime":"00:00"}}'
@@ -1017,17 +1019,8 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
    var sendClassificationIdEsc = jsonEscapeCj(sendClassificationIdForJourney);
    var deliveryProfileIdEsc = jsonEscapeCj(deliveryProfileId);
    var senderProfileIdEsc = jsonEscapeCj(senderProfileIdForJourney);
-   var emailConfigArgs = addSTOActivity == "1"
-     ? '"isModified":false,"isSimulation":false,"fuelAgentRequested":true,"googleAnalyticsCampaignName":"","useLLTS":false,"isReconcilable":false,'
-     : '"isModified":true,"googleAnalyticsCampaignName":"",';
    var taskActivityKey = "XTASK-1";
-   var emailActivity =
-     '{"type":"EMAILV2","key":"EMAILV2-1","name":"' +
-     emailNameEscaped +
-     '","outcomes":[{"next":"WAIT-1","metaData":{"invalid":false}}],"arguments":' +
-     emailArgs +
-     ',"metaData":{"isConfigured":true,"sections":{}},"configurationArguments":{"applicationExtensionKey":"jb-email-activity",' +
-     emailConfigArgs +
+   var triggeredSendJson =
      '"triggeredSend":{"autoAddSubscribers":true,"autoUpdateSubscribers":true,"bccEmail":"","ccEmail":"","created":{"name":"","date":""},"domainExclusions":[],"dynamicEmailSubject":"' +
      emailSubjectEscaped +
      '","emailId":' +
@@ -1040,7 +1033,16 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
      deliveryProfileIdEsc +
      '","senderProfileId":"' +
      senderProfileIdEsc +
-     '","isTrackingClicks":true,"publicationListId":1132}}}';
+     '","isTrackingClicks":true,"publicationListId":1132,"suppressTracking":false,"keyword":"","throttleLimit":0,"campaigns":[],"suppressionLists":[]}';
+   var emailActivity1 =
+     '{"type":"EMAILV2","key":"EMAILV2-1","name":"' +
+     emailNameEscaped +
+     '","outcomes":[{"next":"WAIT-1","metaData":{"invalid":false}}],"arguments":' +
+     emailArgs +
+     ',"metaData":{"isConfigured":true,"sections":{}},"configurationArguments":{"applicationExtensionKey":"jb-email-activity","isModified":true,"googleAnalyticsCampaignName":"",' +
+     triggeredSendJson +
+     '}}';
+   var emailActivity2 = "";
    var taskActivity = "";
    if (addTaskActivity == "1") {
      var taskSubject = "Email Sent: " + (emailName || "Email");
@@ -1138,7 +1140,8 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
          requestObjectId: "{{Context.RequestObjectId}}"
        },
        configurationArguments: {
-         applicationExtensionKey: "Salesforce_Activity_Task"
+         applicationExtensionKey: "Salesforce_Activity_Task",
+         applicationExtensionId: "00000000-0000-0000-0000-000000000000"
        },
        metaData: {
          isConfigured: true,
@@ -1149,29 +1152,66 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
    }
    var stoActivity = "";
    if (addSTOActivity == "1") {
+    var email2Next = addTaskActivity == "1" ? taskActivityKey : null;
+    var email2Outcome = email2Next
+     ? '{"next":"' + email2Next + '","metaData":{"invalid":false}}'
+     : '{"arguments":{},"metaData":{"invalid":false}}';
+    emailActivity2 =
+     '{"type":"EMAILV2","key":"EMAILV2-2","name":"' +
+     emailNameEscaped +
+     '","outcomes":[' +
+     email2Outcome +
+     '],"arguments":' +
+     emailArgs +
+     ',"metaData":{"isConfigured":true,"sections":{}},"configurationArguments":{"applicationExtensionKey":"jb-email-activity","isModified":false,"isSimulation":false,"fuelAgentRequested":true,"googleAnalyticsCampaignName":"","useLLTS":false,"isReconcilable":false,' +
+     triggeredSendJson +
+     '}}';
     var stoActivityObj = {
   "id": randomGuidCj(),
-  "key": "ASTOWAIT-1",
+  "key": "STOWAIT-1",
   "name": "Einstein STO - 4 Hours",
   "description": "",
   "type": "STOWAIT",
   "outcomes": [
     {
       "key": randomGuidCj(),
-      "next": "EMAILV2-1",
+      "next": "EMAILV2-2",
       "arguments": {},
       "metaData": {
         "invalid": false
       }
     }
   ],
-  "arguments": {},
+  "arguments": {
+    "contactKey": "{{Context.ContactKey}}",
+    "contactTagsIn": "{{Interaction.STOWAIT-1.ContactTagsOut}}",
+    "scheduledExpireTimeIn": "{{Interaction.STOWAIT-1.ScheduledExpireTimeOut}}",
+    "jbActivityId": "{{Activity.Id}}",
+    "jbJourneyId": "{{Context.OriginalDefinitionId}}",
+    "jbJourneyVersion": "{{Context.VersionNumber}}",
+    "waitDefinitionId": "00000000-0000-0000-0000-000000000000",
+    "waitForEventId": "",
+    "executionMode": "{{Context.ExecutionMode}}",
+    "startActivityKey": "{{Context.StartActivityKey}}",
+    "waitQueueId": "{{Context.WaitQueueId}}"
+  },
   "configurationArguments": {
+    "applicationExtensionKey": "F828061A-5F0E-46A9-975E-18C414192D17",
     "params": {
       "slidingWindowHours": 4,
-      "enableRandomTime": false
+      "enableRandomTime": false,
+      "nextActivity": {
+        "key": "EMAILV2-2",
+        "type": "EMAILV2"
+      },
+      "version": 2,
+      "definitionType": "Multistep"
     },
-    "applicationExtensionKey": "F828061A-5F0E-46A9-975E-18C414192D17"
+    "overrideDateTime": "0001-01-01T06:00:00Z",
+    "disableStoRestValidation": false,
+    "disableFollowedByEmailValidation": false,
+    "disableFollowedByPushNValidation": false,
+    "waitForEventKey": ""
   },
   "metaData": {
     "backgroundColor": "#032e61",
@@ -1286,19 +1326,23 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
 };
     stoActivity = Platform.Function.Stringify(stoActivityObj);
    }
-   var waitNext = addTaskActivity == "1" ? taskActivityKey : null;
+   var waitNext = null;
+   if (addSTOActivity == "1") {
+    waitNext = "STOWAIT-1";
+   } else if (addTaskActivity == "1") {
+    waitNext = taskActivityKey;
+   }
    var waitActivityJson =
      '{"type":"WAIT","key":"WAIT-1","name":"1 min","outcomes":[{"next":' +
      (waitNext ? '"' + waitNext + '"' : "null") +
-     ',"metaData":{"invalid":false}}],"metaData":{"isConfigured":true,"isExtended":false,"waitType":"duration","guidanceCardKey":null,"uiType":"WAITBYDURATION"},"configurationArguments":{"waitDuration":1,"waitUnit":"MINUTES","timeZone":"America/New_York","specifiedTime":"00:00"}}';
-   var activitiesJson = "";
+     ',"metaData":{"invalid":false}}],"arguments":{"waitEndDateAttributeDataBound":"","waitDefinitionId":"' +
+     randomGuidCj() +
+     '","waitForEventId":"","executionMode":"{{Context.ExecutionMode}}","startActivityKey":"{{Context.StartActivityKey}}","waitQueueId":"{{Context.WaitQueueId}}"},"metaData":{"isConfigured":true,"isExtended":false,"waitType":"duration","guidanceCardKey":"","uiType":"WAITBYDURATION"},"configurationArguments":{"waitDuration":1,"waitUnit":"MINUTES","specifiedTime":"00:00","timeZone":"America/New_York","description":"","waitEndDateAttributeExpression":"","specificDate":"","waitForEventKey":""}}';
+   var activitiesJson = emailActivity1 + "," + waitActivityJson;
    if (addSTOActivity == "1") {
-    activitiesJson = stoActivity + "," + emailActivity;
-   } else {
-    activitiesJson = emailActivity;
+    activitiesJson = activitiesJson + "," + stoActivity + "," + emailActivity2;
    }
-   activitiesJson = activitiesJson + "," + waitActivityJson;
-   if (addTaskActivity == "1") {
+   if (addTaskActivity == "1" && addSTOActivity != "1") {
     activitiesJson = activitiesJson + "," + taskActivity;
    }
    var journeyPayload = '{"name":"' + journeyNameEscaped + '","definitionType":"Multistep","channel":"","description":"","version":1,"workflowApiVersion":1.0,"entryMode":"OnceAndDone","key":"' + journeyKey + '","activities":[' + activitiesJson + '],"notifiers":[],"metaData":{"disableEndWait":true,"dataSource":"ContactsModel","highThroughputSending":{"email":false}},"defaults":{"email":["' + (defaultEmailEscaped || "") + '"],"properties":{"analyticsTracking":{"enabled":true,"analyticsType":"google","urlDomainsToTrack":[]}}},"goals":[],"exits":[],"triggers":[' + triggerWithOutcomes + ']}';
@@ -1848,6 +1892,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   flex-shrink: 0;
 }
 .journey-preview .step.journey-preview-step--sto,
+.journey-preview .step.journey-preview-step--sto-email,
 .journey-preview .step.journey-preview-step--task {
   min-width: 0;
   max-width: 0;
@@ -1858,6 +1903,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   transition: max-width 0.4s ease, min-width 0.4s ease, opacity 0.3s ease, transform 0.4s ease;
 }
 .journey-preview .step.journey-preview-step--sto.is-visible,
+.journey-preview .step.journey-preview-step--sto-email.is-visible,
 .journey-preview .step.journey-preview-step--task.is-visible {
   min-width: 120px;
   max-width: 120px;
@@ -1866,6 +1912,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   pointer-events: auto;
 }
 .journey-preview .step.journey-preview-step--sto:not(.is-visible)::after,
+.journey-preview .step.journey-preview-step--sto-email:not(.is-visible)::after,
 .journey-preview .step.journey-preview-step--task:not(.is-visible)::after {
   opacity: 0;
 }
@@ -2181,20 +2228,6 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
        </div>
        <div class="journey-preview">
          <div class="journey-flow" id="journeyPreviewFlow">
-           <div class="step journey-preview-step journey-preview-step--sto%%[ IF @addSTOActivity == "1" THEN ]%% is-visible%%[ ENDIF ]%%">
-             <div class="icon-wrapper">
-               <div class="diamond">
-                 <div class="icon-inner">
-                   <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="#fff" stroke-width="1.5">
-                     <circle cx="12" cy="12" r="4"/>
-                     <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
-                     <path d="M15 9l-3 3-1.5-1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                   </svg>
-                 </div>
-               </div>
-             </div>
-             <span class="step-label">Einstein STO - 4 Hours</span>
-           </div>
            <div class="step journey-preview-step">
              <div class="icon-wrapper">
                <div class="rounded-square bg-light-blue">
@@ -2216,6 +2249,31 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
                </div>
              </div>
              <span class="step-label">Wait 1 min</span>
+           </div>
+           <div class="step journey-preview-step journey-preview-step--sto%%[ IF @addSTOActivity == "1" THEN ]%% is-visible%%[ ENDIF ]%%">
+             <div class="icon-wrapper">
+               <div class="diamond">
+                 <div class="icon-inner">
+                   <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="#fff" stroke-width="1.5">
+                     <circle cx="12" cy="12" r="4"/>
+                     <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+                     <path d="M15 9l-3 3-1.5-1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                   </svg>
+                 </div>
+               </div>
+             </div>
+             <span class="step-label">Einstein STO - 4 Hours</span>
+           </div>
+           <div class="step journey-preview-step journey-preview-step--sto-email%%[ IF @addSTOActivity == "1" THEN ]%% is-visible%%[ ENDIF ]%%">
+             <div class="icon-wrapper">
+               <div class="rounded-square bg-light-blue">
+                 <svg viewBox="0 0 24 24" fill="none" stroke="#1a8fc4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                   <rect x="3" y="5" width="18" height="14" rx="2"/>
+                   <path d="M3 7l9 6 9-6"/>
+                 </svg>
+               </div>
+             </div>
+             <span class="step-label" id="journeyPreviewStoEmailLabel">%%=IIF(NOT Empty(@emailName), @emailName, "Send Email")=%% (STO)</span>
            </div>
            <div class="step journey-preview-step journey-preview-step--task%%[ IF @addTaskActivity == "1" THEN ]%% is-visible%%[ ENDIF ]%%">
              <div class="icon-wrapper">
@@ -2328,8 +2386,10 @@ Your journey and email are in Marketing Cloud. Open them below or return to the 
    var stoToggle = form.querySelector('input[name="addSTOActivity"]');
    var taskToggle = form.querySelector('input[name="addTaskActivity"]');
    var stoSteps = document.querySelectorAll('.journey-preview-step--sto');
+   var stoEmailSteps = document.querySelectorAll('.journey-preview-step--sto-email');
    var taskSteps = document.querySelectorAll('.journey-preview-step--task');
    var emailLabel = document.getElementById('journeyPreviewEmailLabel');
+   var stoEmailLabel = document.getElementById('journeyPreviewStoEmailLabel');
    var subjectInput = form.querySelector('input[name="emailSubjectLine"]');
    function setPreviewStepVisible(step, visible) {
     if (visible) {
@@ -2358,12 +2418,20 @@ Your journey and email are in Marketing Cloud. Open them below or return to the 
      for (si = 0; si < stoSteps.length; si++) {
       setPreviewStepVisible(stoSteps[si], !!(stoToggle && stoToggle.checked));
      }
+     for (si = 0; si < stoEmailSteps.length; si++) {
+      setPreviewStepVisible(stoEmailSteps[si], !!(stoToggle && stoToggle.checked));
+     }
      for (si = 0; si < taskSteps.length; si++) {
       setPreviewStepVisible(taskSteps[si], !!(taskToggle && taskToggle.checked));
      }
-     if (emailLabel) {
-      var previewName = (subjectInput && subjectInput.value.trim()) || emailLabel.textContent.trim() || 'Send Email';
-      emailLabel.textContent = formatPreviewEmailLabel(previewName);
+     if (emailLabel || stoEmailLabel) {
+      var previewName = (subjectInput && subjectInput.value.trim()) || (emailLabel && emailLabel.textContent.replace(/\s*\(STO\)$/, '').trim()) || 'Send Email';
+      if (emailLabel) {
+       emailLabel.textContent = formatPreviewEmailLabel(previewName);
+      }
+      if (stoEmailLabel) {
+       stoEmailLabel.textContent = formatPreviewEmailLabel(previewName) + ' (STO)';
+      }
      }
    }
    if (stoToggle) stoToggle.addEventListener('change', syncJourneyPreview);
