@@ -2362,8 +2362,8 @@ var journeyDescription = Platform.Variable.GetValue("@journeyDescription") || ""
 var bccEmail = Platform.Variable.GetValue("@bccEmail") || "";
 var senderProfileId = Platform.Variable.GetValue("@senderProfileId") || "";
 var sendClassificationId = Platform.Variable.GetValue("@sendClassificationId") || "";
-var addTaskActivity = Platform.Variable.GetValue("@addTaskActivity") || Variable.GetValue("addTaskActivity") || "0";
-var addSTOActivity = Platform.Variable.GetValue("@addSTOActivity") || Variable.GetValue("addSTOActivity") || "0";
+var addTaskActivity = String(Platform.Variable.GetValue("@addTaskActivity") || Variable.GetValue("addTaskActivity") || "0").replace(/^\s+|\s+$/g, "");
+var addSTOActivity = String(Platform.Variable.GetValue("@addSTOActivity") || Variable.GetValue("addSTOActivity") || "0").replace(/^\s+|\s+$/g, "");
 var journeyResult = "";
 function jsonEscapeSbU(s) {
   if (s === null || s === undefined) {
@@ -2532,12 +2532,10 @@ function buildCmUpdateActivitySbU(opts) {
   };
   if (opts.taskNext) {
     cmOutcome.next = opts.taskNext;
-  } else {
-    cmOutcome.next = null;
   }
   return {
     id: randomGuidSbU(),
-    key: "SALESCLOUDACTIVITY-1",
+    key: "SALESCLOUDACTIVITY-2",
     name: "Update Campaign Member Activity",
     description: "",
     type: "SALESCLOUDACTIVITY",
@@ -2758,10 +2756,12 @@ if (
      '","contactId":"{{Contact.Id}}","contactKey":"{{Contact.Key}}","emailAddress":"{{InteractionDefaults.Email}}","sourceCustomObjectId":"{{Contact.AddressInfo.Email.SourceCustomObjectId}}","sourceCustomObjectKey":"{{Contact.AddressInfo.Email.SourceCustomObjectKey}}","fieldType":"{{Contact.AddressInfo.Email.FieldType}}","eventData":"{{Event}}","obfuscationProperties":"{{InteractionDefaults.Email.ObfuscationProperties}}","customObjectKey":"","definitionInstanceId":"{{Context.DefinitionInstanceId}}"}';
    var emailNameEscaped = jsonEscapeSbU(emailName || "PreEventEmail1");
    var tsDesc = jsonEscapeSbU(emailName || "Journey Maker email");
+   var cmActivityKey = "SALESCLOUDACTIVITY-2";
+   var taskActivityKey = "XTASK-1";
    var emailActivity =
      '{"type":"EMAILV2","key":"EMAILV2-1","name":"' +
      emailNameEscaped +
-     '","outcomes":[{"next":"SALESCLOUDACTIVITY-1","metaData":{"invalid":false}}],"arguments":' +
+     '","outcomes":[{"next":"WAIT-1","metaData":{"invalid":false}}],"arguments":' +
      emailArgs +
      ',"metaData":{"isConfigured":true,"sections":{}},"configurationArguments":{"applicationExtensionKey":"jb-email-activity","isModified":false,"isSimulation":false,"fuelAgentRequested":true,"googleAnalyticsCampaignName":"","useLLTS":false,"isReconcilable":false,"triggeredSend":{"autoAddSubscribers":true,"autoUpdateSubscribers":true,"bccEmail":"' +
      bccEsc +
@@ -2784,9 +2784,11 @@ if (
      eventKey: eventKey,
      campaignId: campaignId,
      campaignLabel: campaignName,
-     taskNext: addTaskActivity == "1" ? "SALESCLOUDACTIVITY-8" : null
+     taskNext: addTaskActivity == "1" ? taskActivityKey : null
    });
    var cmActivity = Platform.Function.Stringify(cmObj);
+   var taskActivity = "";
+   if (addTaskActivity == "1") {
    var taskSubject = "Email Sent: " + (emailName || "Email");
    var taskDescription = "Email name: " + (emailName || "Email");
    var taskEvWho = '{{Event."' + eventKey + '"."ContactId"}}';
@@ -2794,7 +2796,7 @@ if (
    var taskActivityObj = {
      id: randomGuidSbU(),
      type: "SALESCLOUDACTIVITY",
-     key: "SALESCLOUDACTIVITY-8",
+     key: taskActivityKey,
      name: "Create Task Activity",
      description: "",
      outcomes: [
@@ -2904,7 +2906,10 @@ if (
        expressionBuilderPrefix: "Task"
      }
    };
-   var taskActivity = Platform.Function.Stringify(taskActivityObj);
+   taskActivity = Platform.Function.Stringify(taskActivityObj);
+   }
+   var stoActivity = "";
+   if (addSTOActivity == "1") {
    var stoActivityObj = {
   "id": randomGuidSbU(),
   "key": "STOWAIT-1",
@@ -3063,17 +3068,21 @@ if (
     }
   }
 };
-   var stoActivity = Platform.Function.Stringify(stoActivityObj);
-   var activitiesJson = "";
-   if (addSTOActivity == "1") {
-    activitiesJson = stoActivity;
+   stoActivity = Platform.Function.Stringify(stoActivityObj);
    }
-   activitiesJson = activitiesJson != ""
-    ? activitiesJson + "," + emailActivity
-    : emailActivity;
-   activitiesJson = activitiesJson + "," + cmActivity;
+   var waitNext = cmActivityKey;
+   var waitActivityJson =
+     '{"type":"WAIT","key":"WAIT-1","name":"1 min","outcomes":[{"next":"' +
+     waitNext +
+     '","metaData":{"invalid":false}}],"arguments":{"waitEndDateAttributeDataBound":"","waitDefinitionId":"' +
+     randomGuidSbU() +
+     '","waitForEventId":"","executionMode":"{{Context.ExecutionMode}}","startActivityKey":"{{Context.StartActivityKey}}","waitQueueId":"{{Context.WaitQueueId}}"},"metaData":{"isConfigured":true,"isExtended":false,"waitType":"duration","guidanceCardKey":"","uiType":"WAITBYDURATION"},"configurationArguments":{"waitDuration":1,"waitUnit":"MINUTES","specifiedTime":"00:00","timeZone":"America/New_York","description":"","waitEndDateAttributeExpression":"","specificDate":"","waitForEventKey":""}}';
+   var activitiesJson = emailActivity + "," + waitActivityJson + "," + cmActivity;
    if (addTaskActivity == "1") {
     activitiesJson = activitiesJson + "," + taskActivity;
+   }
+   if (addSTOActivity == "1") {
+    activitiesJson = stoActivity + "," + activitiesJson;
    }
    var journeyPayload =
      '{"name":"' +
@@ -3662,6 +3671,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   border: 1px solid #e5e7eb;
 }
 .journey-preview .bg-light-blue { background: #e0f4fd; }
+.journey-preview .bg-wait { background: #ede9fe; }
 .journey-preview .bg-teal { background: #e0f7f5; }
 .journey-preview .bg-blue { background: #e3f1fd; }
 .journey-preview .bg-green { background: #e6f9e6; }
@@ -3997,6 +4007,17 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
                </div>
              </div>
              <span class="step-label" id="journeyPreviewEmailLabel">%%=IIF(NOT Empty(@stackCampaignName), @stackCampaignName, IIF(NOT Empty(@emailName), @emailName, "Send Email"))=%%</span>
+           </div>
+           <div class="step journey-preview-step">
+             <div class="icon-wrapper">
+               <div class="rounded-square bg-wait">
+                 <svg viewBox="0 0 24 24" fill="none" stroke="#7c3aed" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                   <circle cx="12" cy="12" r="9"/>
+                   <path d="M12 7v5l3 3"/>
+                 </svg>
+               </div>
+             </div>
+             <span class="step-label">Wait 1 min</span>
            </div>
            <div class="step journey-preview-step">
              <div class="icon-wrapper">
