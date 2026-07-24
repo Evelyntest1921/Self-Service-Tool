@@ -1039,10 +1039,9 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
      emailNameEscaped +
      '","outcomes":[{"next":"WAIT-1","metaData":{"invalid":false}}],"arguments":' +
      emailArgs +
-     ',"metaData":{"isConfigured":true,"sections":{}},"configurationArguments":{"applicationExtensionKey":"jb-email-activity","isModified":true,"googleAnalyticsCampaignName":"",' +
+     ',"metaData":{"isConfigured":true,"sections":{}},"configurationArguments":{"applicationExtensionKey":"jb-email-activity","isModified":false,"isSimulation":false,"fuelAgentRequested":true,"googleAnalyticsCampaignName":"","useLLTS":false,"isReconcilable":false,' +
      triggeredSendJson +
      '}}';
-   var emailActivity2 = "";
    var taskActivity = "";
    if (addTaskActivity == "1") {
      var taskSubject = "Email Sent: " + (emailName || "Email");
@@ -1152,20 +1151,27 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
    }
    var stoActivity = "";
    if (addSTOActivity == "1") {
-    var email2Next = addTaskActivity == "1" ? taskActivityKey : null;
-    var email2Outcome = email2Next
-     ? '{"next":"' + email2Next + '","metaData":{"invalid":false}}'
-     : '{"arguments":{},"metaData":{"invalid":false}}';
-    emailActivity2 =
-     '{"type":"EMAILV2","key":"EMAILV2-2","name":"' +
-     emailNameEscaped +
-     '","outcomes":[' +
-     email2Outcome +
-     '],"arguments":' +
-     emailArgs +
-     ',"metaData":{"isConfigured":true,"sections":{}},"configurationArguments":{"applicationExtensionKey":"jb-email-activity","isModified":false,"isSimulation":false,"fuelAgentRequested":true,"googleAnalyticsCampaignName":"","useLLTS":false,"isReconcilable":false,' +
-     triggeredSendJson +
-     '}}';
+    var stoNext = addTaskActivity == "1" ? taskActivityKey : null;
+    var stoOutcomeObj = {
+      key: randomGuidCj(),
+      arguments: {},
+      metaData: { invalid: false }
+    };
+    if (stoNext) {
+     stoOutcomeObj.next = stoNext;
+    }
+    var stoParams = {
+      slidingWindowHours: 4,
+      enableRandomTime: false,
+      version: 2,
+      definitionType: "Multistep"
+    };
+    if (stoNext) {
+     stoParams.nextActivity = {
+      key: stoNext,
+      type: "SALESCLOUDACTIVITY"
+     };
+    }
     var stoActivityObj = {
   "id": randomGuidCj(),
   "key": "STOWAIT-1",
@@ -1173,14 +1179,7 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
   "description": "",
   "type": "STOWAIT",
   "outcomes": [
-    {
-      "key": randomGuidCj(),
-      "next": "EMAILV2-2",
-      "arguments": {},
-      "metaData": {
-        "invalid": false
-      }
-    }
+    stoOutcomeObj
   ],
   "arguments": {
     "contactKey": "{{Context.ContactKey}}",
@@ -1197,19 +1196,10 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
   },
   "configurationArguments": {
     "applicationExtensionKey": "F828061A-5F0E-46A9-975E-18C414192D17",
-    "params": {
-      "slidingWindowHours": 4,
-      "enableRandomTime": false,
-      "nextActivity": {
-        "key": "EMAILV2-2",
-        "type": "EMAILV2"
-      },
-      "version": 2,
-      "definitionType": "Multistep"
-    },
+    "params": stoParams,
     "overrideDateTime": "0001-01-01T06:00:00Z",
     "disableStoRestValidation": false,
-    "disableFollowedByEmailValidation": false,
+    "disableFollowedByEmailValidation": true,
     "disableFollowedByPushNValidation": false,
     "waitForEventKey": ""
   },
@@ -1340,9 +1330,9 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
      '","waitForEventId":"","executionMode":"{{Context.ExecutionMode}}","startActivityKey":"{{Context.StartActivityKey}}","waitQueueId":"{{Context.WaitQueueId}}"},"metaData":{"isConfigured":true,"isExtended":false,"waitType":"duration","guidanceCardKey":"","uiType":"WAITBYDURATION"},"configurationArguments":{"waitDuration":1,"waitUnit":"MINUTES","specifiedTime":"00:00","timeZone":"America/New_York","description":"","waitEndDateAttributeExpression":"","specificDate":"","waitForEventKey":""}}';
    var activitiesJson = emailActivity1 + "," + waitActivityJson;
    if (addSTOActivity == "1") {
-    activitiesJson = activitiesJson + "," + stoActivity + "," + emailActivity2;
+    activitiesJson = activitiesJson + "," + stoActivity;
    }
-   if (addTaskActivity == "1" && addSTOActivity != "1") {
+   if (addTaskActivity == "1") {
     activitiesJson = activitiesJson + "," + taskActivity;
    }
    var journeyPayload = '{"name":"' + journeyNameEscaped + '","definitionType":"Multistep","channel":"","description":"","version":1,"workflowApiVersion":1.0,"entryMode":"OnceAndDone","key":"' + journeyKey + '","activities":[' + activitiesJson + '],"notifiers":[],"metaData":{"disableEndWait":true,"dataSource":"ContactsModel","highThroughputSending":{"email":false}},"defaults":{"email":["' + (defaultEmailEscaped || "") + '"],"properties":{"analyticsTracking":{"enabled":true,"analyticsType":"google","urlDomainsToTrack":[]}}},"goals":[],"exits":[],"triggers":[' + triggerWithOutcomes + ']}';
@@ -1892,7 +1882,6 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   flex-shrink: 0;
 }
 .journey-preview .step.journey-preview-step--sto,
-.journey-preview .step.journey-preview-step--sto-email,
 .journey-preview .step.journey-preview-step--task {
   min-width: 0;
   max-width: 0;
@@ -1903,7 +1892,6 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   transition: max-width 0.4s ease, min-width 0.4s ease, opacity 0.3s ease, transform 0.4s ease;
 }
 .journey-preview .step.journey-preview-step--sto.is-visible,
-.journey-preview .step.journey-preview-step--sto-email.is-visible,
 .journey-preview .step.journey-preview-step--task.is-visible {
   min-width: 120px;
   max-width: 120px;
@@ -1912,7 +1900,6 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   pointer-events: auto;
 }
 .journey-preview .step.journey-preview-step--sto:not(.is-visible)::after,
-.journey-preview .step.journey-preview-step--sto-email:not(.is-visible)::after,
 .journey-preview .step.journey-preview-step--task:not(.is-visible)::after {
   opacity: 0;
 }
@@ -2264,17 +2251,6 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
              </div>
              <span class="step-label">Einstein STO - 4 Hours</span>
            </div>
-           <div class="step journey-preview-step journey-preview-step--sto-email%%[ IF @addSTOActivity == "1" THEN ]%% is-visible%%[ ENDIF ]%%">
-             <div class="icon-wrapper">
-               <div class="rounded-square bg-light-blue">
-                 <svg viewBox="0 0 24 24" fill="none" stroke="#1a8fc4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                   <rect x="3" y="5" width="18" height="14" rx="2"/>
-                   <path d="M3 7l9 6 9-6"/>
-                 </svg>
-               </div>
-             </div>
-             <span class="step-label" id="journeyPreviewStoEmailLabel">%%=IIF(NOT Empty(@emailName), @emailName, "Send Email")=%% (STO)</span>
-           </div>
            <div class="step journey-preview-step journey-preview-step--task%%[ IF @addTaskActivity == "1" THEN ]%% is-visible%%[ ENDIF ]%%">
              <div class="icon-wrapper">
                <div class="rounded-square bg-blue">
@@ -2386,10 +2362,8 @@ Your journey and email are in Marketing Cloud. Open them below or return to the 
    var stoToggle = form.querySelector('input[name="addSTOActivity"]');
    var taskToggle = form.querySelector('input[name="addTaskActivity"]');
    var stoSteps = document.querySelectorAll('.journey-preview-step--sto');
-   var stoEmailSteps = document.querySelectorAll('.journey-preview-step--sto-email');
    var taskSteps = document.querySelectorAll('.journey-preview-step--task');
    var emailLabel = document.getElementById('journeyPreviewEmailLabel');
-   var stoEmailLabel = document.getElementById('journeyPreviewStoEmailLabel');
    var subjectInput = form.querySelector('input[name="emailSubjectLine"]');
    function setPreviewStepVisible(step, visible) {
     if (visible) {
@@ -2418,20 +2392,12 @@ Your journey and email are in Marketing Cloud. Open them below or return to the 
      for (si = 0; si < stoSteps.length; si++) {
       setPreviewStepVisible(stoSteps[si], !!(stoToggle && stoToggle.checked));
      }
-     for (si = 0; si < stoEmailSteps.length; si++) {
-      setPreviewStepVisible(stoEmailSteps[si], !!(stoToggle && stoToggle.checked));
-     }
      for (si = 0; si < taskSteps.length; si++) {
       setPreviewStepVisible(taskSteps[si], !!(taskToggle && taskToggle.checked));
      }
-     if (emailLabel || stoEmailLabel) {
-      var previewName = (subjectInput && subjectInput.value.trim()) || (emailLabel && emailLabel.textContent.replace(/\s*\(STO\)$/, '').trim()) || 'Send Email';
-      if (emailLabel) {
-       emailLabel.textContent = formatPreviewEmailLabel(previewName);
-      }
-      if (stoEmailLabel) {
-       stoEmailLabel.textContent = formatPreviewEmailLabel(previewName) + ' (STO)';
-      }
+     if (emailLabel) {
+      var previewName = (subjectInput && subjectInput.value.trim()) || emailLabel.textContent.trim() || 'Send Email';
+      emailLabel.textContent = formatPreviewEmailLabel(previewName);
      }
    }
    if (stoToggle) stoToggle.addEventListener('change', syncJourneyPreview);
