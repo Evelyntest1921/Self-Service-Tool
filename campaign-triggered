@@ -9,9 +9,6 @@ SET @senderProfileId = Trim(RequestParameter("senderProfileId"))
 SET @sendClassificationId = Trim(RequestParameter("sendClassificationId"))
 SET @addTaskActivity = IIF(RequestParameter("addTaskActivity") == "1","1","0")
 SET @addSTOActivity = IIF(RequestParameter("addSTOActivity") == "1","1","0")
-IF @addSTOActivity == "1" AND @addTaskActivity == "1" THEN
- SET @addTaskActivity = "0"
-ENDIF
 SET @flow = Trim(Lowercase(RequestParameter("flow")))
 SET @hubUrl = ""
 SET @buildDetailUrl = ""
@@ -884,9 +881,6 @@ var journeyEmailId = Variable.GetValue("journeyEmailId");
 var emailName = Variable.GetValue("emailName");
 var addTaskActivity = String(Platform.Variable.GetValue("@addTaskActivity") || Variable.GetValue("addTaskActivity") || "0").replace(/^\s+|\s+$/g, "");
 var addSTOActivity = String(Platform.Variable.GetValue("@addSTOActivity") || Variable.GetValue("addSTOActivity") || "0").replace(/^\s+|\s+$/g, "");
-if (addSTOActivity == "1" && addTaskActivity == "1") {
- addTaskActivity = "0";
-}
 var subdomain = Variable.GetValue("subdomain");
 var accessToken = Variable.GetValue("accessToken");
 var resultText = Variable.GetValue("resultText") || "";
@@ -2192,14 +2186,14 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
                <div class="form-group">
           <label for="timezoneId" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Create a task when an email is sent</label>
          <label class="check-box">
-           <input type="checkbox" name="addTaskActivity" value="1" id="addTaskActivity" %%[ IF @addTaskActivity == "1" THEN ]%%checked%%[ ENDIF ]%% %%[ IF @addSTOActivity == "1" THEN ]%%disabled%%[ ENDIF ]%%>
+           <input type="checkbox" name="addTaskActivity" value="1" id="addTaskActivity" %%[ IF @addTaskActivity == "1" THEN ]%%checked%%[ ENDIF ]%%>
            <span>Add task Activity</span>
          </label>
           
           <label for="timezoneId" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Add send time optimization</label>
           <label class="check-box">
             
-           <input type="checkbox" name="addSTOActivity" value="1" id="addSTOActivity" %%[ IF @addSTOActivity == "1" THEN ]%%checked%%[ ENDIF ]%% %%[ IF @addTaskActivity == "1" THEN ]%%disabled%%[ ENDIF ]%%>
+           <input type="checkbox" name="addSTOActivity" value="1" id="addSTOActivity" %%[ IF @addSTOActivity == "1" THEN ]%%checked%%[ ENDIF ]%%>
            <span>Add STO Activity</span>
          </label>
        </div>
@@ -2381,42 +2375,22 @@ Your journey and email are in Marketing Cloud. Open them below or return to the 
     }
     return parts.join('\n');
    }
-   function syncOptionExclusivity(changed) {
-    if (!stoToggle || !taskToggle) {
-     return;
-    }
-    if (changed === 'sto' && stoToggle.checked) {
-     taskToggle.checked = false;
-    } else if (changed === 'task' && taskToggle.checked) {
-     stoToggle.checked = false;
-    }
-    taskToggle.disabled = stoToggle.checked;
-    stoToggle.disabled = taskToggle.checked;
-   }
    function syncJourneyPreview() {
-     syncOptionExclusivity();
      var si;
      for (si = 0; si < stoSteps.length; si++) {
       setPreviewStepVisible(stoSteps[si], !!(stoToggle && stoToggle.checked));
      }
      for (si = 0; si < taskSteps.length; si++) {
-      setPreviewStepVisible(taskSteps[si], !!(taskToggle && taskToggle.checked && !stoToggle.checked));
+      setPreviewStepVisible(taskSteps[si], !!(taskToggle && taskToggle.checked));
      }
      if (emailLabel) {
       var previewName = (subjectInput && subjectInput.value.trim()) || emailLabel.textContent.trim() || 'Send Email';
       emailLabel.textContent = formatPreviewEmailLabel(previewName);
      }
    }
-   if (stoToggle) stoToggle.addEventListener('change', function() {
-    syncOptionExclusivity('sto');
-    syncJourneyPreview();
-   });
-   if (taskToggle) taskToggle.addEventListener('change', function() {
-    syncOptionExclusivity('task');
-    syncJourneyPreview();
-   });
+   if (stoToggle) stoToggle.addEventListener('change', syncJourneyPreview);
+   if (taskToggle) taskToggle.addEventListener('change', syncJourneyPreview);
    if (subjectInput) subjectInput.addEventListener('input', syncJourneyPreview);
-   syncOptionExclusivity();
    syncJourneyPreview();
  }
  var cards = document.querySelectorAll('.email-card');
