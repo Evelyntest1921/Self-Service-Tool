@@ -23,7 +23,7 @@ SET @STACK_JOURNEY_TYPE = "Journey + Automation"
 SET @QUICK_SEND_JOURNEY_TYPE = "Quick Send"
 
 
-VAR @jid, @detailRows, @detailRow, @detailCount, @DETAIL_EXTERNAL_KEY_DE
+VAR @jid, @detailRows, @detailRow, @detailCount
 VAR @dispName, @dispType, @dispEmailName, @dispEmailId, @dispDeName, @dispDeId, @dispCampaignId, @dispSurveyId
 VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationCustomerKey, @dispAutomationName, @dispQueryText, @isStackBuild, @isQuickSendBuild, @isSurveyBuild, @showChecklist
 VAR @dispJourneyStatus, @dispAutomationStatus, @dispSentCount, @dispDeRowCount, @dispDeIdCount, @dispSentDisplay, @sentCountV, @lookupDeKey, @journeyStatusColor, @automationStatusColor, @journeyBtnLabel, @journeyBtnClass, @journeyActionConfirm
@@ -41,13 +41,13 @@ VAR @chkSenderStatus, @chkSenderMsg, @chkSenderName, @chkSenderProfileId, @chkSe
 VAR @chkAutoNameStatus, @chkAutoNameMsg, @chkAutoNameIcon
 VAR @chkQueryStatus, @chkQueryMsg, @chkQueryText, @chkQueryIcon
 VAR @chkAutoStatusStatus, @chkAutoStatusMsg, @chkAutoStatusIcon
-VAR @deleteRequested, @removeLogOnly, @deleteEmailFromPost, @purgeRequested, @attemptRemoveLog
+VAR @deleteRequested, @removeLogOnly, @deleteEmailFromPost, @purgeRequested
 VAR @authOk, @accessToken, @subdomain
 VAR @resultText, @pageStatus
 VAR @logDelCount, @analyticsDelCnt
 VAR @attemptPurgeBuild, @purgeBuildLog, @purgeEmailOk
 VAR @attemptDeleteAsset, @step3bResult
-VAR @surveyPurgeId, @surveyDelResponses, @surveyDelQuestions, @surveyDelMaster, @surveyDeleteLog, @willRemoveBuildLog, @purgeSurveyId
+VAR @surveyPurgeId, @surveyDelResponses, @surveyDelQuestions, @surveyDelMaster, @surveyDeleteLog, @willRemoveBuildLog
 VAR @updRaw
 VAR @journeyActionRequested, @journeyAction, @attemptJourneyAction, @journeyActionOk, @journeyActionMsg, @journeyActionNewStatus
 VAR @automationActionRequested, @attemptAutomationAction, @automationActionOk, @automationActionMsg, @automationActionNewStatus, @automationActionConfirm
@@ -56,10 +56,9 @@ VAR @automationAction, @automationFrequency, @automationMinuteInterval, @automat
 
 SET @purgeRequested = IIF(NOT Empty(RequestParameter("confirmPurgeBuild")),"1","0")
 SET @showChecklist = IIF(NOT Empty(RequestParameter("checklist")),"1","0")
-SET @jid = Concat(Trim(RequestParameter("journeyId")), "")
+SET @jid = Trim(RequestParameter("journeyId"))
 SET @deleteRequested = IIF(NOT Empty(RequestParameter("confirmDeleteAsset")),"1","0")
 SET @removeLogOnly = IIF(NOT Empty(RequestParameter("confirmRemoveLog")),"1","0")
-SET @attemptRemoveLog = "false"
 SET @deleteEmailFromPost = Trim(RequestParameter("deleteEmailId"))
 SET @journeyActionRequested = IIF(NOT Empty(RequestParameter("confirmJourneyAction")),"1","0")
 SET @journeyAction = Trim(RequestParameter("journeyAction"))
@@ -107,8 +106,6 @@ SET @dispUpdated = ""
 SET @attemptPurgeBuild = "false"
 SET @purgeBuildLog = ""
 SET @purgeEmailOk = "false"
-SET @surveyDeleteLog = ""
-SET @purgeSurveyId = ""
 SET @isStackBuild = "false"
 SET @isQuickSendBuild = "false"
 SET @isSurveyBuild = "false"
@@ -311,7 +308,7 @@ ENDIF
 ENDIF
 
 
-IF (@removeLogOnly == "1") AND (@detailCount > 0) AND NOT Empty(@jid) THEN
+IF (@removeLogOnly == "1") AND (@detailCount > 0) THEN
 SET @postedJid = Trim(RequestParameter("postedJourneyId"))
 IF Empty(@postedJid) THEN
   SET @postedJid = @jid
@@ -320,7 +317,14 @@ IF @postedJid != @jid THEN
   SET @pageStatus = "tamper"
   SET @resultText = "Journey identifier did not match."
 ELSE
-  SET @attemptRemoveLog = "true"
+  SET @logDelCount = DeleteData(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
+  IF @logDelCount > 0 THEN
+    SET @pageStatus = "removed_log"
+    Redirect(Concat(@HOME_URL,"?logRemoved=1"))
+  ELSE
+    SET @pageStatus = "drop_log_failed"
+    SET @resultText = Concat("DeleteData returned zero rows deleted. Typical causes: Cloud Page lacks delete rights on ",@DETAIL_EXTERNAL_KEY_DE,", the External Key or journeyId column differs from LookupRows expectations, or the row was removed already.")
+  ENDIF
 ENDIF
 ENDIF
 
@@ -1648,28 +1652,27 @@ var AUTOMATION_PURGE_QUEUE_DE = "bd_sst_automation_purge";
 function queueAutomationPurge(customerKey, automationName) {
  var key = strTrim(customerKey);
  var name = strTrim(automationName);
- if (!key) {
-  return {
-   ok: false,
-   msg: "No automation customerKey on build log (required for bd_sst_automation_purge)."
-  };
+ if (!key && !name) {
+  return { ok: false, msg: "No customer key or automation name to queue." };
  }
  try {
-  var existing = Platform.Function.LookupRows(
-   AUTOMATION_PURGE_QUEUE_DE,
-   "customerKey",
-   String(key)
-  );
-  if (existing && existing.length > 0) {
-   return {
-    ok: true,
-    msg: "Already queued for Script Activity delete (customerKey=" + key + ")."
-   };
+  if (key) {
+   var existing = Platform.Function.LookupRows(
+    AUTOMATION_PURGE_QUEUE_DE,
+    "customerKey",
+    key
+   );
+   if (existing && existing.length > 0) {
+    return {
+     ok: true,
+     msg: "Already queued for Script Activity delete (customerKey=" + key + ")."
+    };
+   }
   }
   Platform.Function.InsertData(
    AUTOMATION_PURGE_QUEUE_DE,
    ["customerKey", "automationName"],
-   [String(key), String(name || "")]
+   [key, name]
   );
   return {
    ok: true,
@@ -1677,169 +1680,6 @@ function queueAutomationPurge(customerKey, automationName) {
   };
  } catch (queueEx) {
   return { ok: false, msg: queueEx.message || String(queueEx) };
- }
-}
-
-
-var ANALYTICS_LOG_DE = "Bd_journey_analytics";
-
-
-function deleteBuildLogRow(journeyId) {
- var jid = strTrim(journeyId);
- if (!jid) {
-  return 0;
- }
- try {
-  return Platform.Function.DeleteData(
-   ANALYTICS_LOG_DE,
-   ["journeyId"],
-   [String(jid)]
-  );
- } catch (delEx) {
-  return 0;
- }
-}
-
-
-function surveyIdForJourney(journeyId) {
- var jid = strTrim(journeyId);
- if (!jid) {
-  return "";
- }
- try {
-  var rows = Platform.Function.LookupRows(
-   ANALYTICS_LOG_DE,
-   "journeyId",
-   String(jid)
-  );
-  if (rows && rows.length > 0 && rows[0].surveyId) {
-   return strTrim(rows[0].surveyId);
-  }
- } catch (lookupEx) {}
- return "";
-}
-
-
-function deleteSurveyBuildRows(surveyId) {
- var sid = strTrim(surveyId);
- if (!sid || sid.toUpperCase() === "N/A") {
-  return null;
- }
- try {
-  return {
-   responses: Platform.Function.DeleteData(
-    "SST_SP_Survey_Responses_DE",
-    ["SurveyID"],
-    [String(sid)]
-   ),
-   questions: Platform.Function.DeleteData(
-    "SST_SP_Survey_Questions_DE",
-    ["SurveyID"],
-    [String(sid)]
-   ),
-   master: Platform.Function.DeleteData(
-    "SST_SP_Surveys_Master_DE",
-    ["SurveyID"],
-    [String(sid)]
-   )
-  };
- } catch (surveyDelEx) {
-  return { error: surveyDelEx.message || String(surveyDelEx) };
- }
-}
-
-
-function applyPostPurgeDataDeletes() {
- var isSurveyBuild = Platform.Variable.GetValue("@isSurveyBuild") || "";
- var purgeEmailOk = Platform.Variable.GetValue("@purgeEmailOk") || "";
- var removeLogOnly = Platform.Variable.GetValue("@removeLogOnly") || "";
- var attemptRemoveLog = Platform.Variable.GetValue("@attemptRemoveLog") || "";
- var willRemoveBuildLog = false;
- var surveyDeleteLog = "";
- var step3b = step3bResult || "";
-
- if (
-  attemptPurgeBuild == "true" &&
-  authOk == "true" &&
-  purgeEmailOk == "true"
- ) {
-  willRemoveBuildLog = true;
- } else if (
-  attemptDeleteAsset == "true" &&
-  authOk == "true" &&
-  String(step3b).indexOf("OK - Email deleted") >= 0
- ) {
-  willRemoveBuildLog = true;
- }
-
- if (willRemoveBuildLog && isSurveyBuild == "true") {
-  var purgeSurveyId = surveyIdForJourney(jidClean);
-  if (purgeSurveyId && purgeSurveyId.toUpperCase() !== "N/A") {
-   Platform.Variable.SetValue("@purgeSurveyId", purgeSurveyId);
-   var surveyDel = deleteSurveyBuildRows(purgeSurveyId);
-   if (surveyDel && !surveyDel.error) {
-    surveyDeleteLog =
-     "[Survey " +
-     purgeSurveyId.substring(0, 50) +
-     "] Responses=" +
-     surveyDel.responses +
-     " Questions=" +
-     surveyDel.questions +
-     " Master=" +
-     surveyDel.master +
-     ".";
-   } else {
-    surveyDeleteLog =
-     "[Survey] DELETE FAILED - " +
-     (surveyDel && surveyDel.error ? surveyDel.error : "Unknown error.");
-   }
-  } else {
-   surveyDeleteLog = "[Survey] SKIP - no surveyId on build log.";
-  }
- }
-
- if (willRemoveBuildLog && jidClean) {
-  var analyticsDelCnt = deleteBuildLogRow(jidClean);
-  Platform.Variable.SetValue("@analyticsDelCnt", String(analyticsDelCnt));
-  if (
-   attemptPurgeBuild == "true" &&
-   authOk == "true" &&
-   purgeEmailOk == "true"
-  ) {
-   Platform.Variable.SetValue("@pageStatus", "purged");
-  } else if (
-   attemptDeleteAsset == "true" &&
-   authOk == "true" &&
-   String(step3b).indexOf("OK - Email deleted") >= 0
-  ) {
-   Platform.Variable.SetValue("@pageStatus", "deleted");
-  }
- } else if (
-  attemptPurgeBuild == "true" &&
-  authOk == "true" &&
-  purgeEmailOk != "true"
- ) {
-  Platform.Variable.SetValue("@pageStatus", "purge_partial");
- }
-
- if (surveyDeleteLog) {
-  Platform.Variable.SetValue("@surveyDeleteLog", surveyDeleteLog);
- }
-
- if (removeLogOnly == "1" && attemptRemoveLog == "true" && jidClean) {
-  var logDelCount = deleteBuildLogRow(jidClean);
-  Platform.Variable.SetValue("@logDelCount", String(logDelCount));
-  if (logDelCount > 0) {
-   Platform.Variable.SetValue("@pageStatus", "removed_log");
-  } else {
-   Platform.Variable.SetValue("@pageStatus", "drop_log_failed");
-   Platform.Variable.SetValue(
-    "@resultText",
-    "DeleteData returned zero rows deleted. Typical causes: Cloud Page lacks delete rights on " +
-     ANALYTICS_LOG_DE +
-     ", the External Key or journeyId column differs from LookupRows expectations, or the row was removed already."
-   );
-  }
  }
 }
 
@@ -2250,7 +2090,7 @@ try {
    }
 
    if (isStackPurge == "true") {
-     if (autoDelKey) {
+     if (autoDelId || autoDelKey) {
        var autoNameForQueue = strTrim(
          Platform.Variable.GetValue("@dispAutomationName") || ""
        );
@@ -2266,10 +2106,6 @@ try {
              formatPurgeAccessHint(queueResult.msg || "Unknown error.")
          );
        }
-     } else if (autoDelId) {
-       truncLog(
-         "[Automation] QUEUE SKIP - automationGuid present but automationCustomerKey missing on build log."
-       );
      } else {
        truncLog("[Automation] SKIP - no id or customer key on build log.");
      }
@@ -2837,19 +2673,10 @@ if (showChecklist == "1") {
 }
 
 
-applyPostPurgeDataDeletes();
 Platform.Variable.SetValue("@step3bResult", step3bResult);
 </script>
 %%[
 VAR @combinedLog, @trailBody
-
-IF @pageStatus == "removed_log" THEN
- Redirect(Concat(@HOME_URL,"?logRemoved=1"))
-ENDIF
-
-IF Empty(@DETAIL_EXTERNAL_KEY_DE) THEN
- SET @DETAIL_EXTERNAL_KEY_DE = "Bd_journey_analytics"
-ENDIF
 
 
 IF (@attemptJourneyAction == "true") AND (@journeyActionOk == "true") AND NOT Empty(@journeyActionNewStatus) THEN
@@ -2921,6 +2748,25 @@ ENDIF
 
 SET @combinedLog = Concat(IIF(NOT Empty(@resultText), Concat(@resultText," "), ""), Substring(IIF(NOT Empty(@trailBody), @trailBody, ""),1,6200))
 
+
+SET @surveyDeleteLog = ""
+SET @willRemoveBuildLog = "false"
+IF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk == "true") THEN
+SET @willRemoveBuildLog = "true"
+ELSEIF (@attemptDeleteAsset == "true") AND (@authOk == "true") AND (IndexOf(IIF(NOT Empty(@step3bResult), @step3bResult, ""),"OK - Email deleted") > 0) THEN
+SET @willRemoveBuildLog = "true"
+ENDIF
+IF (@willRemoveBuildLog == "true") AND (@isSurveyBuild == "true") THEN
+SET @surveyPurgeId = @dispSurveyId
+IF NOT Empty(@surveyPurgeId) AND @surveyPurgeId != "N/A" THEN
+SET @surveyDelResponses = DeleteData("SST_SP_Survey_Responses_DE", "SurveyID", @surveyPurgeId)
+SET @surveyDelQuestions = DeleteData("SST_SP_Survey_Questions_DE", "SurveyID", @surveyPurgeId)
+SET @surveyDelMaster = DeleteData("SST_SP_Surveys_Master_DE", "SurveyID", @surveyPurgeId)
+SET @surveyDeleteLog = Concat("[Survey ", @surveyPurgeId, "] Responses=", @surveyDelResponses, " Questions=", @surveyDelQuestions, " Master=", @surveyDelMaster, ".")
+ELSE
+SET @surveyDeleteLog = "[Survey] SKIP - no surveyId on build log."
+ENDIF
+ENDIF
 IF NOT Empty(@surveyDeleteLog) THEN
 SET @combinedLog = Concat(@combinedLog, " ", @surveyDeleteLog)
 ENDIF
@@ -2930,6 +2776,15 @@ IF IndexOf(@combinedLog,"FAILED") > 0 OR IndexOf(@combinedLog,"DELETE FAILED") >
 ENDIF
 
 
+IF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk == "true") THEN
+SET @analyticsDelCnt = DeleteData(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
+SET @pageStatus = "purged"
+ELSEIF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk != "true") THEN
+SET @pageStatus = "purge_partial"
+ELSEIF (@attemptDeleteAsset == "true") AND (@authOk == "true") AND (IndexOf(IIF(NOT Empty(@step3bResult), @step3bResult, ""),"OK - Email deleted") > 0) THEN
+SET @analyticsDelCnt = DeleteData(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
+SET @pageStatus = "deleted"
+ENDIF
 IF @pageStatus == "purge_partial" THEN
  SET @purgeResultHasFail = "1"
 ENDIF
@@ -3034,7 +2889,7 @@ ENDIF
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Build • Journey Maker</title>
+<title>Manage • SST</title>
 <link rel="icon" href="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" type="image/png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <style>
@@ -3143,16 +2998,16 @@ color:var(--text-secondary);
 .breadcrumb-section{padding:0px 0 0px}
 .breadcrumb-nav{display: flex;
     align-items: center;
-    flex-wrap: wrap;
-    margin-left: -10px;}
+    flex-wrap: wrap;}
 .breadcrumb-link{display:inline-flex;align-items:center;color:var(--primary-color);text-decoration:none;font-weight:500;font-size:16px}
 .breadcrumb-link:hover{color:var(--primary-dark);text-decoration:underline}
 .breadcrumb-link svg{flex-shrink:0}
 .breadcrumb-separator{margin:0 8px;color:var(--gray-400);font-weight:400;user-select:none}
 .breadcrumb-current{font-weight:600;color:var(--gray-900)}
+.breadcrumb-current-white{font-weight:600;color: #ffffff}
 h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 .sub{color:var(--text-secondary);max-width:44rem;margin-bottom:22px}
-.panel{background:#fff;border:1px solid var(--border-color);border-radius:var(--radius-lg);padding:26px 30px;margin-bottom:20px}
+.panel{background:#fff;border:1px solid var(--border-color);padding:26px 30px;margin-bottom:20px}
 .builder-path-row{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
 .builder-path-dl{margin:0;flex:1;min-width:0}
 .builder-path-dl dt{margin-top:0}
@@ -3337,7 +3192,7 @@ pre.log.show{display:block}
 </nav>
 </div>
 <h1>Could not remove the log row</h1>
-<p class="sub">The page tried to delete the matching row via the Cloud Page delete function (not DeleteDE).</p>
+<p class="sub">The page tried to delete the matching row via <strong>DeleteData()</strong>, which SFMC exposes for Cloud Pages (not DeleteDE).</p>
 <div class="banner bad">%%=v(@resultText)=%%</div>
 <p class="sub">Confirm this Cloud Pages app/user can delete rows on <strong>%%=v(@DETAIL_EXTERNAL_KEY_DE)=%%</strong>.</p>
 <p class="sub"><a class="breadcrumb-link" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Back to manage this build</a></p>
@@ -3362,7 +3217,7 @@ pre.log.show{display:block}
   Back
  </a>
  <span class="breadcrumb-separator" aria-hidden="true">/</span>
- <span class="breadcrumb-current">Manage build • Result</span>
+ <span class="breadcrumb-current ">Manage build • Result</span>
 </nav>
 </div>
 <div class="maker-page-heading">
@@ -3407,22 +3262,41 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
  </div>
 </div>
 %%[ ELSE ]%%
-<div class="breadcrumb-section">
+
+<div class="breadcrumb-section" style="
+    background-color: rgb(43 42 42);padding: 30px 10px 10px 30px;
+">
 <nav class="breadcrumb-nav" aria-label="Breadcrumb">
- <a href="%%=v(@HOME_URL)=%%" class="breadcrumb-link">
-  <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+ <a href="%%=v(@HOME_URL)=%%" class="breadcrumb-link" >
+  <svg fill="#FFFFFF" height="auto" width="18px" style="margin-right: 5px;" version="1.1" id="Capa_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" 
+  viewBox="0 0 386.242 386.242" xml:space="preserve">
+<g>
+ <path id="Arrow_Back" d="M374.212,182.3H39.432l100.152-99.767c4.704-4.704,4.704-12.319,0-17.011
+  c-4.704-4.704-12.319-4.704-17.011,0L3.474,184.61c-4.632,4.632-4.632,12.379,0,17.011l119.1,119.1
+  c4.704,4.704,12.319,4.704,17.011,0c4.704-4.704,4.704-12.319,0-17.011L39.432,206.36h334.779c6.641,0,12.03-5.39,12.03-12.03
+  S380.852,182.3,374.212,182.3z"/>
+ <g>
+ </g>
+ <g>
+ </g>
+ <g>
+ </g>
+ <g>
+ </g>
+ <g>
+ </g>
+ <g>
+ </g>
+</g>
+</svg>
   Back
  </a>
  <span class="breadcrumb-separator" aria-hidden="true">/</span>
- <span class="breadcrumb-current">Manage build</span>
-</nav>
-</div>
-<h1>%%=IIF(NOT Empty(@dispName), @dispName, "Build detail")=%%</h1>
-    <p class="sub">Edit journeys and templates in SFMC UI. Choose what else to tidy up.</p>
+ <span class="breadcrumb-current-white">Manage build</span>
+</nav><h1 style = "color: #ffffff; padding-top: 10px;">%%=IIF(NOT Empty(@dispName), @dispName, "Build detail")=%%</h1>
+  <p class="sub" style = "color:#a2a5ac;">Edit journeys and templates in SFMC UI. Choose what else to tidy up.</p>
 
-
-
-
+  </div>
 
 %%[ IF (@pageStatus == "view") AND (@attemptAutomationAction == "true") AND (@automationActionOk == "true") THEN ]%%
 <div class="banner good">%%=v(@automationActionMsg)=%%</div>
@@ -3452,18 +3326,9 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
   <dt>Builder path</dt>
   <dd>%%=v(@dispType)=%%</dd>
  </dl>
-  <div style="" >
-     <svg width="40px" height="40px" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" class="hds-flight-icon--animation-loading%%[ IF @dispAutomationActive == "true" THEN ]%% spinner spinner--active%%[ ENDIF ]%%">
+  <div style="padding-top:8px;" >
+     <span class="status-value"><svg class="status-dot" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="5" fill="%%=v(@journeyStatusColor)=%%"/></svg>%%=IIF(NOT Empty(@dispJourneyStatus), @dispJourneyStatus, "—")=%%</span>
 
-<g fill="#000000" fill-rule="evenodd" clip-rule="evenodd">
-
-<path d="M8 1.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM0 8a8 8 0 1116 0A8 8 0 010 8z" opacity=".2"/>
-
-<path d="M7.25.75A.75.75 0 018 0a8 8 0 018 8 .75.75 0 01-1.5 0A6.5 6.5 0 008 1.5a.75.75 0 01-.75-.75z"/>
-
-</g>
-
-</svg>
   </div>
  <div class="builder-path-action">
 %%[ IF @showChecklist == "1" THEN ]%%
