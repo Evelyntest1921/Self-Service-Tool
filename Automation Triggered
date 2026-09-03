@@ -1434,6 +1434,7 @@ var postEntryDeObjectId = postVar("entryDeObjectId");
 var postDeCustomerKeyVal = postVar("deCustomerKey");
 var postResultText = postVar("resultText");
 var postEnvironment = postVar("environment");
+var postSenderProfileId = postVar("senderProfileId");
 var postSuffix = "";
 
 function postParseJson(s) {
@@ -1613,19 +1614,65 @@ function postEscapeSql(value) {
   return String(value || "").replace(/'/g, "''");
 }
 
-function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environment) {
+function postNormalizeSenderProfileToken(value) {
+  return String(value || "").replace(/^\s+|\s+$/g, "").toUpperCase();
+}
+
+function postIsAscSenderProfile(profileId) {
+  if (!profileId) {
+    return false;
+  }
+  try {
+    var prox = new Script.Util.WSProxy();
+    var props = ["Name", "CustomerKey", "ObjectID"];
+    var pid = String(profileId);
+    var resp = prox.retrieve("SenderProfile", props, {
+      Property: "CustomerKey",
+      SimpleOperator: "equals",
+      Value: pid
+    });
+    var row = resp && resp.Results && resp.Results.length > 0 ? resp.Results[0] : null;
+    if (!row) {
+      resp = prox.retrieve("SenderProfile", props, {
+        Property: "ObjectID",
+        SimpleOperator: "equals",
+        Value: pid
+      });
+      row = resp && resp.Results && resp.Results.length > 0 ? resp.Results[0] : null;
+    }
+    if (!row) {
+      return false;
+    }
+    return (
+      postNormalizeSenderProfileToken(row.Name) === "ASC" ||
+      postNormalizeSenderProfileToken(row.CustomerKey) === "ASC"
+    );
+  } catch (ascErr) {
+    return false;
+  }
+}
+
+function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environment, senderProfileId) {
   var camp = postEscapeSql(campaignId);
   var userFilter = postEscapeSql(sfUserId);
   var env = String(environment || "").toLowerCase();
+  var useAscJoin = postIsAscSenderProfile(senderProfileId);
   var cmTable = "CampaignMember_Salesforce_1";
   var contactTable = "Contact_Salesforce";
   var accountTable = "Account_Salesforce";
   var userTable = "User_Salesforce";
+  var accountOwnerExpr = "a.OwnerId";
+  var userJoinExpr = "a.OwnerId";
   if (env === "uat") {
     cmTable = "ENT.CampaignMember_Salesforce_2";
     contactTable = "ENT.Contact_Salesforce_1";
     accountTable = "ENT.Account_Salesforce_1";
     userTable = "ENT.User_Salesforce_1";
+  }
+  if (useAscJoin) {
+    userTable = env === "uat" ? "ENT.User_Salesforce_1" : "User_Salesforce_1";
+    accountOwnerExpr = "a.ASC__c";
+    userJoinExpr = "a.ASC__c";
   }
   var emailExpr =
     "COALESCE(NULLIF(RTRIM(ISNULL(cm.email, '')), ''), NULLIF(RTRIM(ISNULL(con.Email, '')), ''))";
@@ -1640,12 +1687,12 @@ function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environme
     "  u.Email AS Account_Owner_Email,\n" +
     "  cm.Status AS Status,\n" +
     "  con.MailingState AS State,\n" +
-    "  a.OwnerId AS AccountOwnerId,\n" +
+    "  " + accountOwnerExpr + " AS AccountOwnerId,\n" +
     "  'SST' AS type\n" +
     "FROM " + cmTable + " cm\n" +
     "LEFT JOIN " + contactTable + " con ON cm.ContactId = con.id\n" +
     "LEFT JOIN " + accountTable + " a ON con.AccountId = a.id\n" +
-    "LEFT JOIN " + userTable + " u ON u.id = a.OwnerId\n" +
+    "LEFT JOIN " + userTable + " u ON u.id = " + userJoinExpr + "\n" +
     "WHERE cm.CampaignId = '" + camp + "'\n" +
     "  AND cm.ContactId IS NOT NULL";
   if (userFilter) {
@@ -2262,7 +2309,8 @@ if (postDeleteRequested != "1") {
           postCampaignId,
           postSfUserId,
           postJourneyId,
-          postEnvironment
+          postEnvironment,
+          postSenderProfileId
         );
         var queryResult = postCreateQueryDefinition(
           postProx,
