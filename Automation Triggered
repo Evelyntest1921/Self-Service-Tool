@@ -1720,9 +1720,75 @@ function postSanitizeDeName(deName) {
   return name.replace(/\]/g, "]]");
 }
 
-function postBuildDataExtensionQuery(sourceDeName, sfUserId, environment, senderProfileId) {
+function postCollectWsResults(results) {
+  var rows = [];
+  if (!results) {
+    return rows;
+  }
+  if (typeof results.length === "number") {
+    var i;
+    for (i = 0; i < results.length; i++) {
+      rows.push(results[i]);
+    }
+    return rows;
+  }
+  if (results.Name || results.CustomerKey || results.ObjectID) {
+    rows.push(results);
+  }
+  return rows;
+}
+
+function postRetrieveSourceDeFields(prox, deName) {
+  var safeName = postSanitizeDeName(deName);
+  if (!safeName || !prox) {
+    return { ok: false, fields: {} };
+  }
+  var deFilters = [
+    { Property: "Name", SimpleOperator: "equals", Value: safeName },
+    { Property: "CustomerKey", SimpleOperator: "equals", Value: safeName }
+  ];
+  var deRow = null;
+  var fi;
+  for (fi = 0; fi < deFilters.length; fi++) {
+    var deResp = prox.retrieve("DataExtension", ["CustomerKey", "ObjectID", "Name"], deFilters[fi]);
+    var deRows = postCollectWsResults(deResp ? deResp.Results : null);
+    if (deRows.length > 0) {
+      deRow = deRows[0];
+      break;
+    }
+  }
+  if (!deRow || !deRow.CustomerKey) {
+    return { ok: false, fields: {} };
+  }
+  var deKey = String(deRow.CustomerKey);
+  var fieldResp = prox.retrieve("DataExtensionField", ["Name", "FieldType"], {
+    Property: "DataExtension.CustomerKey",
+    SimpleOperator: "equals",
+    Value: deKey
+  });
+  var fields = {};
+  var fieldRows = postCollectWsResults(fieldResp ? fieldResp.Results : null);
+  var ri;
+  for (ri = 0; ri < fieldRows.length; ri++) {
+    var fieldName = fieldRows[ri].Name ? String(fieldRows[ri].Name) : "";
+    if (fieldName) {
+      fields[fieldName.toLowerCase()] = fieldName;
+    }
+  }
+  return { ok: true, fields: fields, customerKey: deKey, name: String(deRow.Name || safeName) };
+}
+
+function postBuildDataExtensionQuery(prox, sourceDeName, sfUserId, environment, senderProfileId) {
   var deName = postSanitizeDeName(sourceDeName);
   if (!deName) {
+    return "";
+  }
+  var schema = postRetrieveSourceDeFields(prox, deName);
+  if (!schema.ok) {
+    return "";
+  }
+  var fields = schema.fields || {};
+  if (!fields.subscriberkey) {
     return "";
   }
   var userFilter = postEscapeSql(sfUserId);
@@ -1743,35 +1809,78 @@ function postBuildDataExtensionQuery(sourceDeName, sfUserId, environment, sender
     accountOwnerExpr = "a.ASC__c";
     userJoinExpr = "a.ASC__c";
   }
-  var emailExpr =
-    "COALESCE(NULLIF(RTRIM(ISNULL(cm.email, '')), ''), NULLIF(RTRIM(ISNULL(con.Email, '')), ''))";
+  var contactKeyExpr = fields.contactid ? "cm." + fields.contactid : "cm." + fields.subscriberkey;
+  var emailExpr = "NULLIF(RTRIM(ISNULL(con.Email, '')), '')";
+  if (fields.email) {
+    emailExpr =
+      "COALESCE(NULLIF(RTRIM(ISNULL(cm." +
+      fields.email +
+      ", '')), ''), NULLIF(RTRIM(ISNULL(con.Email, '')), ''))";
+  }
   var sql =
     "SELECT\n" +
-    "  cm.SubscriberKey AS MemberId,\n" +
-    "  cm.ContactId AS ContactId,\n" +
-    "  " + emailExpr + " AS Email,\n" +
+    "  cm." +
+    fields.subscriberkey +
+    " AS MemberId,\n" +
+    "  " +
+    contactKeyExpr +
+    " AS ContactId,\n" +
+    "  " +
+    emailExpr +
+    " AS Email,\n" +
     "  '' AS CampaignId,\n" +
     "  con.AccountId AS AccountId,\n" +
     "  u.Name AS Account_Owner_Name,\n" +
     "  u.Email AS Account_Owner_Email,\n" +
     "  '' AS Status,\n" +
     "  con.MailingState AS State,\n" +
-    "  " + accountOwnerExpr + " AS AccountOwnerId,\n" +
+    "  " +
+    accountOwnerExpr +
+    " AS AccountOwnerId,\n" +
     "  'SST' AS type\n" +
-    "FROM [" + deName + "] cm\n" +
-    "LEFT JOIN " + contactTable + " con ON cm.ContactId = con.id\n" +
-    "LEFT JOIN " + accountTable + " a ON con.AccountId = a.id\n" +
-    "LEFT JOIN " + userTable + " u ON u.id = " + userJoinExpr + "\n" +
-    "WHERE cm.SubscriberKey IS NOT NULL";
+    "FROM [" +
+    deName +
+    "] cm\n" +
+    "LEFT JOIN " +
+    contactTable +
+    " con ON " +
+    contactKeyExpr +
+    " = con.id\n" +
+    "LEFT JOIN " +
+    accountTable +
+    " a ON con.AccountId = a.id\n" +
+    "LEFT JOIN " +
+    userTable +
+    " u ON u.id = " +
+    userJoinExpr +
+    "\n" +
+    "WHERE cm." +
+    fields.subscriberkey +
+    " IS NOT NULL";
   if (userFilter) {
     sql += "\n  AND u.id = '" + userFilter + "'";
   }
   return sql;
 }
 
-function postBuildAudienceQuery(audienceSource, campaignId, sourceDeName, sfUserId, journeyId, environment, senderProfileId) {
+function postBuildAudienceQuery(
+  audienceSource,
+  campaignId,
+  sourceDeName,
+  sfUserId,
+  journeyId,
+  environment,
+  senderProfileId,
+  prox
+) {
   if (String(audienceSource || "").toLowerCase() === "dataextension") {
-    return postBuildDataExtensionQuery(sourceDeName, sfUserId, environment, senderProfileId);
+    return postBuildDataExtensionQuery(
+      prox,
+      sourceDeName,
+      sfUserId,
+      environment,
+      senderProfileId
+    );
   }
   return postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environment, senderProfileId);
 }
@@ -2399,10 +2508,14 @@ if (postDeleteRequested != "1") {
           postSfUserId,
           postJourneyId,
           postEnvironment,
-          postSenderProfileId
+          postSenderProfileId,
+          postProx
         );
         if (!queryText) {
-          postSuffix = " Step 6 FAILED - query text could not be built for the selected audience source.";
+          postSuffix =
+            postAudienceSource === "dataextension"
+              ? " Step 6 FAILED - source Data Extension not found or missing SubscriberKey field."
+              : " Step 6 FAILED - query text could not be built for the selected audience source.";
         } else {
         var queryResult = postCreateQueryDefinition(
           postProx,
@@ -3983,7 +4096,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
            <button type="submit" name="verifyCampaign" value="1" class="submit-button campaign-verify-btn" formnovalidate>Verify</button>
          </div>
          <div class="campaign-id-row" id="deSourceRow"%%[ IF @audienceSource != "dataextension" THEN ]%% style="display:none;"%%[ ENDIF ]%%>
-           <input type="text" class="textarea-control" id="sourceDataExtension" name="sourceDataExtension" value="%%=v(@sourceDataExtension)=%%" placeholder="e.g. Audience_DE — query reads SubscriberKey and ContactId from this DE"%%[ IF @audienceSource == "dataextension" THEN ]%% required%%[ ELSE ]%% disabled%%[ ENDIF ]%%>
+           <input type="text" class="textarea-control" id="sourceDataExtension" name="sourceDataExtension" value="%%=v(@sourceDataExtension)=%%" placeholder="e.g. Audience_DE — requires SubscriberKey; Email is used only when that column exists on the DE"%%[ IF @audienceSource == "dataextension" THEN ]%% required%%[ ELSE ]%% disabled%%[ ENDIF ]%%>
          </div>
 %%[ IF @campaignVerifyShow == "1" AND @audienceSource != "dataextension" THEN ]%%
          <div class="campaign-verify-panel campaign-verify-panel--%%=v(@campaignVerifyStatus)=%%" role="status">
