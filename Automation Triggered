@@ -8,6 +8,11 @@ SET @deleteQueryKey = Trim(RequestParameter("deleteQueryKey"))
 SET @deleteEmailId = Trim(RequestParameter("deleteEmailId"))
 SET @deleteEventName = Trim(RequestParameter("deleteEventName"))
 SET @campaignId = Trim(RequestParameter("campaignId"))
+SET @audienceSource = Lowercase(Trim(RequestParameter("audienceSource")))
+SET @sourceDataExtension = Trim(RequestParameter("sourceDataExtension"))
+IF Empty(@audienceSource) THEN
+ SET @audienceSource = "campaign"
+ENDIF
 SET @verifyCampaignRequested = IIF(RequestParameter("verifyCampaign") == "1","1","0")
 SET @emailId = RequestParameter("emailId")
 SET @senderProfileId = Trim(RequestParameter("senderProfileId"))
@@ -195,8 +200,12 @@ IF @showForm != "true" THEN
    IF @templateConfigOk != "true" THEN
      SET @resultText = "Step 0 FAILED: Missing email templates in bd_sst_email_templates (email_type=template)."
    ELSE
-    IF Empty(@stackCampaignName) OR Empty(@campaignId) OR Length(@campaignId) < 15 THEN
-      SET @resultText = "Enter Campaign Name and a valid Salesforce Campaign ID (15+ characters)."
+    IF Empty(@stackCampaignName) THEN
+      SET @resultText = "Enter Campaign Name."
+    ELSEIF @audienceSource == "dataextension" AND Empty(@sourceDataExtension) THEN
+      SET @resultText = "Enter the source Data Extension name."
+    ELSEIF @audienceSource != "dataextension" AND (Empty(@campaignId) OR Length(@campaignId) < 15) THEN
+      SET @resultText = "Enter a valid Salesforce Campaign ID (15+ characters)."
     ELSE
      SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
      SET @rowCount = RowCount(@authRow)
@@ -1435,6 +1444,8 @@ var postDeCustomerKeyVal = postVar("deCustomerKey");
 var postResultText = postVar("resultText");
 var postEnvironment = postVar("environment");
 var postSenderProfileId = postVar("senderProfileId");
+var postAudienceSource = postVar("audienceSource").toLowerCase() || "campaign";
+var postSourceDataExtension = postVar("sourceDataExtension");
 var postSuffix = "";
 
 function postParseJson(s) {
@@ -1699,6 +1710,70 @@ function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environme
     sql += "\n  AND u.id = '" + userFilter + "'";
   }
   return sql;
+}
+
+function postSanitizeDeName(deName) {
+  var name = String(deName || "").replace(/^\s+|\s+$/g, "");
+  if (!name || !/^[A-Za-z0-9_ \-]+$/.test(name)) {
+    return "";
+  }
+  return name.replace(/\]/g, "]]");
+}
+
+function postBuildDataExtensionQuery(sourceDeName, sfUserId, environment, senderProfileId) {
+  var deName = postSanitizeDeName(sourceDeName);
+  if (!deName) {
+    return "";
+  }
+  var userFilter = postEscapeSql(sfUserId);
+  var env = String(environment || "").toLowerCase();
+  var useAscJoin = postIsAscSenderProfile(senderProfileId);
+  var contactTable = "Contact_Salesforce";
+  var accountTable = "Account_Salesforce";
+  var userTable = "User_Salesforce";
+  var accountOwnerExpr = "a.OwnerId";
+  var userJoinExpr = "a.OwnerId";
+  if (env === "uat") {
+    contactTable = "ENT.Contact_Salesforce_1";
+    accountTable = "ENT.Account_Salesforce_1";
+    userTable = "ENT.User_Salesforce_1";
+  }
+  if (useAscJoin) {
+    userTable = env === "uat" ? "ENT.User_Salesforce_1" : "User_Salesforce_1";
+    accountOwnerExpr = "a.ASC__c";
+    userJoinExpr = "a.ASC__c";
+  }
+  var emailExpr =
+    "COALESCE(NULLIF(RTRIM(ISNULL(cm.email, '')), ''), NULLIF(RTRIM(ISNULL(con.Email, '')), ''))";
+  var sql =
+    "SELECT\n" +
+    "  cm.SubscriberKey AS MemberId,\n" +
+    "  cm.ContactId AS ContactId,\n" +
+    "  " + emailExpr + " AS Email,\n" +
+    "  '' AS CampaignId,\n" +
+    "  con.AccountId AS AccountId,\n" +
+    "  u.Name AS Account_Owner_Name,\n" +
+    "  u.Email AS Account_Owner_Email,\n" +
+    "  '' AS Status,\n" +
+    "  con.MailingState AS State,\n" +
+    "  " + accountOwnerExpr + " AS AccountOwnerId,\n" +
+    "  'SST' AS type\n" +
+    "FROM [" + deName + "] cm\n" +
+    "LEFT JOIN " + contactTable + " con ON cm.ContactId = con.id\n" +
+    "LEFT JOIN " + accountTable + " a ON con.AccountId = a.id\n" +
+    "LEFT JOIN " + userTable + " u ON u.id = " + userJoinExpr + "\n" +
+    "WHERE cm.SubscriberKey IS NOT NULL";
+  if (userFilter) {
+    sql += "\n  AND u.id = '" + userFilter + "'";
+  }
+  return sql;
+}
+
+function postBuildAudienceQuery(audienceSource, campaignId, sourceDeName, sfUserId, journeyId, environment, senderProfileId) {
+  if (String(audienceSource || "").toLowerCase() === "dataextension") {
+    return postBuildDataExtensionQuery(sourceDeName, sfUserId, environment, senderProfileId);
+  }
+  return postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environment, senderProfileId);
 }
 
 function postStripTimezoneFromIso(s) {
@@ -2277,13 +2352,25 @@ if (postDeleteRequested != "1") {
         " Step 5 SKIP - query/automation/entry event skipped (entry DE not ready).";
     } else if (postEventDefId) {
       postSuffix = "";
-    } else if (!postAccessToken || !postSubdomain || !postCampaignId) {
+    } else if (!postAccessToken || !postSubdomain) {
       postSuffix =
-        " Step 6 FAILED - missing auth or campaign id for query/automation. token=" +
+        " Step 6 FAILED - missing auth for query/automation. token=" +
         (postAccessToken ? "yes" : "no") +
         " subdomain=" +
         (postSubdomain || "none") +
-        " campaignId=" +
+        ".";
+    } else if (
+      postAudienceSource === "dataextension" &&
+      !postSanitizeDeName(postSourceDataExtension)
+    ) {
+      postSuffix =
+        " Step 6 FAILED - missing source Data Extension name for query/automation.";
+    } else if (
+      postAudienceSource !== "dataextension" &&
+      !postCampaignId
+    ) {
+      postSuffix =
+        " Step 6 FAILED - missing campaign id for query/automation. campaignId=" +
         (postCampaignId || "none") +
         ".";
     } else if (!postQueryKey || !postAutomationKey || !postStackName) {
@@ -2305,13 +2392,18 @@ if (postDeleteRequested != "1") {
         postSuffix = " Step 5 FAILED - entry DE CustomerKey missing.";
       } else {
         Platform.Variable.SetValue("@deCustomerKey", entryDe.customerKey);
-        var queryText = postBuildCampaignMemberQuery(
+        var queryText = postBuildAudienceQuery(
+          postAudienceSource,
           postCampaignId,
+          postSourceDataExtension,
           postSfUserId,
           postJourneyId,
           postEnvironment,
           postSenderProfileId
         );
+        if (!queryText) {
+          postSuffix = " Step 6 FAILED - query text could not be built for the selected audience source.";
+        } else {
         var queryResult = postCreateQueryDefinition(
           postProx,
           postQueryKey,
@@ -2378,6 +2470,7 @@ if (postDeleteRequested != "1") {
             }
           }
         }
+        }
       }
     }
   } catch (postEx) {
@@ -2405,6 +2498,8 @@ var resultText = Platform.Variable.GetValue("@resultText") || "";
 var eventKey = Platform.Variable.GetValue("@eventKey") || "";
 var campaignId = Platform.Variable.GetValue("@campaignId") || "";
 var campaignName = Platform.Variable.GetValue("@campaignName") || "";
+var audienceSource = Platform.Variable.GetValue("@audienceSource") || "campaign";
+var useCampaignMemberUpdate = audienceSource !== "dataextension" && campaignId;
 var emailSubjectLine = Platform.Variable.GetValue("@emailSubjectLine") || "Campaign Event";
 var journeyDescription = Platform.Variable.GetValue("@journeyDescription") || "";
 var bccEmail = Platform.Variable.GetValue("@bccEmail") || "";
@@ -2806,10 +2901,20 @@ if (
      '","contactId":"{{Contact.Id}}","contactKey":"{{Contact.Key}}","emailAddress":"{{InteractionDefaults.Email}}","sourceCustomObjectId":"{{Contact.AddressInfo.Email.SourceCustomObjectId}}","sourceCustomObjectKey":"{{Contact.AddressInfo.Email.SourceCustomObjectKey}}","fieldType":"{{Contact.AddressInfo.Email.FieldType}}","eventData":"{{Event}}","obfuscationProperties":"{{InteractionDefaults.Email.ObfuscationProperties}}","customObjectKey":"","definitionInstanceId":"{{Context.DefinitionInstanceId}}"}';
    var emailNameEscaped = jsonEscapeSbU(emailName || "PreEventEmail1");
    var tsDesc = jsonEscapeSbU(emailName || "Journey Maker email");
+   var emailOutcomeNext = useCampaignMemberUpdate
+     ? "SALESCLOUDACTIVITY-1"
+     : addTaskActivity == "1"
+     ? "SALESCLOUDACTIVITY-8"
+     : null;
+   var emailOutcomeJson = emailOutcomeNext
+     ? '{"next":"' + emailOutcomeNext + '","metaData":{"invalid":false}}'
+     : '{"next":null,"metaData":{"invalid":false}}';
    var emailActivity =
      '{"type":"EMAILV2","key":"EMAILV2-1","name":"' +
      emailNameEscaped +
-     '","outcomes":[{"next":"SALESCLOUDACTIVITY-1","metaData":{"invalid":false}}],"arguments":' +
+     '","outcomes":[' +
+     emailOutcomeJson +
+     '],"arguments":' +
      emailArgs +
      ',"metaData":{"isConfigured":true,"sections":{}},"configurationArguments":{"applicationExtensionKey":"jb-email-activity","isModified":false,"isSimulation":false,"fuelAgentRequested":true,"googleAnalyticsCampaignName":"","useLLTS":false,"isReconcilable":false,"triggeredSend":{"autoAddSubscribers":true,"autoUpdateSubscribers":true,"bccEmail":"' +
      bccEsc +
@@ -3096,7 +3201,9 @@ if (
    activitiesJson = activitiesJson != ""
     ? activitiesJson + "," + emailActivity
     : emailActivity;
-   activitiesJson = activitiesJson + "," + cmActivity;
+   if (useCampaignMemberUpdate) {
+    activitiesJson = activitiesJson + "," + cmActivity;
+   }
    if (addTaskActivity == "1") {
     activitiesJson = activitiesJson + "," + taskActivity;
    }
@@ -3842,7 +3949,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
       </div>
     </div>
     <p class="maker-page-subtitle">Create <strong>Automation</strong> powered journey that allows you to use account owner as the sender for each individual contact<br>
-      <strong>Salesforce Campaign ID</strong> filters the query and updates Campaign Member status in the journey.</p>
+      Pull audience from a <strong>Salesforce Campaign</strong> or an existing <strong>Data Extension</strong>.</p>
     <div class="maker-form-shell">
    <form method="post" action="">
      %%[ IF NOT Empty(@flow) THEN ]%%
@@ -3858,14 +3965,27 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
        </div>
        <div class="question-header" style="margin-top: 24px;">
          <div class="question-number">2</div>
-         <div class="question-text">Salesforce Campaign ID</div>
+         <div class="question-text">Audience source</div>
+       </div>
+       <div class="form-group">
+         <select id="audienceSource" class="select-control" name="audienceSource">
+           <option value="campaign"%%[ IF @audienceSource != "dataextension" THEN ]%% selected%%[ ENDIF ]%%>Salesforce Campaign</option>
+           <option value="dataextension"%%[ IF @audienceSource == "dataextension" THEN ]%% selected%%[ ENDIF ]%%>Data Extension</option>
+         </select>
+       </div>
+       <div class="question-header" style="margin-top: 24px;">
+         <div class="question-number">3</div>
+         <div class="question-text" id="audienceSourceLabel">%%[ IF @audienceSource == "dataextension" THEN ]%%Source Data Extension name%%[ ELSE ]%%Salesforce Campaign ID%%[ ENDIF ]%%</div>
        </div>
        <div class="form-group campaign-id-group">
-         <div class="campaign-id-row">
-           <input type="text" class="textarea-control" id="campaignId" name="campaignId" value="%%=v(@campaignId)=%%" placeholder="e.g. 701WL00000pFzUEYA0 — INNER JOIN filter in query + Campaign Member update" required>
+         <div class="campaign-id-row" id="campaignSourceRow"%%[ IF @audienceSource == "dataextension" THEN ]%% style="display:none;"%%[ ENDIF ]%%>
+           <input type="text" class="textarea-control" id="campaignId" name="campaignId" value="%%=v(@campaignId)=%%" placeholder="e.g. 701WL00000pFzUEYA0 — INNER JOIN filter in query + Campaign Member update"%%[ IF @audienceSource == "dataextension" THEN ]%% disabled%%[ ELSE ]%% required%%[ ENDIF ]%%>
            <button type="submit" name="verifyCampaign" value="1" class="submit-button campaign-verify-btn" formnovalidate>Verify</button>
          </div>
-%%[ IF @campaignVerifyShow == "1" THEN ]%%
+         <div class="campaign-id-row" id="deSourceRow"%%[ IF @audienceSource != "dataextension" THEN ]%% style="display:none;"%%[ ENDIF ]%%>
+           <input type="text" class="textarea-control" id="sourceDataExtension" name="sourceDataExtension" value="%%=v(@sourceDataExtension)=%%" placeholder="e.g. Audience_DE — query reads SubscriberKey and ContactId from this DE"%%[ IF @audienceSource == "dataextension" THEN ]%% required%%[ ELSE ]%% disabled%%[ ENDIF ]%%>
+         </div>
+%%[ IF @campaignVerifyShow == "1" AND @audienceSource != "dataextension" THEN ]%%
          <div class="campaign-verify-panel campaign-verify-panel--%%=v(@campaignVerifyStatus)=%%" role="status">
            <p class="campaign-verify-message">%%=v(@campaignVerifyMessage)=%%</p>
 %%[ IF @campaignVerifyStatus == "used" THEN ]%%
@@ -3875,21 +3995,21 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 %%[ ENDIF ]%%
        </div>
        <div class="question-header" style="margin-top: 24px;">
-         <div class="question-number">3</div>
+         <div class="question-number">4</div>
          <div class="question-text">Account owner User ID (optional)</div>
        </div>
        <div class="form-group">
          <input type="text" class="textarea-control" name="sfUserId" value="%%=v(@sfUserId)=%%" placeholder="Optional — sender will be the id you add here">
        </div>
        <div class="question-header" style="margin-top: 24px;">
-         <div class="question-number">4</div>
+         <div class="question-number">5</div>
          <div class="question-text">Journey description (optional)</div>
        </div>
        <div class="form-group">
          <input type="text" class="textarea-control" name="journeyDescription" value="%%=v(@journeyDescription)=%%" placeholder="Stored on the journey definition API payload">
        </div>
        <div class="question-header" style="margin-top: 24px;">
-         <div class="question-number">5</div>
+         <div class="question-number">6</div>
          <div class="question-text">Email subject line</div>
        </div>
        <div class="form-group">
@@ -3900,7 +4020,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
          <input id="bccEmail" type="text" class="textarea-control" name="bccEmail" value="%%=v(@bccEmail)=%%" placeholder="Leave blank for no BCC">
        </div>
        <div class="question-header" style="margin-top: 24px;">
-         <div class="question-number">6</div>
+         <div class="question-number">7</div>
          <div class="question-text">Sender profile</div>
        </div>
        <div class="form-group">
@@ -3913,7 +4033,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 %%[ ENDIF ]%%
        </div>
        <div class="question-header" style="margin-top: 24px;">
-         <div class="question-number">7</div>
+         <div class="question-number">8</div>
          <div class="question-text">Send classification</div>
        </div>
        <div class="form-group">
@@ -3926,7 +4046,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 %%[ ENDIF ]%%
        </div>
        <div class="question-header" style="margin-top: 24px;">
-         <div class="question-number">8</div>
+         <div class="question-number">9</div>
          <div class="question-text">Choose Email Template</div>
        </div>
        <div class="email-cards">
@@ -3952,7 +4072,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
          %%[ ENDIF ]%%
        </div>
        <div class="question-header" style="margin-top: 24px;">
-         <div class="question-number">9</div>
+         <div class="question-number">10</div>
          <div class="question-text">Automation schedule</div>
        </div>
        <div class="form-group">
@@ -4207,7 +4327,36 @@ Your data extension, query automation, journey, and email are in Marketing Cloud
    if (taskToggle) taskToggle.addEventListener('change', syncJourneyPreview);
    if (campaignNameInput) campaignNameInput.addEventListener('input', syncJourneyPreview);
    syncJourneyPreview();
- }
+   var audienceSourceSelect = form.querySelector('#audienceSource');
+   var campaignSourceRow = document.getElementById('campaignSourceRow');
+   var deSourceRow = document.getElementById('deSourceRow');
+   var audienceSourceLabel = document.getElementById('audienceSourceLabel');
+   var campaignInput = form.querySelector('#campaignId');
+   var deInput = form.querySelector('#sourceDataExtension');
+   var verifyBtn = form.querySelector('.campaign-verify-btn');
+   function syncAudienceSourceUi() {
+    var mode = audienceSourceSelect ? audienceSourceSelect.value : 'campaign';
+    var isDe = mode === 'dataextension';
+    if (campaignSourceRow) campaignSourceRow.style.display = isDe ? 'none' : '';
+    if (deSourceRow) deSourceRow.style.display = isDe ? '' : 'none';
+    if (campaignInput) {
+     campaignInput.required = !isDe;
+     campaignInput.disabled = isDe;
+    }
+    if (deInput) {
+     deInput.required = isDe;
+     deInput.disabled = !isDe;
+    }
+    if (verifyBtn) verifyBtn.style.display = isDe ? 'none' : '';
+    if (audienceSourceLabel) {
+     audienceSourceLabel.textContent = isDe ? 'Source Data Extension name' : 'Salesforce Campaign ID';
+    }
+   }
+   if (audienceSourceSelect) {
+    audienceSourceSelect.addEventListener('change', syncAudienceSourceUi);
+    syncAudienceSourceUi();
+   }
+  }
  var cards = document.querySelectorAll('.email-card');
  cards.forEach(function(card) {
    card.addEventListener('click', function() {
