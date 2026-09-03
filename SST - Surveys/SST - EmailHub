@@ -175,6 +175,39 @@ function createAsset(auth, token, payload) {
   return fromJson(body);
 }
 
+function getAsset(auth, token, assetId) {
+  var req = new Script.Util.HttpRequest("https://" + auth.subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + assetId);
+  req.emptyContentHandling = 0;
+  req.retries = 2;
+  req.continueOnError = true;
+  req.contentType = "application/json";
+  req.setHeader("Authorization", "Bearer " + token);
+  req.method = "GET";
+  var resp = req.send();
+  var body = String(resp.content || "");
+  if (resp.statusCode != 200) {
+    throw "Asset fetch HTTP " + resp.statusCode + ": " + body;
+  }
+  return fromJson(body);
+}
+
+function updateAsset(auth, token, assetId, payload) {
+  var req = new Script.Util.HttpRequest("https://" + auth.subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + assetId);
+  req.emptyContentHandling = 0;
+  req.retries = 2;
+  req.continueOnError = true;
+  req.contentType = "application/json";
+  req.setHeader("Authorization", "Bearer " + token);
+  req.method = "PATCH";
+  req.postData = asJson(payload);
+  var resp = req.send();
+  var body = String(resp.content || "");
+  if (resp.statusCode != 200 && resp.statusCode != 201) {
+    throw "Asset update HTTP " + resp.statusCode + ": " + body;
+  }
+  return fromJson(body);
+}
+
 function previewTables(environment) {
   if (String(environment || "").toLowerCase() == "uat") {
     return {
@@ -488,6 +521,51 @@ function minimalEmailHtml(headline, textBody, surveyId) {
   ].join("");
 }
 
+var loadedAsset = null;
+var loadedAssetId = "";
+var loadedEmailName = "";
+var loadedSubject = "";
+var loadedPreheader = "";
+var loadedHeadline = "";
+var loadedTextBody = "";
+var loadedSurveyId = "";
+
+function extractBetween(str, before, after) {
+  var start = str.indexOf(before);
+  if (start < 0) return "";
+  start += before.length;
+  var end = str.indexOf(after, start);
+  if (end < 0) return "";
+  return str.substring(start, end);
+}
+
+if (formValue("loadEmail") == "1") {
+  try {
+    var loadId = clean(formValue("loadAssetId"));
+    if (!loadId) throw "Please enter an Asset ID to load.";
+    var auth = getAuthConfig();
+    var token = getAccessToken(auth);
+    loadedAsset = getAsset(auth, token, loadId);
+    loadedAssetId = String(loadedAsset.id || "");
+    loadedEmailName = clean(loadedAsset.name);
+    var views = loadedAsset.views || {};
+    loadedSubject = clean((views.subjectline || {}).content);
+    loadedPreheader = clean((views.preheader || {}).content);
+    var htmlContent = String((views.html || {}).content || "");
+    loadedHeadline = extractBetween(htmlContent, "color:#ffffff;\">", "</h1>");
+    loadedTextBody = extractBetween(htmlContent, "<p style=\"margin:0 0 20px;\">", "</p>");
+    var surveyMatch = extractBetween(htmlContent, "MH1Fdf3gkpiWmvpt?id=", "&");
+    if (!surveyMatch) surveyMatch = extractBetween(htmlContent, "MH1Fdf3gkpiWmvpt?id=", "\"");
+    try { loadedSurveyId = decodeURIComponent(surveyMatch); } catch (e) { loadedSurveyId = surveyMatch; }
+    resultStatus = "success";
+    resultMessage = "Email loaded: " + loadedEmailName + " (ID: " + loadedAssetId + ")";
+    createdAssetId = loadedAssetId;
+  } catch (ex) {
+    resultStatus = "error";
+    resultMessage = String(ex);
+  }
+}
+
 if (formValue("createEmail") == "1") {
   try {
     var emailName = clean(formValue("emailName"));
@@ -514,19 +592,10 @@ if (formValue("createEmail") == "1") {
     if (!textBody) {
       textBody = "We're always looking for ways to improve, and your input makes a big difference.";
     }
+    var existingAssetId = clean(formValue("existingAssetId"));
     var surveyUrl = takeSurveyUrl(surveyId, "");
-    createdCustomerKey = "sst-" + guidKey();
     var payload = {
       name: emailName,
-      customerKey: createdCustomerKey,
-      assetType: {
-        id: 208,
-        name: "htmlemail"
-      },
-      channels: {
-        email: true,
-        web: false
-      },
       views: {
         html: {
           content: minimalEmailHtml(headline, textBody, surveyId)
@@ -551,10 +620,22 @@ if (formValue("createEmail") == "1") {
     };
     var auth = getAuthConfig();
     var token = getAccessToken(auth);
-    var created = createAsset(auth, token, payload);
-    createdAssetId = String(created.id || "");
-    resultStatus = "success";
-    resultMessage = "Minimal Content Builder email created.";
+    if (existingAssetId) {
+      var updated = updateAsset(auth, token, existingAssetId, payload);
+      createdAssetId = String(updated.id || existingAssetId);
+      createdCustomerKey = String(updated.customerKey || "");
+      resultStatus = "success";
+      resultMessage = "Email updated in Content Builder.";
+    } else {
+      createdCustomerKey = "sst-" + guidKey();
+      payload.customerKey = createdCustomerKey;
+      payload.assetType = { id: 208, name: "htmlemail" };
+      payload.channels = { email: true, web: false };
+      var created = createAsset(auth, token, payload);
+      createdAssetId = String(created.id || "");
+      resultStatus = "success";
+      resultMessage = "Minimal Content Builder email created.";
+    }
   } catch (ex) {
     resultStatus = "error";
     resultMessage = String(ex);
@@ -575,6 +656,13 @@ Platform.Variable.SetValue("@emailHubSurveyStageUrl", surveyStageUrl);
 Platform.Variable.SetValue("@emailHubSurveyAnalyticsUrl", surveyAnalyticsUrl);
 Platform.Variable.SetValue("@emailHubPreviewContactId", previewContactId);
 Platform.Variable.SetValue("@emailHubPreviewDataJson", asJson(previewData));
+Platform.Variable.SetValue("@emailHubLoadedAssetId", loadedAssetId);
+Platform.Variable.SetValue("@emailHubLoadedEmailName", loadedEmailName);
+Platform.Variable.SetValue("@emailHubLoadedSubject", loadedSubject);
+Platform.Variable.SetValue("@emailHubLoadedPreheader", loadedPreheader);
+Platform.Variable.SetValue("@emailHubLoadedHeadline", loadedHeadline);
+Platform.Variable.SetValue("@emailHubLoadedTextBody", loadedTextBody);
+Platform.Variable.SetValue("@emailHubLoadedSurveyId", loadedSurveyId);
 </script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -1010,34 +1098,74 @@ Platform.Variable.SetValue("@emailHubPreviewDataJson", asJson(previewData));
       }
     </script>
     <div class="hub-grid">
-      <form method="post" id="emailHubForm">
-        <input type="hidden" name="createEmail" value="1">
-        <div class="form-group">
-          <label class="form-label" for="emailName">Email Name</label>
-          <input class="form-input" id="emailName" name="emailName" value="SST Survey Email">
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="subject">Subject</label>
-          <input class="form-input" id="subject" name="subject" value="Got 2 minutes? Tell us what you think">
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="preheader">Preheader</label>
-          <input class="form-input" id="preheader" name="preheader" value="We would appreciate a few minutes of your time.">
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="surveyId">Survey ID</label>
-          <input class="form-input" id="surveyId" name="surveyId" value="SURV_20260612_102301">
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="headline">Headline</label>
-          <input class="form-input" id="headline" name="headline" value="Got 2 minutes? Tell us what you think">
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="textBody">Text Body</label>
-          <textarea class="form-textarea" id="textBody" name="textBody">We're always looking for ways to improve, and your input makes a big difference.</textarea>
-        </div>
-        <button class="btn btn-create" type="submit">Create</button>
-      </form>
+      <div>
+        <form method="post" id="loadEmailForm" style="margin-bottom:16px;display:flex;gap:8px;align-items:flex-end;">
+          <input type="hidden" name="loadEmail" value="1">
+          <div class="form-group" style="margin:0;flex:1;">
+            <label class="form-label" for="loadAssetId">Load existing email by Asset ID</label>
+            <input class="form-input" id="loadAssetId" name="loadAssetId" placeholder="e.g. 123456">
+          </div>
+          <button class="btn btn-secondary" type="submit" style="white-space:nowrap;">Load</button>
+        </form>
+        <form method="post" id="emailHubForm">
+          <input type="hidden" name="createEmail" value="1">
+          <script runat="server">
+            var hiddenAssetId = Platform.Variable.GetValue("@emailHubLoadedAssetId") || "";
+            if (hiddenAssetId) {
+              Write('<input type="hidden" name="existingAssetId" id="existingAssetId" value="' + hiddenAssetId + '">');
+              Write('<p class="small" style="margin-bottom:14px;padding:8px 12px;background:#f0f4ff;border:1px solid #c7d2fe;">Editing Asset ID: <strong>' + hiddenAssetId + '</strong> &mdash; submitting will update this email.</p>');
+            }
+          </script>
+          <div class="form-group">
+            <label class="form-label" for="emailName">Email Name</label>
+            <script runat="server">
+              function fv(varName, fallback) {
+                var v = Platform.Variable.GetValue(varName);
+                return String(v && v != "undefined" ? v : fallback || "")
+                  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+              }
+              Write('<input class="form-input" id="emailName" name="emailName" value="' + fv("@emailHubLoadedEmailName", "SST Survey Email") + '">');
+            </script>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="subject">Subject</label>
+            <script runat="server">
+              Write('<input class="form-input" id="subject" name="subject" value="' + fv("@emailHubLoadedSubject", "Got 2 minutes? Tell us what you think") + '">');
+            </script>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="preheader">Preheader</label>
+            <script runat="server">
+              Write('<input class="form-input" id="preheader" name="preheader" value="' + fv("@emailHubLoadedPreheader", "We would appreciate a few minutes of your time.") + '">');
+            </script>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="surveyId">Survey ID</label>
+            <script runat="server">
+              Write('<input class="form-input" id="surveyId" name="surveyId" value="' + fv("@emailHubLoadedSurveyId", "SURV_20260612_102301") + '">');
+            </script>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="headline">Headline</label>
+            <script runat="server">
+              Write('<input class="form-input" id="headline" name="headline" value="' + fv("@emailHubLoadedHeadline", "Got 2 minutes? Tell us what you think") + '">');
+            </script>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="textBody">Text Body</label>
+            <script runat="server">
+              var tbVal = Platform.Variable.GetValue("@emailHubLoadedTextBody");
+              var tbSafe = String(tbVal && tbVal != "undefined" ? tbVal : "We're always looking for ways to improve, and your input makes a big difference.")
+                .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+              Write('<textarea class="form-textarea" id="textBody" name="textBody">' + tbSafe + '</textarea>');
+            </script>
+          </div>
+          <script runat="server">
+            var submitLabel = Platform.Variable.GetValue("@emailHubLoadedAssetId") ? "Update" : "Create";
+            Write('<button class="btn btn-create" type="submit">' + submitLabel + '</button>');
+          </script>
+        </form>
+      </div>
       <section class="preview-panel" aria-label="Email preview">
         <div class="preview-header">
           <button class="preview-avatar" id="previewContactToggle" type="button" aria-expanded="false" aria-controls="previewContactPanel">M</button>
