@@ -156,27 +156,44 @@ function normalizeBatchRows(rawRows) {
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i];
     out.push({
-      batchId: strTrim(queueField(row, ["batchId", "BatchId", "BATCHID"])),
+      batchId: strTrim(
+        fieldFromRow(row, ["batchId", "BatchId", "BATCHID"])
+      ),
       sourceDeName: strTrim(
-        queueField(row, ["sourceDeName", "SourceDeName", "sourceDEName"])
+        fieldFromRow(row, ["sourceDeName", "SourceDeName", "sourceDEName"])
       ),
       journeyID: strTrim(
-        queueField(row, ["journeyID", "journeyId", "JourneyID"])
+        fieldFromRow(row, ["journeyID", "journeyId", "JourneyID"])
       ),
       journeyName: strTrim(
-        queueField(row, ["journeyName", "JourneyName"])
+        fieldFromRow(row, ["journeyName", "JourneyName"])
       ),
       journeyKey: strTrim(
-        queueField(row, ["journeyKey", "JourneyKey", "definitionKey"])
+        fieldFromRow(row, ["journeyKey", "JourneyKey", "definitionKey"])
       ),
-      status: strTrim(queueField(row, ["status", "Status"]))
+      status: strTrim(fieldFromRow(row, ["status", "Status"]))
     });
   }
   return out;
 }
 
+function isWorkableBatchStatus(status) {
+  var s = asLower(status);
+  if (!s) {
+    return true;
+  }
+  return (
+    s === "pending" ||
+    s === "failed" ||
+    s === "queued" ||
+    s === "processing" ||
+    s === "done"
+  );
+}
+
 function fetchPendingBatches(prox) {
   var errors = [];
+  var notes = [];
   var keyVariants = [BATCH_DE, String(BATCH_DE).toLowerCase()];
   var props = [
     "batchId",
@@ -188,29 +205,57 @@ function fetchPendingBatches(prox) {
     "requestedAt",
     "message"
   ];
-  var workable = {
-    pending: true,
-    failed: true,
-    queued: true,
-    processing: true
-  };
+  var collected = [];
+  var seen = {};
+  var statusCounts = {};
 
-  function isWorkable(status) {
-    return workable[asLower(status)] === true;
+  function addRows(rows, sourceLabel) {
+    var list = normalizeBatchRows(rows);
+    notes.push(sourceLabel + " raw=" + list.length);
+    for (var i = 0; i < list.length; i++) {
+      var row = list[i];
+      var st = row.status || "(blank)";
+      statusCounts[st] = (statusCounts[st] || 0) + 1;
+      if (!row.batchId) {
+        notes.push(sourceLabel + " skipped row missing batchId");
+        continue;
+      }
+      if (!isWorkableBatchStatus(row.status)) {
+        notes.push(
+          sourceLabel +
+            " skipped batchId=" +
+            row.batchId +
+            " status=" +
+            st
+        );
+        continue;
+      }
+      var id = asLower(row.batchId);
+      if (seen[id]) {
+        continue;
+      }
+      seen[id] = true;
+      if (!row.status) {
+        row.status = "Pending";
+      }
+      collected.push(row);
+    }
   }
 
   for (var v = 0; v < keyVariants.length; v++) {
     var deKey = keyVariants[v];
     try {
       var de = DataExtension.Init(deKey);
-      var allRows = normalizeBatchRows(de.Rows.Retrieve());
-      var pending = [];
-      for (var i = 0; i < allRows.length; i++) {
-        if (isWorkable(allRows[i].status)) {
-          pending.push(allRows[i]);
-        }
+      var initRows = de.Rows.Retrieve();
+      addRows(initRows, "Init(" + deKey + ")");
+      if (collected.length) {
+        return {
+          rows: collected,
+          error: "",
+          notes: notes.join(" | "),
+          statusCounts: statusCounts
+        };
       }
-      return { rows: pending, error: "", scanned: allRows.length };
     } catch (deEx) {
       errors.push(
         "DataExtension.Init(" + deKey + "): " + (deEx.message || String(deEx))
@@ -218,14 +263,50 @@ function fetchPendingBatches(prox) {
     }
   }
 
-  var statusValues = ["Pending", "Failed", "Queued", "Processing"];
-  var collected = [];
-  var seen = {};
-  for (var s = 0; s < statusValues.length; s++) {
+  var filters = [
+    { Property: "batchId", SimpleOperator: "isNotNull" },
+    { Property: "status", SimpleOperator: "isNotNull" },
+    { Property: "sourceDeName", SimpleOperator: "isNotNull" }
+  ];
+  for (var f = 0; f < filters.length; f++) {
     for (var k = 0; k < keyVariants.length; k++) {
       try {
         var wsResp = prox.retrieve(
           "DataExtensionObject[" + keyVariants[k] + "]",
+          props,
+          filters[f]
+        );
+        addRows(
+          wsResp && wsResp.Results ? wsResp.Results : [],
+          "WSProxy[" + keyVariants[k] + "]/" + filters[f].Property
+        );
+        if (collected.length) {
+          return {
+            rows: collected,
+            error: "",
+            notes: notes.join(" | "),
+            statusCounts: statusCounts
+          };
+        }
+      } catch (wsEx) {
+        errors.push(
+          "WSProxy " +
+            keyVariants[k] +
+            " " +
+            filters[f].Property +
+            ": " +
+            (wsEx.message || String(wsEx))
+        );
+      }
+    }
+  }
+
+  var statusValues = ["Pending", "Failed", "Queued", "Processing", "Done"];
+  for (var s = 0; s < statusValues.length; s++) {
+    for (var k2 = 0; k2 < keyVariants.length; k2++) {
+      try {
+        var wsResp2 = prox.retrieve(
+          "DataExtensionObject[" + keyVariants[k2] + "]",
           props,
           {
             Property: "status",
@@ -233,34 +314,44 @@ function fetchPendingBatches(prox) {
             Value: statusValues[s]
           }
         );
-        var normalized = normalizeBatchRows(
-          wsResp && wsResp.Results ? wsResp.Results : []
+        addRows(
+          wsResp2 && wsResp2.Results ? wsResp2.Results : [],
+          "WSProxy[" + keyVariants[k2] + "]/status=" + statusValues[s]
         );
-        for (var n = 0; n < normalized.length; n++) {
-          var id = asLower(normalized[n].batchId);
-          if (!id || seen[id]) {
-            continue;
-          }
-          seen[id] = true;
-          collected.push(normalized[n]);
-        }
-      } catch (wsEx) {
+      } catch (wsEx2) {
         errors.push(
-          "WSProxy " +
-            keyVariants[k] +
-            " status=" +
+          "WSProxy status=" +
             statusValues[s] +
             ": " +
-            (wsEx.message || String(wsEx))
+            (wsEx2.message || String(wsEx2))
         );
       }
     }
   }
+
   if (collected.length) {
-    return { rows: collected, error: "", scanned: collected.length };
+    return {
+      rows: collected,
+      error: "",
+      notes: notes.join(" | "),
+      statusCounts: statusCounts
+    };
   }
 
-  return { rows: [], error: errors.join(" | "), scanned: 0 };
+  var countBits = [];
+  for (var ck in statusCounts) {
+    if (statusCounts.hasOwnProperty(ck)) {
+      countBits.push(ck + "=" + statusCounts[ck]);
+    }
+  }
+
+  return {
+    rows: [],
+    error: errors.join(" | "),
+    notes: notes.join(" | "),
+    statusCounts: statusCounts,
+    statusSummary: countBits.join(", ")
+  };
 }
 
 function updateBatchRow(batchId, status, message) {
@@ -646,17 +737,23 @@ try {
   resultLines.push(
     "bd_sst_journey_exit_batch seeder — " +
       batches.length +
-      " workable batch(es) (Pending/Failed/Queued/Processing)."
+      " workable batch(es)."
   );
+  if (fetch.notes) {
+    debugLines.push("Fetch notes: " + fetch.notes);
+  }
+  if (fetch.statusSummary) {
+    debugLines.push("Status counts: " + fetch.statusSummary);
+  }
   if (fetch.error) {
-    debugLines.push("Retrieve notes: " + fetch.error);
+    debugLines.push("Retrieve errors: " + fetch.error);
   }
 
   if (!batches.length) {
     resultLines.push(
-      fetch.error
-        ? "No workable batches (retrieve issues — see notes)."
-        : "No workable batches. If a batch already shows Done with 0 inserts, set status back to Pending and re-run."
+      "No workable batches found. Check Fetch notes/Status counts in the log. Expected DE external key: " +
+        BATCH_DE +
+        ". Workable statuses: Pending, Failed, Queued, Processing, Done, or blank."
     );
   } else {
     var runCount =
@@ -673,6 +770,16 @@ try {
       );
     }
     for (var b = 0; b < runCount; b++) {
+      debugLines.push(
+        "Selected batchId=" +
+          (batches[b].batchId || "") +
+          " status=" +
+          (batches[b].status || "") +
+          " sourceDeName=" +
+          (batches[b].sourceDeName || "") +
+          " journeyId=" +
+          (batches[b].journeyID || "")
+      );
       debugLines.push(processBatch(prox, batches[b]));
     }
   }
