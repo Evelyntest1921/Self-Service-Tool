@@ -19,12 +19,32 @@ function formValue(name) {
   return value || "";
 }
 
+function asStr(value) {
+  if (value === null || typeof value === "undefined") {
+    return "";
+  }
+  try {
+    return (value + "").replace(/^\s+|\s+$/g, "");
+  } catch (e) {
+    return "";
+  }
+}
+
+function asLower(value) {
+  var s = asStr(value);
+  try {
+    return s.toLowerCase();
+  } catch (e) {
+    return s;
+  }
+}
+
 function clean(value) {
-  return String(value || "").replace(/^\s+|\s+$/g, "");
+  return asStr(value);
 }
 
 function htmlSafe(value) {
-  return String(value || "")
+  return asStr(value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -36,7 +56,39 @@ function asJson(value) {
 }
 
 function fromJson(value) {
-  return Platform.Function.ParseJSON(String(value || "{}"));
+  try {
+    return Platform.Function.ParseJSON(asStr(value) || "{}");
+  } catch (e) {
+    return {};
+  }
+}
+
+function lenArrayish(raw) {
+  if (raw === null || typeof raw === "undefined") {
+    return -1;
+  }
+  try {
+    if (typeof raw.length === "number") {
+      return raw.length;
+    }
+  } catch (e) {}
+  return -1;
+}
+
+function coerceRows(raw) {
+  if (raw === null || typeof raw === "undefined") {
+    return [];
+  }
+  var n = lenArrayish(raw);
+  if (n < 0) {
+    return [];
+  }
+  var out = [];
+  var i;
+  for (i = 0; i < n; i++) {
+    out.push(raw[i]);
+  }
+  return out;
 }
 
 function field(row, name) {
@@ -89,7 +141,7 @@ function getAccessToken(auth) {
   req.method = "POST";
   req.postData = asJson(payload);
   var resp = req.send();
-  var body = String(resp.content || "");
+  var body = asStr(resp.content);
   if (resp.statusCode != 200) {
     throw "Auth HTTP " + resp.statusCode + ": " + body;
   }
@@ -97,7 +149,7 @@ function getAccessToken(auth) {
   if (!parsed.access_token) {
     throw "Auth response did not include access_token.";
   }
-  return parsed.access_token;
+  return asStr(parsed.access_token);
 }
 
 function httpJson(auth, token, method, path, payload) {
@@ -114,13 +166,8 @@ function httpJson(auth, token, method, path, payload) {
   var resp = req.send();
   return {
     status: resp.statusCode,
-    body: String(resp.content || "")
+    body: asStr(resp.content)
   };
-}
-
-function isActiveJourneyStatus(status) {
-  var u = String(status || "").toLowerCase();
-  return u === "published" || u === "running";
 }
 
 function loadActiveJourneys(auth, token) {
@@ -140,36 +187,41 @@ function loadActiveJourneys(auth, token) {
       throw "Journey list HTTP " + resp.status + ": " + resp.body;
     }
     var parsed = fromJson(resp.body);
-    var items = parsed.items || [];
+    var items = coerceRows(parsed && parsed.items ? parsed.items : []);
     var i;
     for (i = 0; i < items.length; i++) {
       var item = items[i] || {};
-      var key = clean(item.key);
-      var name = clean(item.name) || "Untitled journey";
-      var status = clean(item.status) || "Published";
-      if (!key) continue;
-      if (!isActiveJourneyStatus(status) && String(status).toLowerCase() !== "published") continue;
+      var key = asStr(item.key);
+      var name = asStr(item.name) || "Untitled journey";
+      var status = asStr(item.status) || "Published";
+      var version = asStr(item.version);
+      if (!version) {
+        version = asStr(item.versionNumber);
+      }
+      if (!key) {
+        continue;
+      }
       all.push({
         key: key,
         name: name,
         status: status,
-        version: item.version || item.versionNumber || ""
+        version: version
       });
     }
-    var count = Number(parsed.count || 0);
-    var pageSizeResp = Number(parsed.pageSize || pageSize);
-    if (!items.length || page * pageSizeResp >= count) {
+    var count = 0;
+    try {
+      count = parseInt(asStr(parsed.count) || "0", 10);
+    } catch (countEx) {
+      count = 0;
+    }
+    if (isNaN(count)) {
+      count = 0;
+    }
+    if (!items.length || page * pageSize >= count) {
       break;
     }
     page++;
   }
-  all.sort(function (a, b) {
-    var an = String(a.name || "").toLowerCase();
-    var bn = String(b.name || "").toLowerCase();
-    if (an < bn) return -1;
-    if (an > bn) return 1;
-    return 0;
-  });
   return all;
 }
 
@@ -202,21 +254,23 @@ function buildJourneyOptions(journeys, selectedKey) {
 function summarizeExitResponse(body) {
   try {
     var parsed = fromJson(body);
-    if (parsed && parsed.errors && parsed.errors.length) {
+    var errors = coerceRows(parsed && parsed.errors ? parsed.errors : []);
+    if (errors.length) {
       var bits = [];
       var e;
-      for (e = 0; e < parsed.errors.length; e++) {
-        var err = parsed.errors[e] || {};
+      for (e = 0; e < errors.length; e++) {
+        var err = errors[e] || {};
         var statuses = err.status || [];
         var messages = [];
         var s;
-        for (s = 0; s < statuses.length; s++) {
-          if (statuses[s] && statuses[s].message) {
-            messages.push(String(statuses[s].message));
+        var statusRows = coerceRows(statuses);
+        for (s = 0; s < statusRows.length; s++) {
+          if (statusRows[s] && statusRows[s].message) {
+            messages.push(asStr(statusRows[s].message));
           }
         }
         bits.push(
-          (err.contactKey || "contact") +
+          (asStr(err.contactKey) || "contact") +
             ": " +
             (messages.length ? messages.join("; ") : "exit request reported an error")
         );
@@ -292,9 +346,9 @@ try {
 } catch (ex) {
   if (formValue("exitContact") == "1") {
     resultStatus = "error";
-    resultMessage = String(ex);
+    resultMessage = asStr(ex && ex.message ? ex.message : ex);
   } else {
-    journeysLoadError = String(ex);
+    journeysLoadError = asStr(ex && ex.message ? ex.message : ex);
     if (!journeyOptionsHtml) {
       journeyOptionsHtml = '<option value="">Unable to load journeys</option>';
     }
