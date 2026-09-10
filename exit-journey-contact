@@ -1,0 +1,595 @@
+<script runat="server">
+Platform.Load("core", "1");
+
+var resultStatus = "";
+var resultMessage = "";
+var resultDetail = "";
+var hubUrl = "";
+var journeyOptionsHtml = "";
+var selectedDefinitionKey = "";
+var selectedJourneyName = "";
+var subscriberKeyValue = "";
+var journeysLoadError = "";
+
+function formValue(name) {
+  var value = "";
+  try {
+    value = Platform.Request.GetFormField(name);
+  } catch (e) {}
+  return value || "";
+}
+
+function clean(value) {
+  return String(value || "").replace(/^\s+|\s+$/g, "");
+}
+
+function htmlSafe(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function asJson(value) {
+  return Platform.Function.Stringify(value);
+}
+
+function fromJson(value) {
+  return Platform.Function.ParseJSON(String(value || "{}"));
+}
+
+function field(row, name) {
+  if (!row) return "";
+  return row[name] || row[String(name)] || "";
+}
+
+function lookupValue(deName, returnField, lookupField, lookupValue) {
+  try {
+    return clean(Platform.Function.Lookup(deName, returnField, lookupField, lookupValue));
+  } catch (e) {}
+  return "";
+}
+
+function getAuthConfig() {
+  var rows = Platform.Function.LookupRows("SFMC_AUTH", "User", "Admin");
+  if (!rows || rows.length < 1) {
+    throw "Missing SFMC_AUTH row for User=Admin.";
+  }
+  var row = rows[0];
+  var clientId = clean(field(row, "clientId"));
+  var clientSecret = clean(field(row, "clientSecret"));
+  var subdomain = clean(field(row, "subdomain"));
+  var accountId = clean(field(row, "accountId"));
+  if (!clientId || !clientSecret || !subdomain) {
+    throw "SFMC_AUTH must include clientId, clientSecret, and subdomain.";
+  }
+  return {
+    clientId: clientId,
+    clientSecret: clientSecret,
+    subdomain: subdomain,
+    accountId: accountId
+  };
+}
+
+function getAccessToken(auth) {
+  var payload = {
+    grant_type: "client_credentials",
+    client_id: auth.clientId,
+    client_secret: auth.clientSecret
+  };
+  if (auth.accountId) {
+    payload.account_id = auth.accountId;
+  }
+  var req = new Script.Util.HttpRequest("https://" + auth.subdomain + ".auth.marketingcloudapis.com/v2/token");
+  req.emptyContentHandling = 0;
+  req.retries = 2;
+  req.continueOnError = true;
+  req.contentType = "application/json";
+  req.method = "POST";
+  req.postData = asJson(payload);
+  var resp = req.send();
+  var body = String(resp.content || "");
+  if (resp.statusCode != 200) {
+    throw "Auth HTTP " + resp.statusCode + ": " + body;
+  }
+  var parsed = fromJson(body);
+  if (!parsed.access_token) {
+    throw "Auth response did not include access_token.";
+  }
+  return parsed.access_token;
+}
+
+function httpJson(auth, token, method, path, payload) {
+  var req = new Script.Util.HttpRequest("https://" + auth.subdomain + ".rest.marketingcloudapis.com" + path);
+  req.emptyContentHandling = 0;
+  req.retries = 2;
+  req.continueOnError = true;
+  req.contentType = "application/json";
+  req.setHeader("Authorization", "Bearer " + token);
+  req.method = method;
+  if (payload !== null && payload !== undefined) {
+    req.postData = asJson(payload);
+  }
+  var resp = req.send();
+  return {
+    status: resp.statusCode,
+    body: String(resp.content || "")
+  };
+}
+
+function isActiveJourneyStatus(status) {
+  var u = String(status || "").toLowerCase();
+  return u === "published" || u === "running";
+}
+
+function loadActiveJourneys(auth, token) {
+  var all = [];
+  var page = 1;
+  var pageSize = 50;
+  var maxPages = 20;
+  while (page <= maxPages) {
+    var path =
+      "/interaction/v1/interactions?$page=" +
+      page +
+      "&$pagesize=" +
+      pageSize +
+      "&status=Published&mostRecentVersionOnly=true&$orderBy=Name ASC";
+    var resp = httpJson(auth, token, "GET", path, null);
+    if (resp.status != 200) {
+      throw "Journey list HTTP " + resp.status + ": " + resp.body;
+    }
+    var parsed = fromJson(resp.body);
+    var items = parsed.items || [];
+    var i;
+    for (i = 0; i < items.length; i++) {
+      var item = items[i] || {};
+      var key = clean(item.key);
+      var name = clean(item.name) || "Untitled journey";
+      var status = clean(item.status) || "Published";
+      if (!key) continue;
+      if (!isActiveJourneyStatus(status) && String(status).toLowerCase() !== "published") continue;
+      all.push({
+        key: key,
+        name: name,
+        status: status,
+        version: item.version || item.versionNumber || ""
+      });
+    }
+    var count = Number(parsed.count || 0);
+    var pageSizeResp = Number(parsed.pageSize || pageSize);
+    if (!items.length || page * pageSizeResp >= count) {
+      break;
+    }
+    page++;
+  }
+  all.sort(function (a, b) {
+    var an = String(a.name || "").toLowerCase();
+    var bn = String(b.name || "").toLowerCase();
+    if (an < bn) return -1;
+    if (an > bn) return 1;
+    return 0;
+  });
+  return all;
+}
+
+function buildJourneyOptions(journeys, selectedKey) {
+  var parts = ['<option value="">Select a published journey</option>'];
+  var i;
+  for (i = 0; i < journeys.length; i++) {
+    var j = journeys[i];
+    var selected = selectedKey && selectedKey === j.key ? ' selected' : "";
+    var label = j.name;
+    if (j.version) {
+      label += " (v" + j.version + ")";
+    }
+    label += " — " + j.status;
+    parts.push(
+      '<option value="' +
+        htmlSafe(j.key) +
+        '"' +
+        selected +
+        ' data-name="' +
+        htmlSafe(j.name) +
+        '">' +
+        htmlSafe(label) +
+        "</option>"
+    );
+  }
+  return parts.join("");
+}
+
+function summarizeExitResponse(body) {
+  try {
+    var parsed = fromJson(body);
+    if (parsed && parsed.errors && parsed.errors.length) {
+      var bits = [];
+      var e;
+      for (e = 0; e < parsed.errors.length; e++) {
+        var err = parsed.errors[e] || {};
+        var statuses = err.status || [];
+        var messages = [];
+        var s;
+        for (s = 0; s < statuses.length; s++) {
+          if (statuses[s] && statuses[s].message) {
+            messages.push(String(statuses[s].message));
+          }
+        }
+        bits.push(
+          (err.contactKey || "contact") +
+            ": " +
+            (messages.length ? messages.join("; ") : "exit request reported an error")
+        );
+      }
+      return { hasErrors: true, summary: bits.join(" | ") };
+    }
+  } catch (parseEx) {}
+  return { hasErrors: false, summary: "" };
+}
+
+hubUrl = lookupValue("bd_sst_page_navigation", "ss_home", "type", "cloudpage") || "#";
+selectedDefinitionKey = clean(formValue("definitionKey"));
+selectedJourneyName = clean(formValue("journeyName"));
+subscriberKeyValue = clean(formValue("subscriberKey"));
+
+try {
+  var auth = getAuthConfig();
+  var token = getAccessToken(auth);
+  var journeys = loadActiveJourneys(auth, token);
+  journeyOptionsHtml = buildJourneyOptions(journeys, selectedDefinitionKey);
+
+  if (formValue("exitContact") == "1") {
+    if (!selectedDefinitionKey) {
+      throw "Select a journey.";
+    }
+    if (!subscriberKeyValue) {
+      throw "Enter a Subscriber Key.";
+    }
+    if (!selectedJourneyName) {
+      var j;
+      for (j = 0; j < journeys.length; j++) {
+        if (journeys[j].key === selectedDefinitionKey) {
+          selectedJourneyName = journeys[j].name;
+          break;
+        }
+      }
+    }
+
+    var exitPayload = [
+      {
+        ContactKey: subscriberKeyValue,
+        DefinitionKey: selectedDefinitionKey
+      }
+    ];
+    var exitResp = httpJson(auth, token, "POST", "/interaction/v1/interactions/contactexit", exitPayload);
+    resultDetail = exitResp.body;
+    var summary = summarizeExitResponse(exitResp.body);
+
+    if (exitResp.status == 202 || exitResp.status == 200) {
+      if (summary.hasErrors) {
+        resultStatus = "error";
+        resultMessage =
+          "Exit request accepted with errors for " +
+          subscriberKeyValue +
+          " on " +
+          (selectedJourneyName || selectedDefinitionKey) +
+          ". " +
+          summary.summary;
+      } else {
+        resultStatus = "success";
+        resultMessage =
+          "Exit request accepted for " +
+          subscriberKeyValue +
+          " from " +
+          (selectedJourneyName || selectedDefinitionKey) +
+          ". SFMC processes removals asynchronously.";
+      }
+    } else {
+      resultStatus = "error";
+      resultMessage = "Exit HTTP " + exitResp.status + ": " + exitResp.body;
+    }
+  }
+} catch (ex) {
+  if (formValue("exitContact") == "1") {
+    resultStatus = "error";
+    resultMessage = String(ex);
+  } else {
+    journeysLoadError = String(ex);
+    if (!journeyOptionsHtml) {
+      journeyOptionsHtml = '<option value="">Unable to load journeys</option>';
+    }
+  }
+}
+
+Platform.Variable.SetValue("@exitHubUrl", hubUrl);
+Platform.Variable.SetValue("@exitResultStatus", resultStatus);
+Platform.Variable.SetValue("@exitResultMessage", resultMessage);
+Platform.Variable.SetValue("@exitResultDetail", resultDetail);
+Platform.Variable.SetValue("@exitJourneyOptionsHtml", journeyOptionsHtml);
+Platform.Variable.SetValue("@exitSelectedDefinitionKey", selectedDefinitionKey);
+Platform.Variable.SetValue("@exitSelectedJourneyName", selectedJourneyName);
+Platform.Variable.SetValue("@exitSubscriberKey", subscriberKeyValue);
+Platform.Variable.SetValue("@exitJourneysLoadError", journeysLoadError);
+</script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Exit contact from journey</title>
+<link rel="icon" href="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&amp;w=640&amp;q=75" type="image/png">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+:root {
+  --primary-color: #6366f1;
+  --primary-dark: #4f46e5;
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --bg-secondary: #f9fafb;
+  --border-color: #e5e7eb;
+  --gray-400: #9ca3af;
+  --gray-500: #6b7280;
+  --gray-900: #111827;
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --radius-md: 0.5rem;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  line-height: 1.6;
+}
+.page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+}
+.breadcrumb-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+.breadcrumb-link {
+  display: inline-flex;
+  align-items: center;
+  color: var(--primary-color);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 16px;
+}
+.breadcrumb-link:hover { color: var(--primary-dark); text-decoration: underline; }
+.breadcrumb-separator { margin: 0 8px; color: var(--gray-400); }
+.breadcrumb-current { font-weight: 600; color: var(--gray-900); }
+.card {
+  background: #fff;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+  padding: 28px 28px 32px;
+}
+h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  margin-bottom: 8px;
+  line-height: 1.25;
+}
+.sub {
+  color: var(--text-secondary);
+  margin-bottom: 24px;
+  max-width: 560px;
+}
+.form-group { margin-bottom: 20px; }
+.form-label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+.form-input,
+.form-select {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  background: #fff;
+}
+.form-input:focus,
+.form-select:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+.hint {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--gray-500);
+}
+.btn {
+  border: 0;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 12px 24px;
+}
+.btn-create {
+  background: #000;
+  color: #fff;
+  border-radius: 0;
+}
+.btn-create:hover { box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+.btn-secondary {
+  background: #f3f4f6;
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  text-decoration: none;
+  display: inline-block;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 8px;
+}
+.notice {
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  border: 1px solid;
+  background: #fff;
+}
+.success { border-color: #24a148; color: #0e6027; }
+.error { border-color: #da1e28; color: #a2191f; }
+.warn { border-color: #f59e0b; color: #92400e; }
+.detail {
+  margin-top: 12px;
+  padding: 12px;
+  background: #f9fafb;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #374151;
+  display: none;
+}
+.detail.is-visible { display: block; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav class="breadcrumb-nav" aria-label="Breadcrumb">
+    <script runat="server">
+      function navSafe(value) {
+        return String(value || "#")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+      Write('<a href="' + navSafe(Platform.Variable.GetValue("@exitHubUrl") || "#") + '" class="breadcrumb-link">Back</a>');
+    </script>
+    <span class="breadcrumb-separator" aria-hidden="true">/</span>
+    <span class="breadcrumb-current">Exit contact</span>
+  </nav>
+
+  <div class="card">
+    <h1>Exit contact from journey</h1>
+    <p class="sub">Select a published journey and enter a Subscriber Key to remove that contact from the journey.</p>
+
+    <script runat="server">
+      function bodySafe(value) {
+        return String(value || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+      var loadErr = Platform.Variable.GetValue("@exitJourneysLoadError");
+      if (loadErr) {
+        Write('<div class="notice warn"><strong>Could not fully load journeys.</strong><br>' + bodySafe(loadErr) + '</div>');
+      }
+      var status = Platform.Variable.GetValue("@exitResultStatus");
+      var message = Platform.Variable.GetValue("@exitResultMessage");
+      if (status) {
+        Write('<div class="notice ' + bodySafe(status) + '"><strong>' + bodySafe(message) + '</strong></div>');
+      }
+    </script>
+
+    <form method="post" id="exitForm" onsubmit="return confirmExit();">
+      <input type="hidden" name="exitContact" value="1">
+      <input type="hidden" name="journeyName" id="journeyName" value="">
+      <div class="form-group">
+        <label class="form-label" for="definitionKey">Journey</label>
+        <select class="form-select" id="definitionKey" name="definitionKey" required>
+          <script runat="server">
+            Write(Platform.Variable.GetValue("@exitJourneyOptionsHtml") || '<option value="">No journeys loaded</option>');
+          </script>
+        </select>
+        <p class="hint">Only published journeys are listed. The API uses the journey Definition Key, not the Journey ID.</p>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="subscriberKey">Subscriber Key</label>
+        <script runat="server">
+          function fieldSafe(value) {
+            return String(value || "")
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;");
+          }
+          Write('<input class="form-input" id="subscriberKey" name="subscriberKey" required placeholder="Contact or subscriber key" value="' + fieldSafe(Platform.Variable.GetValue("@exitSubscriberKey") || "") + '">');
+        </script>
+      </div>
+      <div class="actions">
+        <button class="btn btn-create" type="submit" id="submitBtn">Exit contact</button>
+        <script runat="server">
+          function navSafe(value) {
+            return String(value || "#")
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;");
+          }
+          Write('<a class="btn btn-secondary" href="' + navSafe(Platform.Variable.GetValue("@exitHubUrl") || "#") + '">Cancel</a>');
+        </script>
+        <script runat="server">
+          var detail = Platform.Variable.GetValue("@exitResultDetail");
+          if (detail) {
+            Write('<button type="button" class="btn btn-secondary" id="toggleDetailBtn">Show API response</button>');
+          }
+        </script>
+      </div>
+    </form>
+
+    <script runat="server">
+      function detailSafe(value) {
+        return String(value || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+      var detailBody = Platform.Variable.GetValue("@exitResultDetail");
+      if (detailBody) {
+        Write('<pre class="detail" id="apiDetail">' + detailSafe(detailBody) + '</pre>');
+      }
+    </script>
+  </div>
+</div>
+<script>
+(function () {
+  var select = document.getElementById("definitionKey");
+  var journeyName = document.getElementById("journeyName");
+  function syncJourneyName() {
+    if (!select || !journeyName) return;
+    var opt = select.options[select.selectedIndex];
+    journeyName.value = opt && opt.getAttribute("data-name") ? opt.getAttribute("data-name") : (opt ? opt.text : "");
+  }
+  if (select) {
+    select.addEventListener("change", syncJourneyName);
+    syncJourneyName();
+  }
+  window.confirmExit = function () {
+    syncJourneyName();
+    var key = document.getElementById("subscriberKey").value || "";
+    var label = journeyName.value || "the selected journey";
+    return confirm("Exit " + key + " from " + label + "? This cannot be undone from this page.");
+  };
+  var toggle = document.getElementById("toggleDetailBtn");
+  var detail = document.getElementById("apiDetail");
+  if (toggle && detail) {
+    toggle.addEventListener("click", function () {
+      var open = detail.className.indexOf("is-visible") > -1;
+      detail.className = open ? "detail" : "detail is-visible";
+      toggle.textContent = open ? "Show API response" : "Hide API response";
+    });
+  }
+})();
+</script>
+</body>
+</html>
