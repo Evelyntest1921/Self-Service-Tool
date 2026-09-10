@@ -1,14 +1,17 @@
 <script runat="server">
 Platform.Load("core", "1");
 
+var BATCH_DE = "bd_sst_journey_exit_batch";
 var resultStatus = "";
 var resultMessage = "";
 var resultDetail = "";
 var hubUrl = "";
 var journeyOptionsHtml = "";
-var selectedDefinitionKey = "";
+var selectedJourneyId = "";
+var selectedJourneyKey = "";
 var selectedJourneyName = "";
-var subscriberKeyValue = "";
+var sourceDeNameValue = "";
+var createdBatchId = "";
 var journeysLoadError = "";
 
 function formValue(name) {
@@ -27,15 +30,6 @@ function asStr(value) {
     return (value + "").replace(/^\s+|\s+$/g, "");
   } catch (e) {
     return "";
-  }
-}
-
-function asLower(value) {
-  var s = asStr(value);
-  try {
-    return s.toLowerCase();
-  } catch (e) {
-    return s;
   }
 }
 
@@ -133,7 +127,9 @@ function getAccessToken(auth) {
   if (auth.accountId) {
     payload.account_id = auth.accountId;
   }
-  var req = new Script.Util.HttpRequest("https://" + auth.subdomain + ".auth.marketingcloudapis.com/v2/token");
+  var req = new Script.Util.HttpRequest(
+    "https://" + auth.subdomain + ".auth.marketingcloudapis.com/v2/token"
+  );
   req.emptyContentHandling = 0;
   req.retries = 2;
   req.continueOnError = true;
@@ -153,7 +149,9 @@ function getAccessToken(auth) {
 }
 
 function httpJson(auth, token, method, path, payload) {
-  var req = new Script.Util.HttpRequest("https://" + auth.subdomain + ".rest.marketingcloudapis.com" + path);
+  var req = new Script.Util.HttpRequest(
+    "https://" + auth.subdomain + ".rest.marketingcloudapis.com" + path
+  );
   req.emptyContentHandling = 0;
   req.retries = 2;
   req.continueOnError = true;
@@ -192,17 +190,19 @@ function loadActiveJourneys(auth, token) {
     for (i = 0; i < items.length; i++) {
       var item = items[i] || {};
       var key = asStr(item.key);
+      var id = asStr(item.id);
       var name = asStr(item.name) || "Untitled journey";
       var status = asStr(item.status) || "Published";
       var version = asStr(item.version);
       if (!version) {
         version = asStr(item.versionNumber);
       }
-      if (!key) {
+      if (!key && !id) {
         continue;
       }
       all.push({
-        key: key,
+        id: id || key,
+        key: key || id,
         name: name,
         status: status,
         version: version
@@ -225,12 +225,12 @@ function loadActiveJourneys(auth, token) {
   return all;
 }
 
-function buildJourneyOptions(journeys, selectedKey) {
+function buildJourneyOptions(journeys, selectedId) {
   var parts = ['<option value="">Select a published journey</option>'];
   var i;
   for (i = 0; i < journeys.length; i++) {
     var j = journeys[i];
-    var selected = selectedKey && selectedKey === j.key ? ' selected' : "";
+    var selected = selectedId && selectedId === j.id ? " selected" : "";
     var label = j.name;
     if (j.version) {
       label += " (v" + j.version + ")";
@@ -238,11 +238,13 @@ function buildJourneyOptions(journeys, selectedKey) {
     label += " — " + j.status;
     parts.push(
       '<option value="' +
-        htmlSafe(j.key) +
+        htmlSafe(j.id) +
         '"' +
         selected +
         ' data-name="' +
         htmlSafe(j.name) +
+        '" data-key="' +
+        htmlSafe(j.key) +
         '">' +
         htmlSafe(label) +
         "</option>"
@@ -251,366 +253,184 @@ function buildJourneyOptions(journeys, selectedKey) {
   return parts.join("");
 }
 
-function summarizeExitResponse(body) {
-  try {
-    var parsed = fromJson(body);
-    var errors = coerceRows(parsed && parsed.errors ? parsed.errors : []);
-    if (errors.length) {
-      var bits = [];
-      var e;
-      for (e = 0; e < errors.length; e++) {
-        var err = errors[e] || {};
-        var statuses = err.status || [];
-        var messages = [];
-        var s;
-        var statusRows = coerceRows(statuses);
-        for (s = 0; s < statusRows.length; s++) {
-          if (statusRows[s] && statusRows[s].message) {
-            messages.push(asStr(statusRows[s].message));
-          }
-        }
-        bits.push(
-          (asStr(err.contactKey) || "contact") +
-            ": " +
-            (messages.length ? messages.join("; ") : "exit request reported an error")
-        );
-      }
-      return { hasErrors: true, summary: bits.join(" | ") };
+function resolveJourneyMeta(journeys, journeyId, fallbackName, fallbackKey) {
+  var i;
+  for (i = 0; i < journeys.length; i++) {
+    if (journeys[i].id === journeyId || journeys[i].key === journeyId) {
+      return {
+        id: journeys[i].id,
+        key: journeys[i].key,
+        name: journeys[i].name
+      };
     }
-  } catch (parseEx) {}
-  return { hasErrors: false, summary: "" };
+  }
+  return {
+    id: journeyId,
+    key: fallbackKey || journeyId,
+    name: fallbackName || journeyId
+  };
 }
 
-function summarizeStatusResponse(body) {
+function sourceDeExists(deName) {
+  var name = clean(deName);
+  if (!name) {
+    return { ok: false, error: "Enter a source Data Extension name or Customer Key." };
+  }
   try {
-    var parsed = fromJson(body);
-    var rows = [];
-    if (parsed && typeof parsed.length === "number") {
-      rows = coerceRows(parsed);
-    } else if (parsed) {
-      rows = [parsed];
-    }
-    if (!rows.length) {
+    var de = DataExtension.Init(name);
+    var rows = de.Rows.Retrieve();
+    return { ok: true, rowHint: lenArrayish(rows) };
+  } catch (deEx) {
+    try {
+      var prox = new Script.Util.WSProxy();
+      var byKey = prox.retrieve(
+        "DataExtension",
+        ["Name", "CustomerKey", "ObjectID"],
+        { Property: "CustomerKey", SimpleOperator: "equals", Value: name }
+      );
+      if (byKey && byKey.Results && byKey.Results.length) {
+        return {
+          ok: true,
+          resolvedName: asStr(byKey.Results[0].Name),
+          resolvedKey: asStr(byKey.Results[0].CustomerKey)
+        };
+      }
+      var byName = prox.retrieve(
+        "DataExtension",
+        ["Name", "CustomerKey", "ObjectID"],
+        { Property: "Name", SimpleOperator: "equals", Value: name }
+      );
+      if (byName && byName.Results && byName.Results.length) {
+        return {
+          ok: true,
+          resolvedName: asStr(byName.Results[0].Name),
+          resolvedKey: asStr(byName.Results[0].CustomerKey)
+        };
+      }
+    } catch (wsEx) {
       return {
         ok: false,
-        summary: "No status rows returned for this contact/journey."
+        error:
+          "Could not verify DE: " +
+          (deEx.message || String(deEx)) +
+          " | " +
+          (wsEx.message || String(wsEx))
       };
     }
-    var bits = [];
-    var completed = 0;
-    var pending = 0;
-    var other = 0;
-    var r;
-    for (r = 0; r < rows.length; r++) {
-      var row = rows[r] || {};
-      var statusRows = coerceRows(row.status || []);
-      if (!statusRows.length) {
-        bits.push((asStr(row.contactKey) || "contact") + ": no status details");
-        other++;
-        continue;
-      }
-      var s;
-      for (s = 0; s < statusRows.length; s++) {
-        var st = statusRows[s] || {};
-        var msg = asStr(st.message) || "No message";
-        var version = asStr(st.version);
-        var lowerMsg = asLower(msg);
-        if (lowerMsg.indexOf("completed") >= 0) {
-          completed++;
-        } else if (
-          lowerMsg.indexOf("processing") >= 0 ||
-          lowerMsg.indexOf("queued") >= 0 ||
-          lowerMsg.indexOf("pending") >= 0 ||
-          lowerMsg.indexOf("in progress") >= 0
-        ) {
-          pending++;
-        } else {
-          other++;
-        }
-        bits.push(
-          "v" +
-            (version || "?") +
-            ": " +
-            msg +
-            (asStr(st.definitionInstanceId)
-              ? " (instance " + asStr(st.definitionInstanceId) + ")"
-              : "")
-        );
-      }
-    }
-    var level = "success";
-    if (pending > 0 && completed === 0) {
-      level = "warn";
-    } else if (completed === 0 && other > 0) {
-      level = "error";
-    } else if (pending > 0) {
-      level = "warn";
-    }
-    return {
-      ok: true,
-      level: level,
-      summary: bits.join(" | ")
-    };
-  } catch (parseEx) {
-    return { ok: false, summary: "Could not parse status response." };
-  }
-}
-
-function summarizeMembershipResponse(body, definitionKey, contactKey) {
-  try {
-    var parsed = fromJson(body);
-    var results = parsed && parsed.results ? parsed.results : parsed;
-    var memberships = coerceRows(
-      results && results.contactMemberships ? results.contactMemberships : []
-    );
-    var notFound = coerceRows(
-      results && results.contactsNotFound ? results.contactsNotFound : []
-    );
-    var targetKey = asLower(definitionKey);
-    var matches = [];
-    var i;
-    for (i = 0; i < memberships.length; i++) {
-      var m = memberships[i] || {};
-      var memberContact = asStr(m.contactKey);
-      var memberDef = asStr(m.definitionKey);
-      if (asLower(memberContact) !== asLower(contactKey)) {
-        continue;
-      }
-      if (targetKey && asLower(memberDef) !== targetKey) {
-        continue;
-      }
-      matches.push(
-        "v" +
-          (asStr(m.version) || asStr(m.Version) || "?") +
-          " (" +
-          (memberDef || "unknown key") +
-          ")"
-      );
-    }
-
-    var contactListedNotFound = false;
-    var n;
-    for (n = 0; n < notFound.length; n++) {
-      if (asLower(notFound[n]) === asLower(contactKey)) {
-        contactListedNotFound = true;
-        break;
-      }
-    }
-
-    if (matches.length) {
-      return {
-        ok: true,
-        stillMember: true,
-        level: "warn",
-        summary:
-          "still in this journey: " + matches.join(", ")
-      };
-    }
-
-    if (contactListedNotFound) {
-      return {
-        ok: true,
-        stillMember: false,
-        level: "success",
-        summary: "not in any journey (contactsNotFound)"
-      };
-    }
-
-    return {
-      ok: true,
-      stillMember: false,
-      level: "success",
-      summary: "not currently a member of this journey"
-    };
-  } catch (memEx) {
     return {
       ok: false,
-      stillMember: null,
-      level: "error",
-      summary: "Could not parse membership response."
+      error: "Data Extension not found for name/key: " + name
     };
   }
 }
 
-function resolveJourneyName(journeys, definitionKey, fallbackName) {
-  if (fallbackName) {
-    return fallbackName;
+function insertBatchRow(batch) {
+  try {
+    Platform.Function.InsertData(
+      BATCH_DE,
+      [
+        "batchId",
+        "sourceDeName",
+        "journeyID",
+        "journeyName",
+        "journeyKey",
+        "status",
+        "requestedAt",
+        "message"
+      ],
+      [
+        batch.batchId,
+        batch.sourceDeName,
+        batch.journeyID,
+        batch.journeyName,
+        batch.journeyKey,
+        batch.status,
+        batch.requestedAt,
+        batch.message
+      ]
+    );
+    return { ok: true };
+  } catch (insEx) {
+    return { ok: false, error: insEx.message || String(insEx) };
   }
-  var j;
-  for (j = 0; j < journeys.length; j++) {
-    if (journeys[j].key === definitionKey) {
-      return journeys[j].name;
-    }
-  }
-  return definitionKey;
 }
 
 hubUrl = lookupValue("bd_sst_page_navigation", "ss_home", "type", "cloudpage") || "#";
-selectedDefinitionKey = clean(formValue("definitionKey"));
+selectedJourneyId = clean(formValue("journeyId"));
+selectedJourneyKey = clean(formValue("journeyKey"));
 selectedJourneyName = clean(formValue("journeyName"));
-subscriberKeyValue = clean(formValue("subscriberKey"));
+sourceDeNameValue = clean(formValue("sourceDeName"));
 var formAction = clean(formValue("formAction"));
 
 try {
   var auth = getAuthConfig();
   var token = getAccessToken(auth);
   var journeys = loadActiveJourneys(auth, token);
-  journeyOptionsHtml = buildJourneyOptions(journeys, selectedDefinitionKey);
+  journeyOptionsHtml = buildJourneyOptions(journeys, selectedJourneyId);
 
-  if (formAction == "exit" || formAction == "check") {
-    if (!selectedDefinitionKey) {
+  if (formAction == "queue") {
+    if (!selectedJourneyId) {
       throw "Select a journey.";
     }
-    if (!subscriberKeyValue) {
-      throw "Enter a Subscriber Key.";
+    if (!sourceDeNameValue) {
+      throw "Enter the source Data Extension name or Customer Key.";
     }
-    selectedJourneyName = resolveJourneyName(
+
+    var meta = resolveJourneyMeta(
       journeys,
-      selectedDefinitionKey,
-      selectedJourneyName
+      selectedJourneyId,
+      selectedJourneyName,
+      selectedJourneyKey
     );
+    selectedJourneyId = meta.id;
+    selectedJourneyKey = meta.key;
+    selectedJourneyName = meta.name;
 
-    var contactPayload = [
-      {
-        ContactKey: subscriberKeyValue,
-        DefinitionKey: selectedDefinitionKey
-      }
-    ];
-
-    if (formAction == "exit") {
-      var exitResp = httpJson(
-        auth,
-        token,
-        "POST",
-        "/interaction/v1/interactions/contactexit",
-        contactPayload
-      );
-      resultDetail = exitResp.body;
-      var summary = summarizeExitResponse(exitResp.body);
-
-      if (exitResp.status == 202 || exitResp.status == 200) {
-        if (summary.hasErrors) {
-          resultStatus = "error";
-          resultMessage =
-            "Exit request accepted with errors for " +
-            subscriberKeyValue +
-            " on " +
-            selectedJourneyName +
-            ". " +
-            summary.summary;
-        } else {
-          resultStatus = "success";
-          resultMessage =
-            "Exit request accepted for " +
-            subscriberKeyValue +
-            " from " +
-            selectedJourneyName +
-            ". SFMC processes removals asynchronously. Use Check progress to confirm.";
-        }
-      } else {
-        resultStatus = "error";
-        resultMessage = "Exit HTTP " + exitResp.status + ": " + exitResp.body;
-      }
-    } else {
-      var statusResp = httpJson(
-        auth,
-        token,
-        "POST",
-        "/interaction/v1/interactions/contactexit/status",
-        contactPayload
-      );
-      var membershipResp = httpJson(
-        auth,
-        token,
-        "POST",
-        "/interaction/v1/interactions/contactMembership",
-        { ContactKeyList: [subscriberKeyValue] }
-      );
-      resultDetail =
-        "exitStatus HTTP " +
-        statusResp.status +
-        ":\n" +
-        statusResp.body +
-        "\n\nmembership HTTP " +
-        membershipResp.status +
-        ":\n" +
-        membershipResp.body;
-
-      var statusOk =
-        statusResp.status == 200 || statusResp.status == 202;
-      var membershipOk =
-        membershipResp.status == 200 || membershipResp.status == 202;
-
-      if (!statusOk && !membershipOk) {
-        resultStatus = "error";
-        resultMessage =
-          "Could not check progress. Exit status HTTP " +
-          statusResp.status +
-          "; membership HTTP " +
-          membershipResp.status +
-          ".";
-      } else {
-        var statusSummary = statusOk
-          ? summarizeStatusResponse(statusResp.body)
-          : {
-              ok: false,
-              level: "error",
-              summary: "Exit status HTTP " + statusResp.status
-            };
-        var membershipSummary = membershipOk
-          ? summarizeMembershipResponse(
-              membershipResp.body,
-              selectedDefinitionKey,
-              subscriberKeyValue
-            )
-          : {
-              ok: false,
-              stillMember: null,
-              level: "error",
-              summary: "Membership HTTP " + membershipResp.status
-            };
-
-        var parts = [];
-        parts.push(
-          "Exit status: " +
-            (statusSummary.summary || "unavailable")
-        );
-        parts.push(
-          "Membership: " +
-            (membershipSummary.summary || "unavailable")
-        );
-
-        if (membershipSummary.stillMember === true) {
-          resultStatus = "warn";
-          parts.push(
-            "Contact is still a member of this journey in SFMC. Journey Builder Waiting can lag, but membership says they are still in."
-          );
-        } else if (membershipSummary.stillMember === false) {
-          resultStatus =
-            statusSummary.level === "error" ? "warn" : "success";
-          parts.push(
-            "Contact is not a member of this journey anymore. If Journey Builder still shows Waiting, refresh or wait for UI lag."
-          );
-        } else {
-          resultStatus =
-            statusSummary.level === "error" ||
-            membershipSummary.level === "error"
-              ? "error"
-              : statusSummary.level || "warn";
-        }
-
-        resultMessage =
-          "Progress for " +
-          subscriberKeyValue +
-          " on " +
-          selectedJourneyName +
-          " — " +
-          parts.join(" | ");
-      }
+    var deCheck = sourceDeExists(sourceDeNameValue);
+    if (!deCheck.ok) {
+      throw deCheck.error || "Source Data Extension not found.";
     }
+    if (deCheck.resolvedKey) {
+      sourceDeNameValue = deCheck.resolvedKey;
+    }
+
+    createdBatchId = Platform.Function.GUID();
+    var now = new Date();
+    var insertResult = insertBatchRow({
+      batchId: createdBatchId,
+      sourceDeName: sourceDeNameValue,
+      journeyID: selectedJourneyId,
+      journeyName: selectedJourneyName,
+      journeyKey: selectedJourneyKey,
+      status: "Pending",
+      requestedAt: now,
+      message: "Queued from CloudPage. Waiting for batch seeder."
+    });
+
+    if (!insertResult.ok) {
+      throw "Failed to insert bd_sst_journey_exit_batch row: " + insertResult.error;
+    }
+
+    resultStatus = "success";
+    resultMessage =
+      "Batch queued. batchId=" +
+      createdBatchId +
+      " | journey=" +
+      selectedJourneyName +
+      " | source DE=" +
+      sourceDeNameValue +
+      " | status=Pending. The seeder automation will copy SubscriberKeys into bd_sst_journey_exit.";
+    resultDetail = asJson({
+      batchId: createdBatchId,
+      sourceDeName: sourceDeNameValue,
+      journeyID: selectedJourneyId,
+      journeyName: selectedJourneyName,
+      journeyKey: selectedJourneyKey,
+      status: "Pending"
+    });
   }
 } catch (ex) {
-  if (formAction == "exit" || formAction == "check") {
+  if (formAction == "queue") {
     resultStatus = "error";
     resultMessage = asStr(ex && ex.message ? ex.message : ex);
   } else {
@@ -626,9 +446,11 @@ Platform.Variable.SetValue("@exitResultStatus", resultStatus);
 Platform.Variable.SetValue("@exitResultMessage", resultMessage);
 Platform.Variable.SetValue("@exitResultDetail", resultDetail);
 Platform.Variable.SetValue("@exitJourneyOptionsHtml", journeyOptionsHtml);
-Platform.Variable.SetValue("@exitSelectedDefinitionKey", selectedDefinitionKey);
+Platform.Variable.SetValue("@exitSelectedJourneyId", selectedJourneyId);
+Platform.Variable.SetValue("@exitSelectedJourneyKey", selectedJourneyKey);
 Platform.Variable.SetValue("@exitSelectedJourneyName", selectedJourneyName);
-Platform.Variable.SetValue("@exitSubscriberKey", subscriberKeyValue);
+Platform.Variable.SetValue("@exitSourceDeName", sourceDeNameValue);
+Platform.Variable.SetValue("@exitBatchId", createdBatchId);
 Platform.Variable.SetValue("@exitJourneysLoadError", journeysLoadError);
 </script>
 <!DOCTYPE html>
@@ -636,7 +458,7 @@ Platform.Variable.SetValue("@exitJourneysLoadError", journeysLoadError);
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Exit contact from journey</title>
+<title>Queue journey exits</title>
 <link rel="icon" href="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&amp;w=640&amp;q=75" type="image/png">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -795,12 +617,12 @@ h1 {
       Write('<a href="' + navSafe(Platform.Variable.GetValue("@exitHubUrl") || "#") + '" class="breadcrumb-link">Back</a>');
     </script>
     <span class="breadcrumb-separator" aria-hidden="true">/</span>
-    <span class="breadcrumb-current">Exit contact</span>
+    <span class="breadcrumb-current">Queue journey exits</span>
   </nav>
 
   <div class="card">
-    <h1>Exit contact from journey</h1>
-    <p class="sub">Select a published journey and enter a Subscriber Key to remove that contact from the journey.</p>
+    <h1>Queue journey exits</h1>
+    <p class="sub">Select a published journey and enter a source Data Extension. This writes a Pending row to <code>bd_sst_journey_exit_batch</code> for the seeder automation.</p>
 
     <script runat="server">
       function bodySafe(value) {
@@ -822,19 +644,20 @@ h1 {
     </script>
 
     <form method="post" id="exitForm">
-      <input type="hidden" name="formAction" id="formAction" value="">
+      <input type="hidden" name="formAction" id="formAction" value="queue">
       <input type="hidden" name="journeyName" id="journeyName" value="">
+      <input type="hidden" name="journeyKey" id="journeyKey" value="">
       <div class="form-group">
-        <label class="form-label" for="definitionKey">Journey</label>
-        <select class="form-select" id="definitionKey" name="definitionKey" required>
+        <label class="form-label" for="journeyId">Journey</label>
+        <select class="form-select" id="journeyId" name="journeyId" required>
           <script runat="server">
             Write(Platform.Variable.GetValue("@exitJourneyOptionsHtml") || '<option value="">No journeys loaded</option>');
           </script>
         </select>
-        <p class="hint">Only published journeys are listed. The API uses the journey Definition Key, not the Journey ID.</p>
+        <p class="hint">Published journeys only. Journey ID and Definition Key are saved on the batch row.</p>
       </div>
       <div class="form-group">
-        <label class="form-label" for="subscriberKey">Subscriber Key</label>
+        <label class="form-label" for="sourceDeName">Source Data Extension</label>
         <script runat="server">
           function fieldSafe(value) {
             return String(value || "")
@@ -843,12 +666,12 @@ h1 {
               .replace(/>/g, "&gt;")
               .replace(/"/g, "&quot;");
           }
-          Write('<input class="form-input" id="subscriberKey" name="subscriberKey" required placeholder="Contact or subscriber key" value="' + fieldSafe(Platform.Variable.GetValue("@exitSubscriberKey") || "") + '">');
+          Write('<input class="form-input" id="sourceDeName" name="sourceDeName" required placeholder="DE name or Customer Key (must include SubscriberKey)" value="' + fieldSafe(Platform.Variable.GetValue("@exitSourceDeName") || "") + '">');
         </script>
+        <p class="hint">Source DE must contain a <code>SubscriberKey</code> column. Prefer Customer Key if names collide.</p>
       </div>
       <div class="actions">
-        <button class="btn btn-create" type="submit" id="submitBtn" onclick="return submitAction('exit');">Exit contact</button>
-        <button class="btn btn-secondary" type="submit" id="checkBtn" onclick="return submitAction('check');">Check progress</button>
+        <button class="btn btn-create" type="submit" id="submitBtn" onclick="return submitQueue();">Queue batch</button>
         <script runat="server">
           function navSafe(value) {
             return String(value || "#")
@@ -862,7 +685,7 @@ h1 {
         <script runat="server">
           var detail = Platform.Variable.GetValue("@exitResultDetail");
           if (detail) {
-            Write('<button type="button" class="btn btn-secondary" id="toggleDetailBtn">Show API response</button>');
+            Write('<button type="button" class="btn btn-secondary" id="toggleDetailBtn">Show details</button>');
           }
         </script>
       </div>
@@ -884,29 +707,28 @@ h1 {
 </div>
 <script>
 (function () {
-  var select = document.getElementById("definitionKey");
+  var select = document.getElementById("journeyId");
   var journeyName = document.getElementById("journeyName");
-  function syncJourneyName() {
-    if (!select || !journeyName) return;
+  var journeyKey = document.getElementById("journeyKey");
+  function syncJourneyMeta() {
+    if (!select) return;
     var opt = select.options[select.selectedIndex];
-    journeyName.value = opt && opt.getAttribute("data-name") ? opt.getAttribute("data-name") : (opt ? opt.text : "");
+    if (journeyName) {
+      journeyName.value = opt && opt.getAttribute("data-name") ? opt.getAttribute("data-name") : "";
+    }
+    if (journeyKey) {
+      journeyKey.value = opt && opt.getAttribute("data-key") ? opt.getAttribute("data-key") : "";
+    }
   }
   if (select) {
-    select.addEventListener("change", syncJourneyName);
-    syncJourneyName();
+    select.addEventListener("change", syncJourneyMeta);
+    syncJourneyMeta();
   }
-  window.submitAction = function (action) {
-    syncJourneyName();
-    var actionField = document.getElementById("formAction");
-    if (actionField) {
-      actionField.value = action || "";
-    }
-    if (action === "exit") {
-      var key = document.getElementById("subscriberKey").value || "";
-      var label = journeyName.value || "the selected journey";
-      return confirm("Exit " + key + " from " + label + "? This cannot be undone from this page.");
-    }
-    return true;
+  window.submitQueue = function () {
+    syncJourneyMeta();
+    var deName = document.getElementById("sourceDeName").value || "";
+    var label = journeyName.value || "the selected journey";
+    return confirm("Queue exits for " + label + " from DE \"" + deName + "\"?");
   };
   var toggle = document.getElementById("toggleDetailBtn");
   var detail = document.getElementById("apiDetail");
@@ -914,7 +736,7 @@ h1 {
     toggle.addEventListener("click", function () {
       var open = detail.className.indexOf("is-visible") > -1;
       detail.className = open ? "detail" : "detail is-visible";
-      toggle.textContent = open ? "Show API response" : "Hide API response";
+      toggle.textContent = open ? "Show details" : "Hide details";
     });
   }
 })();
