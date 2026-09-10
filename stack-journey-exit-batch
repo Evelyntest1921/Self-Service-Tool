@@ -434,12 +434,17 @@ function subscriberKeyFromRow(row) {
   );
 }
 
-function insertExitQueueRow(subscriberKey, journeyName, journeyID) {
+function insertExitQueueRow(subscriberKey, journeyName, journeyId) {
+  var sk = strTrim(subscriberKey);
+  var jid = strTrim(journeyId);
+  var rowKey = sk + "|" + jid;
+  if (!sk || !jid) {
+    return { ok: false, error: "Need subscriberKey and journeyId for insert." };
+  }
   var attempts = [
-    ["subscriberKey", "journeyName", "journeyID"],
-    ["SubscriberKey", "journeyName", "journeyID"],
-    ["subscriberKey", "JourneyName", "journeyID"],
-    ["subscriberKey", "journeyName", "JourneyID"]
+    ["key", "subscriberKey", "journeyName", "journeyId"],
+    ["key", "subscriberKey", "journeyName", "journeyID"],
+    ["Key", "subscriberKey", "journeyName", "journeyId"]
   ];
   var errors = [];
   for (var a = 0; a < attempts.length; a++) {
@@ -447,9 +452,14 @@ function insertExitQueueRow(subscriberKey, journeyName, journeyID) {
       Platform.Function.InsertData(
         EXIT_QUEUE_DE,
         attempts[a],
-        [subscriberKey, journeyName || "", journeyID]
+        [rowKey, sk, journeyName || "", jid]
       );
-      return { ok: true, duplicate: false, fields: attempts[a].join(",") };
+      return {
+        ok: true,
+        duplicate: false,
+        fields: attempts[a].join(","),
+        key: rowKey
+      };
     } catch (insEx) {
       var msg = asLower(insEx.message || String(insEx));
       if (
@@ -459,12 +469,17 @@ function insertExitQueueRow(subscriberKey, journeyName, journeyID) {
         msg.indexOf("violation") >= 0 ||
         msg.indexOf("cannot insert duplicate") >= 0
       ) {
-        return { ok: true, duplicate: true, fields: attempts[a].join(",") };
+        return {
+          ok: true,
+          duplicate: true,
+          fields: attempts[a].join(","),
+          key: rowKey
+        };
       }
       errors.push(attempts[a].join("/") + ": " + (insEx.message || String(insEx)));
     }
   }
-  return { ok: false, error: errors.join(" | ") };
+  return { ok: false, error: errors.join(" | "), key: rowKey };
 }
 
 function processBatch(prox, batch) {
@@ -483,9 +498,9 @@ function processBatch(prox, batch) {
     updateBatchRow(batchId, "Failed", "Missing sourceDeName.");
     return label + " — FAILED missing sourceDeName.";
   }
-  if (!strTrim(batch.journeyID)) {
-    updateBatchRow(batchId, "Failed", "Missing journeyID.");
-    return label + " — FAILED missing journeyID.";
+  if (!strTrim(batch.journeyID) && !strTrim(batch.journeyId)) {
+    updateBatchRow(batchId, "Failed", "Missing journeyId.");
+    return label + " — FAILED missing journeyId.";
   }
 
   var markProcessing = updateBatchRow(
@@ -550,7 +565,7 @@ function processBatch(prox, batch) {
   var limitHit = false;
   var max = MAX_ROWS_PER_BATCH;
   var journeyName = strTrim(batch.journeyName);
-  var journeyID = strTrim(batch.journeyID);
+  var journeyId = strTrim(batch.journeyID || batch.journeyId);
   var firstInsertError = "";
 
   for (var i = 0; i < sourceRows.length; i++) {
@@ -572,7 +587,7 @@ function processBatch(prox, batch) {
       }
       continue;
     }
-    var ins = insertExitQueueRow(sk, journeyName, journeyID);
+    var ins = insertExitQueueRow(sk, journeyName, journeyId);
     if (!ins.ok) {
       errors++;
       if (!firstInsertError) {

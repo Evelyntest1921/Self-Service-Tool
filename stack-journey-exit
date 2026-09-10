@@ -74,7 +74,8 @@ function coerceQueueRows(raw) {
   if (
     typeof rows === "object" &&
     (queueField(rows, ["subscriberKey", "SubscriberKey"]) ||
-      queueField(rows, ["journeyID", "journeyId", "JourneyID"]))
+      queueField(rows, ["journeyId", "journeyID", "JourneyID"]) ||
+      queueField(rows, ["key", "Key"]))
   ) {
     return [rows];
   }
@@ -89,16 +90,23 @@ function normalizeQueueRows(rawRows) {
   var out = [];
   for (var j = 0; j < rows.length; j++) {
     var row = rows[j];
+    var subscriberKey = strTrim(
+      queueField(row, ["subscriberKey", "SubscriberKey"])
+    );
+    var journeyId = strTrim(
+      queueField(row, ["journeyId", "journeyID", "JourneyID", "JourneyId"])
+    );
+    var rowKey = strTrim(queueField(row, ["key", "Key"]));
+    if (!rowKey && subscriberKey && journeyId) {
+      rowKey = subscriberKey + "|" + journeyId;
+    }
     out.push({
-      subscriberKey: strTrim(
-        queueField(row, ["subscriberKey", "SubscriberKey"])
-      ),
+      key: rowKey,
+      subscriberKey: subscriberKey,
       journeyName: strTrim(
         queueField(row, ["journeyName", "JourneyName", "Name"])
       ),
-      journeyID: strTrim(
-        queueField(row, ["journeyID", "journeyId", "JourneyID", "JourneyId"])
-      )
+      journeyId: journeyId
     });
   }
   return out;
@@ -128,29 +136,36 @@ function fetchExitQueueRows(prox) {
   }
 
   var filters = [
+    { Property: "key", SimpleOperator: "isNotNull" },
     { Property: "subscriberKey", SimpleOperator: "isNotNull" },
-    { Property: "journeyID", SimpleOperator: "isNotNull" }
+    { Property: "journeyId", SimpleOperator: "isNotNull" }
+  ];
+  var propSets = [
+    ["key", "subscriberKey", "journeyName", "journeyId"],
+    ["key", "subscriberKey", "journeyName", "journeyID"]
   ];
   for (var f = 0; f < filters.length; f++) {
     for (var k = 0; k < keyVariants.length; k++) {
-      try {
-        var wsResp = prox.retrieve(
-          "DataExtensionObject[" + keyVariants[k] + "]",
-          ["subscriberKey", "journeyName", "journeyID"],
-          filters[f]
-        );
-        if (wsResp && wsResp.Results && wsResp.Results.length) {
-          return { rows: normalizeQueueRows(wsResp.Results), error: "" };
+      for (var p = 0; p < propSets.length; p++) {
+        try {
+          var wsResp = prox.retrieve(
+            "DataExtensionObject[" + keyVariants[k] + "]",
+            propSets[p],
+            filters[f]
+          );
+          if (wsResp && wsResp.Results && wsResp.Results.length) {
+            return { rows: normalizeQueueRows(wsResp.Results), error: "" };
+          }
+        } catch (wsEx) {
+          errors.push(
+            "WSProxy " +
+              keyVariants[k] +
+              " " +
+              filters[f].Property +
+              ": " +
+              (wsEx.message || String(wsEx))
+          );
         }
-      } catch (wsEx) {
-        errors.push(
-          "WSProxy " +
-            keyVariants[k] +
-            " " +
-            filters[f].Property +
-            ": " +
-            (wsEx.message || String(wsEx))
-        );
       }
     }
   }
@@ -158,29 +173,23 @@ function fetchExitQueueRows(prox) {
   return { rows: [], error: errors.join(" | ") };
 }
 
-function removeExitQueueRow(subscriberKey, journeyID) {
-  var key = strTrim(subscriberKey);
-  var jid = strTrim(journeyID);
-  if (!key || !jid) {
+function removeExitQueueRow(rowKey, subscriberKey, journeyId) {
+  var key = strTrim(rowKey);
+  if (!key && strTrim(subscriberKey) && strTrim(journeyId)) {
+    key = strTrim(subscriberKey) + "|" + strTrim(journeyId);
+  }
+  if (!key) {
     return {
       ok: false,
-      error: "Need subscriberKey and journeyID to remove queue row."
+      error: "Need key (or subscriberKey + journeyId) to remove queue row."
     };
   }
   try {
-    Platform.Function.DeleteData(
-      EXIT_QUEUE_DE,
-      ["subscriberKey", "journeyID"],
-      [key, jid]
-    );
+    Platform.Function.DeleteData(EXIT_QUEUE_DE, ["key"], [key]);
     return { ok: true };
   } catch (delEx) {
     try {
-      Platform.Function.DeleteData(
-        EXIT_QUEUE_DE,
-        ["SubscriberKey", "JourneyID"],
-        [key, jid]
-      );
+      Platform.Function.DeleteData(EXIT_QUEUE_DE, ["Key"], [key]);
       return { ok: true };
     } catch (delEx2) {
       return {
@@ -362,7 +371,7 @@ function groupQueueByJourney(rows) {
   var order = [];
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i];
-    var jid = strTrim(row.journeyID);
+    var jid = strTrim(row.journeyId);
     var sk = strTrim(row.subscriberKey);
     if (!jid || !sk) {
       continue;
@@ -370,7 +379,7 @@ function groupQueueByJourney(rows) {
     var gkey = asLower(jid);
     if (!groups[gkey]) {
       groups[gkey] = {
-        journeyID: jid,
+        journeyId: jid,
         journeyName: strTrim(row.journeyName),
         contacts: []
       };
@@ -379,9 +388,10 @@ function groupQueueByJourney(rows) {
       groups[gkey].journeyName = strTrim(row.journeyName);
     }
     groups[gkey].contacts.push({
+      key: strTrim(row.key) || sk + "|" + jid,
       subscriberKey: sk,
       journeyName: strTrim(row.journeyName),
-      journeyID: jid
+      journeyId: jid
     });
   }
   return { groups: groups, order: order };
@@ -430,7 +440,7 @@ function processJourneyGroup(auth, token, group, definition) {
   var label =
     (group.journeyName || definition.name || "(no name)") +
     " / " +
-    group.journeyID;
+    group.journeyId;
   if (!definition.ok || !definition.key) {
     return [
       label +
@@ -492,7 +502,11 @@ function processJourneyGroup(auth, token, group, definition) {
         );
         continue;
       }
-      var removed = removeExitQueueRow(contact.subscriberKey, contact.journeyID);
+      var removed = removeExitQueueRow(
+        contact.key,
+        contact.subscriberKey,
+        contact.journeyId
+      );
       if (!removed.ok) {
         failCount++;
         lines.push(
@@ -555,14 +569,14 @@ try {
     for (var s = 0; s < queueRows.length; s++) {
       if (
         !strTrim(queueRows[s].subscriberKey) ||
-        !strTrim(queueRows[s].journeyID)
+        !strTrim(queueRows[s].journeyId)
       ) {
         skipped++;
         debugLines.push(
           "SKIP incomplete row subscriberKey=" +
             (queueRows[s].subscriberKey || "(empty)") +
-            " journeyID=" +
-            (queueRows[s].journeyID || "(empty)")
+            " journeyId=" +
+            (queueRows[s].journeyId || "(empty)")
         );
       }
     }
@@ -578,7 +592,7 @@ try {
       var definition = resolveDefinitionKey(
         auth,
         token,
-        group.journeyID,
+        group.journeyId,
         keyCache
       );
       var groupLines = processJourneyGroup(auth, token, group, definition);
