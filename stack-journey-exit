@@ -1,0 +1,604 @@
+<script runat="server">
+Platform.Load("core", "1");
+
+var EXIT_QUEUE_DE = "bd_sst_journey_exit";
+var LOG_DE = "sst_de_journey_exit_log";
+var LOG_FIELD = "log";
+var LOG_MAX_LEN = 4000;
+var EXIT_BATCH_SIZE = 50;
+
+var resultLines = [];
+var debugLines = [];
+
+function strTrim(v) {
+  if (v === null || typeof v === "undefined") {
+    return "";
+  }
+  try {
+    return (v + "").replace(/^\s+|\s+$/g, "");
+  } catch (e) {
+    return "";
+  }
+}
+
+function asLower(v) {
+  var s = strTrim(v);
+  try {
+    return s.toLowerCase();
+  } catch (e) {
+    return s;
+  }
+}
+
+function writeExitLog(text) {
+  var msg = text === null || typeof text === "undefined" ? "" : text + "";
+  if (msg.length > LOG_MAX_LEN) {
+    msg = msg.substring(0, LOG_MAX_LEN - 3) + "...";
+  }
+  try {
+    Platform.Function.InsertData(LOG_DE, [LOG_FIELD], [msg]);
+    return { ok: true };
+  } catch (logEx) {
+    return { ok: false, error: logEx.message || String(logEx) };
+  }
+}
+
+function queueField(row, names) {
+  if (!row) {
+    return "";
+  }
+  for (var i = 0; i < names.length; i++) {
+    var val = row[names[i]];
+    if (val !== undefined && val !== null && String(val) !== "") {
+      return String(val);
+    }
+  }
+  return "";
+}
+
+function coerceQueueRows(raw) {
+  if (raw === null || typeof raw === "undefined") {
+    return [];
+  }
+  var rows = raw;
+  if (rows.Results) {
+    rows = rows.Results;
+  }
+  if (typeof rows.length === "number") {
+    var out = [];
+    for (var i = 0; i < rows.length; i++) {
+      out.push(rows[i]);
+    }
+    return out;
+  }
+  if (
+    typeof rows === "object" &&
+    (queueField(rows, ["subscriberKey", "SubscriberKey"]) ||
+      queueField(rows, ["journeyID", "journeyId", "JourneyID"]))
+  ) {
+    return [rows];
+  }
+  return [];
+}
+
+function normalizeQueueRows(rawRows) {
+  var rows = coerceQueueRows(rawRows);
+  if (!rows.length) {
+    return [];
+  }
+  var out = [];
+  for (var j = 0; j < rows.length; j++) {
+    var row = rows[j];
+    out.push({
+      subscriberKey: strTrim(
+        queueField(row, ["subscriberKey", "SubscriberKey"])
+      ),
+      journeyName: strTrim(
+        queueField(row, ["journeyName", "JourneyName", "Name"])
+      ),
+      journeyID: strTrim(
+        queueField(row, ["journeyID", "journeyId", "JourneyID", "JourneyId"])
+      )
+    });
+  }
+  return out;
+}
+
+function fetchExitQueueRows(prox) {
+  var errors = [];
+  var keyVariants = [EXIT_QUEUE_DE, String(EXIT_QUEUE_DE).toLowerCase()];
+
+  for (var v = 0; v < keyVariants.length; v++) {
+    var deKey = keyVariants[v];
+    if (!deKey) {
+      continue;
+    }
+    try {
+      var de = DataExtension.Init(deKey);
+      var deRows = de.Rows.Retrieve();
+      var normalized = normalizeQueueRows(deRows);
+      if (normalized.length) {
+        return { rows: normalized, error: "" };
+      }
+    } catch (deEx) {
+      errors.push(
+        "DataExtension.Init(" + deKey + "): " + (deEx.message || String(deEx))
+      );
+    }
+  }
+
+  var filters = [
+    { Property: "subscriberKey", SimpleOperator: "isNotNull" },
+    { Property: "journeyID", SimpleOperator: "isNotNull" }
+  ];
+  for (var f = 0; f < filters.length; f++) {
+    for (var k = 0; k < keyVariants.length; k++) {
+      try {
+        var wsResp = prox.retrieve(
+          "DataExtensionObject[" + keyVariants[k] + "]",
+          ["subscriberKey", "journeyName", "journeyID"],
+          filters[f]
+        );
+        if (wsResp && wsResp.Results && wsResp.Results.length) {
+          return { rows: normalizeQueueRows(wsResp.Results), error: "" };
+        }
+      } catch (wsEx) {
+        errors.push(
+          "WSProxy " +
+            keyVariants[k] +
+            " " +
+            filters[f].Property +
+            ": " +
+            (wsEx.message || String(wsEx))
+        );
+      }
+    }
+  }
+
+  return { rows: [], error: errors.join(" | ") };
+}
+
+function removeExitQueueRow(subscriberKey, journeyID) {
+  var key = strTrim(subscriberKey);
+  var jid = strTrim(journeyID);
+  if (!key || !jid) {
+    return {
+      ok: false,
+      error: "Need subscriberKey and journeyID to remove queue row."
+    };
+  }
+  try {
+    Platform.Function.DeleteData(
+      EXIT_QUEUE_DE,
+      ["subscriberKey", "journeyID"],
+      [key, jid]
+    );
+    return { ok: true };
+  } catch (delEx) {
+    try {
+      Platform.Function.DeleteData(
+        EXIT_QUEUE_DE,
+        ["SubscriberKey", "JourneyID"],
+        [key, jid]
+      );
+      return { ok: true };
+    } catch (delEx2) {
+      return {
+        ok: false,
+        error:
+          (delEx.message || String(delEx)) +
+          " | " +
+          (delEx2.message || String(delEx2))
+      };
+    }
+  }
+}
+
+function field(row, name) {
+  if (!row) {
+    return "";
+  }
+  return row[name] || row[String(name)] || "";
+}
+
+function getAuthConfig() {
+  var rows = Platform.Function.LookupRows("SFMC_AUTH", "User", "Admin");
+  if (!rows || rows.length < 1) {
+    throw "Missing SFMC_AUTH row for User=Admin.";
+  }
+  var row = rows[0];
+  var clientId = strTrim(field(row, "clientId"));
+  var clientSecret = strTrim(field(row, "clientSecret"));
+  var subdomain = strTrim(field(row, "subdomain"));
+  var accountId = strTrim(field(row, "accountId"));
+  if (!clientId || !clientSecret || !subdomain) {
+    throw "SFMC_AUTH must include clientId, clientSecret, and subdomain.";
+  }
+  return {
+    clientId: clientId,
+    clientSecret: clientSecret,
+    subdomain: subdomain,
+    accountId: accountId
+  };
+}
+
+function getAccessToken(auth) {
+  var payload = {
+    grant_type: "client_credentials",
+    client_id: auth.clientId,
+    client_secret: auth.clientSecret
+  };
+  if (auth.accountId) {
+    payload.account_id = auth.accountId;
+  }
+  var req = new Script.Util.HttpRequest(
+    "https://" + auth.subdomain + ".auth.marketingcloudapis.com/v2/token"
+  );
+  req.emptyContentHandling = 0;
+  req.retries = 2;
+  req.continueOnError = true;
+  req.contentType = "application/json";
+  req.method = "POST";
+  req.postData = Platform.Function.Stringify(payload);
+  var resp = req.send();
+  var body = resp.content ? String(resp.content) : "";
+  if (resp.statusCode != 200) {
+    throw "Auth HTTP " + resp.statusCode + ": " + body;
+  }
+  var parsed = Platform.Function.ParseJSON(body);
+  if (!parsed || !parsed.access_token) {
+    throw "Auth response did not include access_token.";
+  }
+  return String(parsed.access_token);
+}
+
+function httpJson(auth, token, method, path, payload) {
+  var req = new Script.Util.HttpRequest(
+    "https://" + auth.subdomain + ".rest.marketingcloudapis.com" + path
+  );
+  req.emptyContentHandling = 0;
+  req.retries = 2;
+  req.continueOnError = true;
+  req.contentType = "application/json";
+  req.setHeader("Authorization", "Bearer " + token);
+  req.method = method;
+  if (payload !== null && typeof payload !== "undefined") {
+    req.postData = Platform.Function.Stringify(payload);
+  }
+  var resp = req.send();
+  return {
+    status: resp.statusCode,
+    body: resp.content ? String(resp.content) : ""
+  };
+}
+
+function parseJsonSafe(body) {
+  try {
+    return Platform.Function.ParseJSON(body || "{}");
+  } catch (e) {
+    return null;
+  }
+}
+
+function resolveDefinitionKey(auth, token, journeyID, cache) {
+  var id = strTrim(journeyID);
+  if (!id) {
+    return { ok: false, key: "", error: "Empty journeyID." };
+  }
+  var cacheKey = asLower(id);
+  if (cache[cacheKey]) {
+    return cache[cacheKey];
+  }
+
+  var byId = httpJson(
+    auth,
+    token,
+    "GET",
+    "/interaction/v1/interactions/" + encodeURIComponent(id) + "?extras=",
+    null
+  );
+  if (byId.status == 200) {
+    var parsedId = parseJsonSafe(byId.body);
+    var keyFromId = strTrim(parsedId && parsedId.key ? parsedId.key : "");
+    if (keyFromId) {
+      cache[cacheKey] = {
+        ok: true,
+        key: keyFromId,
+        name: strTrim(parsedId.name || ""),
+        error: ""
+      };
+      return cache[cacheKey];
+    }
+  }
+
+  var byKey = httpJson(
+    auth,
+    token,
+    "GET",
+    "/interaction/v1/interactions?key=" + encodeURIComponent(id),
+    null
+  );
+  if (byKey.status == 200) {
+    var parsedKey = parseJsonSafe(byKey.body);
+    var items =
+      parsedKey && parsedKey.items
+        ? parsedKey.items
+        : parsedKey && typeof parsedKey.length === "number"
+          ? parsedKey
+          : parsedKey
+            ? [parsedKey]
+            : [];
+    if (items && items.length) {
+      var first = items[0] || {};
+      var keyFromQuery = strTrim(first.key || id);
+      cache[cacheKey] = {
+        ok: true,
+        key: keyFromQuery,
+        name: strTrim(first.name || ""),
+        error: ""
+      };
+      return cache[cacheKey];
+    }
+  }
+
+  cache[cacheKey] = {
+    ok: false,
+    key: "",
+    name: "",
+    error:
+      "Could not resolve DefinitionKey from journeyID=" +
+      id +
+      " (id HTTP " +
+      byId.status +
+      ", key HTTP " +
+      byKey.status +
+      ")."
+  };
+  return cache[cacheKey];
+}
+
+function groupQueueByJourney(rows) {
+  var groups = {};
+  var order = [];
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    var jid = strTrim(row.journeyID);
+    var sk = strTrim(row.subscriberKey);
+    if (!jid || !sk) {
+      continue;
+    }
+    var gkey = asLower(jid);
+    if (!groups[gkey]) {
+      groups[gkey] = {
+        journeyID: jid,
+        journeyName: strTrim(row.journeyName),
+        contacts: []
+      };
+      order.push(gkey);
+    } else if (!groups[gkey].journeyName && row.journeyName) {
+      groups[gkey].journeyName = strTrim(row.journeyName);
+    }
+    groups[gkey].contacts.push({
+      subscriberKey: sk,
+      journeyName: strTrim(row.journeyName),
+      journeyID: jid
+    });
+  }
+  return { groups: groups, order: order };
+}
+
+function chunkContacts(contacts, size) {
+  var chunks = [];
+  var i = 0;
+  while (i < contacts.length) {
+    chunks.push(contacts.slice(i, i + size));
+    i += size;
+  }
+  return chunks;
+}
+
+function exitErrorMap(body) {
+  var map = {};
+  var parsed = parseJsonSafe(body);
+  if (!parsed || !parsed.errors) {
+    return map;
+  }
+  var errors = parsed.errors;
+  var n = typeof errors.length === "number" ? errors.length : 0;
+  for (var i = 0; i < n; i++) {
+    var err = errors[i] || {};
+    var ck = strTrim(err.contactKey || err.ContactKey);
+    if (!ck) {
+      continue;
+    }
+    var statuses = err.status || [];
+    var messages = [];
+    var sn = typeof statuses.length === "number" ? statuses.length : 0;
+    for (var s = 0; s < sn; s++) {
+      if (statuses[s] && statuses[s].message) {
+        messages.push(String(statuses[s].message));
+      }
+    }
+    map[asLower(ck)] = messages.length
+      ? messages.join("; ")
+      : "exit request reported an error";
+  }
+  return map;
+}
+
+function processJourneyGroup(auth, token, group, definition) {
+  var label =
+    (group.journeyName || definition.name || "(no name)") +
+    " / " +
+    group.journeyID;
+  if (!definition.ok || !definition.key) {
+    return [
+      label +
+        " — SKIP " +
+        group.contacts.length +
+        " contact(s): " +
+        (definition.error || "no DefinitionKey")
+    ];
+  }
+
+  var lines = [];
+  var chunks = chunkContacts(group.contacts, EXIT_BATCH_SIZE);
+  for (var c = 0; c < chunks.length; c++) {
+    var chunk = chunks[c];
+    var payload = [];
+    for (var p = 0; p < chunk.length; p++) {
+      payload.push({
+        ContactKey: chunk[p].subscriberKey,
+        DefinitionKey: definition.key
+      });
+    }
+    var exitResp = httpJson(
+      auth,
+      token,
+      "POST",
+      "/interaction/v1/interactions/contactexit",
+      payload
+    );
+    if (!(exitResp.status == 202 || exitResp.status == 200)) {
+      lines.push(
+        label +
+          " — batch " +
+          (c + 1) +
+          "/" +
+          chunks.length +
+          " FAILED HTTP " +
+          exitResp.status +
+          ": " +
+          exitResp.body
+      );
+      continue;
+    }
+
+    var errMap = exitErrorMap(exitResp.body);
+    var okCount = 0;
+    var failCount = 0;
+    for (var i = 0; i < chunk.length; i++) {
+      var contact = chunk[i];
+      var err = errMap[asLower(contact.subscriberKey)];
+      if (err) {
+        failCount++;
+        lines.push(
+          contact.subscriberKey +
+            " @ " +
+            label +
+            " — EXIT ERROR: " +
+            err +
+            " (queue row kept)"
+        );
+        continue;
+      }
+      var removed = removeExitQueueRow(contact.subscriberKey, contact.journeyID);
+      if (!removed.ok) {
+        failCount++;
+        lines.push(
+          contact.subscriberKey +
+            " @ " +
+            label +
+            " — EXIT ACCEPTED, queue remove FAILED: " +
+            (removed.error || "unknown")
+        );
+        continue;
+      }
+      okCount++;
+      lines.push(
+        contact.subscriberKey +
+          " @ " +
+          label +
+          " — EXIT ACCEPTED, queue row removed."
+      );
+    }
+    lines.push(
+      label +
+        " — batch " +
+        (c + 1) +
+        "/" +
+        chunks.length +
+        " done: accepted=" +
+        okCount +
+        ", errors/kept=" +
+        failCount +
+        ", definitionKey=" +
+        definition.key
+    );
+  }
+  return lines;
+}
+
+try {
+  var auth = getAuthConfig();
+  var token = getAccessToken(auth);
+  var prox = new Script.Util.WSProxy();
+  var queueFetch = fetchExitQueueRows(prox);
+  var queueRows = queueFetch.rows || [];
+  resultLines.push(
+    "bd_sst_journey_exit worker — " + queueRows.length + " row(s)."
+  );
+  if (queueFetch.error) {
+    debugLines.push("Retrieve notes: " + queueFetch.error);
+  }
+
+  if (!queueRows.length) {
+    resultLines.push(
+      queueFetch.error
+        ? "No queued exits (retrieve failed — see notes)."
+        : "No queued exits."
+    );
+  } else {
+    var grouped = groupQueueByJourney(queueRows);
+    var keyCache = {};
+    var skipped = 0;
+    for (var s = 0; s < queueRows.length; s++) {
+      if (
+        !strTrim(queueRows[s].subscriberKey) ||
+        !strTrim(queueRows[s].journeyID)
+      ) {
+        skipped++;
+        debugLines.push(
+          "SKIP incomplete row subscriberKey=" +
+            (queueRows[s].subscriberKey || "(empty)") +
+            " journeyID=" +
+            (queueRows[s].journeyID || "(empty)")
+        );
+      }
+    }
+    if (skipped) {
+      resultLines.push("Skipped incomplete rows: " + skipped);
+    }
+    resultLines.push(
+      "Grouped into " + grouped.order.length + " journey(s)."
+    );
+
+    for (var g = 0; g < grouped.order.length; g++) {
+      var group = grouped.groups[grouped.order[g]];
+      var definition = resolveDefinitionKey(
+        auth,
+        token,
+        group.journeyID,
+        keyCache
+      );
+      var groupLines = processJourneyGroup(auth, token, group, definition);
+      for (var gl = 0; gl < groupLines.length; gl++) {
+        debugLines.push(groupLines[gl]);
+      }
+    }
+  }
+} catch (runEx) {
+  resultLines.push("ERROR: " + (runEx.message || String(runEx)));
+}
+
+var output = resultLines.join("\n");
+if (debugLines.length) {
+  output += "\n\n" + debugLines.join("\n");
+}
+
+var logResult = writeExitLog(output);
+if (!logResult.ok) {
+  output += "\n\n[sst_de_journey_exit_log insert FAILED] " + logResult.error;
+}
+Write(output);
+</script>
