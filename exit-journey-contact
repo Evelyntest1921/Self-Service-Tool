@@ -281,10 +281,99 @@ function summarizeExitResponse(body) {
   return { hasErrors: false, summary: "" };
 }
 
+function summarizeStatusResponse(body) {
+  try {
+    var parsed = fromJson(body);
+    var rows = [];
+    if (parsed && typeof parsed.length === "number") {
+      rows = coerceRows(parsed);
+    } else if (parsed) {
+      rows = [parsed];
+    }
+    if (!rows.length) {
+      return {
+        ok: false,
+        summary: "No status rows returned for this contact/journey."
+      };
+    }
+    var bits = [];
+    var completed = 0;
+    var pending = 0;
+    var other = 0;
+    var r;
+    for (r = 0; r < rows.length; r++) {
+      var row = rows[r] || {};
+      var statusRows = coerceRows(row.status || []);
+      if (!statusRows.length) {
+        bits.push((asStr(row.contactKey) || "contact") + ": no status details");
+        other++;
+        continue;
+      }
+      var s;
+      for (s = 0; s < statusRows.length; s++) {
+        var st = statusRows[s] || {};
+        var msg = asStr(st.message) || "No message";
+        var version = asStr(st.version);
+        var lowerMsg = asLower(msg);
+        if (lowerMsg.indexOf("completed") >= 0) {
+          completed++;
+        } else if (
+          lowerMsg.indexOf("processing") >= 0 ||
+          lowerMsg.indexOf("queued") >= 0 ||
+          lowerMsg.indexOf("pending") >= 0 ||
+          lowerMsg.indexOf("in progress") >= 0
+        ) {
+          pending++;
+        } else {
+          other++;
+        }
+        bits.push(
+          "v" +
+            (version || "?") +
+            ": " +
+            msg +
+            (asStr(st.definitionInstanceId)
+              ? " (instance " + asStr(st.definitionInstanceId) + ")"
+              : "")
+        );
+      }
+    }
+    var level = "success";
+    if (pending > 0 && completed === 0) {
+      level = "warn";
+    } else if (completed === 0 && other > 0) {
+      level = "error";
+    } else if (pending > 0) {
+      level = "warn";
+    }
+    return {
+      ok: true,
+      level: level,
+      summary: bits.join(" | ")
+    };
+  } catch (parseEx) {
+    return { ok: false, summary: "Could not parse status response." };
+  }
+}
+
+function resolveJourneyName(journeys, definitionKey, fallbackName) {
+  if (fallbackName) {
+    return fallbackName;
+  }
+  var j;
+  for (j = 0; j < journeys.length; j++) {
+    if (journeys[j].key === definitionKey) {
+      return journeys[j].name;
+    }
+  }
+  return definitionKey;
+}
+
 hubUrl = lookupValue("bd_sst_page_navigation", "ss_home", "type", "cloudpage") || "#";
 selectedDefinitionKey = clean(formValue("definitionKey"));
 selectedJourneyName = clean(formValue("journeyName"));
 subscriberKeyValue = clean(formValue("subscriberKey"));
+var formAction = clean(formValue("formAction"));
 
 try {
   var auth = getAuthConfig();
@@ -292,59 +381,99 @@ try {
   var journeys = loadActiveJourneys(auth, token);
   journeyOptionsHtml = buildJourneyOptions(journeys, selectedDefinitionKey);
 
-  if (formValue("exitContact") == "1") {
+  if (formAction == "exit" || formAction == "check") {
     if (!selectedDefinitionKey) {
       throw "Select a journey.";
     }
     if (!subscriberKeyValue) {
       throw "Enter a Subscriber Key.";
     }
-    if (!selectedJourneyName) {
-      var j;
-      for (j = 0; j < journeys.length; j++) {
-        if (journeys[j].key === selectedDefinitionKey) {
-          selectedJourneyName = journeys[j].name;
-          break;
-        }
-      }
-    }
+    selectedJourneyName = resolveJourneyName(
+      journeys,
+      selectedDefinitionKey,
+      selectedJourneyName
+    );
 
-    var exitPayload = [
+    var contactPayload = [
       {
         ContactKey: subscriberKeyValue,
         DefinitionKey: selectedDefinitionKey
       }
     ];
-    var exitResp = httpJson(auth, token, "POST", "/interaction/v1/interactions/contactexit", exitPayload);
-    resultDetail = exitResp.body;
-    var summary = summarizeExitResponse(exitResp.body);
 
-    if (exitResp.status == 202 || exitResp.status == 200) {
-      if (summary.hasErrors) {
-        resultStatus = "error";
-        resultMessage =
-          "Exit request accepted with errors for " +
-          subscriberKeyValue +
-          " on " +
-          (selectedJourneyName || selectedDefinitionKey) +
-          ". " +
-          summary.summary;
+    if (formAction == "exit") {
+      var exitResp = httpJson(
+        auth,
+        token,
+        "POST",
+        "/interaction/v1/interactions/contactexit",
+        contactPayload
+      );
+      resultDetail = exitResp.body;
+      var summary = summarizeExitResponse(exitResp.body);
+
+      if (exitResp.status == 202 || exitResp.status == 200) {
+        if (summary.hasErrors) {
+          resultStatus = "error";
+          resultMessage =
+            "Exit request accepted with errors for " +
+            subscriberKeyValue +
+            " on " +
+            selectedJourneyName +
+            ". " +
+            summary.summary;
+        } else {
+          resultStatus = "success";
+          resultMessage =
+            "Exit request accepted for " +
+            subscriberKeyValue +
+            " from " +
+            selectedJourneyName +
+            ". SFMC processes removals asynchronously. Use Check progress to confirm.";
+        }
       } else {
-        resultStatus = "success";
-        resultMessage =
-          "Exit request accepted for " +
-          subscriberKeyValue +
-          " from " +
-          (selectedJourneyName || selectedDefinitionKey) +
-          ". SFMC processes removals asynchronously.";
+        resultStatus = "error";
+        resultMessage = "Exit HTTP " + exitResp.status + ": " + exitResp.body;
       }
     } else {
-      resultStatus = "error";
-      resultMessage = "Exit HTTP " + exitResp.status + ": " + exitResp.body;
+      var statusResp = httpJson(
+        auth,
+        token,
+        "POST",
+        "/interaction/v1/interactions/contactexit/status",
+        contactPayload
+      );
+      resultDetail = statusResp.body;
+      if (statusResp.status == 200 || statusResp.status == 202) {
+        var statusSummary = summarizeStatusResponse(statusResp.body);
+        if (!statusSummary.ok) {
+          resultStatus = "error";
+          resultMessage =
+            "Could not confirm exit status for " +
+            subscriberKeyValue +
+            " on " +
+            selectedJourneyName +
+            ". " +
+            statusSummary.summary;
+        } else {
+          resultStatus = statusSummary.level || "success";
+          resultMessage =
+            "Exit progress for " +
+            subscriberKeyValue +
+            " on " +
+            selectedJourneyName +
+            ": " +
+            statusSummary.summary;
+        }
+      } else {
+        resultStatus = "error";
+        resultMessage =
+          "Status HTTP " + statusResp.status + ": " + statusResp.body;
+      }
     }
   }
 } catch (ex) {
-  if (formValue("exitContact") == "1") {
+  if (formAction == "exit" || formAction == "check") {
     resultStatus = "error";
     resultMessage = asStr(ex && ex.message ? ex.message : ex);
   } else {
@@ -555,8 +684,8 @@ h1 {
       }
     </script>
 
-    <form method="post" id="exitForm" onsubmit="return confirmExit();">
-      <input type="hidden" name="exitContact" value="1">
+    <form method="post" id="exitForm">
+      <input type="hidden" name="formAction" id="formAction" value="">
       <input type="hidden" name="journeyName" id="journeyName" value="">
       <div class="form-group">
         <label class="form-label" for="definitionKey">Journey</label>
@@ -581,7 +710,8 @@ h1 {
         </script>
       </div>
       <div class="actions">
-        <button class="btn btn-create" type="submit" id="submitBtn">Exit contact</button>
+        <button class="btn btn-create" type="submit" id="submitBtn" onclick="return submitAction('exit');">Exit contact</button>
+        <button class="btn btn-secondary" type="submit" id="checkBtn" onclick="return submitAction('check');">Check progress</button>
         <script runat="server">
           function navSafe(value) {
             return String(value || "#")
@@ -628,11 +758,18 @@ h1 {
     select.addEventListener("change", syncJourneyName);
     syncJourneyName();
   }
-  window.confirmExit = function () {
+  window.submitAction = function (action) {
     syncJourneyName();
-    var key = document.getElementById("subscriberKey").value || "";
-    var label = journeyName.value || "the selected journey";
-    return confirm("Exit " + key + " from " + label + "? This cannot be undone from this page.");
+    var actionField = document.getElementById("formAction");
+    if (actionField) {
+      actionField.value = action || "";
+    }
+    if (action === "exit") {
+      var key = document.getElementById("subscriberKey").value || "";
+      var label = journeyName.value || "the selected journey";
+      return confirm("Exit " + key + " from " + label + "? This cannot be undone from this page.");
+    }
+    return true;
   };
   var toggle = document.getElementById("toggleDetailBtn");
   var detail = document.getElementById("apiDetail");
