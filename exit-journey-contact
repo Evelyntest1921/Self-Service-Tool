@@ -356,6 +356,82 @@ function summarizeStatusResponse(body) {
   }
 }
 
+function summarizeMembershipResponse(body, definitionKey, contactKey) {
+  try {
+    var parsed = fromJson(body);
+    var results = parsed && parsed.results ? parsed.results : parsed;
+    var memberships = coerceRows(
+      results && results.contactMemberships ? results.contactMemberships : []
+    );
+    var notFound = coerceRows(
+      results && results.contactsNotFound ? results.contactsNotFound : []
+    );
+    var targetKey = asLower(definitionKey);
+    var matches = [];
+    var i;
+    for (i = 0; i < memberships.length; i++) {
+      var m = memberships[i] || {};
+      var memberContact = asStr(m.contactKey);
+      var memberDef = asStr(m.definitionKey);
+      if (asLower(memberContact) !== asLower(contactKey)) {
+        continue;
+      }
+      if (targetKey && asLower(memberDef) !== targetKey) {
+        continue;
+      }
+      matches.push(
+        "v" +
+          (asStr(m.version) || asStr(m.Version) || "?") +
+          " (" +
+          (memberDef || "unknown key") +
+          ")"
+      );
+    }
+
+    var contactListedNotFound = false;
+    var n;
+    for (n = 0; n < notFound.length; n++) {
+      if (asLower(notFound[n]) === asLower(contactKey)) {
+        contactListedNotFound = true;
+        break;
+      }
+    }
+
+    if (matches.length) {
+      return {
+        ok: true,
+        stillMember: true,
+        level: "warn",
+        summary:
+          "still in this journey: " + matches.join(", ")
+      };
+    }
+
+    if (contactListedNotFound) {
+      return {
+        ok: true,
+        stillMember: false,
+        level: "success",
+        summary: "not in any journey (contactsNotFound)"
+      };
+    }
+
+    return {
+      ok: true,
+      stillMember: false,
+      level: "success",
+      summary: "not currently a member of this journey"
+    };
+  } catch (memEx) {
+    return {
+      ok: false,
+      stillMember: null,
+      level: "error",
+      summary: "Could not parse membership response."
+    };
+  }
+}
+
 function resolveJourneyName(journeys, definitionKey, fallbackName) {
   if (fallbackName) {
     return fallbackName;
@@ -443,32 +519,93 @@ try {
         "/interaction/v1/interactions/contactexit/status",
         contactPayload
       );
-      resultDetail = statusResp.body;
-      if (statusResp.status == 200 || statusResp.status == 202) {
-        var statusSummary = summarizeStatusResponse(statusResp.body);
-        if (!statusSummary.ok) {
-          resultStatus = "error";
-          resultMessage =
-            "Could not confirm exit status for " +
-            subscriberKeyValue +
-            " on " +
-            selectedJourneyName +
-            ". " +
-            statusSummary.summary;
-        } else {
-          resultStatus = statusSummary.level || "success";
-          resultMessage =
-            "Exit progress for " +
-            subscriberKeyValue +
-            " on " +
-            selectedJourneyName +
-            ": " +
-            statusSummary.summary;
-        }
-      } else {
+      var membershipResp = httpJson(
+        auth,
+        token,
+        "POST",
+        "/interaction/v1/interactions/contactMembership",
+        { ContactKeyList: [subscriberKeyValue] }
+      );
+      resultDetail =
+        "exitStatus HTTP " +
+        statusResp.status +
+        ":\n" +
+        statusResp.body +
+        "\n\nmembership HTTP " +
+        membershipResp.status +
+        ":\n" +
+        membershipResp.body;
+
+      var statusOk =
+        statusResp.status == 200 || statusResp.status == 202;
+      var membershipOk =
+        membershipResp.status == 200 || membershipResp.status == 202;
+
+      if (!statusOk && !membershipOk) {
         resultStatus = "error";
         resultMessage =
-          "Status HTTP " + statusResp.status + ": " + statusResp.body;
+          "Could not check progress. Exit status HTTP " +
+          statusResp.status +
+          "; membership HTTP " +
+          membershipResp.status +
+          ".";
+      } else {
+        var statusSummary = statusOk
+          ? summarizeStatusResponse(statusResp.body)
+          : {
+              ok: false,
+              level: "error",
+              summary: "Exit status HTTP " + statusResp.status
+            };
+        var membershipSummary = membershipOk
+          ? summarizeMembershipResponse(
+              membershipResp.body,
+              selectedDefinitionKey,
+              subscriberKeyValue
+            )
+          : {
+              ok: false,
+              stillMember: null,
+              level: "error",
+              summary: "Membership HTTP " + membershipResp.status
+            };
+
+        var parts = [];
+        parts.push(
+          "Exit status: " +
+            (statusSummary.summary || "unavailable")
+        );
+        parts.push(
+          "Membership: " +
+            (membershipSummary.summary || "unavailable")
+        );
+
+        if (membershipSummary.stillMember === true) {
+          resultStatus = "warn";
+          parts.push(
+            "Contact is still a member of this journey in SFMC. Journey Builder Waiting can lag, but membership says they are still in."
+          );
+        } else if (membershipSummary.stillMember === false) {
+          resultStatus =
+            statusSummary.level === "error" ? "warn" : "success";
+          parts.push(
+            "Contact is not a member of this journey anymore. If Journey Builder still shows Waiting, refresh or wait for UI lag."
+          );
+        } else {
+          resultStatus =
+            statusSummary.level === "error" ||
+            membershipSummary.level === "error"
+              ? "error"
+              : statusSummary.level || "warn";
+        }
+
+        resultMessage =
+          "Progress for " +
+          subscriberKeyValue +
+          " on " +
+          selectedJourneyName +
+          " — " +
+          parts.join(" | ");
       }
     }
   }
