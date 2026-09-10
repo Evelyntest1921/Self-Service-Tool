@@ -7,6 +7,19 @@ ENDIF
 SET @batchRows = LookupRows("bd_sst_journey_exit_batch", "batchId", @batchId)
 SET @batchRowCount = RowCount(@batchRows)
 
+SET @batch_batchId = ""
+SET @batch_sourceDeName = ""
+SET @batch_journeyID = ""
+SET @batch_journeyName = ""
+SET @batch_journeyKey = ""
+SET @batch_status = ""
+SET @batch_requestedAt = ""
+SET @batch_processedAt = ""
+SET @batch_message = ""
+SET @emailHeadline = ""
+SET @emailBody = ""
+SET @emailTone = "info"
+
 IF @batchRowCount > 0 THEN
   SET @batchRow = Row(@batchRows, 1)
   SET @batch_batchId = Field(@batchRow, "batchId")
@@ -18,15 +31,95 @@ IF @batchRowCount > 0 THEN
   SET @batch_requestedAt = Field(@batchRow, "requestedAt")
   SET @batch_processedAt = Field(@batchRow, "processedAt")
   SET @batch_message = Field(@batchRow, "message")
+
+  SET @statusLower = Lowercase(Trim(@batch_status))
+
+  IF @statusLower == "done" THEN
+    SET @emailTone = "success"
+    SET @emailHeadline = "Journey exit batch completed"
+    SET @emailBody = Concat(
+      "Your exit batch finished successfully. Contacts from ",
+      @batch_sourceDeName,
+      " were queued for journey ",
+      @batch_journeyName,
+      " and seeding is complete."
+    )
+  ELSEIF @statusLower == "failed" THEN
+    SET @emailTone = "error"
+    SET @emailHeadline = "Journey exit batch failed"
+    SET @emailBody = Concat(
+      "Your exit batch for journey ",
+      @batch_journeyName,
+      " using source DE ",
+      @batch_sourceDeName,
+      " failed during processing. Review the message below and re-queue if needed."
+    )
+  ELSEIF @statusLower == "processing" THEN
+    SET @emailTone = "info"
+    SET @emailHeadline = "Journey exit batch is processing"
+    SET @emailBody = Concat(
+      "Your exit batch for journey ",
+      @batch_journeyName,
+      " is currently processing contacts from ",
+      @batch_sourceDeName,
+      ". You will get another update when it finishes."
+    )
+  ELSEIF @statusLower == "queued" THEN
+    SET @emailTone = "warn"
+    SET @emailHeadline = "Journey exit batch partially queued"
+    SET @emailBody = Concat(
+      "Your exit batch for journey ",
+      @batch_journeyName,
+      " was partially queued from ",
+      @batch_sourceDeName,
+      ". Some rows may still need another seeder run."
+    )
+  ELSEIF @statusLower == "pending" THEN
+    SET @emailTone = "info"
+    SET @emailHeadline = "Journey exit batch is pending"
+    SET @emailBody = Concat(
+      "Your exit batch for journey ",
+      @batch_journeyName,
+      " is pending. The seeder has not finished processing ",
+      @batch_sourceDeName,
+      " yet."
+    )
+  ELSE
+    SET @emailTone = "info"
+    SET @emailHeadline = "Journey exit batch update"
+    SET @emailBody = Concat(
+      "Your exit batch status is ",
+      @batch_status,
+      " for journey ",
+      @batch_journeyName,
+      "."
+    )
+  ENDIF
+ELSE
+  SET @emailTone = "error"
+  SET @emailHeadline = "Journey exit batch not found"
+  SET @emailBody = Concat(
+    "No batch was found for batchId ",
+    @batchId,
+    ". Confirm the ID and try again."
+  )
 ENDIF
 ]%%
 
-Batch ID: %%=v(@batch_batchId)=%%
-Source DE: %%=v(@batch_sourceDeName)=%%
-Journey ID: %%=v(@batch_journeyID)=%%
-Journey Name: %%=v(@batch_journeyName)=%%
-Journey Key: %%=v(@batch_journeyKey)=%%
-Status: %%=v(@batch_status)=%%
-Requested At: %%=v(@batch_requestedAt)=%%
-Processed At: %%=v(@batch_processedAt)=%%
-Message: %%=v(@batch_message)=%%
+<h2>%%=v(@emailHeadline)=%%</h2>
+<p>%%=v(@emailBody)=%%</p>
+
+<p>
+<strong>Status:</strong> %%=v(@batch_status)=%%<br>
+<strong>Batch ID:</strong> %%=v(@batch_batchId)=%%<br>
+<strong>Journey:</strong> %%=v(@batch_journeyName)=%%<br>
+<strong>Journey ID:</strong> %%=v(@batch_journeyID)=%%<br>
+<strong>Journey Key:</strong> %%=v(@batch_journeyKey)=%%<br>
+<strong>Source DE:</strong> %%=v(@batch_sourceDeName)=%%<br>
+<strong>Requested:</strong> %%=v(@batch_requestedAt)=%%<br>
+<strong>Processed:</strong> %%=v(@batch_processedAt)=%%
+</p>
+
+%%[ IF NOT Empty(@batch_message) THEN ]%%
+<p><strong>Details:</strong> %%=v(@batch_message)=%%</p>
+%%[ ENDIF ]%%
