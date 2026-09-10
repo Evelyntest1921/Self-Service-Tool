@@ -1,0 +1,471 @@
+<script runat="server">
+Platform.Load("core", "1");
+
+var BATCH_DE = "bd_sst_journey_exit_batch";
+var EXIT_QUEUE_DE = "bd_sst_journey_exit";
+var LOG_DE = "sst_de_journey_exit_log";
+var LOG_FIELD = "log";
+var LOG_MAX_LEN = 4000;
+var MAX_BATCHES_PER_RUN = 5;
+var MAX_ROWS_PER_BATCH = 2500;
+
+var resultLines = [];
+var debugLines = [];
+
+function strTrim(v) {
+  if (v === null || typeof v === "undefined") {
+    return "";
+  }
+  try {
+    return (v + "").replace(/^\s+|\s+$/g, "");
+  } catch (e) {
+    return "";
+  }
+}
+
+function asLower(v) {
+  var s = strTrim(v);
+  try {
+    return s.toLowerCase();
+  } catch (e) {
+    return s;
+  }
+}
+
+function writeExitLog(text) {
+  var msg = text === null || typeof text === "undefined" ? "" : text + "";
+  if (msg.length > LOG_MAX_LEN) {
+    msg = msg.substring(0, LOG_MAX_LEN - 3) + "...";
+  }
+  try {
+    Platform.Function.InsertData(LOG_DE, [LOG_FIELD], [msg]);
+    return { ok: true };
+  } catch (logEx) {
+    return { ok: false, error: logEx.message || String(logEx) };
+  }
+}
+
+function queueField(row, names) {
+  if (!row) {
+    return "";
+  }
+  for (var i = 0; i < names.length; i++) {
+    var val = row[names[i]];
+    if (val !== undefined && val !== null && String(val) !== "") {
+      return String(val);
+    }
+  }
+  return "";
+}
+
+function coerceRows(raw) {
+  if (raw === null || typeof raw === "undefined") {
+    return [];
+  }
+  var rows = raw;
+  if (rows.Results) {
+    rows = rows.Results;
+  }
+  if (typeof rows.length === "number") {
+    var out = [];
+    for (var i = 0; i < rows.length; i++) {
+      out.push(rows[i]);
+    }
+    return out;
+  }
+  if (typeof rows === "object") {
+    return [rows];
+  }
+  return [];
+}
+
+function normalizeBatchRows(rawRows) {
+  var rows = coerceRows(rawRows);
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    out.push({
+      batchId: strTrim(queueField(row, ["batchId", "BatchId", "BATCHID"])),
+      sourceDeName: strTrim(
+        queueField(row, ["sourceDeName", "SourceDeName", "sourceDEName"])
+      ),
+      journeyID: strTrim(
+        queueField(row, ["journeyID", "journeyId", "JourneyID"])
+      ),
+      journeyName: strTrim(
+        queueField(row, ["journeyName", "JourneyName"])
+      ),
+      journeyKey: strTrim(
+        queueField(row, ["journeyKey", "JourneyKey", "definitionKey"])
+      ),
+      status: strTrim(queueField(row, ["status", "Status"]))
+    });
+  }
+  return out;
+}
+
+function fetchPendingBatches(prox) {
+  var errors = [];
+  var keyVariants = [BATCH_DE, String(BATCH_DE).toLowerCase()];
+  var props = [
+    "batchId",
+    "sourceDeName",
+    "journeyID",
+    "journeyName",
+    "journeyKey",
+    "status",
+    "requestedAt",
+    "message"
+  ];
+
+  for (var v = 0; v < keyVariants.length; v++) {
+    var deKey = keyVariants[v];
+    try {
+      var de = DataExtension.Init(deKey);
+      var allRows = normalizeBatchRows(de.Rows.Retrieve());
+      var pending = [];
+      for (var i = 0; i < allRows.length; i++) {
+        if (asLower(allRows[i].status) === "pending") {
+          pending.push(allRows[i]);
+        }
+      }
+      if (pending.length || allRows.length === 0) {
+        return { rows: pending, error: "" };
+      }
+    } catch (deEx) {
+      errors.push(
+        "DataExtension.Init(" + deKey + "): " + (deEx.message || String(deEx))
+      );
+    }
+  }
+
+  for (var k = 0; k < keyVariants.length; k++) {
+    try {
+      var wsResp = prox.retrieve(
+        "DataExtensionObject[" + keyVariants[k] + "]",
+        props,
+        { Property: "status", SimpleOperator: "equals", Value: "Pending" }
+      );
+      if (wsResp && wsResp.Results) {
+        return { rows: normalizeBatchRows(wsResp.Results), error: "" };
+      }
+    } catch (wsEx) {
+      errors.push(
+        "WSProxy " +
+          keyVariants[k] +
+          ": " +
+          (wsEx.message || String(wsEx))
+      );
+    }
+  }
+
+  return { rows: [], error: errors.join(" | ") };
+}
+
+function updateBatchRow(batchId, status, message) {
+  var id = strTrim(batchId);
+  if (!id) {
+    return { ok: false, error: "Missing batchId for update." };
+  }
+  try {
+    Platform.Function.UpdateData(
+      BATCH_DE,
+      ["batchId"],
+      [id],
+      ["status", "processedAt", "message"],
+      [status, new Date(), strTrim(message).substring(0, 3900)]
+    );
+    return { ok: true };
+  } catch (upEx) {
+    try {
+      Platform.Function.UpdateData(
+        BATCH_DE,
+        ["batchId"],
+        [id],
+        ["status", "message"],
+        [status, strTrim(message).substring(0, 3900)]
+      );
+      return { ok: true };
+    } catch (upEx2) {
+      return {
+        ok: false,
+        error:
+          (upEx.message || String(upEx)) +
+          " | " +
+          (upEx2.message || String(upEx2))
+      };
+    }
+  }
+}
+
+function resolveSourceDe(prox, sourceDeName) {
+  var name = strTrim(sourceDeName);
+  if (!name) {
+    return { ok: false, error: "Empty sourceDeName." };
+  }
+
+  try {
+    var de = DataExtension.Init(name);
+    var rows = coerceRows(de.Rows.Retrieve());
+    return { ok: true, deKey: name, rows: rows };
+  } catch (deEx) {
+    var resolvedKey = "";
+    var resolvedName = "";
+    try {
+      var byKey = prox.retrieve(
+        "DataExtension",
+        ["Name", "CustomerKey"],
+        { Property: "CustomerKey", SimpleOperator: "equals", Value: name }
+      );
+      if (byKey && byKey.Results && byKey.Results.length) {
+        resolvedKey = strTrim(byKey.Results[0].CustomerKey);
+        resolvedName = strTrim(byKey.Results[0].Name);
+      } else {
+        var byName = prox.retrieve(
+          "DataExtension",
+          ["Name", "CustomerKey"],
+          { Property: "Name", SimpleOperator: "equals", Value: name }
+        );
+        if (byName && byName.Results && byName.Results.length) {
+          resolvedKey = strTrim(byName.Results[0].CustomerKey);
+          resolvedName = strTrim(byName.Results[0].Name);
+        }
+      }
+    } catch (wsEx) {
+      return {
+        ok: false,
+        error:
+          "Source DE lookup failed: " +
+          (deEx.message || String(deEx)) +
+          " | " +
+          (wsEx.message || String(wsEx))
+      };
+    }
+
+    if (!resolvedKey && !resolvedName) {
+      return {
+        ok: false,
+        error: "Source DE not found: " + name
+      };
+    }
+
+    var tryKeys = [];
+    if (resolvedKey) tryKeys.push(resolvedKey);
+    if (resolvedName && asLower(resolvedName) !== asLower(resolvedKey)) {
+      tryKeys.push(resolvedName);
+    }
+    for (var t = 0; t < tryKeys.length; t++) {
+      try {
+        var de2 = DataExtension.Init(tryKeys[t]);
+        var rows2 = coerceRows(de2.Rows.Retrieve());
+        return { ok: true, deKey: tryKeys[t], rows: rows2 };
+      } catch (deEx2) {}
+    }
+    return {
+      ok: false,
+      error: "Source DE found but Rows.Retrieve failed for: " + name
+    };
+  }
+}
+
+function subscriberKeyFromRow(row) {
+  return strTrim(
+    queueField(row, [
+      "SubscriberKey",
+      "subscriberKey",
+      "SUBSCRIBERKEY",
+      "ContactKey",
+      "contactKey"
+    ])
+  );
+}
+
+function insertExitQueueRow(subscriberKey, journeyName, journeyID) {
+  try {
+    Platform.Function.InsertData(
+      EXIT_QUEUE_DE,
+      ["subscriberKey", "journeyName", "journeyID"],
+      [subscriberKey, journeyName, journeyID]
+    );
+    return { ok: true, duplicate: false };
+  } catch (insEx) {
+    var msg = asLower(insEx.message || String(insEx));
+    if (
+      msg.indexOf("primary key") >= 0 ||
+      msg.indexOf("duplicate") >= 0 ||
+      msg.indexOf("already") >= 0 ||
+      msg.indexOf("violation") >= 0
+    ) {
+      return { ok: true, duplicate: true };
+    }
+    return { ok: false, error: insEx.message || String(insEx) };
+  }
+}
+
+function processBatch(prox, batch) {
+  var batchId = strTrim(batch.batchId);
+  var label =
+    batchId +
+    " / " +
+    (batch.journeyName || "(no journey name)") +
+    " / DE=" +
+    (batch.sourceDeName || "(no DE)");
+
+  if (!batchId) {
+    return label + " — SKIP missing batchId.";
+  }
+  if (!strTrim(batch.sourceDeName)) {
+    updateBatchRow(batchId, "Failed", "Missing sourceDeName.");
+    return label + " — FAILED missing sourceDeName.";
+  }
+  if (!strTrim(batch.journeyID)) {
+    updateBatchRow(batchId, "Failed", "Missing journeyID.");
+    return label + " — FAILED missing journeyID.";
+  }
+
+  var markProcessing = updateBatchRow(
+    batchId,
+    "Processing",
+    "Seeder started."
+  );
+  if (!markProcessing.ok) {
+    return (
+      label +
+      " — could not mark Processing: " +
+      (markProcessing.error || "unknown")
+    );
+  }
+
+  var source = resolveSourceDe(prox, batch.sourceDeName);
+  if (!source.ok) {
+    updateBatchRow(batchId, "Failed", source.error || "Source DE resolve failed.");
+    return label + " — FAILED " + (source.error || "source resolve failed");
+  }
+
+  var sourceRows = source.rows || [];
+  if (!sourceRows.length) {
+    updateBatchRow(
+      batchId,
+      "Done",
+      "Source DE empty. Queued 0 rows into " + EXIT_QUEUE_DE + "."
+    );
+    return label + " — DONE source DE empty (0 rows).";
+  }
+
+  var inserted = 0;
+  var duplicates = 0;
+  var skipped = 0;
+  var errors = 0;
+  var limitHit = false;
+  var max = MAX_ROWS_PER_BATCH;
+  var journeyName = strTrim(batch.journeyName);
+  var journeyID = strTrim(batch.journeyID);
+
+  for (var i = 0; i < sourceRows.length; i++) {
+    if (inserted + duplicates >= max) {
+      limitHit = true;
+      break;
+    }
+    var sk = subscriberKeyFromRow(sourceRows[i]);
+    if (!sk) {
+      skipped++;
+      continue;
+    }
+    var ins = insertExitQueueRow(sk, journeyName, journeyID);
+    if (!ins.ok) {
+      errors++;
+      debugLines.push(
+        batchId + " insert failed for " + sk + ": " + (ins.error || "unknown")
+      );
+      continue;
+    }
+    if (ins.duplicate) {
+      duplicates++;
+    } else {
+      inserted++;
+    }
+  }
+
+  var summary =
+    "Queued into " +
+    EXIT_QUEUE_DE +
+    ": inserted=" +
+    inserted +
+    ", duplicates=" +
+    duplicates +
+    ", skippedEmptyKey=" +
+    skipped +
+    ", errors=" +
+    errors +
+    ", sourceRows=" +
+    sourceRows.length +
+    (limitHit ? ", cappedAt=" + max : "");
+
+  if (errors && !inserted && !duplicates) {
+    updateBatchRow(batchId, "Failed", summary);
+    return label + " — FAILED " + summary;
+  }
+
+  updateBatchRow(
+    batchId,
+    limitHit ? "Queued" : "Done",
+    summary +
+      (limitHit
+        ? " Batch marked Queued because row cap was hit; re-run or raise MAX_ROWS_PER_BATCH."
+        : "")
+  );
+  return label + " — " + (limitHit ? "QUEUED (capped) " : "DONE ") + summary;
+}
+
+try {
+  var prox = new Script.Util.WSProxy();
+  var fetch = fetchPendingBatches(prox);
+  var batches = fetch.rows || [];
+  resultLines.push(
+    "bd_sst_journey_exit_batch seeder — " +
+      batches.length +
+      " Pending batch(es)."
+  );
+  if (fetch.error) {
+    debugLines.push("Retrieve notes: " + fetch.error);
+  }
+
+  if (!batches.length) {
+    resultLines.push(
+      fetch.error
+        ? "No Pending batches (retrieve issues — see notes)."
+        : "No Pending batches."
+    );
+  } else {
+    var runCount =
+      batches.length > MAX_BATCHES_PER_RUN
+        ? MAX_BATCHES_PER_RUN
+        : batches.length;
+    if (batches.length > MAX_BATCHES_PER_RUN) {
+      resultLines.push(
+        "Processing first " +
+          runCount +
+          " of " +
+          batches.length +
+          " Pending batches this run."
+      );
+    }
+    for (var b = 0; b < runCount; b++) {
+      debugLines.push(processBatch(prox, batches[b]));
+    }
+  }
+} catch (runEx) {
+  resultLines.push("ERROR: " + (runEx.message || String(runEx)));
+}
+
+var output = resultLines.join("\n");
+if (debugLines.length) {
+  output += "\n\n" + debugLines.join("\n");
+}
+
+var logResult = writeExitLog(output);
+if (!logResult.ok) {
+  output += "\n\n[sst_de_journey_exit_log insert FAILED] " + logResult.error;
+}
+Write(output);
+</script>
