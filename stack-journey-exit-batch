@@ -58,6 +58,77 @@ function queueField(row, names) {
   return "";
 }
 
+function fieldFromPropertyList(props, names) {
+  if (!props || typeof props.length !== "number") {
+    return "";
+  }
+  for (var pi = 0; pi < props.length; pi++) {
+    var pname = props[pi].Name != null ? props[pi].Name : props[pi].name;
+    if (!pname) {
+      continue;
+    }
+    for (var i = 0; i < names.length; i++) {
+      if (asLower(pname) === asLower(names[i])) {
+        var v = props[pi].Value != null ? props[pi].Value : props[pi].value;
+        if (v !== null && typeof v !== "undefined" && String(v) !== "") {
+          return String(v);
+        }
+      }
+    }
+  }
+  return "";
+}
+
+function fieldFromRow(row, names) {
+  if (!row) {
+    return "";
+  }
+  var direct = queueField(row, names);
+  if (direct) {
+    return direct;
+  }
+  try {
+    for (var i = 0; i < names.length; i++) {
+      var v = Platform.Function.Field(row, names[i]);
+      if (v !== null && typeof v !== "undefined" && String(v) !== "") {
+        return String(v);
+      }
+    }
+  } catch (fe) {}
+  var fromProps = fieldFromPropertyList(row.Properties, names);
+  if (fromProps) {
+    return fromProps;
+  }
+  return fieldFromPropertyList(row.Property, names);
+}
+
+function rowKeysSample(row) {
+  if (!row) {
+    return "(null row)";
+  }
+  var keys = [];
+  try {
+    for (var k in row) {
+      if (keys.length >= 12) {
+        break;
+      }
+      if (k === "Properties" || k === "Property") {
+        continue;
+      }
+      keys.push(k);
+    }
+  } catch (e) {}
+  if (row.Properties && typeof row.Properties.length === "number") {
+    for (var p = 0; p < row.Properties.length && keys.length < 20; p++) {
+      var pn = row.Properties[p].Name || row.Properties[p].name;
+      if (pn) {
+        keys.push("Properties." + pn);
+      }
+    }
+  }
+  return keys.length ? keys.join(",") : "(no enumerable keys)";
+}
+
 function coerceRows(raw) {
   if (raw === null || typeof raw === "undefined") {
     return [];
@@ -117,6 +188,16 @@ function fetchPendingBatches(prox) {
     "requestedAt",
     "message"
   ];
+  var workable = {
+    pending: true,
+    failed: true,
+    queued: true,
+    processing: true
+  };
+
+  function isWorkable(status) {
+    return workable[asLower(status)] === true;
+  }
 
   for (var v = 0; v < keyVariants.length; v++) {
     var deKey = keyVariants[v];
@@ -125,13 +206,11 @@ function fetchPendingBatches(prox) {
       var allRows = normalizeBatchRows(de.Rows.Retrieve());
       var pending = [];
       for (var i = 0; i < allRows.length; i++) {
-        if (asLower(allRows[i].status) === "pending") {
+        if (isWorkable(allRows[i].status)) {
           pending.push(allRows[i]);
         }
       }
-      if (pending.length || allRows.length === 0) {
-        return { rows: pending, error: "" };
-      }
+      return { rows: pending, error: "", scanned: allRows.length };
     } catch (deEx) {
       errors.push(
         "DataExtension.Init(" + deKey + "): " + (deEx.message || String(deEx))
@@ -139,27 +218,49 @@ function fetchPendingBatches(prox) {
     }
   }
 
-  for (var k = 0; k < keyVariants.length; k++) {
-    try {
-      var wsResp = prox.retrieve(
-        "DataExtensionObject[" + keyVariants[k] + "]",
-        props,
-        { Property: "status", SimpleOperator: "equals", Value: "Pending" }
-      );
-      if (wsResp && wsResp.Results) {
-        return { rows: normalizeBatchRows(wsResp.Results), error: "" };
+  var statusValues = ["Pending", "Failed", "Queued", "Processing"];
+  var collected = [];
+  var seen = {};
+  for (var s = 0; s < statusValues.length; s++) {
+    for (var k = 0; k < keyVariants.length; k++) {
+      try {
+        var wsResp = prox.retrieve(
+          "DataExtensionObject[" + keyVariants[k] + "]",
+          props,
+          {
+            Property: "status",
+            SimpleOperator: "equals",
+            Value: statusValues[s]
+          }
+        );
+        var normalized = normalizeBatchRows(
+          wsResp && wsResp.Results ? wsResp.Results : []
+        );
+        for (var n = 0; n < normalized.length; n++) {
+          var id = asLower(normalized[n].batchId);
+          if (!id || seen[id]) {
+            continue;
+          }
+          seen[id] = true;
+          collected.push(normalized[n]);
+        }
+      } catch (wsEx) {
+        errors.push(
+          "WSProxy " +
+            keyVariants[k] +
+            " status=" +
+            statusValues[s] +
+            ": " +
+            (wsEx.message || String(wsEx))
+        );
       }
-    } catch (wsEx) {
-      errors.push(
-        "WSProxy " +
-          keyVariants[k] +
-          ": " +
-          (wsEx.message || String(wsEx))
-      );
     }
   }
+  if (collected.length) {
+    return { rows: collected, error: "", scanned: collected.length };
+  }
 
-  return { rows: [], error: errors.join(" | ") };
+  return { rows: [], error: errors.join(" | "), scanned: 0 };
 }
 
 function updateBatchRow(batchId, status, message) {
@@ -198,79 +299,132 @@ function updateBatchRow(batchId, status, message) {
   }
 }
 
-function resolveSourceDe(prox, sourceDeName) {
+function resolveDeIdentity(prox, sourceDeName) {
   var name = strTrim(sourceDeName);
   if (!name) {
     return { ok: false, error: "Empty sourceDeName." };
   }
-
+  var resolvedKey = name;
+  var resolvedName = name;
   try {
-    var de = DataExtension.Init(name);
-    var rows = coerceRows(de.Rows.Retrieve());
-    return { ok: true, deKey: name, rows: rows };
-  } catch (deEx) {
-    var resolvedKey = "";
-    var resolvedName = "";
-    try {
-      var byKey = prox.retrieve(
-        "DataExtension",
-        ["Name", "CustomerKey"],
-        { Property: "CustomerKey", SimpleOperator: "equals", Value: name }
-      );
-      if (byKey && byKey.Results && byKey.Results.length) {
-        resolvedKey = strTrim(byKey.Results[0].CustomerKey);
-        resolvedName = strTrim(byKey.Results[0].Name);
-      } else {
-        var byName = prox.retrieve(
-          "DataExtension",
-          ["Name", "CustomerKey"],
-          { Property: "Name", SimpleOperator: "equals", Value: name }
-        );
-        if (byName && byName.Results && byName.Results.length) {
-          resolvedKey = strTrim(byName.Results[0].CustomerKey);
-          resolvedName = strTrim(byName.Results[0].Name);
-        }
-      }
-    } catch (wsEx) {
-      return {
-        ok: false,
-        error:
-          "Source DE lookup failed: " +
-          (deEx.message || String(deEx)) +
-          " | " +
-          (wsEx.message || String(wsEx))
-      };
+    var byKey = prox.retrieve(
+      "DataExtension",
+      ["Name", "CustomerKey"],
+      { Property: "CustomerKey", SimpleOperator: "equals", Value: name }
+    );
+    if (byKey && byKey.Results && byKey.Results.length) {
+      resolvedKey = strTrim(byKey.Results[0].CustomerKey) || name;
+      resolvedName = strTrim(byKey.Results[0].Name) || name;
+      return { ok: true, customerKey: resolvedKey, name: resolvedName };
     }
-
-    if (!resolvedKey && !resolvedName) {
-      return {
-        ok: false,
-        error: "Source DE not found: " + name
-      };
+    var byName = prox.retrieve(
+      "DataExtension",
+      ["Name", "CustomerKey"],
+      { Property: "Name", SimpleOperator: "equals", Value: name }
+    );
+    if (byName && byName.Results && byName.Results.length) {
+      resolvedKey = strTrim(byName.Results[0].CustomerKey) || name;
+      resolvedName = strTrim(byName.Results[0].Name) || name;
+      return { ok: true, customerKey: resolvedKey, name: resolvedName };
     }
-
-    var tryKeys = [];
-    if (resolvedKey) tryKeys.push(resolvedKey);
-    if (resolvedName && asLower(resolvedName) !== asLower(resolvedKey)) {
-      tryKeys.push(resolvedName);
-    }
-    for (var t = 0; t < tryKeys.length; t++) {
-      try {
-        var de2 = DataExtension.Init(tryKeys[t]);
-        var rows2 = coerceRows(de2.Rows.Retrieve());
-        return { ok: true, deKey: tryKeys[t], rows: rows2 };
-      } catch (deEx2) {}
-    }
+  } catch (wsEx) {
     return {
       ok: false,
-      error: "Source DE found but Rows.Retrieve failed for: " + name
+      error: "Source DE lookup failed: " + (wsEx.message || String(wsEx))
     };
   }
+  return { ok: true, customerKey: name, name: name };
+}
+
+function retrieveSourceRows(prox, deIdentity) {
+  var tryKeys = [];
+  var seen = {};
+  function addKey(k) {
+    var key = strTrim(k);
+    if (!key || seen[asLower(key)]) {
+      return;
+    }
+    seen[asLower(key)] = true;
+    tryKeys.push(key);
+  }
+  addKey(deIdentity.customerKey);
+  addKey(deIdentity.name);
+  addKey(asLower(deIdentity.customerKey));
+  addKey(asLower(deIdentity.name));
+
+  var notes = [];
+  var i;
+
+  for (i = 0; i < tryKeys.length; i++) {
+    try {
+      var de = DataExtension.Init(tryKeys[i]);
+      var rows = coerceRows(de.Rows.Retrieve());
+      notes.push("Init(" + tryKeys[i] + ") rows=" + rows.length);
+      if (rows.length) {
+        return { ok: true, deKey: tryKeys[i], rows: rows, notes: notes.join(" | ") };
+      }
+    } catch (deEx) {
+      notes.push(
+        "Init(" + tryKeys[i] + ") ERROR " + (deEx.message || String(deEx))
+      );
+    }
+  }
+
+  var fieldSets = [
+    ["SubscriberKey"],
+    ["subscriberKey"],
+    ["ContactKey"],
+    ["SubscriberKey", "Email"]
+  ];
+  for (i = 0; i < tryKeys.length; i++) {
+    for (var f = 0; f < fieldSets.length; f++) {
+      try {
+        var filterProp = fieldSets[f][0];
+        var wsResp = prox.retrieve(
+          "DataExtensionObject[" + tryKeys[i] + "]",
+          fieldSets[f],
+          { Property: filterProp, SimpleOperator: "isNotNull" }
+        );
+        var wsRows = coerceRows(wsResp && wsResp.Results ? wsResp.Results : []);
+        notes.push(
+          "WSProxy[" +
+            tryKeys[i] +
+            "] fields=" +
+            fieldSets[f].join(",") +
+            " rows=" +
+            wsRows.length
+        );
+        if (wsRows.length) {
+          return {
+            ok: true,
+            deKey: tryKeys[i],
+            rows: wsRows,
+            notes: notes.join(" | ")
+          };
+        }
+      } catch (wsEx) {
+        notes.push(
+          "WSProxy[" +
+            tryKeys[i] +
+            "] " +
+            fieldSets[f].join(",") +
+            " ERROR " +
+            (wsEx.message || String(wsEx))
+        );
+      }
+    }
+  }
+
+  return {
+    ok: false,
+    error: "No source rows retrieved. " + notes.join(" | "),
+    notes: notes.join(" | ")
+  };
 }
 
 function subscriberKeyFromRow(row) {
   return strTrim(
-    queueField(row, [
+    fieldFromRow(row, [
       "SubscriberKey",
       "subscriberKey",
       "SUBSCRIBERKEY",
@@ -281,25 +435,36 @@ function subscriberKeyFromRow(row) {
 }
 
 function insertExitQueueRow(subscriberKey, journeyName, journeyID) {
-  try {
-    Platform.Function.InsertData(
-      EXIT_QUEUE_DE,
-      ["subscriberKey", "journeyName", "journeyID"],
-      [subscriberKey, journeyName, journeyID]
-    );
-    return { ok: true, duplicate: false };
-  } catch (insEx) {
-    var msg = asLower(insEx.message || String(insEx));
-    if (
-      msg.indexOf("primary key") >= 0 ||
-      msg.indexOf("duplicate") >= 0 ||
-      msg.indexOf("already") >= 0 ||
-      msg.indexOf("violation") >= 0
-    ) {
-      return { ok: true, duplicate: true };
+  var attempts = [
+    ["subscriberKey", "journeyName", "journeyID"],
+    ["SubscriberKey", "journeyName", "journeyID"],
+    ["subscriberKey", "JourneyName", "journeyID"],
+    ["subscriberKey", "journeyName", "JourneyID"]
+  ];
+  var errors = [];
+  for (var a = 0; a < attempts.length; a++) {
+    try {
+      Platform.Function.InsertData(
+        EXIT_QUEUE_DE,
+        attempts[a],
+        [subscriberKey, journeyName || "", journeyID]
+      );
+      return { ok: true, duplicate: false, fields: attempts[a].join(",") };
+    } catch (insEx) {
+      var msg = asLower(insEx.message || String(insEx));
+      if (
+        msg.indexOf("primary key") >= 0 ||
+        msg.indexOf("duplicate") >= 0 ||
+        msg.indexOf("already") >= 0 ||
+        msg.indexOf("violation") >= 0 ||
+        msg.indexOf("cannot insert duplicate") >= 0
+      ) {
+        return { ok: true, duplicate: true, fields: attempts[a].join(",") };
+      }
+      errors.push(attempts[a].join("/") + ": " + (insEx.message || String(insEx)));
     }
-    return { ok: false, error: insEx.message || String(insEx) };
   }
+  return { ok: false, error: errors.join(" | ") };
 }
 
 function processBatch(prox, batch) {
@@ -336,20 +501,46 @@ function processBatch(prox, batch) {
     );
   }
 
-  var source = resolveSourceDe(prox, batch.sourceDeName);
+  var identity = resolveDeIdentity(prox, batch.sourceDeName);
+  if (!identity.ok) {
+    updateBatchRow(batchId, "Failed", identity.error || "Source DE resolve failed.");
+    return label + " — FAILED " + (identity.error || "source resolve failed");
+  }
+
+  var source = retrieveSourceRows(prox, identity);
   if (!source.ok) {
-    updateBatchRow(batchId, "Failed", source.error || "Source DE resolve failed.");
-    return label + " — FAILED " + (source.error || "source resolve failed");
+    updateBatchRow(batchId, "Failed", source.error || "Source retrieve failed.");
+    return label + " — FAILED " + (source.error || "source retrieve failed");
   }
 
   var sourceRows = source.rows || [];
+  debugLines.push(
+    batchId +
+      " source deKey=" +
+      source.deKey +
+      " rows=" +
+      sourceRows.length +
+      " notes=" +
+      (source.notes || "")
+  );
+  if (sourceRows.length) {
+    debugLines.push(
+      batchId + " firstRowKeys=" + rowKeysSample(sourceRows[0])
+    );
+    debugLines.push(
+      batchId +
+        " firstSubscriberKey=" +
+        (subscriberKeyFromRow(sourceRows[0]) || "(empty)")
+    );
+  }
+
   if (!sourceRows.length) {
     updateBatchRow(
       batchId,
-      "Done",
-      "Source DE empty. Queued 0 rows into " + EXIT_QUEUE_DE + "."
+      "Failed",
+      "Source DE returned 0 rows. " + (source.notes || "")
     );
-    return label + " — DONE source DE empty (0 rows).";
+    return label + " — FAILED source DE returned 0 rows.";
   }
 
   var inserted = 0;
@@ -360,6 +551,7 @@ function processBatch(prox, batch) {
   var max = MAX_ROWS_PER_BATCH;
   var journeyName = strTrim(batch.journeyName);
   var journeyID = strTrim(batch.journeyID);
+  var firstInsertError = "";
 
   for (var i = 0; i < sourceRows.length; i++) {
     if (inserted + duplicates >= max) {
@@ -369,14 +561,28 @@ function processBatch(prox, batch) {
     var sk = subscriberKeyFromRow(sourceRows[i]);
     if (!sk) {
       skipped++;
+      if (skipped <= 3) {
+        debugLines.push(
+          batchId +
+            " skipped row " +
+            i +
+            " keys=" +
+            rowKeysSample(sourceRows[i])
+        );
+      }
       continue;
     }
     var ins = insertExitQueueRow(sk, journeyName, journeyID);
     if (!ins.ok) {
       errors++;
-      debugLines.push(
-        batchId + " insert failed for " + sk + ": " + (ins.error || "unknown")
-      );
+      if (!firstInsertError) {
+        firstInsertError = ins.error || "unknown";
+      }
+      if (errors <= 5) {
+        debugLines.push(
+          batchId + " insert failed for " + sk + ": " + (ins.error || "unknown")
+        );
+      }
       continue;
     }
     if (ins.duplicate) {
@@ -399,9 +605,10 @@ function processBatch(prox, batch) {
     errors +
     ", sourceRows=" +
     sourceRows.length +
+    (firstInsertError ? ", firstInsertError=" + firstInsertError : "") +
     (limitHit ? ", cappedAt=" + max : "");
 
-  if (errors && !inserted && !duplicates) {
+  if (!inserted && !duplicates) {
     updateBatchRow(batchId, "Failed", summary);
     return label + " — FAILED " + summary;
   }
@@ -424,7 +631,7 @@ try {
   resultLines.push(
     "bd_sst_journey_exit_batch seeder — " +
       batches.length +
-      " Pending batch(es)."
+      " workable batch(es) (Pending/Failed/Queued/Processing)."
   );
   if (fetch.error) {
     debugLines.push("Retrieve notes: " + fetch.error);
@@ -433,8 +640,8 @@ try {
   if (!batches.length) {
     resultLines.push(
       fetch.error
-        ? "No Pending batches (retrieve issues — see notes)."
-        : "No Pending batches."
+        ? "No workable batches (retrieve issues — see notes)."
+        : "No workable batches. If a batch already shows Done with 0 inserts, set status back to Pending and re-run."
     );
   } else {
     var runCount =
@@ -447,7 +654,7 @@ try {
           runCount +
           " of " +
           batches.length +
-          " Pending batches this run."
+          " batches this run."
       );
     }
     for (var b = 0; b < runCount; b++) {
