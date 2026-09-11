@@ -3,7 +3,8 @@ SELECT
   cm.LeadOrContactId AS subscriberKey,
   b.journeyName AS journeyName,
   b.journeyID AS journeyId,
-  b.batchId AS batchID
+  b.batchId AS batchID,
+  'Pending' AS [Status]
 FROM bd_sst_journey_exit_batch b
 INNER JOIN CampaignMember_Salesforce_2 cm
   ON (

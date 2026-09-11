@@ -138,8 +138,32 @@ function normalizeQueueRows(rawRows) {
       journeyName: strTrim(
         queueField(row, ["journeyName", "JourneyName", "Name"])
       ),
-      journeyId: journeyId
+      journeyId: journeyId,
+      status: strTrim(queueField(row, ["Status", "status"]))
     });
+  }
+  return out;
+}
+
+function isWorkableExitStatus(status) {
+  var s = asLower(status);
+  if (!s) {
+    return true;
+  }
+  return s === "pending" || s === "queued" || s === "failed";
+}
+
+function filterWorkableExitRows(rows) {
+  var out = [];
+  var i;
+  for (i = 0; i < rows.length; i++) {
+    if (!strTrim(rows[i].subscriberKey) || !strTrim(rows[i].journeyId)) {
+      continue;
+    }
+    if (!isWorkableExitStatus(rows[i].status)) {
+      continue;
+    }
+    out.push(rows[i]);
   }
   return out;
 }
@@ -149,24 +173,38 @@ function fetchExitQueueRows(prox) {
   var notes = [];
   var keyVariants = [EXIT_QUEUE_DE, String(EXIT_QUEUE_DE).toLowerCase()];
   var propSets = [
-    ["key", "subscriberKey", "journeyName", "journeyId", "batchID"],
-    ["key", "subscriberKey", "journeyName", "journeyId", "batchId"],
-    ["key", "subscriberKey", "journeyName", "journeyID", "batchID"],
-    ["key", "subscriberKey", "journeyName", "journeyID", "batchId"],
-    ["Key", "subscriberKey", "journeyName", "journeyId", "batchID"],
-    ["key", "SubscriberKey", "journeyName", "journeyId", "batchID"],
-    ["key", "SubscriberKey", "JourneyName", "JourneyID", "batchID"]
+    ["key", "subscriberKey", "journeyName", "journeyId", "batchID", "Status"],
+    ["key", "subscriberKey", "journeyName", "journeyId", "batchId", "status"],
+    ["key", "subscriberKey", "journeyName", "journeyID", "batchID", "Status"],
+    ["key", "subscriberKey", "journeyName", "journeyID", "batchId", "Status"],
+    ["Key", "subscriberKey", "journeyName", "journeyId", "batchID", "Status"]
   ];
   var filters = [
-    { Property: "key", SimpleOperator: "notEquals", Value: "" },
-    { Property: "subscriberKey", SimpleOperator: "notEquals", Value: "" },
-    { Property: "SubscriberKey", SimpleOperator: "notEquals", Value: "" },
-    { Property: "batchID", SimpleOperator: "notEquals", Value: "" },
-    { Property: "batchId", SimpleOperator: "notEquals", Value: "" },
-    { Property: "journeyId", SimpleOperator: "notEquals", Value: "" },
-    { Property: "journeyID", SimpleOperator: "notEquals", Value: "" }
+    { Property: "Status", SimpleOperator: "equals", Value: "Pending" },
+    { Property: "status", SimpleOperator: "equals", Value: "Pending" },
+    { Property: "Status", SimpleOperator: "equals", Value: "Failed" },
+    { Property: "status", SimpleOperator: "equals", Value: "Failed" },
+    { Property: "Status", SimpleOperator: "equals", Value: "Queued" },
+    { Property: "batchID", SimpleOperator: "isNotNull" },
+    { Property: "batchId", SimpleOperator: "isNotNull" }
   ];
   var initSucceeded = false;
+  var collected = [];
+  var seen = {};
+
+  function addNormalized(rows, sourceLabel) {
+    var list = filterWorkableExitRows(normalizeQueueRows(rows));
+    notes.push(sourceLabel + " workable=" + list.length);
+    var i;
+    for (i = 0; i < list.length; i++) {
+      var id = asLower(list[i].key || list[i].subscriberKey + "|" + list[i].journeyId);
+      if (!id || seen[id]) {
+        continue;
+      }
+      seen[id] = true;
+      collected.push(list[i]);
+    }
+  }
 
   for (var v = 0; v < keyVariants.length; v++) {
     var deKey = keyVariants[v];
@@ -176,11 +214,10 @@ function fetchExitQueueRows(prox) {
     try {
       var de = DataExtension.Init(deKey);
       var deRows = de.Rows.Retrieve();
-      var normalized = normalizeQueueRows(deRows);
       initSucceeded = true;
-      notes.push("Init(" + deKey + ") rows=" + normalized.length);
-      if (normalized.length) {
-        return { rows: normalized, error: "", notes: notes.join(" | ") };
+      addNormalized(deRows, "Init(" + deKey + ")");
+      if (collected.length) {
+        return { rows: collected, error: "", notes: notes.join(" | ") };
       }
     } catch (deEx) {
       errors.push(
@@ -211,26 +248,24 @@ function fetchExitQueueRows(prox) {
                 keyVariants[k] +
                 " " +
                 filters[f].Property +
-                " props=" +
-                propSets[p].join(",") +
+                "=" +
+                filters[f].Value +
                 ": " +
                 msg
             );
             continue;
           }
-          var wsRows = normalizeQueueRows(
-            wsResp && wsResp.Results ? wsResp.Results : []
-          );
-          notes.push(
+          addNormalized(
+            wsResp && wsResp.Results ? wsResp.Results : [],
             "WSProxy[" +
               keyVariants[k] +
               "]/" +
               filters[f].Property +
-              " rows=" +
-              wsRows.length
+              "=" +
+              (filters[f].Value || "isNotNull")
           );
-          if (wsRows.length) {
-            return { rows: wsRows, error: "", notes: notes.join(" | ") };
+          if (collected.length) {
+            return { rows: collected, error: "", notes: notes.join(" | ") };
           }
         } catch (wsEx) {
           errors.push(
@@ -238,8 +273,6 @@ function fetchExitQueueRows(prox) {
               keyVariants[k] +
               " " +
               filters[f].Property +
-              " props=" +
-              propSets[p].join(",") +
               ": " +
               (wsEx.message || String(wsEx))
           );
@@ -248,13 +281,17 @@ function fetchExitQueueRows(prox) {
     }
   }
 
+  if (collected.length) {
+    return { rows: collected, error: "", notes: notes.join(" | ") };
+  }
+
   if (initSucceeded) {
     return {
       rows: [],
       error: "",
       notes:
         (notes.length ? notes.join(" | ") + " | " : "") +
-        "Queue empty or no readable rows." +
+        "No Pending/Failed/Queued exit rows." +
         (errors.length ? " WSProxy notes: " + errors.join(" | ") : "")
     };
   }
@@ -266,7 +303,7 @@ function fetchExitQueueRows(prox) {
   };
 }
 
-function removeExitQueueRow(rowKey, subscriberKey, journeyId, batchId) {
+function markExitQueueStatus(rowKey, subscriberKey, journeyId, batchId, status) {
   var key = strTrim(rowKey);
   if (!key && strTrim(batchId) && strTrim(subscriberKey)) {
     key = strTrim(batchId) + "|" + strTrim(subscriberKey);
@@ -277,26 +314,53 @@ function removeExitQueueRow(rowKey, subscriberKey, journeyId, batchId) {
   if (!key) {
     return {
       ok: false,
-      error: "Need key (or batchId + subscriberKey) to remove queue row."
+      error: "Need key (or batchId + subscriberKey) to update queue Status."
     };
   }
-  try {
-    Platform.Function.DeleteData(EXIT_QUEUE_DE, ["key"], [key]);
-    return { ok: true };
-  } catch (delEx) {
+  var st = strTrim(status) || "Done";
+  var attempts = [
+    { keys: ["key"], fields: ["Status"], values: [st] },
+    { keys: ["Key"], fields: ["Status"], values: [st] },
+    { keys: ["key"], fields: ["status"], values: [st] },
+    { keys: ["Key"], fields: ["status"], values: [st] }
+  ];
+  var errors = [];
+  var a;
+  for (a = 0; a < attempts.length; a++) {
     try {
-      Platform.Function.DeleteData(EXIT_QUEUE_DE, ["Key"], [key]);
-      return { ok: true };
-    } catch (delEx2) {
-      return {
-        ok: false,
-        error:
-          (delEx.message || String(delEx)) +
-          " | " +
-          (delEx2.message || String(delEx2))
-      };
+      Platform.Function.UpdateData(
+        EXIT_QUEUE_DE,
+        attempts[a].keys,
+        [key],
+        attempts[a].fields,
+        attempts[a].values
+      );
+      return { ok: true, key: key, status: st };
+    } catch (upEx) {
+      errors.push(
+        attempts[a].keys.join("/") +
+          ":" +
+          attempts[a].fields.join("/") +
+          " " +
+          (upEx.message || String(upEx))
+      );
     }
   }
+  return { ok: false, error: errors.join(" | "), key: key };
+}
+
+function isAlreadyExitedError(message) {
+  var msg = asLower(message);
+  if (!msg) {
+    return false;
+  }
+  return (
+    msg.indexOf("already") >= 0 ||
+    msg.indexOf("not currently in") >= 0 ||
+    msg.indexOf("not in the journey") >= 0 ||
+    msg.indexOf("not active") >= 0 ||
+    msg.indexOf("has already exited") >= 0
+  );
 }
 
 function field(row, name) {
@@ -797,6 +861,43 @@ function processJourneyGroup(auth, token, group, definition) {
       var contact = chunk[i];
       var err = errMap[asLower(contact.subscriberKey)];
       if (err) {
+        if (isAlreadyExitedError(err)) {
+          var markedDone = markExitQueueStatus(
+            contact.key,
+            contact.subscriberKey,
+            contact.journeyId,
+            contact.batchId,
+            "Done"
+          );
+          if (markedDone.ok) {
+            okCount++;
+            recordBatchExitResult(contact.batchId, true);
+            lines.push(
+              contact.subscriberKey +
+                " @ " +
+                label +
+                " — already exited; Status→Done."
+            );
+          } else {
+            failCount++;
+            recordBatchExitResult(contact.batchId, false);
+            lines.push(
+              contact.subscriberKey +
+                " @ " +
+                label +
+                " — already exited, Status update FAILED: " +
+                (markedDone.error || "unknown")
+            );
+          }
+          continue;
+        }
+        var markedFail = markExitQueueStatus(
+          contact.key,
+          contact.subscriberKey,
+          contact.journeyId,
+          contact.batchId,
+          "Failed"
+        );
         failCount++;
         recordBatchExitResult(contact.batchId, false);
         lines.push(
@@ -805,25 +906,28 @@ function processJourneyGroup(auth, token, group, definition) {
             label +
             " — EXIT ERROR: " +
             err +
-            " (queue row kept)"
+            " (Status→" +
+            (markedFail.ok ? "Failed" : "update failed") +
+            ")"
         );
         continue;
       }
-      var removed = removeExitQueueRow(
+      var marked = markExitQueueStatus(
         contact.key,
         contact.subscriberKey,
         contact.journeyId,
-        contact.batchId
+        contact.batchId,
+        "Done"
       );
-      if (!removed.ok) {
+      if (!marked.ok) {
         failCount++;
         recordBatchExitResult(contact.batchId, false);
         lines.push(
           contact.subscriberKey +
             " @ " +
             label +
-            " — EXIT ACCEPTED, queue remove FAILED: " +
-            (removed.error || "unknown")
+            " — EXIT ACCEPTED, Status→Done FAILED: " +
+            (marked.error || "unknown")
         );
         continue;
       }
@@ -849,7 +953,7 @@ function processJourneyGroup(auth, token, group, definition) {
         contact.subscriberKey +
           " @ " +
           label +
-          " — EXIT ACCEPTED, queue row removed." +
+          " — EXIT ACCEPTED, Status→Done." +
           cmNote
       );
     }
