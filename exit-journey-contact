@@ -11,6 +11,7 @@ var selectedJourneyId = "";
 var selectedJourneyKey = "";
 var selectedJourneyName = "";
 var sourceDeNameValue = "";
+var alertEmailValue = "";
 var createdBatchId = "";
 var journeysLoadError = "";
 
@@ -336,7 +337,8 @@ function insertBatchRow(batch) {
         "journeyKey",
         "status",
         "requestedAt",
-        "message"
+        "message",
+        "Email"
       ],
       [
         batch.batchId,
@@ -346,7 +348,8 @@ function insertBatchRow(batch) {
         batch.journeyKey,
         batch.status,
         batch.requestedAt,
-        batch.message
+        batch.message,
+        batch.Email
       ]
     );
     return { ok: true };
@@ -360,6 +363,7 @@ selectedJourneyId = clean(formValue("journeyId"));
 selectedJourneyKey = clean(formValue("journeyKey"));
 selectedJourneyName = clean(formValue("journeyName"));
 sourceDeNameValue = clean(formValue("sourceDeName"));
+alertEmailValue = clean(formValue("alertEmail"));
 var formAction = clean(formValue("formAction"));
 
 try {
@@ -374,6 +378,12 @@ try {
     }
     if (!sourceDeNameValue) {
       throw "Enter the source Data Extension name or Customer Key.";
+    }
+    if (!alertEmailValue) {
+      throw "Enter an alert Email.";
+    }
+    if (alertEmailValue.indexOf("@") < 1) {
+      throw "Enter a valid alert Email.";
     }
 
     var meta = resolveJourneyMeta(
@@ -404,7 +414,8 @@ try {
       journeyKey: selectedJourneyKey,
       status: "Pending",
       requestedAt: now,
-      message: "Queued from CloudPage. Waiting for batch seeder."
+      message: "Queued from CloudPage. Waiting for batch seeder.",
+      Email: alertEmailValue
     });
 
     if (!insertResult.ok) {
@@ -419,6 +430,8 @@ try {
       selectedJourneyName +
       " | source DE=" +
       sourceDeNameValue +
+      " | alert Email=" +
+      alertEmailValue +
       " | status=Pending. The seeder automation will copy SubscriberKeys into bd_sst_journey_exit.";
     resultDetail = asJson({
       batchId: createdBatchId,
@@ -426,6 +439,7 @@ try {
       journeyID: selectedJourneyId,
       journeyName: selectedJourneyName,
       journeyKey: selectedJourneyKey,
+      Email: alertEmailValue,
       status: "Pending"
     });
   }
@@ -450,6 +464,7 @@ Platform.Variable.SetValue("@exitSelectedJourneyId", selectedJourneyId);
 Platform.Variable.SetValue("@exitSelectedJourneyKey", selectedJourneyKey);
 Platform.Variable.SetValue("@exitSelectedJourneyName", selectedJourneyName);
 Platform.Variable.SetValue("@exitSourceDeName", sourceDeNameValue);
+Platform.Variable.SetValue("@exitAlertEmail", alertEmailValue);
 Platform.Variable.SetValue("@exitBatchId", createdBatchId);
 Platform.Variable.SetValue("@exitJourneysLoadError", journeysLoadError);
 </script>
@@ -669,6 +684,20 @@ h1 {
           Write('<input class="form-input" id="sourceDeName" name="sourceDeName" required placeholder="DE name or Customer Key (must include SubscriberKey)" value="' + fieldSafe(Platform.Variable.GetValue("@exitSourceDeName") || "") + '">');
         </script>
         <p class="hint">Source DE must contain a <code>SubscriberKey</code> column. Prefer Customer Key if names collide.</p>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="alertEmail">Alert Email</label>
+        <script runat="server">
+          function fieldSafeEmail(value) {
+            return String(value || "")
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;");
+          }
+          Write('<input class="form-input" id="alertEmail" name="alertEmail" type="email" required placeholder="name@example.com" value="' + fieldSafeEmail(Platform.Variable.GetValue("@exitAlertEmail") || "") + '">');
+        </script>
+        <p class="hint">Saved to the batch <code>Email</code> column for status notifications.</p>
       </div>
       <div class="actions">
         <button class="btn btn-create" type="submit" id="submitBtn" onclick="return submitQueue();">Queue batch</button>
