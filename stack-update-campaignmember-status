@@ -1,8 +1,7 @@
 <script runat="server">
 Platform.Load("Core", "1");
 
-var CONTENT_BLOCK_KEY = "sst_sf_update_cm_status";
-var CONTENT_BLOCK_ID = "";
+var CONTENT_BLOCK_ID = "0357";
 var LOG_DE = "sst_de_journey_exit_log";
 var LOG_FIELD = "log";
 var LOG_MAX_LEN = 4000;
@@ -41,21 +40,15 @@ try {
   toStatus = strTrim(toStatus) || "Responded";
 
   if (!campaignId || campaignId.indexOf("REPLACE_") === 0) {
-    Write("Set campaignId in stack-update-campaignmember-status before running.");
+    Write("Set campaignId before running.");
     writeLog("CM status update SKIP: campaignId not set.");
+  } else if (!strTrim(CONTENT_BLOCK_ID)) {
+    Write("Set CONTENT_BLOCK_ID to your AMPscript snippet Content Block ID.");
+    writeLog("CM status update SKIP: CONTENT_BLOCK_ID not set.");
   } else {
     Platform.Variable.SetValue("@sfCampaignId", campaignId);
     Platform.Variable.SetValue("@sfFromStatus", fromStatus);
     Platform.Variable.SetValue("@sfToStatus", toStatus);
-
-    var treatExpr = "";
-    if (strTrim(CONTENT_BLOCK_ID)) {
-      treatExpr =
-        '%%=ContentBlockById("' + strTrim(CONTENT_BLOCK_ID) + '")=%%';
-    } else {
-      treatExpr =
-        '%%=ContentBlockByKey("' + CONTENT_BLOCK_KEY + '")=%%';
-    }
 
     writeLog(
       "CM status update START campaign=" +
@@ -64,18 +57,16 @@ try {
         fromStatus +
         " to=" +
         toStatus +
-        " block=" +
-        (strTrim(CONTENT_BLOCK_ID) || CONTENT_BLOCK_KEY)
+        " contentBlockId=" +
+        CONTENT_BLOCK_ID
     );
 
-    var result = Platform.Function.TreatAsContent(treatExpr);
+    var result = Platform.Function.TreatAsContent(
+      '\%\%=contentblockbyid("' + CONTENT_BLOCK_ID + '")=\%\%'
+    );
     var out = strTrim(result) || "(empty TreatAsContent result)";
     Write(out);
-
-    var logged = writeLog("CM status update RESULT: " + out);
-    if (!logged.ok) {
-      Write("\nLog DE insert failed: " + (logged.error || "unknown"));
-    }
+    writeLog("CM status update RESULT: " + out);
   }
 } catch (error) {
   var msg = "CM status update ERROR: " + Stringify(error);
