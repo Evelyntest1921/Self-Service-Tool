@@ -22,6 +22,9 @@ var envDisplayEmail = "";
 var envAvatarLetter = "";
 var automationTriggerNote = "";
 var environment = "";
+var sourceTypeValue = "dataextension";
+var campaignIdValue = "";
+var memberStatusValue = "";
 
 function formValue(name) {
   var value = "";
@@ -258,6 +261,9 @@ function loadRecentBatches(limit) {
           "batchId",
           "journeyName",
           "sourceDeName",
+          "sourceType",
+          "campaignId",
+          "memberStatus",
           "requestedAt",
           "status",
           "contactsProcessed",
@@ -280,9 +286,21 @@ function loadRecentBatches(limit) {
     var row = rows[i];
     var requestedAt = fieldAny(row, ["requestedAt", "RequestedAt"]);
     var contactsProcessed = contactsProcessedFromRow(row);
+    var sourceType = asLower(fieldAny(row, ["sourceType", "SourceType"])) || "dataextension";
+    var campaignId = asStr(fieldAny(row, ["campaignId", "CampaignId"]));
+    var memberStatus = asStr(fieldAny(row, ["memberStatus", "MemberStatus"]));
+    var sourceDeName = asStr(fieldAny(row, ["sourceDeName", "SourceDeName", "sourceDEName"])) || "—";
+    var audienceLabel = sourceDeName;
+    if (sourceType === "campaign") {
+      audienceLabel =
+        "Campaign " +
+        (campaignId || "—") +
+        (memberStatus ? " · " + memberStatus : "");
+    }
     normalized.push({
       journeyName: asStr(fieldAny(row, ["journeyName", "JourneyName"])) || "Untitled journey",
-      sourceDeName: asStr(fieldAny(row, ["sourceDeName", "SourceDeName", "sourceDEName"])) || "—",
+      sourceDeName: audienceLabel,
+      sourceType: sourceType,
       contactsProcessed: contactsProcessed !== "" ? contactsProcessed : "—",
       requestedAt: requestedAt,
       requestedAtMs: parseDateMs(requestedAt),
@@ -573,10 +591,39 @@ function sourceDeExists(deName) {
 }
 
 function insertBatchRow(batch) {
-  try {
-    Platform.Function.InsertData(
-      BATCH_DE,
-      [
+  var attempts = [
+    {
+      cols: [
+        "batchId",
+        "sourceDeName",
+        "journeyID",
+        "journeyName",
+        "journeyKey",
+        "status",
+        "requestedAt",
+        "message",
+        "Email",
+        "sourceType",
+        "campaignId",
+        "memberStatus"
+      ],
+      vals: [
+        batch.batchId,
+        batch.sourceDeName,
+        batch.journeyID,
+        batch.journeyName,
+        batch.journeyKey,
+        batch.status,
+        batch.requestedAt,
+        batch.message,
+        batch.Email,
+        batch.sourceType || "dataextension",
+        batch.campaignId || "",
+        batch.memberStatus || ""
+      ]
+    },
+    {
+      cols: [
         "batchId",
         "sourceDeName",
         "journeyID",
@@ -587,7 +634,7 @@ function insertBatchRow(batch) {
         "message",
         "Email"
       ],
-      [
+      vals: [
         batch.batchId,
         batch.sourceDeName,
         batch.journeyID,
@@ -598,11 +645,19 @@ function insertBatchRow(batch) {
         batch.message,
         batch.Email
       ]
-    );
-    return { ok: true };
-  } catch (insEx) {
-    return { ok: false, error: insEx.message || String(insEx) };
+    }
+  ];
+  var errors = [];
+  var a;
+  for (a = 0; a < attempts.length; a++) {
+    try {
+      Platform.Function.InsertData(BATCH_DE, attempts[a].cols, attempts[a].vals);
+      return { ok: true, fields: attempts[a].cols.join(",") };
+    } catch (insEx) {
+      errors.push(attempts[a].cols.join("/") + ": " + (insEx.message || String(insEx)));
+    }
   }
+  return { ok: false, error: errors.join(" | ") };
 }
 
 function lookupTriggerByType(triggerType) {
@@ -746,7 +801,13 @@ if (environment === "uat") {
 selectedJourneyId = clean(formValue("journeyId"));
 selectedJourneyKey = clean(formValue("journeyKey"));
 selectedJourneyName = clean(formValue("journeyName"));
+sourceTypeValue = asLower(formValue("sourceType")) || "dataextension";
+if (sourceTypeValue !== "campaign") {
+  sourceTypeValue = "dataextension";
+}
 sourceDeNameValue = clean(formValue("sourceDeName"));
+campaignIdValue = clean(formValue("campaignId"));
+memberStatusValue = clean(formValue("memberStatus"));
 alertEmailValue = clean(formValue("alertEmail"));
 var formAction = clean(formValue("formAction"));
 
@@ -759,9 +820,6 @@ try {
   if (formAction == "queue") {
     if (!selectedJourneyId) {
       throw "Select a journey.";
-    }
-    if (!sourceDeNameValue) {
-      throw "Enter the source Data Extension name or Customer Key.";
     }
     if (!alertEmailValue) {
       throw "Enter an alert Email.";
@@ -780,25 +838,49 @@ try {
     selectedJourneyKey = meta.key;
     selectedJourneyName = meta.name;
 
-    var deCheck = sourceDeExists(sourceDeNameValue);
-    if (!deCheck.ok) {
-      throw deCheck.error || "Source Data Extension not found.";
-    }
-    if (deCheck.resolvedKey) {
-      sourceDeNameValue = deCheck.resolvedKey;
+    var sourceLabel = "";
+    if (sourceTypeValue === "campaign") {
+      if (!campaignIdValue || campaignIdValue.length < 15) {
+        throw "Enter a valid Salesforce Campaign ID (15 or 18 characters).";
+      }
+      if (!memberStatusValue) {
+        throw "Enter the Campaign Member status to exit.";
+      }
+      sourceLabel = "Campaign:" + campaignIdValue;
+      sourceDeNameValue = sourceLabel;
+    } else {
+      if (!sourceDeNameValue) {
+        throw "Enter the source Data Extension name or Customer Key.";
+      }
+      var deCheck = sourceDeExists(sourceDeNameValue);
+      if (!deCheck.ok) {
+        throw deCheck.error || "Source Data Extension not found.";
+      }
+      if (deCheck.resolvedKey) {
+        sourceDeNameValue = deCheck.resolvedKey;
+      }
+      sourceLabel = sourceDeNameValue;
+      campaignIdValue = "";
+      memberStatusValue = "";
     }
 
     createdBatchId = Platform.Function.GUID();
     var now = new Date();
     var insertResult = insertBatchRow({
       batchId: createdBatchId,
-      sourceDeName: sourceDeNameValue,
+      sourceDeName: sourceLabel,
+      sourceType: sourceTypeValue,
+      campaignId: campaignIdValue,
+      memberStatus: memberStatusValue,
       journeyID: selectedJourneyId,
       journeyName: selectedJourneyName,
       journeyKey: selectedJourneyKey,
       status: "Pending",
       requestedAt: now,
-      message: "Queued from CloudPage. Waiting for batch seeder.",
+      message:
+        sourceTypeValue === "campaign"
+          ? "Queued from CloudPage (Campaign). Waiting for batch seeder."
+          : "Queued from CloudPage. Waiting for batch seeder.",
       Email: alertEmailValue
     });
 
@@ -824,7 +906,10 @@ try {
     }
     resultDetail = asJson({
       batchId: createdBatchId,
-      sourceDeName: sourceDeNameValue,
+      sourceType: sourceTypeValue,
+      sourceDeName: sourceLabel,
+      campaignId: campaignIdValue,
+      memberStatus: memberStatusValue,
       journeyID: selectedJourneyId,
       journeyName: selectedJourneyName,
       journeyKey: selectedJourneyKey,
@@ -882,6 +967,9 @@ Platform.Variable.SetValue("@exitSelectedJourneyId", selectedJourneyId);
 Platform.Variable.SetValue("@exitSelectedJourneyKey", selectedJourneyKey);
 Platform.Variable.SetValue("@exitSelectedJourneyName", selectedJourneyName);
 Platform.Variable.SetValue("@exitSourceDeName", sourceDeNameValue);
+Platform.Variable.SetValue("@exitSourceType", sourceTypeValue);
+Platform.Variable.SetValue("@exitCampaignId", campaignIdValue);
+Platform.Variable.SetValue("@exitMemberStatus", memberStatusValue);
 Platform.Variable.SetValue("@exitAlertEmail", alertEmailValue);
 Platform.Variable.SetValue("@exitBatchId", createdBatchId);
 Platform.Variable.SetValue("@exitJourneysLoadError", journeysLoadError);
@@ -1214,6 +1302,24 @@ h1 {
               <p class="hint">Only published journeys are listed.</p>
             </div>
             <div class="form-group">
+              <label class="form-label" for="sourceType">Source</label>
+              <script runat="server">
+                function fieldSafeType(value) {
+                  return String(value || "dataextension")
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;");
+                }
+                var selectedSource = fieldSafeType(Platform.Variable.GetValue("@exitSourceType") || "dataextension");
+                Write('<select class="form-select" id="sourceType" name="sourceType">');
+                Write('<option value="dataextension"' + (selectedSource === "campaign" ? "" : " selected") + ">Audience list</option>");
+                Write('<option value="campaign"' + (selectedSource === "campaign" ? " selected" : "") + ">Campaign</option>");
+                Write("</select>");
+              </script>
+              <p class="hint">Choose an audience list (data extension) or a Salesforce campaign.</p>
+            </div>
+            <div class="form-group" id="deSourceRow">
               <label class="form-label" for="sourceDeName">Audience list</label>
               <script runat="server">
                 function fieldSafe(value) {
@@ -1223,9 +1329,37 @@ h1 {
                     .replace(/>/g, "&gt;")
                     .replace(/"/g, "&quot;");
                 }
-                Write('<input class="form-input" id="sourceDeName" name="sourceDeName" required placeholder="Enter the list name" value="' + fieldSafe(Platform.Variable.GetValue("@exitSourceDeName") || "") + '">');
+                Write('<input class="form-input" id="sourceDeName" name="sourceDeName" placeholder="Enter the list name" value="' + fieldSafe(Platform.Variable.GetValue("@exitSourceDeName") || "") + '">');
               </script>
-              <p class="hint">Use the Marketing Cloud list or data extension that holds the contacts to exit. It must include a Subscriber Key field.</p>
+              <p class="hint">Marketing Cloud list or data extension with a Subscriber Key field.</p>
+            </div>
+            <div class="form-group" id="campaignSourceRow" style="display:none;">
+              <label class="form-label" for="campaignId">Campaign ID</label>
+              <script runat="server">
+                function fieldSafeCamp(value) {
+                  return String(value || "")
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;");
+                }
+                Write('<input class="form-input" id="campaignId" name="campaignId" placeholder="e.g. 701XXXXXXXXXXXXXXX" value="' + fieldSafeCamp(Platform.Variable.GetValue("@exitCampaignId") || "") + '">');
+              </script>
+              <p class="hint">Salesforce Campaign ID (15 or 18 characters).</p>
+            </div>
+            <div class="form-group" id="memberStatusRow" style="display:none;">
+              <label class="form-label" for="memberStatus">Campaign Member status</label>
+              <script runat="server">
+                function fieldSafeStatus(value) {
+                  return String(value || "")
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;");
+                }
+                Write('<input class="form-input" id="memberStatus" name="memberStatus" placeholder="e.g. Sent" value="' + fieldSafeStatus(Platform.Variable.GetValue("@exitMemberStatus") || "") + '">');
+              </script>
+              <p class="hint">Exact CampaignMember Status value. Only members with this status are queued for exit.</p>
             </div>
             <div class="form-group">
               <label class="form-label" for="alertEmail">Notification email</label>
@@ -1301,10 +1435,56 @@ h1 {
   }
   window.submitQueue = function () {
     syncJourneyMeta();
-    var deName = document.getElementById("sourceDeName").value || "";
+    var sourceTypeEl = document.getElementById("sourceType");
+    var mode = sourceTypeEl ? sourceTypeEl.value : "dataextension";
     var label = journeyName.value || "the selected journey";
+    if (mode === "campaign") {
+      var campId = (document.getElementById("campaignId").value || "").replace(/^\s+|\s+$/g, "");
+      var memberStatus = (document.getElementById("memberStatus").value || "").replace(/^\s+|\s+$/g, "");
+      return confirm(
+        "Start exiting contacts for " +
+          label +
+          " from Campaign \"" +
+          campId +
+          "\" with status \"" +
+          memberStatus +
+          "\"?"
+      );
+    }
+    var deName = document.getElementById("sourceDeName").value || "";
     return confirm("Start exiting contacts for " + label + " using audience list \"" + deName + "\"?");
   };
+  function syncSourceUi() {
+    var sourceTypeEl = document.getElementById("sourceType");
+    var mode = sourceTypeEl ? sourceTypeEl.value : "dataextension";
+    var isCampaign = mode === "campaign";
+    var deRow = document.getElementById("deSourceRow");
+    var campRow = document.getElementById("campaignSourceRow");
+    var statusRow = document.getElementById("memberStatusRow");
+    var deInput = document.getElementById("sourceDeName");
+    var campInput = document.getElementById("campaignId");
+    var statusInput = document.getElementById("memberStatus");
+    if (deRow) deRow.style.display = isCampaign ? "none" : "";
+    if (campRow) campRow.style.display = isCampaign ? "" : "none";
+    if (statusRow) statusRow.style.display = isCampaign ? "" : "none";
+    if (deInput) {
+      deInput.required = !isCampaign;
+      deInput.disabled = isCampaign;
+    }
+    if (campInput) {
+      campInput.required = isCampaign;
+      campInput.disabled = !isCampaign;
+    }
+    if (statusInput) {
+      statusInput.required = isCampaign;
+      statusInput.disabled = !isCampaign;
+    }
+  }
+  var sourceTypeSelect = document.getElementById("sourceType");
+  if (sourceTypeSelect) {
+    sourceTypeSelect.addEventListener("change", syncSourceUi);
+  }
+  syncSourceUi();
   var toggle = document.getElementById("toggleDetailBtn");
   var detail = document.getElementById("apiDetail");
   if (toggle && detail) {

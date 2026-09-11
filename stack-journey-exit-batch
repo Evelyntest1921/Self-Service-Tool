@@ -162,6 +162,15 @@ function normalizeBatchRows(rawRows) {
       sourceDeName: strTrim(
         fieldFromRow(row, ["sourceDeName", "SourceDeName", "sourceDEName"])
       ),
+      sourceType: strTrim(
+        fieldFromRow(row, ["sourceType", "SourceType"])
+      ),
+      campaignId: strTrim(
+        fieldFromRow(row, ["campaignId", "CampaignId", "CAMPAIGNID"])
+      ),
+      memberStatus: strTrim(
+        fieldFromRow(row, ["memberStatus", "MemberStatus"])
+      ),
       journeyID: strTrim(
         fieldFromRow(row, ["journeyID", "journeyId", "JourneyID"])
       ),
@@ -198,6 +207,9 @@ function fetchPendingBatches(prox) {
   var props = [
     "batchId",
     "sourceDeName",
+    "sourceType",
+    "campaignId",
+    "memberStatus",
     "journeyID",
     "journeyName",
     "journeyKey",
@@ -642,19 +654,183 @@ function insertExitQueueRow(subscriberKey, journeyName, journeyId, batchId) {
   return { ok: false, error: errors.join(" | "), key: rowKey, batchId: bid };
 }
 
+function lookupEnvironment() {
+  try {
+    return asLower(
+      Platform.Function.Lookup(
+        "bd_sst_page_navigation",
+        "environment",
+        "type",
+        "cloudpage"
+      ) || ""
+    );
+  } catch (e) {
+    return "";
+  }
+}
+
+function campaignMemberDeKeys(environment) {
+  if (asLower(environment) === "uat") {
+    return [
+      "ENT.CampaignMember_Salesforce_2",
+      "CampaignMember_Salesforce_2",
+      "CampaignMember_Salesforce"
+    ];
+  }
+  return [
+    "CampaignMember_Salesforce_1",
+    "CampaignMember_Salesforce",
+    "ENT.CampaignMember_Salesforce_1"
+  ];
+}
+
+function retrieveCampaignMemberRows(prox, campaignId, memberStatus, environment) {
+  var camp = strTrim(campaignId);
+  var statusVal = strTrim(memberStatus);
+  if (!camp) {
+    return { ok: false, error: "Missing campaignId.", rows: [], notes: "" };
+  }
+  if (!statusVal) {
+    return { ok: false, error: "Missing memberStatus.", rows: [], notes: "" };
+  }
+  var keys = campaignMemberDeKeys(environment);
+  var notes = [];
+  var propSets = [
+    ["ContactId", "CampaignId", "Status", "Id"],
+    ["contactId", "CampaignId", "Status", "Id"],
+    ["ContactId", "campaignId", "Status", "Id"]
+  ];
+  var k;
+  var p;
+  for (k = 0; k < keys.length; k++) {
+    for (p = 0; p < propSets.length; p++) {
+      try {
+        var wsResp = prox.retrieve(
+          "DataExtensionObject[" + keys[k] + "]",
+          propSets[p],
+          {
+            LeftOperand: {
+              Property: propSets[p][1],
+              SimpleOperator: "equals",
+              Value: camp
+            },
+            LogicalOperator: "AND",
+            RightOperand: {
+              Property: "Status",
+              SimpleOperator: "equals",
+              Value: statusVal
+            }
+          }
+        );
+        var rows = coerceRows(wsResp && wsResp.Results ? wsResp.Results : []);
+        notes.push(
+          "WSProxy[" +
+            keys[k] +
+            "] props=" +
+            propSets[p].join(",") +
+            " rows=" +
+            rows.length
+        );
+        if (rows.length) {
+          return {
+            ok: true,
+            deKey: keys[k],
+            rows: rows,
+            notes: notes.join(" | ")
+          };
+        }
+      } catch (wsEx) {
+        notes.push(
+          "WSProxy[" +
+            keys[k] +
+            "] ERROR " +
+            (wsEx.message || String(wsEx))
+        );
+      }
+    }
+    try {
+      var de = DataExtension.Init(keys[k]);
+      var allRows = coerceRows(de.Rows.Retrieve());
+      var filtered = [];
+      var i;
+      for (i = 0; i < allRows.length; i++) {
+        var rowCamp = strTrim(
+          fieldFromRow(allRows[i], ["CampaignId", "campaignId", "CAMPAIGNID"])
+        );
+        var rowStatus = strTrim(
+          fieldFromRow(allRows[i], ["Status", "status", "STATUS"])
+        );
+        if (
+          asLower(rowCamp) === asLower(camp) &&
+          asLower(rowStatus) === asLower(statusVal)
+        ) {
+          filtered.push(allRows[i]);
+        }
+      }
+      notes.push("Init(" + keys[k] + ") filtered=" + filtered.length);
+      if (filtered.length) {
+        return {
+          ok: true,
+          deKey: keys[k],
+          rows: filtered,
+          notes: notes.join(" | ")
+        };
+      }
+    } catch (deEx) {
+      notes.push(
+        "Init(" + keys[k] + ") ERROR " + (deEx.message || String(deEx))
+      );
+    }
+  }
+  return {
+    ok: false,
+    error: "No CampaignMember rows for campaign/status. " + notes.join(" | "),
+    rows: [],
+    notes: notes.join(" | ")
+  };
+}
+
+function subscriberKeyFromCampaignRow(row) {
+  return strTrim(
+    fieldFromRow(row, [
+      "ContactId",
+      "contactId",
+      "CONTACTID",
+      "SubscriberKey",
+      "subscriberKey",
+      "Id"
+    ])
+  );
+}
+
 function processBatch(prox, batch) {
   var batchId = strTrim(batch.batchId);
+  var sourceType = asLower(batch.sourceType) || "dataextension";
+  if (sourceType !== "campaign") {
+    sourceType = "dataextension";
+  }
   var label =
     batchId +
     " / " +
     (batch.journeyName || "(no journey name)") +
-    " / DE=" +
-    (batch.sourceDeName || "(no DE)");
+    " / " +
+    (sourceType === "campaign"
+      ? "Campaign=" + (batch.campaignId || "(none)") + " Status=" + (batch.memberStatus || "(none)")
+      : "DE=" + (batch.sourceDeName || "(no DE)"));
 
   if (!batchId) {
     return label + " — SKIP missing batchId.";
   }
-  if (!strTrim(batch.sourceDeName)) {
+  if (sourceType === "campaign") {
+    if (!strTrim(batch.campaignId)) {
+      updateBatchRow(batchId, "Failed", "Missing campaignId.");
+      return label + " — FAILED missing campaignId.";
+    }
+    if (!strTrim(batch.memberStatus)) {
+      updateBatchRow(batchId, "Failed", "Missing memberStatus.");
+      return label + " — FAILED missing memberStatus.";
+    }
+  } else if (!strTrim(batch.sourceDeName)) {
     updateBatchRow(batchId, "Failed", "Missing sourceDeName.");
     return label + " — FAILED missing sourceDeName.";
   }
@@ -676,28 +852,67 @@ function processBatch(prox, batch) {
     );
   }
 
-  var identity = resolveDeIdentity(prox, batch.sourceDeName);
-  if (!identity.ok) {
-    updateBatchRow(batchId, "Failed", identity.error || "Source DE resolve failed.");
-    return label + " — FAILED " + (identity.error || "source resolve failed");
+  var sourceRows = [];
+  var sourceNotes = "";
+  var sourceDeKey = "";
+  if (sourceType === "campaign") {
+    var environment = lookupEnvironment();
+    var campaignSource = retrieveCampaignMemberRows(
+      prox,
+      batch.campaignId,
+      batch.memberStatus,
+      environment
+    );
+    if (!campaignSource.ok) {
+      updateBatchRow(
+        batchId,
+        "Failed",
+        campaignSource.error || "Campaign member retrieve failed."
+      );
+      return (
+        label +
+        " — FAILED " +
+        (campaignSource.error || "campaign member retrieve failed")
+      );
+    }
+    sourceRows = campaignSource.rows || [];
+    sourceNotes = campaignSource.notes || "";
+    sourceDeKey = campaignSource.deKey || "";
+    debugLines.push(
+      batchId +
+        " campaign source deKey=" +
+        sourceDeKey +
+        " rows=" +
+        sourceRows.length +
+        " notes=" +
+        sourceNotes
+    );
+  } else {
+    var identity = resolveDeIdentity(prox, batch.sourceDeName);
+    if (!identity.ok) {
+      updateBatchRow(batchId, "Failed", identity.error || "Source DE resolve failed.");
+      return label + " — FAILED " + (identity.error || "source resolve failed");
+    }
+
+    var source = retrieveSourceRows(prox, identity);
+    if (!source.ok) {
+      updateBatchRow(batchId, "Failed", source.error || "Source retrieve failed.");
+      return label + " — FAILED " + (source.error || "source retrieve failed");
+    }
+    sourceRows = source.rows || [];
+    sourceNotes = source.notes || "";
+    sourceDeKey = source.deKey || "";
+    debugLines.push(
+      batchId +
+        " source deKey=" +
+        sourceDeKey +
+        " rows=" +
+        sourceRows.length +
+        " notes=" +
+        sourceNotes
+    );
   }
 
-  var source = retrieveSourceRows(prox, identity);
-  if (!source.ok) {
-    updateBatchRow(batchId, "Failed", source.error || "Source retrieve failed.");
-    return label + " — FAILED " + (source.error || "source retrieve failed");
-  }
-
-  var sourceRows = source.rows || [];
-  debugLines.push(
-    batchId +
-      " source deKey=" +
-      source.deKey +
-      " rows=" +
-      sourceRows.length +
-      " notes=" +
-      (source.notes || "")
-  );
   if (sourceRows.length) {
     debugLines.push(
       batchId + " firstRowKeys=" + rowKeysSample(sourceRows[0])
@@ -705,7 +920,9 @@ function processBatch(prox, batch) {
     debugLines.push(
       batchId +
         " firstSubscriberKey=" +
-        (subscriberKeyFromRow(sourceRows[0]) || "(empty)")
+        ((sourceType === "campaign"
+          ? subscriberKeyFromCampaignRow(sourceRows[0])
+          : subscriberKeyFromRow(sourceRows[0])) || "(empty)")
     );
   }
 
@@ -713,9 +930,11 @@ function processBatch(prox, batch) {
     updateBatchRow(
       batchId,
       "Failed",
-      "Source DE returned 0 rows. " + (source.notes || "")
+      (sourceType === "campaign"
+        ? "Campaign member query returned 0 rows. "
+        : "Source DE returned 0 rows. ") + sourceNotes
     );
-    return label + " — FAILED source DE returned 0 rows.";
+    return label + " — FAILED source returned 0 rows.";
   }
 
   var inserted = 0;
@@ -733,7 +952,10 @@ function processBatch(prox, batch) {
       limitHit = true;
       break;
     }
-    var sk = subscriberKeyFromRow(sourceRows[i]);
+    var sk =
+      sourceType === "campaign"
+        ? subscriberKeyFromCampaignRow(sourceRows[i])
+        : subscriberKeyFromRow(sourceRows[i]);
     if (!sk) {
       skipped++;
       if (skipped <= 3) {
@@ -780,6 +1002,8 @@ function processBatch(prox, batch) {
     errors +
     ", sourceRows=" +
     sourceRows.length +
+    ", sourceType=" +
+    sourceType +
     (firstInsertError ? ", firstInsertError=" + firstInsertError : "") +
     (limitHit ? ", cappedAt=" + max : "");
 
