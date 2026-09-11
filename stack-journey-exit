@@ -116,12 +116,14 @@ function normalizeQueueRows(rawRows) {
     var journeyId = strTrim(
       queueField(row, ["journeyId", "journeyID", "JourneyID", "JourneyId"])
     );
+    var batchId = strTrim(queueField(row, ["batchId", "BatchId", "BATCHID"]));
     var rowKey = strTrim(queueField(row, ["key", "Key"]));
-    if (!rowKey && subscriberKey && journeyId) {
-      rowKey = subscriberKey + "|" + journeyId;
+    if (!rowKey && batchId && subscriberKey) {
+      rowKey = batchId + "|" + subscriberKey;
     }
     out.push({
       key: rowKey,
+      batchId: batchId,
       subscriberKey: subscriberKey,
       journeyName: strTrim(
         queueField(row, ["journeyName", "JourneyName", "Name"])
@@ -137,16 +139,19 @@ function fetchExitQueueRows(prox) {
   var notes = [];
   var keyVariants = [EXIT_QUEUE_DE, String(EXIT_QUEUE_DE).toLowerCase()];
   var propSets = [
+    ["key", "subscriberKey", "journeyName", "journeyId", "batchId"],
+    ["key", "subscriberKey", "journeyName", "journeyID", "batchId"],
     ["key", "subscriberKey", "journeyName", "journeyId"],
     ["key", "subscriberKey", "journeyName", "journeyID"],
-    ["Key", "subscriberKey", "journeyName", "journeyId"],
-    ["key", "SubscriberKey", "journeyName", "journeyId"],
-    ["key", "SubscriberKey", "JourneyName", "JourneyID"]
+    ["Key", "subscriberKey", "journeyName", "journeyId", "batchId"],
+    ["key", "SubscriberKey", "journeyName", "journeyId", "batchId"],
+    ["key", "SubscriberKey", "JourneyName", "JourneyID", "batchId"]
   ];
   var filters = [
     { Property: "key", SimpleOperator: "notEquals", Value: "" },
     { Property: "subscriberKey", SimpleOperator: "notEquals", Value: "" },
     { Property: "SubscriberKey", SimpleOperator: "notEquals", Value: "" },
+    { Property: "batchId", SimpleOperator: "notEquals", Value: "" },
     { Property: "journeyId", SimpleOperator: "notEquals", Value: "" },
     { Property: "journeyID", SimpleOperator: "notEquals", Value: "" }
   ];
@@ -250,15 +255,15 @@ function fetchExitQueueRows(prox) {
   };
 }
 
-function removeExitQueueRow(rowKey, subscriberKey, journeyId) {
+function removeExitQueueRow(rowKey, subscriberKey, batchId) {
   var key = strTrim(rowKey);
-  if (!key && strTrim(subscriberKey) && strTrim(journeyId)) {
-    key = strTrim(subscriberKey) + "|" + strTrim(journeyId);
+  if (!key && strTrim(batchId) && strTrim(subscriberKey)) {
+    key = strTrim(batchId) + "|" + strTrim(subscriberKey);
   }
   if (!key) {
     return {
       ok: false,
-      error: "Need key (or subscriberKey + journeyId) to remove queue row."
+      error: "Need key (or batchId + subscriberKey) to remove queue row."
     };
   }
   try {
@@ -465,7 +470,8 @@ function groupQueueByJourney(rows) {
       groups[gkey].journeyName = strTrim(row.journeyName);
     }
     groups[gkey].contacts.push({
-      key: strTrim(row.key) || sk + "|" + jid,
+      key: strTrim(row.key) || (strTrim(row.batchId) ? strTrim(row.batchId) + "|" + sk : ""),
+      batchId: strTrim(row.batchId),
       subscriberKey: sk,
       journeyName: strTrim(row.journeyName),
       journeyId: jid
@@ -582,7 +588,7 @@ function processJourneyGroup(auth, token, group, definition) {
       var removed = removeExitQueueRow(
         contact.key,
         contact.subscriberKey,
-        contact.journeyId
+        contact.batchId
       );
       if (!removed.ok) {
         failCount++;

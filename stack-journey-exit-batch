@@ -550,30 +550,49 @@ function subscriberKeyFromRow(row) {
   );
 }
 
-function insertExitQueueRow(subscriberKey, journeyName, journeyId) {
+function insertExitQueueRow(subscriberKey, journeyName, journeyId, batchId) {
   var sk = strTrim(subscriberKey);
   var jid = strTrim(journeyId);
-  var rowKey = sk + "|" + jid;
-  if (!sk || !jid) {
-    return { ok: false, error: "Need subscriberKey and journeyId for insert." };
+  var bid = strTrim(batchId);
+  var rowKey = bid + "|" + sk;
+  if (!sk || !bid) {
+    return { ok: false, error: "Need subscriberKey and batchId for insert." };
   }
   var attempts = [
+    ["key", "subscriberKey", "journeyName", "journeyId", "batchId"],
+    ["key", "subscriberKey", "journeyName", "journeyID", "batchId"],
     ["key", "subscriberKey", "journeyName", "journeyId"],
     ["key", "subscriberKey", "journeyName", "journeyID"],
+    ["Key", "subscriberKey", "journeyName", "journeyId", "batchId"],
     ["Key", "subscriberKey", "journeyName", "journeyId"]
   ];
   var errors = [];
   for (var a = 0; a < attempts.length; a++) {
     try {
-      Platform.Function.InsertData(
-        EXIT_QUEUE_DE,
-        attempts[a],
-        [rowKey, sk, journeyName || "", jid]
-      );
+      var cols = attempts[a];
+      var vals = [];
+      var c;
+      for (c = 0; c < cols.length; c++) {
+        var colLower = asLower(cols[c]);
+        if (colLower === "key") {
+          vals.push(rowKey);
+        } else if (colLower === "subscriberkey") {
+          vals.push(sk);
+        } else if (colLower === "journeyname") {
+          vals.push(journeyName || "");
+        } else if (colLower === "journeyid") {
+          vals.push(jid);
+        } else if (colLower === "batchid") {
+          vals.push(bid);
+        } else {
+          vals.push("");
+        }
+      }
+      Platform.Function.InsertData(EXIT_QUEUE_DE, cols, vals);
       return {
         ok: true,
         duplicate: false,
-        fields: attempts[a].join(","),
+        fields: cols.join(","),
         key: rowKey
       };
     } catch (insEx) {
@@ -703,7 +722,7 @@ function processBatch(prox, batch) {
       }
       continue;
     }
-    var ins = insertExitQueueRow(sk, journeyName, journeyId);
+    var ins = insertExitQueueRow(sk, journeyName, journeyId, batchId);
     if (!ins.ok) {
       errors++;
       if (!firstInsertError) {
