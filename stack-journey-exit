@@ -12,6 +12,7 @@ var CM_STATUS_TO = "Responded";
 var resultLines = [];
 var debugLines = [];
 var batchMetaCache = {};
+var cmUpdatePairs = [];
 
 function strTrim(v) {
   if (v === null || typeof v === "undefined") {
@@ -577,21 +578,47 @@ function lookupBatchMeta(batchId) {
   return meta;
 }
 
-function markCampaignMemberResponded(campaignId, subscriberKey) {
+function queueCampaignMemberResponded(campaignId, subscriberKey) {
   var camp = strTrim(campaignId);
   var sk = strTrim(subscriberKey);
   if (!camp || !sk) {
-    return { ok: false, error: "Missing campaignId or subscriberKey." };
+    return false;
   }
+  cmUpdatePairs.push(camp + "^" + sk);
+  return true;
+}
+
+function flushCampaignMemberStatusUpdates() {
+  if (!cmUpdatePairs.length) {
+    return { ok: true, skipped: true, count: 0 };
+  }
+  var pairs = cmUpdatePairs.join("|");
   try {
-    Platform.Variable.SetValue("@sfCampaignId", camp);
-    Platform.Variable.SetValue("@sfSubscriberKey", sk);
+    Platform.Variable.SetValue("@sfCmUpdatePairs", pairs);
     Platform.Variable.SetValue("@sfToStatus", CM_STATUS_TO);
+    Platform.Variable.SetValue("@sfCampaignId", "");
     Platform.Variable.SetValue("@sfFromStatus", "");
-    Platform.Function.TreatAsContent('\%\%=contentblockbyid("0357")=\%\%');
-    return { ok: true };
+    Platform.Variable.SetValue("@sfSubscriberKey", "");
+    var rendered = Platform.Function.TreatAsContent(
+      '\%\%=contentblockbyid("0357")=\%\%'
+    );
+    return {
+      ok: true,
+      count: cmUpdatePairs.length,
+      result: strTrim(rendered)
+    };
   } catch (sfEx) {
-    return { ok: false, error: sfEx.message || String(sfEx) };
+    var detail = "";
+    try {
+      detail = Stringify(sfEx);
+    } catch (syEx) {
+      detail = sfEx.message || String(sfEx);
+    }
+    return {
+      ok: false,
+      count: cmUpdatePairs.length,
+      error: detail
+    };
   }
 }
 
@@ -686,15 +713,13 @@ function processJourneyGroup(auth, token, group, definition) {
         batchMeta.sourceType === "campaign" &&
         batchMeta.campaignId
       ) {
-        var cmUp = markCampaignMemberResponded(
-          batchMeta.campaignId,
-          contact.subscriberKey
-        );
-        if (cmUp.ok) {
-          cmNote = " CM Status→" + CM_STATUS_TO + " requested.";
-        } else {
-          cmNote =
-            " CM Status update FAILED: " + (cmUp.error || "unknown");
+        if (
+          queueCampaignMemberResponded(
+            batchMeta.campaignId,
+            contact.subscriberKey
+          )
+        ) {
+          cmNote = " CM Status→" + CM_STATUS_TO + " queued.";
         }
       }
       lines.push(
@@ -781,6 +806,24 @@ try {
       for (var gl = 0; gl < groupLines.length; gl++) {
         debugLines.push(groupLines[gl]);
       }
+    }
+
+    var cmFlush = flushCampaignMemberStatusUpdates();
+    if (cmFlush.skipped) {
+      resultLines.push("CM Status update: none queued.");
+    } else if (cmFlush.ok) {
+      resultLines.push(
+        "CM Status update TreatAsContent OK pairs=" +
+          cmFlush.count +
+          (cmFlush.result ? " result=" + cmFlush.result : "")
+      );
+    } else {
+      resultLines.push(
+        "CM Status update TreatAsContent FAILED pairs=" +
+          cmFlush.count +
+          " detail=" +
+          (cmFlush.error || "unknown")
+      );
     }
   }
 } catch (runEx) {

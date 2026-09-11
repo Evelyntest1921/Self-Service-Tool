@@ -3,6 +3,7 @@ SET @campaignId = Trim(@sfCampaignId)
 SET @fromStatus = Trim(@sfFromStatus)
 SET @toStatus = Trim(@sfToStatus)
 SET @subscriberKey = Trim(@sfSubscriberKey)
+SET @updatePairs = Trim(@sfCmUpdatePairs)
 SET @maxRows = 2000
 SET @logDe = "sst_de_journey_exit_log"
 
@@ -18,7 +19,64 @@ SET @err = ""
 SET @logMsg = ""
 SET @cmId = ""
 
-IF Empty(@campaignId) THEN
+IF NOT Empty(@updatePairs) THEN
+  SET @pairRows = BuildRowsetFromString(@updatePairs, "|")
+  SET @cnt = RowCount(@pairRows)
+  FOR @i = 1 TO @cnt DO
+    SET @pair = Trim(Field(Row(@pairRows, @i), 1))
+    IF Empty(@pair) THEN
+      SET @skipped = Add(@skipped, 1)
+    ELSE
+      SET @parts = BuildRowsetFromString(@pair, "^")
+      SET @pairCamp = Trim(Field(Row(@parts, 1), 1))
+      SET @pairSk = Trim(Field(Row(@parts, 2), 1))
+      SET @cmId = ""
+      IF Empty(@pairCamp) OR Empty(@pairSk) THEN
+        SET @skipped = Add(@skipped, 1)
+      ELSE
+        SET @cmRows = RetrieveSalesforceObjects(
+          "CampaignMember",
+          "Id,Status,CampaignId",
+          "CampaignId", "=", @pairCamp,
+          "ContactId", "=", @pairSk
+        )
+        IF RowCount(@cmRows) == 0 THEN
+          SET @cmRows = RetrieveSalesforceObjects(
+            "CampaignMember",
+            "Id,Status,CampaignId",
+            "CampaignId", "=", @pairCamp,
+            "LeadId", "=", @pairSk
+          )
+        ENDIF
+        IF RowCount(@cmRows) > 0 THEN
+          SET @cmId = Trim(Field(Row(@cmRows, 1), "Id"))
+        ENDIF
+        IF Empty(@cmId) THEN
+          SET @failed = Add(@failed, 1)
+        ELSE
+          SET @ok = UpdateSingleSalesforceObject(
+            "CampaignMember",
+            @cmId,
+            "Status",
+            @toStatus
+          )
+          IF @ok == 1 THEN
+            SET @updated = Add(@updated, 1)
+          ELSE
+            SET @failed = Add(@failed, 1)
+          ENDIF
+        ENDIF
+      ENDIF
+    ENDIF
+  NEXT @i
+  SET @logMsg = Concat(
+    "CM status update PAIRS to=", @toStatus,
+    " pairs=", @cnt,
+    " updated=", @updated,
+    " failed=", @failed,
+    " skipped=", @skipped
+  )
+ELSEIF Empty(@campaignId) THEN
   SET @err = "Missing @sfCampaignId"
 ELSEIF NOT Empty(@subscriberKey) THEN
   SET @cmRows = RetrieveSalesforceObjects(
@@ -56,7 +114,7 @@ ELSEIF NOT Empty(@subscriberKey) THEN
     ENDIF
   ENDIF
 ELSEIF Empty(@fromStatus) THEN
-  SET @err = "Missing @sfFromStatus (bulk) or @sfSubscriberKey (single)"
+  SET @err = "Missing @sfFromStatus (bulk) or @sfCmUpdatePairs / @sfSubscriberKey"
 ELSE
   SET @cmRows = RetrieveSalesforceObjects(
     "CampaignMember",
@@ -90,19 +148,21 @@ ELSE
   NEXT @i
 ENDIF
 
-IF Empty(@err) THEN
-  SET @logMsg = Concat(
-    "CM status update OK campaign=", @campaignId,
-    " sk=", @subscriberKey,
-    " from=", @fromStatus,
-    " to=", @toStatus,
-    " found=", @cnt,
-    " updated=", @updated,
-    " failed=", @failed,
-    " skipped=", @skipped
-  )
-ELSE
-  SET @logMsg = Concat("CM status update ERROR ", @err)
+IF Empty(@logMsg) THEN
+  IF Empty(@err) THEN
+    SET @logMsg = Concat(
+      "CM status update OK campaign=", @campaignId,
+      " sk=", @subscriberKey,
+      " from=", @fromStatus,
+      " to=", @toStatus,
+      " found=", @cnt,
+      " updated=", @updated,
+      " failed=", @failed,
+      " skipped=", @skipped
+    )
+  ELSE
+    SET @logMsg = Concat("CM status update ERROR ", @err)
+  ENDIF
 ENDIF
 
 InsertDE(@logDe, "log", @logMsg)
