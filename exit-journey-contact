@@ -210,7 +210,10 @@ function statusClass(status) {
   if (s === "failed" || s === "error") {
     return "is-failed";
   }
-  if (s === "processing" || s === "queued") {
+  if (s === "processing") {
+    return "is-processing";
+  }
+  if (s === "queued") {
     return "is-active";
   }
   return "is-pending";
@@ -1027,9 +1030,33 @@ Platform.Variable.SetValue("@exitRecentBatchesHtml", recentBatchesHtml);
   color: #92400e;
   background: #fffbeb;
 }
+.recent-status.is-processing {
+  position: relative;
+  overflow: hidden;
+  border-color: #d97706;
+  color: #78350f;
+  background-color: #fffbeb;
+  background-image: linear-gradient(90deg, rgba(251, 191, 36, 0.95) 0%, rgba(245, 158, 11, 0.95) 100%);
+  background-repeat: no-repeat;
+  background-size: 0% 100%;
+  animation: processingFill 1.5s ease-in-out infinite;
+}
+@keyframes processingFill {
+  0% {
+    background-size: 0% 100%;
+  }
+  100% {
+    background-size: 100% 100%;
+  }
+}
 .recent-status.is-pending {
   border-color: #d1d5db;
   color: #4b5563;
+}
+.reload-countdown {
+  display: inline-block;
+  margin-top: 8px;
+  font-weight: 600;
 }
 .recent-empty {
   font-size: 13px;
@@ -1169,7 +1196,7 @@ h1 {
             var status = Platform.Variable.GetValue("@exitResultStatus");
             var message = Platform.Variable.GetValue("@exitResultMessage");
             if (status) {
-              Write('<div class="notice ' + bodySafe(status) + '"><strong>' + bodySafe(message) + '</strong></div>');
+              Write('<div class="notice ' + bodySafe(status) + '" id="exitResultNotice"><strong>' + bodySafe(message) + '</strong></div>');
             }
           </script>
 
@@ -1286,6 +1313,37 @@ h1 {
       detail.className = open ? "detail" : "detail is-visible";
       toggle.textContent = open ? "Show details" : "Hide details";
     });
+  }
+
+  var successNotice = document.getElementById("exitResultNotice");
+  if (successNotice && (" " + successNotice.className + " ").indexOf(" success ") > -1) {
+    var submitBtn = document.getElementById("submitBtn");
+    if (submitBtn) {
+      submitBtn.disabled = true;
+    }
+    var exitForm = document.getElementById("exitForm");
+    if (exitForm) {
+      exitForm.addEventListener("submit", function (e) {
+        e.preventDefault();
+        return false;
+      });
+    }
+    var secondsLeft = 5;
+    var countdown = document.createElement("div");
+    countdown.className = "reload-countdown";
+    successNotice.appendChild(countdown);
+    function tickReload() {
+      countdown.textContent =
+        "This page will reload in " + secondsLeft + " sec.";
+      if (secondsLeft <= 0) {
+        var nextUrl = window.location.pathname + window.location.search;
+        window.location.replace(nextUrl);
+        return;
+      }
+      secondsLeft -= 1;
+      window.setTimeout(tickReload, 1000);
+    }
+    tickReload();
   }
 })();
 </script>
