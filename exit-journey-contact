@@ -3,7 +3,6 @@ Platform.Load("core", "1");
 
 var BATCH_DE = "bd_sst_journey_exit_batch";
 var TRIGGER_DE = "sst_trigger_automation";
-var TRIGGER_NAME = "journey_exit";
 var resultStatus = "";
 var resultMessage = "";
 var resultDetail = "";
@@ -21,6 +20,7 @@ var envDisplayName = "";
 var envDisplayEmail = "";
 var envAvatarLetter = "";
 var automationTriggerNote = "";
+var triggerAutomationName = "";
 
 function formValue(name) {
   var value = "";
@@ -377,14 +377,25 @@ function insertBatchRow(batch) {
 function lookupTriggerExternalKey(triggerName) {
   var name = clean(triggerName);
   if (!name) {
-    return { ok: false, error: "Missing automation trigger name." };
+    return {
+      ok: false,
+      error:
+        "Missing automation name. Set bd_sst_page_navigation.ss_journey_exit_automation to the same name value you inserted in " +
+        TRIGGER_DE +
+        "."
+    };
   }
   try {
     var externalKey = lookupValue(TRIGGER_DE, "externalKey", "name", name);
     if (!externalKey) {
       return {
         ok: false,
-        error: "No externalKey in " + TRIGGER_DE + " for name=" + name + "."
+        error:
+          "No " +
+          TRIGGER_DE +
+          " row for name=\"" +
+          name +
+          "\". Insert name + externalKey, and match ss_journey_exit_automation."
       };
     }
     return { ok: true, name: name, externalKey: externalKey };
@@ -480,6 +491,12 @@ function triggerAutomationByName(triggerName) {
 
 hubUrl = lookupValue("bd_sst_page_navigation", "ss_home", "type", "cloudpage") || "#";
 journeyExitUrl = lookupValue("bd_sst_page_navigation", "ss_journey_exit", "type", "cloudpage") || "";
+triggerAutomationName = lookupValue(
+  "bd_sst_page_navigation",
+  "ss_journey_exit_automation",
+  "type",
+  "cloudpage"
+);
 var environment = asLower(lookupValue("bd_sst_page_navigation", "environment", "type", "cloudpage"));
 if (environment === "uat") {
   envDisplayName = "UAT";
@@ -553,7 +570,7 @@ try {
       throw "Failed to insert bd_sst_journey_exit_batch row: " + insertResult.error;
     }
 
-    var triggerResult = triggerAutomationByName(TRIGGER_NAME);
+    var triggerResult = triggerAutomationByName(triggerAutomationName);
     if (triggerResult.ok) {
       resultStatus = "success";
       automationTriggerNote = triggerResult.message;
@@ -578,7 +595,7 @@ try {
       Email: alertEmailValue,
       status: "Pending",
       automationTrigger: {
-        name: TRIGGER_NAME,
+        name: triggerAutomationName || "",
         ok: !!triggerResult.ok,
         externalKey: triggerResult.externalKey || "",
         objectId: triggerResult.objectId || "",
