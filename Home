@@ -47,13 +47,16 @@
   SET @automationsTotal = RowCount(@automationsCount)
   SET @oneSendCount = LookupRows("Bd_journey_analytics", "journeyType", "Campaign journey")
   SET @oneSendTotal = RowCount(@oneSendCount)
+  SET @mcSurveys = LookupRows("Bd_journey_analytics", "journeyType", "Survey")
+  SET @mcSurveysTotal = RowCount(@mcSurveys)
+  SET @salesforceSurveys = LookupRows("Bd_journey_analytics", "journeyType", "Salesforce Survey Send")
+  SET @salesforceSurveysTotal = RowCount(@salesforceSurveys)
   SET @hubUrl = ""
   SET @buildDetailUrl = ""
   SET @emailOnlyUrl = ""
   SET @quickSendUrl = ""
   SET @campaignOnlyUrl = ""
   SET @campaignAutomationUrl = ""
-  SET @journeyExitUrl = ""
   SET @surveyPageUrl = ""
   SET @surveyJourneyUrl = ""
   SET @environment = ""
@@ -70,8 +73,8 @@
     SET @emailOnlyUrl = Field(@navRow,"ss_email_only")
     SET @quickSendUrl = Field(@navRow,"ss_quick_send")
     SET @campaignOnlyUrl = Field(@navRow,"ss_campaign_only")
+    SET @SFsurveyJourneyUrl = Field(@navRow,"ss_sf_survey_journey")
     SET @campaignAutomationUrl = Field(@navRow,"ss_campaign_automation")
-    SET @journeyExitUrl = Trim(Field(@navRow,"ss_journey_exit"))
     SET @environment = Trim(Lowercase(Field(@navRow,"environment")))
     SET @environmentSwitchUrl = Trim(Field(@navRow,"environment_switch"))
   ENDIF
@@ -96,11 +99,9 @@
     SET @envAvatarLetter = "P"
     SET @envSwitchLabel = "Switch to UAT environment"
   ENDIF
-  
   IF @redirect == "true" THEN
     Redirect(@hubUrl)
   ENDIF
-
   SET @homeDo = RequestParameter("do")
   SET @browseJourneys = RequestParameter("browseJourneys")
   SET @browsePage = Trim(RequestParameter("browsePage"))
@@ -176,7 +177,6 @@
       SET @jaBrowseError = "No SFMC_AUTH row for User=Admin."
     ENDIF
   ENDIF
-
   SET @specDE = "sst_de_specialty_log_12_months"
   SET @specMap = ""
   IF DataExtensionRowCount(@specDE) == 0 THEN
@@ -322,17 +322,14 @@
       ENDIF
     NEXT @specMapIdxOut
   ENDIF
-  
-  ]%%
-  <script runat="server" language="javascript">
+]%%
+<script runat="server" language="javascript">
   Platform.Load("Core", "1.1");
-  
   var DE_EXTERNAL_KEY = "Bd_journey_analytics";
   var BROWSE_PAGE_SIZE = 50;
   var BUILD_PAGE_SIZE = 20;
   var MAX_DE_FETCH = 500;
   var BUILD_DETAIL_URL = Platform.Variable.GetValue("@buildDetailUrl") || "";
-  
   function esc(s) {
     if (s == null || s === undefined) return "";
     return String(s)
@@ -340,7 +337,6 @@
       .replace(/</g, "&lt;")
       .replace(/"/g, "&quot;");
   }
-
   function wrapTitle(s, size) {
     var text, i, chunk, parts;
     size = size || 30;
@@ -353,7 +349,6 @@
     }
     return parts.join("<br>");
   }
-  
   function resolveJourneyProgress(statusRaw) {
     var status, label;
     status = String(statusRaw == null ? "" : statusRaw).replace(/^\s+|\s+$/g, "").toLowerCase();
@@ -397,7 +392,6 @@
       labelClass: "progress-percentage--ready"
     };
   }
-
   function fieldFromPropertyList(props, names) {
     var pi, i, pname, v;
     if (!props || typeof props.length !== "number") {
@@ -419,7 +413,6 @@
     }
     return "";
   }
-
   function fieldFromRow(r, names) {
     var i, n, v;
     if (r == null) return "";
@@ -428,7 +421,9 @@
       v = null;
       try {
         v = Platform.Function.Field(r, n);
-      } catch (fe0) {}
+      }
+      catch (fe0) {
+      }
       if (v === null || v === undefined || v === "") {
         v = r[n];
       }
@@ -440,7 +435,6 @@
     if (v !== "") return v;
     return "";
   }
-
   function coerceDeRows(raw) {
     if (raw == null) {
       return [];
@@ -457,24 +451,21 @@
     }
     return coerceRows(r);
   }
-
   function journeyIdFromRow(r) {
     return String(fieldFromRow(r, ["journeyId", "JourneyId", "JourneyID"]));
   }
-
   function safeSortStr(v) {
     if (v === null || v === undefined) return "";
     try {
       return String(v);
-    } catch (safeEx) {
+    }
+    catch (safeEx) {
       return "";
     }
   }
-
   function pad2(n) {
     return n < 10 ? "0" + n : String(n);
   }
-
   function formatUsDateFromMs(ms) {
     var dt, month, day, year, hour, min, sec, ampm, h12;
     dt = new Date(ms);
@@ -494,7 +485,6 @@
     }
     return month + "/" + day + "/" + year + " " + h12 + ":" + pad2(min) + ":" + pad2(sec) + " " + ampm;
   }
-
   function parseUsDateToMs(s) {
     var text = String(s == null ? "" : s).replace(/^\s+|\s+$/g, "");
     var m = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/i);
@@ -518,7 +508,6 @@
     dt = new Date(year, month, day, hour, min, sec);
     return dt && dt.getTime ? safeMs(dt.getTime()) : 0;
   }
-
   function parseSqlDateTimeToMs(s) {
     var text = String(s == null ? "" : s).replace(/^\s+|\s+$/g, "");
     var m = text.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?$/);
@@ -535,7 +524,6 @@
     dt = new Date(year, month, day, hour, min, sec);
     return dt && dt.getTime ? safeMs(dt.getTime()) : 0;
   }
-
   function safeMs(val) {
     var n = Number(val);
     if (isNaN(n) || !isFinite(n)) {
@@ -543,7 +531,6 @@
     }
     return n;
   }
-
   function normalizeEpochMs(ms) {
     ms = safeMs(ms);
     if (ms > 0 && ms < 1e12) {
@@ -551,11 +538,9 @@
     }
     return ms;
   }
-
   function isPlausibleMs(ms) {
     return safeMs(ms) >= 1e12;
   }
-
   function parseDateToMs(ud) {
     var s, p, n, fmts, fi, ms, sqlMs;
     if (ud === null || ud === undefined || ud === "") {
@@ -568,7 +553,9 @@
           return ms;
         }
       }
-    } catch (e0) {}
+    }
+    catch (e0) {
+    }
     s = String(ud).replace(/^\s+|\s+$/g, "");
     if (!s) {
       return 0;
@@ -603,7 +590,9 @@
             return ms;
           }
         }
-      } catch (fmtEx) {}
+      }
+      catch (fmtEx) {
+      }
     }
     try {
       p = Platform.Function.ParseDate(s);
@@ -613,18 +602,18 @@
           return ms;
         }
       }
-    } catch (e1) {}
+    }
+    catch (e1) {
+    }
     ms = parseUsDateToMs(s);
     if (ms > 0) {
       return ms;
     }
     return 0;
   }
-
   function msFromRow(r) {
     return parseDateToMs(fieldFromRow(r, ["updateDate", "UpdateDate"]));
   }
-
   function formatRowDate(r) {
     var udx = fieldFromRow(r, ["updateDate", "UpdateDate"]);
     var ms, formatted;
@@ -643,10 +632,11 @@
       if (formatted !== null && formatted !== undefined && String(formatted) !== "") {
         return String(formatted);
       }
-    } catch (e3) {}
+    }
+    catch (e3) {
+    }
     return safeSortStr(udx);
   }
-
   function sortRowsByUpdateDate(rows) {
     var i, j, tmp, mi, mj, idi, idj;
     for (i = 0; i < rows.length; i++) {
@@ -658,7 +648,8 @@
             tmp = rows[i];
             rows[i] = rows[j];
             rows[j] = tmp;
-          } else if (mj === mi) {
+          }
+          else if (mj === mi) {
             idi = safeSortStr(journeyIdFromRow(rows[i]));
             idj = safeSortStr(journeyIdFromRow(rows[j]));
             if (idj > idi) {
@@ -667,18 +658,20 @@
               rows[j] = tmp;
             }
           }
-        } catch (sortEx) {}
+        }
+        catch (sortEx) {
+        }
       }
     }
     return rows;
   }
-
   function mergeLookupRows(target, seen, col, val) {
     var chunk = [];
     var i, jid, row;
     try {
       chunk = coerceRows(Platform.Function.LookupRows(DE_EXTERNAL_KEY, col, val));
-    } catch (lookupEx) {
+    }
+    catch (lookupEx) {
       return;
     }
     for (i = 0; i < chunk.length; i++) {
@@ -690,7 +683,6 @@
       }
     }
   }
-
   function retrieveAnalyticsRows() {
     var rows = [];
     var types = [
@@ -702,9 +694,11 @@
       "Create an Email",
       "Automation",
       "Survey",
-      "Survey | email-only"
+      "Survey | email-only",
+      "Salesforce Survey Send"
     ];
-    var seen = {};
+    var seen = {
+    };
     var ti;
     for (ti = 0; ti < types.length; ti++) {
       mergeLookupRows(rows, seen, "journeyType", types[ti]);
@@ -713,21 +707,21 @@
     mergeLookupRows(rows, seen, "deId", "N/A");
     return rows;
   }
-
   function loadRecentBuildRows(fetchLimit) {
     var rows = [];
     var limit = fetchLimit > 0 ? fetchLimit : MAX_DE_FETCH;
     rows = retrieveAnalyticsRows();
     if (!rows.length) {
-      return { rows: [], count: 0 };
+      return {
+        rows: [], count: 0 };
     }
     sortRowsByUpdateDate(rows);
     if (rows.length > limit) {
       rows = rows.slice(0, limit);
     }
-    return { rows: rows, count: rows.length };
+    return {
+      rows: rows, count: rows.length };
   }
-
   function getDeRowCount() {
     var total = 0;
     total = parseInt(getAmpVar("allJourneysTotal"), 10);
@@ -736,10 +730,11 @@
     }
     try {
       total = Platform.Function.DataExtensionRowCount(DE_EXTERNAL_KEY);
-    } catch (e0) {}
+    }
+    catch (e0) {
+    }
     return total > 0 ? total : 0;
   }
-
   function hubUrlWithBuildsPage(hubUrl, page) {
     var base = String(hubUrl || "");
     if (!base) {
@@ -750,62 +745,64 @@
     }
     return base + "?buildsPage=" + page;
   }
-
   function renderBuildsPagination(hubUrl, page, totalPages, totalCount) {
     if (totalPages <= 1) {
       return "";
     }
     var parts = [
       '<div class="browse-pagination">' +
-        '<div class="browse-pagination-inner">'
+      '<div class="browse-pagination-inner">'
     ];
     if (page > 1) {
       parts.push(
         '<a href="' +
-          esc(hubUrlWithBuildsPage(hubUrl, page - 1)) +
-          '" class="filter-btn">Previous</a>'
+        esc(hubUrlWithBuildsPage(hubUrl, page - 1)) +
+        '" class="filter-btn">Previous</a>'
       );
-    } else {
+    }
+    else {
       parts.push('<span class="filter-btn browse-page-disabled">Previous</span>');
     }
     parts.push(
       '<span class="browse-page-label">Page ' +
-        page +
-        " of " +
-        totalPages +
-        " (" +
-        totalCount +
-        " builds)</span>"
+      page +
+      " of " +
+      totalPages +
+      " (" +
+      totalCount +
+      " builds)</span>"
     );
     if (page < totalPages) {
       parts.push(
         '<a href="' +
-          esc(hubUrlWithBuildsPage(hubUrl, page + 1)) +
-          '" class="filter-btn">Next</a>'
+        esc(hubUrlWithBuildsPage(hubUrl, page + 1)) +
+        '" class="filter-btn">Next</a>'
       );
-    } else {
+    }
+    else {
       parts.push('<span class="filter-btn browse-page-disabled">Next</span>');
     }
     parts.push("</div></div>");
     return parts.join("");
   }
-
   function setV(key, val) {
     var s = val == null ? "" : String(val);
     try {
       Platform.Variable.SetValue(key, s);
-    } catch (e0) {}
+    }
+    catch (e0) {
+    }
     try {
       Platform.Variable.SetValue("@" + key, s);
-    } catch (e1) {}
+    }
+    catch (e1) {
+    }
   }
-  
   function lenArrayish(x) {
     if (x == null) return -1;
     if (typeof x.length === "number") return x.length;
     return -1;
   }
-  
   function coerceRows(raw) {
     if (raw == null) return [];
     var r = raw;
@@ -817,23 +814,25 @@
     for (i = 0; i < n; i++) out.push(r[i]);
     return out;
   }
-  
   function getAmpVar(name) {
     var v = "";
     try {
       v = Platform.Variable.GetValue("@" + name);
-    } catch (e0) {}
+    }
+    catch (e0) {
+    }
     if (v === null || v === undefined || String(v) === "") {
       try {
         v = Variable.GetValue(name);
-      } catch (e1) {}
+      }
+      catch (e1) {
+      }
     }
     if (v === null || v === undefined) {
       return "";
     }
     return String(v);
   }
-
   function authField(row, names) {
     var i, n, v;
     if (row == null) return "";
@@ -844,14 +843,15 @@
     }
     return "";
   }
-
   function extractAccessToken(body) {
     var text = body == null ? "" : String(body);
     if (!text) return "";
     var parsed = null;
     try {
       parsed = Platform.Function.ParseJSON(text);
-    } catch (parseEx) {}
+    }
+    catch (parseEx) {
+    }
     if (parsed) {
       if (parsed.access_token) return String(parsed.access_token);
       if (parsed["access_token"]) return String(parsed["access_token"]);
@@ -861,28 +861,34 @@
     try {
       var rx = Platform.Function.RegExMatch(text, '"access_token":"([^"]+)"', 1);
       if (rx) return String(rx);
-    } catch (regexEx) {}
+    }
+    catch (regexEx) {
+    }
     return "";
   }
-
   function fetchHomeRestAuth() {
     var ampToken = getAmpVar("accessToken");
     var ampSubdomain = getAmpVar("subdomain");
     var ampBrowseError = getAmpVar("jaBrowseError");
     if (ampToken && ampSubdomain) {
-      return { token: ampToken, subdomain: ampSubdomain };
+      return {
+        token: ampToken, subdomain: ampSubdomain };
     }
     if (ampBrowseError) {
-      return { error: ampBrowseError };
+      return {
+        error: ampBrowseError };
     }
     var rows = [];
     try {
       rows = Platform.Function.LookupRows("SFMC_AUTH", "User", "Admin");
-    } catch (authLookupEx) {
-      return { error: "Could not read SFMC_AUTH." };
+    }
+    catch (authLookupEx) {
+      return {
+        error: "Could not read SFMC_AUTH." };
     }
     if (!rows || rows.length === 0) {
-      return { error: "No SFMC_AUTH row for User=Admin." };
+      return {
+        error: "No SFMC_AUTH row for User=Admin." };
     }
     var authRow = rows[0];
     var clientId = authField(authRow, ["clientId", "ClientId"]);
@@ -890,15 +896,16 @@
     var subdomain = authField(authRow, ["subdomain", "Subdomain"]);
     var accountId = authField(authRow, ["accountId", "AccountId"]);
     if (!clientId || !clientSecret || !subdomain) {
-      return { error: "Missing clientId, clientSecret, or subdomain in SFMC_AUTH." };
+      return {
+        error: "Missing clientId, clientSecret, or subdomain in SFMC_AUTH." };
     }
     var authUrl = "https://" + subdomain + ".auth.marketingcloudapis.com/v2/token";
     var authPayload =
-      '{"grant_type":"client_credentials","client_id":"' +
-      clientId +
-      '","client_secret":"' +
-      clientSecret +
-      '"';
+        '{"grant_type":"client_credentials","client_id":"' +
+        clientId +
+        '","client_secret":"' +
+        clientSecret +
+        '"';
     if (accountId) {
       authPayload += ',"account_id":"' + accountId + '"';
     }
@@ -915,24 +922,24 @@
       var authErrBody = authResp.content ? String(authResp.content).substring(0, 200) : "";
       return {
         error:
-          "Auth HTTP " +
-          authResp.statusCode +
-          (authErrBody ? ": " + authErrBody : ".")
+        "Auth HTTP " +
+        authResp.statusCode +
+        (authErrBody ? ": " + authErrBody : ".")
       };
     }
     var authBody = authResp.content ? String(authResp.content) : "";
     var token = extractAccessToken(authBody);
     if (!token) {
       var authSnippet = authBody ? authBody.substring(0, 200) : "(empty response body)";
-      return { error: "Auth HTTP 200 but no access token in response: " + authSnippet };
+      return {
+        error: "Auth HTTP 200 but no access token in response: " + authSnippet };
     }
-    return { token: token, subdomain: subdomain };
+    return {
+      token: token, subdomain: subdomain };
   }
-
   function httpOk(code) {
     return Number(code) === 200;
   }
-
   function buildJourneyListUrl(subdomain, page, pageSize) {
     return (
       "https://" +
@@ -943,7 +950,6 @@
       pageSize
     );
   }
-
   function parseBrowsePage(val) {
     var page = parseInt(String(val || "1"), 10);
     if (isNaN(page) || page < 1) {
@@ -951,50 +957,50 @@
     }
     return page;
   }
-
   function renderBrowsePagination(hubUrl, page, totalPages, totalCount) {
     if (totalPages <= 1) {
       return "";
     }
     var parts = [
       '<div class="browse-pagination">' +
-        '<div class="browse-pagination-inner">'
+      '<div class="browse-pagination-inner">'
     ];
     if (page > 1) {
       parts.push(
         '<a href="' +
-          esc(hubUrl) +
-          "?browseJourneys=1&amp;browsePage=" +
-          (page - 1) +
-          '" class="filter-btn">Previous</a>'
+        esc(hubUrl) +
+        "?browseJourneys=1&amp;browsePage=" +
+        (page - 1) +
+        '" class="filter-btn">Previous</a>'
       );
-    } else {
+    }
+    else {
       parts.push('<span class="filter-btn browse-page-disabled">Previous</span>');
     }
     parts.push(
       '<span class="browse-page-label">Page ' +
-        page +
-        " of " +
-        totalPages +
-        " (" +
-        totalCount +
-        " journeys)</span>"
+      page +
+      " of " +
+      totalPages +
+      " (" +
+      totalCount +
+      " journeys)</span>"
     );
     if (page < totalPages) {
       parts.push(
         '<a href="' +
-          esc(hubUrl) +
-          "?browseJourneys=1&amp;browsePage=" +
-          (page + 1) +
-          '" class="filter-btn">Next</a>'
+        esc(hubUrl) +
+        "?browseJourneys=1&amp;browsePage=" +
+        (page + 1) +
+        '" class="filter-btn">Next</a>'
       );
-    } else {
+    }
+    else {
       parts.push('<span class="filter-btn browse-page-disabled">Next</span>');
     }
     parts.push("</div></div>");
     return parts.join("");
   }
-
   function renderBrowseJourneyCards(items, existing, hubUrl) {
     var formAction = hubUrl ? String(hubUrl) : "";
     var browseParts = [];
@@ -1013,7 +1019,8 @@
       if (exists) {
         actionHtml =
           '<button type="button" class="btn-secondary" disabled>Already added</button>';
-      } else {
+      }
+      else {
         actionHtml =
           '<form method="post" action="' + escAttr(formAction) + '" style="margin:0;display:inline">' +
           '<input type="hidden" name="do" value="addBuild">' +
@@ -1024,24 +1031,23 @@
       }
       browseParts.push(
         '<div class="survey-card survey-card-browse">' +
-          '<div class="survey-header">' +
-          '<div class="survey-icon">🗄</div>' +
-          '<div class="survey-status status-Active">' + statusLabel + "</div>" +
-          "</div>" +
-          '<h3 class="survey-title">' + title + "</h3>" +
-          '<div class="survey-meta">' +
-          '<span class="survey-id">ID: ' + esc(jid) + "</span>" +
-          '<span class="survey-date">' + esc(jdate) + "</span>" +
-          "</div>" +
-          '<div class="survey-actions">' +
-          actionHtml +
-          "</div>" +
-          "</div>"
+        '<div class="survey-header">' +
+        '<div class="survey-icon">🗄</div>' +
+        '<div class="survey-status status-Active">' + statusLabel + "</div>" +
+        "</div>" +
+        '<h3 class="survey-title">' + title + "</h3>" +
+        '<div class="survey-meta">' +
+        '<span class="survey-id">ID: ' + esc(jid) + "</span>" +
+        '<span class="survey-date">' + esc(jdate) + "</span>" +
+        "</div>" +
+        '<div class="survey-actions">' +
+        actionHtml +
+        "</div>" +
+        "</div>"
       );
     }
     return browseParts.join("");
   }
-
   function homeHttpGet(token, url) {
     var req = new Script.Util.HttpRequest(url);
     req.method = "GET";
@@ -1056,22 +1062,21 @@
       body: resp.content ? String(resp.content) : ""
     };
   }
-
   function parseJourneyListItems(parsed) {
     if (!parsed) return [];
     if (parsed.items) return coerceRows(parsed.items);
     if (Array.isArray(parsed)) return parsed;
     return [];
   }
-
   function isBrowseMode() {
     if (getAmpVar("browseMode") === "1") return true;
     try {
       return Request.GetQueryStringParameter("browseJourneys") === "1";
-    } catch (browseReqEx) {}
+    }
+    catch (browseReqEx) {
+    }
     return false;
   }
-
   function escAttr(s) {
     if (s == null || s === undefined) return "";
     return String(s)
@@ -1079,9 +1084,9 @@
       .replace(/"/g, "&quot;")
       .replace(/</g, "&lt;");
   }
-
   function loadExistingJourneyIds() {
-    var map = {};
+    var map = {
+    };
     var rows = retrieveAnalyticsRows();
     var i, id;
     for (i = 0; i < rows.length; i++) {
@@ -1090,7 +1095,6 @@
     }
     return map;
   }
-
   function formatBrowseDate(val) {
     if (val == null || val === "") return "";
     try {
@@ -1099,11 +1103,12 @@
       }
       var p = Platform.Function.ParseDate(String(val));
       if (p && p.getTime) return Platform.Function.FormatDate(p, "yyyy-MM-dd HH:mm");
-    } catch (e0) {}
+    }
+    catch (e0) {
+    }
     var s = String(val);
     return s.length > 16 ? s.substring(0, 16) : s;
   }
-
   if (!isBrowseMode()) {
     try {
       var hubUrl = Platform.Variable.GetValue("@hubUrl") || "";
@@ -1111,7 +1116,9 @@
       if (!buildsPage || buildsPage === 1) {
         try {
           buildsPage = parseBrowsePage(Request.GetQueryStringParameter("buildsPage"));
-        } catch (buildsPageEx) {}
+        }
+        catch (buildsPageEx) {
+        }
       }
       var totalInDe = getDeRowCount();
       var fetchLimit = totalInDe > 0 ? (totalInDe > MAX_DE_FETCH ? MAX_DE_FETCH : totalInDe) : MAX_DE_FETCH;
@@ -1126,14 +1133,14 @@
         buildsPage = 1;
       }
       setV("buildsPage", String(buildsPage));
-
       if (!rowCount) {
         setV("recentBuildsOk", "true");
         setV("jaEmpty", "1");
         setV("jaRecentBuildsMarkup", "");
         setV("jaBuildsLoadError", "");
         setV("jaBuildsPagination", "");
-      } else {
+      }
+      else {
         var startIdx = (buildsPage - 1) * BUILD_PAGE_SIZE;
         var endIdx = buildsPage * BUILD_PAGE_SIZE;
         if (endIdx > rowCount) {
@@ -1159,48 +1166,48 @@
             sentHtml = '<span class="progress-sent-count">' + esc(String(sentRaw)) + " sent</span>";
           }
           var detailHref =
-            jidv !== ""
-              ? BUILD_DETAIL_URL + "?journeyId=" + encodeURIComponent(jidv)
-              : BUILD_DETAIL_URL;
+              jidv !== ""
+          ? BUILD_DETAIL_URL + "?journeyId=" + encodeURIComponent(jidv)
+          : BUILD_DETAIL_URL;
           parts.push(
             '<div class="survey-card">' +
-              '<div class="survey-header">' +
-              '<div class="survey-icon">🗄</div>' +
-              '<div class="survey-status status-Active">' +
-              esc(tp.length > 28 ? tp.substring(0, 28) + "..." : tp) +
-              "</div>" +
-              "</div>" +
-              '<h3 class="survey-title">' +
-              wrapTitle(nm, 30) +
-              "</h3>" +
-              '<div class="survey-meta">' +
-              '<span class="survey-id">ID: ' + esc(jidv) + '</span>' +
-              '<span class="survey-date">' + esc(cr) + "</span>" +
-              "</div>" +
-              '<div class="survey-progress">' +
-              '<div class="progress-info">' +
-              '<span class="progress-percentage ' +
-              prog.labelClass +
-              '">' +
-              esc(prog.label) +
-              "</span>" +
-              sentHtml +
-              "</div>" +
-              '<div class="progress-bar">' +
-              '<div class="progress-fill ' +
-              prog.fillClass +
-              '" style="width:' +
-              prog.width +
-              ';">' +
-              "</div>" +
-              "</div>" +
-              "</div>" +
-              '<div class="survey-actions">' +
-              '<a href="' +
-              detailHref +
-              '" class="btn-secondary">Manage build</a>' +
-              "</div>" +
-              "</div>"
+            '<div class="survey-header">' +
+            '<div class="survey-icon">🗄</div>' +
+            '<div class="survey-status status-Active">' +
+            esc(tp.length > 28 ? tp.substring(0, 28) + "..." : tp) +
+            "</div>" +
+            "</div>" +
+            '<h3 class="survey-title">' +
+            wrapTitle(nm, 30) +
+            "</h3>" +
+            '<div class="survey-meta">' +
+            '<span class="survey-id">ID: ' + esc(jidv) + '</span>' +
+            '<span class="survey-date">' + esc(cr) + "</span>" +
+            "</div>" +
+            '<div class="survey-progress">' +
+            '<div class="progress-info">' +
+            '<span class="progress-percentage ' +
+            prog.labelClass +
+            '">' +
+            esc(prog.label) +
+            "</span>" +
+            sentHtml +
+            "</div>" +
+            '<div class="progress-bar">' +
+            '<div class="progress-fill ' +
+            prog.fillClass +
+            '" style="width:' +
+            prog.width +
+            ';">' +
+            "</div>" +
+            "</div>" +
+            "</div>" +
+            '<div class="survey-actions">' +
+            '<a href="' +
+            detailHref +
+            '" class="btn-secondary">Manage build</a>' +
+            "</div>" +
+            "</div>"
           );
         }
         setV("jaRecentBuildsMarkup", parts.join(""));
@@ -1209,12 +1216,15 @@
         setV("jaBuildsLoadError", "");
         setV("jaBuildsPagination", renderBuildsPagination(hubUrl, buildsPage, totalPages, rowCount));
       }
-    } catch (e) {
+    }
+    catch (e) {
       var errMsg = "Could not read recent builds.";
       try {
         errMsg = e.message != null && e.message !== "" ? String(e.message) : String(e);
         if (errMsg.length > 400) errMsg = errMsg.substring(0, 400);
-      } catch (err2) {}
+      }
+      catch (err2) {
+      }
       setV("jaBuildsLoadError", errMsg);
       setV("recentBuildsOk", "false");
       setV("jaEmpty", "1");
@@ -1222,20 +1232,22 @@
       setV("jaBuildsPagination", "");
     }
   }
-
   if (isBrowseMode()) {
     setV("browseMode", "1");
     var browsePage = parseBrowsePage(getAmpVar("browsePage"));
     if (!browsePage || browsePage === 1) {
       try {
         browsePage = parseBrowsePage(Request.GetQueryStringParameter("browsePage"));
-      } catch (browsePageEx) {}
+      }
+      catch (browsePageEx) {
+      }
     }
     setV("browsePage", String(browsePage));
     var authResult = fetchHomeRestAuth();
     if (authResult.error) {
       setV("jaBrowseError", authResult.error);
-    } else {
+    }
+    else {
       try {
         var listUrl = buildJourneyListUrl(authResult.subdomain, browsePage, BROWSE_PAGE_SIZE);
         var listResp = homeHttpGet(authResult.token, listUrl);
@@ -1244,14 +1256,16 @@
           setV(
             "jaBrowseError",
             "Journey API HTTP " +
-              listResp.status +
-              (listErrBody ? ": " + listErrBody : ".")
+            listResp.status +
+            (listErrBody ? ": " + listErrBody : ".")
           );
-        } else {
+        }
+        else {
           var parsed = null;
           try {
             parsed = Platform.Function.ParseJSON(listResp.body);
-          } catch (listParseEx) {
+          }
+          catch (listParseEx) {
             setV("jaBrowseError", "Journey API returned invalid JSON.");
             parsed = null;
           }
@@ -1271,14 +1285,15 @@
           setV(
             "jaBrowseHint",
             "Page " +
-              browsePage +
-              " of " +
-              totalPages +
-              ". Search filters journeys on this page."
+            browsePage +
+            " of " +
+            totalPages +
+            ". Search filters journeys on this page."
           );
           if (parsed && !items.length) {
             setV("jaBrowseError", "No journeys returned from Journey Builder.");
-          } else if (items.length) {
+          }
+          else if (items.length) {
             var existing = loadExistingJourneyIds();
             var hubUrl = getAmpVar("hubUrl");
             setV("jaBrowseMarkup", renderBrowseJourneyCards(items, existing, hubUrl));
@@ -1288,28 +1303,25 @@
             );
           }
         }
-      } catch (browseEx) {
+      }
+      catch (browseEx) {
         setV("jaBrowseError", browseEx.message != null ? String(browseEx.message) : String(browseEx));
       }
     }
   }
-  
-  </script>
-  <script runat="server" language="javascript">
+</script>
+<script runat="server" language="javascript">
   Platform.Load("Core", "1.1");
-
   function escJsonSendLog(v) {
     if (v == null || v === undefined) return "";
     return String(v).replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
   }
-
   function rowHasDeFields(row) {
     if (row == null || typeof row !== "object") return false;
     return (
       fieldValSendLog(row, ["Specialty", "SpecialtyName", "MonthIndex", "MonthLabel", "Responses"]) != null
     );
   }
-
   function fieldValSendLog(row, names) {
     var i, n, k, rowKeys, target, v;
     if (row == null) return null;
@@ -1335,7 +1347,6 @@
     }
     return null;
   }
-
   function coerceSendLogRows(raw) {
     if (raw == null) return [];
     var r = raw;
@@ -1351,10 +1362,10 @@
     if (typeof r === "object" && rowHasDeFields(r)) return [r];
     return [];
   }
-
   function retrieveDeRows(deKey) {
     var keys = [];
-    var seen = {};
+    var seen = {
+    };
     var variants = [deKey, String(deKey).toLowerCase(), String(deKey).toUpperCase()];
     var i, k, rows;
     for (i = 0; i < variants.length; i++) {
@@ -1367,7 +1378,9 @@
       try {
         rows = coerceSendLogRows(DataExtension.Init(keys[i]).Rows.Retrieve());
         if (rows.length) return rows;
-      } catch (e0) {}
+      }
+      catch (e0) {
+      }
     }
     for (i = 0; i < keys.length; i++) {
       try {
@@ -1382,22 +1395,27 @@
           )
         );
         if (rows.length) return rows;
-      } catch (e1) {}
+      }
+      catch (e1) {
+      }
     }
     return [];
   }
-
   function setChartVar(key, val) {
     try {
       Platform.Variable.SetValue("@" + key, val);
-    } catch (e0) {}
+    }
+    catch (e0) {
+    }
     try {
       Platform.Variable.SetValue(key, val);
-    } catch (e1) {}
+    }
+    catch (e1) {
+    }
   }
-
   function loadSendLogSeries(deKey) {
-    var out = { labels: [], responses: [], hasData: false };
+    var out = {
+      labels: [], responses: [], hasData: false };
     try {
       var rows = retrieveDeRows(deKey);
       rows.sort(function (a, b) {
@@ -1406,7 +1424,8 @@
         if (ai < bi) return -1;
         if (ai > bi) return 1;
         return 0;
-      });
+      }
+               );
       var i, label, resp, respNum;
       for (i = 0; i < rows.length; i++) {
         label = fieldValSendLog(rows[i], ["MonthLabel", "monthLabel"]);
@@ -1417,10 +1436,11 @@
         out.responses.push(respNum);
         if (respNum > 0) out.hasData = true;
       }
-    } catch (e0) {}
+    }
+    catch (e0) {
+    }
     return out;
   }
-
   function seriesToJsonKey(series, keyName) {
     var labels = [];
     var i;
@@ -1435,576 +1455,680 @@
       '  }'
     );
   }
-
   var s12 = loadSendLogSeries("sst_de_send_log_12_months");
   var s6 = loadSendLogSeries("sst_de_send_log_6_months");
   var s30 = loadSendLogSeries("sst_de_send_log_30_days");
   var chartJson =
-    "{\n" +
-    seriesToJsonKey(s12, "12months") + ",\n" +
-    seriesToJsonKey(s6, "6months") + ",\n" +
-    seriesToJsonKey(s30, "30days") + "\n" +
-    "}";
-
+      "{\n" +
+      seriesToJsonKey(s12, "12months") + ",\n" +
+      seriesToJsonKey(s6, "6months") + ",\n" +
+      seriesToJsonKey(s30, "30days") + "\n" +
+      "}";
   setChartVar("sendLogChartJson", chartJson);
-  </script>
-  <title>Self Service Dashboard - Magmutual</title>
-  <link rel="icon" href="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" type="image/png">
-%%[ SET @activeNav = "home" ]%%
-  <div class="dashboard-layout">
-    %%=ContentBlockByKey("sst_shell_sidebar")=%%
-    <main class="main-content">
-      <!-- Breadcrumb Section (Hidden by default) -->
-      <div class="breadcrumb-section" id="breadcrumbSection" style="display: none;">
-        <div class="breadcrumb">
-          <a href="#" onclick="showDashboard(); return false;" class="breadcrumb-link">Journey home</a>
-          <span class="breadcrumb-separator">/</span>
-          <span class="breadcrumb-current">Recent builds</span>
+</script>
+<title>Self Service Dashboard - Magmutual
+</title>
+<link rel="icon" href="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" type="image/png">
+<div class="dashboard-layout">
+  <!-- Modern Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <img style="filter: invert(1);" src="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" alt="MagMutual">
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section">
+        <span class="nav-section-title">MENU</span>
+      </div>
+      <a class="nav-link active" href="%%=v(@hubUrl)=%%">
+        <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/>
+        </svg>
+        <span>Builder home</span>
+      </a>
+      <a class="nav-link" href="#" onclick="showAllJourneys(); return false;">
+        <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/>
+        </svg>
+        <span>Recent builds</span>
+      </a>
+      <a class="nav-link" href="#" onclick="showReports(); return false;">
+        <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M9 11H7v6h2v-6zm4 0h-2v6h2v-6zm4 0h-2v6h2v-6zM5 20h14V4H5v16zm14 2H5c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v16c0 1.1-.9 2-2 2z"/>
+        </svg>
+        <span>Performance</span>
+      </a>
+      <a class="nav-link" href="#" onclick="showResponses(); return false;">
+        <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M20 6h-2.18c.11-.31.18-.65.18-1a2.996 2.996 0 0 0-5.5-1.65l-.5.67-.5-.68C10.96 2.54 10 2 10 2 10 2 9 3 8.18 4H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-5-2c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zM9 4c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1z"/>
+        </svg>
+        <span>Deployment</span>
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="sidebar-user">
+        <div class="user-avatar">%%=v(@envAvatarLetter)=%%</div>
+        <div class="user-info">
+          <div class="user-name">%%=v(@envDisplayName)=%%</div>
+          <div class="user-email">%%=v(@envDisplayEmail)=%%</div>
         </div>
       </div>
-  
-      <!-- Hero Section -->
-      <div class="hero-section" id="heroSection">
-        <div class="hero-content">
-          <div class="hero-badge">MAKE A JOURNEY, DATA EXTENSION, AND AUTOMATIONS</div>
-          <h1>Quickly build and monitor<br> journeys in Marketing Cloud</h1>
-          <p>Central hub to spin up emails, journeys, data extensions, automations and connect Salesforce campaigns to track engagements.</p>
-          <button type="button" class="hero-cta" id="heroOpenBuilderBtn" onclick="toggleJourneyBuilderPanel(event)">
-            Start building
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/>
-            </svg>
-          </button>
+    </div>
+  </aside>
+  <!-- Main Content -->
+  <main class="main-content">
+    <!-- Breadcrumb Section (Hidden by default) -->
+    <div class="breadcrumb-section" id="breadcrumbSection" style="display: none;">
+      <div class="breadcrumb">
+        <a href="#" onclick="showDashboard(); return false;" class="breadcrumb-link">Journey home</a>
+        <span class="breadcrumb-separator">/</span>
+        <span class="breadcrumb-current">Recent builds</span>
+      </div>
+    </div>
+    <!-- Hero Section -->
+    <div class="hero-section" id="heroSection">
+      <div class="hero-content">
+        <div class="hero-badge">MAKE A JOURNEY, DATA EXTENSION, AND AUTOMATIONS
         </div>
-        <div class="hero-illustration">
-          <div class="floating-card card-1">
-            <div class="mini-chart"></div>
+        <h1>Quickly build and monitor
+          <br> journeys in Marketing Cloud
+        </h1>
+        <p>Central hub to spin up emails, journeys, data extensions, automations and connect Salesforce campaigns to track engagements.
+        </p>
+        <button type="button" class="hero-cta" id="heroOpenBuilderBtn" onclick="toggleJourneyBuilderPanel(event)">
+          Start building
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/>
+          </svg>
+        </button>
+      </div>
+      <div class="hero-illustration">
+        <div class="floating-card card-1">
+          <div class="mini-chart">
           </div>
-          <div class="floating-card card-2">
-            <div class="mini-stat">85%</div>
+        </div>
+        <div class="floating-card card-2">
+          <div class="mini-stat">85%
           </div>
-          <div class="floating-card card-3">
-            <div class="mini-progress"></div>
+        </div>
+        <div class="floating-card card-3">
+          <div class="mini-progress">
           </div>
         </div>
       </div>
-  
-      <div class="journey-builder-panel-wrap" id="journeyBuilderPanel" aria-hidden="true">
-        <div class="journey-builder-panel">
-          <div class="journey-builder-panel-head">
-            <h2 class="journey-builder-panel-title">Choose a builder path</h2>
-            <button type="button" class="journey-builder-panel-close" onclick="closeJourneyBuilderPanel()" aria-label="Close">✕</button>
-          </div>
-          <div class="journey-builder-panel-head">
-            <h2 class="" style="
-      color: gray;
-      font-weight: 400;
-      font-size: 17px;
-      margin-bottom: 20px;
-  ">What do you want to build?</h2>
-            
-          </div>
-          <div class="journey-builder-panel-cards">
-            <a href="%%=v(@emailOnlyUrl)=%%" class="journey-builder-choice">
-              <span class="journey-builder-choice-label">Create an Email</span>
-              <span class="journey-builder-choice-hint">Spin up a new email — no journey</span>
-            </a>
-            <a href="%%=v(@quickSendUrl)=%%" class="journey-builder-choice">
-              <span class="journey-builder-choice-label">Quick Send</span>
-              <span class="journey-builder-choice-hint">Distributed marketing cloud</span>
-            </a>
-            <a href="%%=v(@campaignAutomationUrl)=%%" class="journey-builder-choice">
-              <span class="journey-builder-choice-label">Automation</span>
-              <span class="journey-builder-choice-hint">Dynamic sender profile</span>
-            </a>
-            <a href="%%=v(@campaignOnlyUrl)=%%" class="journey-builder-choice">
-              <span class="journey-builder-choice-label">Campaign Journey</span>
-              <span class="journey-builder-choice-hint">Single sender profile across messages</span>
-            </a>
-            <a href="%%=v(@surveyJourneyUrl)=%%" class="journey-builder-choice">
-              <span class="journey-builder-choice-label">Survey</span>
-              <span class="journey-builder-choice-hint">Campaign triggered survey</span>
-            </a>
-          </div>
+    </div>
+    <div class="journey-builder-panel-wrap" id="journeyBuilderPanel" aria-hidden="true">
+      <div class="journey-builder-panel">
+        <div class="journey-builder-panel-head">
+          <h2 class="journey-builder-panel-title">Choose a builder path
+          </h2>
+          <button type="button" class="journey-builder-panel-close" onclick="closeJourneyBuilderPanel()" aria-label="Close">✕</button>
+        </div>
+        <div class="journey-builder-panel-head">
+          <h2 class="" style="
+                              color: gray;
+                              font-weight: 400;
+                              font-size: 17px;
+                              margin-bottom: 20px;
+                              ">What do you want to build?
+          </h2>
+        </div>
+        <div class="journey-builder-panel-cards">
+          <a href="%%=v(@emailOnlyUrl)=%%" class="journey-builder-choice">
+            <span class="journey-builder-choice-label">Create an Email</span>
+            <span class="journey-builder-choice-hint">Spin up a new email — no journey</span>
+          </a>
+          <a href="%%=v(@quickSendUrl)=%%" class="journey-builder-choice">
+            <span class="journey-builder-choice-label">Quick Send</span>
+            <span class="journey-builder-choice-hint">Distributed marketing cloud</span>
+          </a>
+          <a href="%%=v(@campaignAutomationUrl)=%%" class="journey-builder-choice">
+            <span class="journey-builder-choice-label">Automation</span>
+            <span class="journey-builder-choice-hint">Full journeys, entry sources, and activities</span>
+          </a>
+          <a href="%%=v(@campaignOnlyUrl)=%%" class="journey-builder-choice">
+            <span class="journey-builder-choice-label">Campaign Journey</span>
+            <span class="journey-builder-choice-hint">Consistent sender profile across messages</span>
+          </a>
+          <a href="%%=v(@surveyJourneyUrl)=%%" class="journey-builder-choice">
+            <span class="journey-builder-choice-label">Survey</span>
+            <span class="journey-builder-choice-hint">Campaign triggered survey</span>
+          </a>
+          <a href="%%=v(@SFsurveyJourneyUrl)=%%" class="journey-builder-choice">
+            <span class="journey-builder-choice-label">Salesforce Survey</span>
+            <span class="journey-builder-choice-hint">Email journey with link to SF Survey Invitation</span>
+          </a>
         </div>
       </div>
-  
-  
-  
-      <div class="section-header">
-        <h2>Engagement pulse</h2>
-        <div class="activity-filters">
-          <button class="activity-filter active" onclick="filterActivity('12months')" data-period="12months">12 months</button>
-          <button class="activity-filter" onclick="filterActivity('6months')" data-period="6months">6 months</button>
-          <button class="activity-filter" onclick="filterActivity('30days')" data-period="30days">30 days</button>
-        </div>
+    </div>
+    <div class="section-header">
+      <h2>Engagement pulse
+      </h2>
+      <div class="activity-filters">
+        <button class="activity-filter active" onclick="filterActivity('12months')" data-period="12months">12 months</button>
+        <button class="activity-filter" onclick="filterActivity('6months')" data-period="6months">6 months</button>
+        <button class="activity-filter" onclick="filterActivity('30days')" data-period="30days">30 days</button>
       </div>
-          <!-- Statistics Cards -->
-      <div class="stats-grid">
-        %%[
+    </div>
+    <!-- Statistics Cards -->
+    <div class="stats-grid">
+      %%[
           VAR @surveyCount, @qsCount, @emailsCount, @automationsCount, @oneSend
           SET @surveyCount = @allJourneysTotal
           SET @emailsCount = @allJourneysTotal
           SET @qsCount = @quickSendsTotal
           SET @automationsCount = @automationsTotal
           SET @oneSend = @oneSendTotal
-        ]%%
-        
-        <div class="stat-card primary">
-          <div class="stat-icon" style="color: #000000;">    
-        <svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" 
-  viewBox="0 0 384.891 384.891" xml:space="preserve">
-<g>
- <g>
-  <rect x="13.438" y="207.825" style="fill:#CAA977;" width="214.023" height="154.009"/>
-  <rect y="170.511" style="fill:#DFCAA3;" width="227.461" height="37.314"/>
-  <rect x="227.461" y="207.825" style="fill:#A88D63;" width="143.992" height="154.009"/>
-  <rect x="227.461" y="170.511" style="fill:#CAA977;" width="157.43" height="37.314"/>
-  <path style="fill:#333E48;" d="M332.096,230.972c6.074,0,11,4.925,11,11s-4.926,11-11,11H285.82c-6.076,0-11-4.925-11-11
-   s4.924-11,11-11H332.096z"/>
-  <rect x="13.437" y="284.829" style="fill:#D16A70;" width="95.963" height="40.9"/>
- </g>
- <g>
-  <rect x="95.475" y="51.815" style="fill:#CAA977;" width="164.949" height="118.695"/>
-  <rect x="85.117" y="23.057" style="fill:#DFCAA3;" width="175.307" height="28.759"/>
-  <rect x="260.424" y="51.815" style="fill:#A88D63;" width="110.977" height="118.695"/>
-  <rect x="260.424" y="23.057" style="fill:#CAA977;" width="121.332" height="28.759"/>
-  <path style="fill:#333E48;" d="M341.066,69.654c4.682,0,8.478,3.796,8.478,8.478c0,4.683-3.797,8.479-8.478,8.479h-35.664
-   c-4.684,0-8.479-3.796-8.479-8.479c0-4.682,3.795-8.478,8.479-8.478C305.402,69.654,341.066,69.654,341.066,69.654z"/>
-  <rect x="95.475" y="111.163" style="fill:#D16A70;" width="73.959" height="31.521"/>
- </g>
-</g>
-</svg>
-          </div>
-          <div class="stat-content">
-            <div class="stat-value">%%=v(@surveyCount)=%%</div>
-            <div class="stat-label">All builds</div>
-            <div class="stat-change">Self serviced journeys</div>
-          </div>
+]%%
+      <div class="stat-card primary">
+        <div class="stat-icon" style="color: #000000;">    
+          <svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" 
+               viewBox="0 0 384.891 384.891" xml:space="preserve">
+            <g>
+              <g>
+                <rect x="13.438" y="207.825" style="fill:#CAA977;" width="214.023" height="154.009"/>
+                <rect y="170.511" style="fill:#DFCAA3;" width="227.461" height="37.314"/>
+                <rect x="227.461" y="207.825" style="fill:#A88D63;" width="143.992" height="154.009"/>
+                <rect x="227.461" y="170.511" style="fill:#CAA977;" width="157.43" height="37.314"/>
+                <path style="fill:#333E48;" d="M332.096,230.972c6.074,0,11,4.925,11,11s-4.926,11-11,11H285.82c-6.076,0-11-4.925-11-11
+                                               s4.924-11,11-11H332.096z"/>
+                <rect x="13.437" y="284.829" style="fill:#D16A70;" width="95.963" height="40.9"/>
+              </g>
+              <g>
+                <rect x="95.475" y="51.815" style="fill:#CAA977;" width="164.949" height="118.695"/>
+                <rect x="85.117" y="23.057" style="fill:#DFCAA3;" width="175.307" height="28.759"/>
+                <rect x="260.424" y="51.815" style="fill:#A88D63;" width="110.977" height="118.695"/>
+                <rect x="260.424" y="23.057" style="fill:#CAA977;" width="121.332" height="28.759"/>
+                <path style="fill:#333E48;" d="M341.066,69.654c4.682,0,8.478,3.796,8.478,8.478c0,4.683-3.797,8.479-8.478,8.479h-35.664
+                                               c-4.684,0-8.479-3.796-8.479-8.479c0-4.682,3.795-8.478,8.479-8.478C305.402,69.654,341.066,69.654,341.066,69.654z"/>
+                <rect x="95.475" y="111.163" style="fill:#D16A70;" width="73.959" height="31.521"/>
+              </g>
+            </g>
+          </svg>
         </div>
-        
-        <div class="stat-card">
-          <div class="stat-icon success" style="color: #000000;">
-            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M13.025 17H3.707l5.963-5.963L12 12.83l2.33-1.794 1.603 1.603a5.463 5.463 0 0 1 1.004-.41l-1.808-1.808L21 5.9v6.72a5.514 5.514 0 0 1 1 .64V5.5A1.504 1.504 0 0 0 20.5 4h-17A1.504 1.504 0 0 0 2 5.5v11A1.5 1.5 0 0 0 3.5 18h9.525c-.015-.165-.025-.331-.025-.5s.01-.335.025-.5zM3 16.293V5.901l5.871 4.52zM20.5 5c.009 0 .016.005.025.005L12 11.57 3.475 5.005c.009 0 .016-.005.025-.005zm-2 8a4.505 4.505 0 0 0-4.5 4.5 4.403 4.403 0 0 0 .05.5 4.49 4.49 0 0 0 4.45 4h.5v-1h-.5a3.495 3.495 0 0 1-3.45-3 3.455 3.455 0 0 1-.05-.5 3.498 3.498 0 0 1 5.947-2.5H20v.513A2.476 2.476 0 0 0 18.5 15a2.5 2.5 0 1 0 1.733 4.295A1.497 1.497 0 0 0 23 18.5v-1a4.555 4.555 0 0 0-4.5-4.5zm0 6a1.498 1.498 0 0 1-1.408-1 1.483 1.483 0 0 1-.092-.5 1.5 1.5 0 0 1 3 0 1.483 1.483 0 0 1-.092.5 1.498 1.498 0 0 1-1.408 1zm3.5-.5a.5.5 0 0 1-1 0v-3.447a3.639 3.639 0 0 1 1 2.447z"/><path fill="none" d="M0 0h24v24H0z"/></svg>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@surveyCount)=%%</div>
+          <div class="stat-label">All builds
           </div>
-          <div class="stat-content">
-            <div class="stat-value">%%=v(@emailsCount)=%%</div>
-            <div class="stat-label">Emails Created</div>
-            <div class="stat-change">Illustrative totals</div>
-          </div>
-        </div>
-        
-        <div class="stat-card">
-          <div class="stat-icon warning" style="color: #000000;">
-        <svg  viewBox="0 0 32 32" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-<g id="icomoon-ignore">
-</g>
-<path d="M16.533 8.562v-1.647c0-0.487 1.029-1.131 1.855-1.649 1.184-0.741 2.41-1.509 2.41-2.627v-2.633h-1.066v2.633c0 0.527-1.058 1.19-1.909 1.723-1.158 0.725-2.356 1.475-2.356 2.552v1.647c-4.167 0.268-7.464 3.626-7.464 7.739v7.927c0 4.288 3.58 7.765 7.997 7.765s7.997-3.477 7.997-7.765v-7.927c0-4.114-3.297-7.472-7.464-7.739zM22.931 16.301v0.765h-6.398v-7.438c3.572 0.265 6.398 3.153 6.398 6.673zM9.069 16.301c0-3.52 2.825-6.408 6.398-6.673v7.438h-6.398v-0.765zM16 30.927c-3.821 0-6.931-3.005-6.931-6.699v-6.096h13.861v6.096c0 3.694-3.109 6.699-6.931 6.699z" fill="#000000">
-
-</path>
-</svg>
-          </div>
-          <div class="stat-content">
-            <div class="stat-value">%%=v(@qsCount)=%%</div>
-            <div class="stat-label">Quick Send</div>
-            <div class="stat-change">Distributed marketing campaigns</div>
-          </div>
-        </div>
-        
-        <div class="stat-card">
-          <div class="stat-icon info" style="color: #000000;">
-            
-    <svg version="1.1" id="Capa_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" 
-  viewBox="0 0 459.926 459.926" xml:space="preserve">
-<g>
- <g>
-  <path style="fill:#010002;" d="M229.963,45.76c90.863,0,165.545,70.421,172.46,159.542l-32-32l-8.437,8.437l42.765,42.765h8.437
-   l46.738-46.744l-8.437-8.437l-37.018,37.024c-6.432-96.204-86.699-172.52-184.508-172.52
-   c-101.998,0-184.973,82.981-184.973,184.973h11.934C56.924,123.389,134.553,45.76,229.963,45.76z"/>
-  <path style="fill:#010002;" d="M229.963,414.166c-90.863,0-165.545-70.421-172.46-159.542l32,32l8.437-8.437l-42.765-42.765
-   h-8.437L0,282.161l8.437,8.437l37.018-37.018c6.432,96.204,86.699,172.52,184.508,172.52
-   c101.998,0,184.973-82.975,184.973-184.973h-11.934C403.002,336.537,325.373,414.166,229.963,414.166z"/>
- </g>
-</g>
-</svg>
-            
-          </div>
-          <div class="stat-content">
-            <div class="stat-value">%%=v(@automationsCount)=%%</div>
-            <div class="stat-label">Automations</div>
-            <div class="stat-change">Automations created</div>
-          </div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-icon info" style="color: #000000;">
-            
-              <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path fill-rule="evenodd" clip-rule="evenodd" d="M10 18C8.89543 18 8 18.8954 8 20V26C8 27.1046 8.89543 28 10 28H14V18H10ZM14 30H12V38C12 38.5523 12.4477 39 13 39C13.5523 39 14 38.5523 14 38V30ZM10 30C7.79086 30 6 28.2091 6 26V20C6 17.7909 7.79086 16 10 16H15C15.5523 16 16 16.4477 16 17V38C16 39.6569 14.6569 41 13 41C11.3431 41 10 39.6569 10 38V30Z" fill="#333333"/>
-<path fill-rule="evenodd" clip-rule="evenodd" d="M30.4812 7.12339C30.8012 7.29903 31 7.63502 31 8V18C33.2091 18 35 19.7909 35 22V23C35 25.2091 33.2091 27 31 27V37C31 37.365 30.8012 37.701 30.4812 37.8766C30.1613 38.0522 29.771 38.0396 29.4631 37.8437L18.4631 30.8437C18.1747 30.6601 18 30.3419 18 30V15C18 14.6581 18.1747 14.3399 18.4631 14.1563L29.4631 7.15634C29.771 6.96039 30.1613 6.94776 30.4812 7.12339ZM31 25C32.1046 25 33 24.1046 33 23V22C33 20.8954 32.1046 20 31 20V25ZM20 15.5489V29.4511L29 35.1783V9.82167L20 15.5489Z" fill="#333333"/>
-<path fill-rule="evenodd" clip-rule="evenodd" d="M40.832 17.4453C41.1384 17.9048 41.0142 18.5257 40.5547 18.832L37.5547 20.832C37.0952 21.1384 36.4743 21.0142 36.1679 20.5547C35.8616 20.0952 35.9858 19.4743 36.4453 19.1679L39.4453 17.1679C39.9048 16.8616 40.5257 16.9858 40.832 17.4453ZM36 24C36 23.4477 36.4477 23 37 23H41C41.5523 23 42 23.4477 42 24C42 24.5523 41.5523 25 41 25H37C36.4477 25 36 24.5523 36 24ZM36.1679 27.4453C36.4743 26.9858 37.0952 26.8616 37.5547 27.1679L40.5547 29.1679C41.0142 29.4743 41.1384 30.0952 40.832 30.5547C40.5257 31.0142 39.9048 31.1384 39.4453 30.832L36.4453 28.832C35.9858 28.5257 35.8616 27.9048 36.1679 27.4453Z" fill="#333333"/>
-</svg>
-            
-          </div>
-          <div class="stat-content">
-            <div class="stat-value">%%=v(@oneSend)=%%</div>
-            <div class="stat-label">Campaign journey</div>
-            <div class="stat-change">Campaign triggered journeys</div>
+          <div class="stat-change">Self serviced journeys
           </div>
         </div>
       </div>
-      <div class="chart-container home-engagement-chart" id="homeEngagementChartWrap">
-        <div class="chart-header">
-          <div class="chart-number">☈</div>
-          <div class="chart-content">
-            <div class="chart-text">Engagement Trends</div>
-            <div class="chart-type">Emails sent over time</div>
+      <div class="stat-card">
+        <div class="stat-icon success" style="color: #000000;">
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M13.025 17H3.707l5.963-5.963L12 12.83l2.33-1.794 1.603 1.603a5.463 5.463 0 0 1 1.004-.41l-1.808-1.808L21 5.9v6.72a5.514 5.514 0 0 1 1 .64V5.5A1.504 1.504 0 0 0 20.5 4h-17A1.504 1.504 0 0 0 2 5.5v11A1.5 1.5 0 0 0 3.5 18h9.525c-.015-.165-.025-.331-.025-.5s.01-.335.025-.5zM3 16.293V5.901l5.871 4.52zM20.5 5c.009 0 .016.005.025.005L12 11.57 3.475 5.005c.009 0 .016-.005.025-.005zm-2 8a4.505 4.505 0 0 0-4.5 4.5 4.403 4.403 0 0 0 .05.5 4.49 4.49 0 0 0 4.45 4h.5v-1h-.5a3.495 3.495 0 0 1-3.45-3 3.455 3.455 0 0 1-.05-.5 3.498 3.498 0 0 1 5.947-2.5H20v.513A2.476 2.476 0 0 0 18.5 15a2.5 2.5 0 1 0 1.733 4.295A1.497 1.497 0 0 0 23 18.5v-1a4.555 4.555 0 0 0-4.5-4.5zm0 6a1.498 1.498 0 0 1-1.408-1 1.483 1.483 0 0 1-.092-.5 1.5 1.5 0 0 1 3 0 1.483 1.483 0 0 1-.092.5 1.498 1.498 0 0 1-1.408 1zm3.5-.5a.5.5 0 0 1-1 0v-3.447a3.639 3.639 0 0 1 1 2.447z"/>
+            <path fill="none" d="M0 0h24v24H0z"/>
+          </svg>
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@emailsCount)=%%</div>
+          <div class="stat-label">Emails Created
           </div>
-        </div>
-        <div class="chart-wrapper">
-          <canvas id="activityChart"></canvas>
-        </div>
-      </div>
-      
-  
-      
-      <!-- Hidden data for JavaScript -->
-      <script type="application/json" id="activityChartData">
-      %%=TreatAsContent(@sendLogChartJson)=%%
-      </script>
-  
-      <!-- Hidden data for Reports Chart -->
-      <script type="application/json" id="reportsChartData">
-      %%=TreatAsContent(@sendLogChartJson)=%%
-      </script>
-  
-      <div class="section-header recent-builds-header" id="allSurveysSection">
-        <div class="recent-builds-header-left">
-          <h2>Recent builds</h2>
-          %%[ IF @browseMode == "1" THEN ]%%
-          <p class="recent-builds-browse-hint">%%=IIF(NOT Empty(@jaBrowseHint), @jaBrowseHint, "Select a journey to add.")=%%</p>
-          %%[ ENDIF ]%%
-          %%[ IF NOT Empty(@addBuildMessage) THEN ]%%
-          <p class="recent-builds-flash">%%=v(@addBuildMessage)=%%</p>
-          %%[ ENDIF ]%%
-          %%[ IF NOT Empty(@addBuildError) THEN ]%%
-          <p class="recent-builds-flash recent-builds-flash-error">%%=v(@addBuildError)=%%</p>
-          %%[ ENDIF ]%%
-        </div>
-        <div class="recent-builds-header-right">
-          %%[ IF @browseMode == "1" THEN ]%%
-          <a href="%%=v(@hubUrl)=%%" class="filter-btn">Cancel</a>
-          %%[ ELSE ]%%
-          <button type="button" class="btn-add-journey" id="browseJourneysBtn" onclick="openBrowseJourneys()" title="Add existing journey" aria-label="Add existing journey">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-              <path d="M12 5v14M5 12h14"/>
-            </svg>
-          </button>
-          %%[ ENDIF ]%%
-          <div class="search-section">
-            <input class="search-input" type="text" placeholder="Search journeys by name or ID..." id="journeySearch" onkeyup="searchJourneys()">
-            <button class="filter-btn" onclick="toggleFilter()">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/>
-              </svg>
-              Filter
-            </button>
+          <div class="stat-change">Illustrative totals
           </div>
         </div>
       </div>
-      
-      <div class="surveys-grid" id="surveysGrid">
+      <div class="stat-card">
+        <div class="stat-icon warning" style="color: #000000;">
+          <svg  viewBox="0 0 32 32" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+            <g id="icomoon-ignore">
+            </g>
+            <path d="M16.533 8.562v-1.647c0-0.487 1.029-1.131 1.855-1.649 1.184-0.741 2.41-1.509 2.41-2.627v-2.633h-1.066v2.633c0 0.527-1.058 1.19-1.909 1.723-1.158 0.725-2.356 1.475-2.356 2.552v1.647c-4.167 0.268-7.464 3.626-7.464 7.739v7.927c0 4.288 3.58 7.765 7.997 7.765s7.997-3.477 7.997-7.765v-7.927c0-4.114-3.297-7.472-7.464-7.739zM22.931 16.301v0.765h-6.398v-7.438c3.572 0.265 6.398 3.153 6.398 6.673zM9.069 16.301c0-3.52 2.825-6.408 6.398-6.673v7.438h-6.398v-0.765zM16 30.927c-3.821 0-6.931-3.005-6.931-6.699v-6.096h13.861v6.096c0 3.694-3.109 6.699-6.931 6.699z" fill="#000000">
+            </path>
+          </svg>
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@qsCount)=%%</div>
+          <div class="stat-label">Quick Send
+          </div>
+          <div class="stat-change">Distributed marketing campaigns
+          </div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon info" style="color: #000000;">
+          <svg version="1.1" id="Capa_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" 
+               viewBox="0 0 459.926 459.926" xml:space="preserve">
+            <g>
+              <g>
+                <path style="fill:#010002;" d="M229.963,45.76c90.863,0,165.545,70.421,172.46,159.542l-32-32l-8.437,8.437l42.765,42.765h8.437
+                                               l46.738-46.744l-8.437-8.437l-37.018,37.024c-6.432-96.204-86.699-172.52-184.508-172.52
+                                               c-101.998,0-184.973,82.981-184.973,184.973h11.934C56.924,123.389,134.553,45.76,229.963,45.76z"/>
+                <path style="fill:#010002;" d="M229.963,414.166c-90.863,0-165.545-70.421-172.46-159.542l32,32l8.437-8.437l-42.765-42.765
+                                               h-8.437L0,282.161l8.437,8.437l37.018-37.018c6.432,96.204,86.699,172.52,184.508,172.52
+                                               c101.998,0,184.973-82.975,184.973-184.973h-11.934C403.002,336.537,325.373,414.166,229.963,414.166z"/>
+              </g>
+            </g>
+          </svg>
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@automationsCount)=%%</div>
+          <div class="stat-label">Automations
+          </div>
+          <div class="stat-change">Automations created
+          </div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon info" style="color: #000000;">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M10 18C8.89543 18 8 18.8954 8 20V26C8 27.1046 8.89543 28 10 28H14V18H10ZM14 30H12V38C12 38.5523 12.4477 39 13 39C13.5523 39 14 38.5523 14 38V30ZM10 30C7.79086 30 6 28.2091 6 26V20C6 17.7909 7.79086 16 10 16H15C15.5523 16 16 16.4477 16 17V38C16 39.6569 14.6569 41 13 41C11.3431 41 10 39.6569 10 38V30Z" fill="#333333"/>
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M30.4812 7.12339C30.8012 7.29903 31 7.63502 31 8V18C33.2091 18 35 19.7909 35 22V23C35 25.2091 33.2091 27 31 27V37C31 37.365 30.8012 37.701 30.4812 37.8766C30.1613 38.0522 29.771 38.0396 29.4631 37.8437L18.4631 30.8437C18.1747 30.6601 18 30.3419 18 30V15C18 14.6581 18.1747 14.3399 18.4631 14.1563L29.4631 7.15634C29.771 6.96039 30.1613 6.94776 30.4812 7.12339ZM31 25C32.1046 25 33 24.1046 33 23V22C33 20.8954 32.1046 20 31 20V25ZM20 15.5489V29.4511L29 35.1783V9.82167L20 15.5489Z" fill="#333333"/>
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M40.832 17.4453C41.1384 17.9048 41.0142 18.5257 40.5547 18.832L37.5547 20.832C37.0952 21.1384 36.4743 21.0142 36.1679 20.5547C35.8616 20.0952 35.9858 19.4743 36.4453 19.1679L39.4453 17.1679C39.9048 16.8616 40.5257 16.9858 40.832 17.4453ZM36 24C36 23.4477 36.4477 23 37 23H41C41.5523 23 42 23.4477 42 24C42 24.5523 41.5523 25 41 25H37C36.4477 25 36 24.5523 36 24ZM36.1679 27.4453C36.4743 26.9858 37.0952 26.8616 37.5547 27.1679L40.5547 29.1679C41.0142 29.4743 41.1384 30.0952 40.832 30.5547C40.5257 31.0142 39.9048 31.1384 39.4453 30.832L36.4453 28.832C35.9858 28.5257 35.8616 27.9048 36.1679 27.4453Z" fill="#333333"/>
+          </svg>
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@oneSend)=%%</div>
+          <div class="stat-label">Campaign journey
+          </div>
+          <div class="stat-change">Campaign triggered journeys
+          </div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon info" style="color: #000000;">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M10 18C8.89543 18 8 18.8954 8 20V26C8 27.1046 8.89543 28 10 28H14V18H10ZM14 30H12V38C12 38.5523 12.4477 39 13 39C13.5523 39 14 38.5523 14 38V30ZM10 30C7.79086 30 6 28.2091 6 26V20C6 17.7909 7.79086 16 10 16H15C15.5523 16 16 16.4477 16 17V38C16 39.6569 14.6569 41 13 41C11.3431 41 10 39.6569 10 38V30Z" fill="#333333"/>
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M30.4812 7.12339C30.8012 7.29903 31 7.63502 31 8V18C33.2091 18 35 19.7909 35 22V23C35 25.2091 33.2091 27 31 27V37C31 37.365 30.8012 37.701 30.4812 37.8766C30.1613 38.0522 29.771 38.0396 29.4631 37.8437L18.4631 30.8437C18.1747 30.6601 18 30.3419 18 30V15C18 14.6581 18.1747 14.3399 18.4631 14.1563L29.4631 7.15634C29.771 6.96039 30.1613 6.94776 30.4812 7.12339ZM31 25C32.1046 25 33 24.1046 33 23V22C33 20.8954 32.1046 20 31 20V25ZM20 15.5489V29.4511L29 35.1783V9.82167L20 15.5489Z" fill="#333333"/>
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M40.832 17.4453C41.1384 17.9048 41.0142 18.5257 40.5547 18.832L37.5547 20.832C37.0952 21.1384 36.4743 21.0142 36.1679 20.5547C35.8616 20.0952 35.9858 19.4743 36.4453 19.1679L39.4453 17.1679C39.9048 16.8616 40.5257 16.9858 40.832 17.4453ZM36 24C36 23.4477 36.4477 23 37 23H41C41.5523 23 42 23.4477 42 24C42 24.5523 41.5523 25 41 25H37C36.4477 25 36 24.5523 36 24ZM36.1679 27.4453C36.4743 26.9858 37.0952 26.8616 37.5547 27.1679L40.5547 29.1679C41.0142 29.4743 41.1384 30.0952 40.832 30.5547C40.5257 31.0142 39.9048 31.1384 39.4453 30.832L36.4453 28.832C35.9858 28.5257 35.8616 27.9048 36.1679 27.4453Z" fill="#333333"/>
+          </svg>
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@mcSurveysTotal)=%%</div>
+          <div class="stat-label">Survey journeys
+          </div>
+          <div class="stat-change">Journeys with surveys hosted in Marketing Cloud
+          </div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon info" style="color: #000000;">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M10 18C8.89543 18 8 18.8954 8 20V26C8 27.1046 8.89543 28 10 28H14V18H10ZM14 30H12V38C12 38.5523 12.4477 39 13 39C13.5523 39 14 38.5523 14 38V30ZM10 30C7.79086 30 6 28.2091 6 26V20C6 17.7909 7.79086 16 10 16H15C15.5523 16 16 16.4477 16 17V38C16 39.6569 14.6569 41 13 41C11.3431 41 10 39.6569 10 38V30Z" fill="#333333"/>
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M30.4812 7.12339C30.8012 7.29903 31 7.63502 31 8V18C33.2091 18 35 19.7909 35 22V23C35 25.2091 33.2091 27 31 27V37C31 37.365 30.8012 37.701 30.4812 37.8766C30.1613 38.0522 29.771 38.0396 29.4631 37.8437L18.4631 30.8437C18.1747 30.6601 18 30.3419 18 30V15C18 14.6581 18.1747 14.3399 18.4631 14.1563L29.4631 7.15634C29.771 6.96039 30.1613 6.94776 30.4812 7.12339ZM31 25C32.1046 25 33 24.1046 33 23V22C33 20.8954 32.1046 20 31 20V25ZM20 15.5489V29.4511L29 35.1783V9.82167L20 15.5489Z" fill="#333333"/>
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M40.832 17.4453C41.1384 17.9048 41.0142 18.5257 40.5547 18.832L37.5547 20.832C37.0952 21.1384 36.4743 21.0142 36.1679 20.5547C35.8616 20.0952 35.9858 19.4743 36.4453 19.1679L39.4453 17.1679C39.9048 16.8616 40.5257 16.9858 40.832 17.4453ZM36 24C36 23.4477 36.4477 23 37 23H41C41.5523 23 42 23.4477 42 24C42 24.5523 41.5523 25 41 25H37C36.4477 25 36 24.5523 36 24ZM36.1679 27.4453C36.4743 26.9858 37.0952 26.8616 37.5547 27.1679L40.5547 29.1679C41.0142 29.4743 41.1384 30.0952 40.832 30.5547C40.5257 31.0142 39.9048 31.1384 39.4453 30.832L36.4453 28.832C35.9858 28.5257 35.8616 27.9048 36.1679 27.4453Z" fill="#333333"/>
+          </svg>
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@salesforceSurveysTotal)=%%</div>
+          <div class="stat-label">Salesforce Survey journey
+          </div>
+          <div class="stat-change">SF Survey invitation journeys
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="chart-container home-engagement-chart" id="homeEngagementChartWrap">
+      <div class="chart-header">
+        <div class="chart-number">☈
+        </div>
+        <div class="chart-content">
+          <div class="chart-text">Engagement Trends
+          </div>
+          <div class="chart-type">Emails sent over time
+          </div>
+        </div>
+      </div>
+      <div class="chart-wrapper">
+        <canvas id="activityChart">
+        </canvas>
+      </div>
+    </div>
+    <!-- Hidden data for JavaScript -->
+    <script type="application/json" id="activityChartData">
+%%=TreatAsContent(@sendLogChartJson)=%%
+    </script>
+    <!-- Hidden data for Reports Chart -->
+    <script type="application/json" id="reportsChartData">
+%%=TreatAsContent(@sendLogChartJson)=%%
+    </script>
+    <div class="section-header recent-builds-header" id="allSurveysSection">
+      <div class="recent-builds-header-left">
+        <h2>Recent builds
+        </h2>
         %%[ IF @browseMode == "1" THEN ]%%
-        %%[ IF NOT Empty(@jaBrowseError) THEN ]%%
-        <div class="no-surveys-message" style="grid-column: 1 / -1;">
-          <div class="empty-state">
-            <h3>Could not load journeys</h3>
-            <p>%%=v(@jaBrowseError)=%%</p>
-            <a href="%%=v(@hubUrl)=%%" class="btn-primary" style="display:inline-block;margin-top:12px;text-decoration:none;">Back to Recent builds</a>
-          </div>
-        </div>
-        %%[ ELSE ]%%
-        %%=TreatAsContent(@jaBrowseMarkup)=%%
+        <p class="recent-builds-browse-hint">%%=IIF(NOT Empty(@jaBrowseHint), @jaBrowseHint, "Select a journey to add.")=%%</p>
         %%[ ENDIF ]%%
-        %%[ ELSEIF @recentBuildsOk == "true" AND @jaEmpty == "1" THEN ]%%
-        <div class="no-surveys-message">
-          <div class="empty-state">
-            <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-              <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/>
-              <path d="M9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/>
-            </svg>
-            <h3>No builds yet</h3>
-            <p>You haven't built anything yet.</p>
-          </div>
-        </div>
-        %%[ ELSEIF @recentBuildsOk == "true" THEN ]%%
-        %%=TreatAsContent(@jaRecentBuildsMarkup)=%%
-        %%[ ELSE ]%%
-        %%[ IF NOT Empty(@jaBuildsLoadError) THEN ]%%
-        <div class="no-surveys-message" style="grid-column: 1 / -1; margin-bottom: 0;">
-          <div class="empty-state" style="padding: 16px 20px;">
-            <p style="margin: 0; font-size: 14px;">Recent builds could not be loaded from the log.</p>
-            <p style="margin: 8px 0 0; font-size: 12px; opacity: 0.85;">%%=Replace(Replace(@jaBuildsLoadError,"\n"," "),"\r","")=%%</p>
-          </div>
-        </div>
+        %%[ IF NOT Empty(@addBuildMessage) THEN ]%%
+        <p class="recent-builds-flash">%%=v(@addBuildMessage)=%%</p>
         %%[ ENDIF ]%%
+        %%[ IF NOT Empty(@addBuildError) THEN ]%%
+        <p class="recent-builds-flash recent-builds-flash-error">%%=v(@addBuildError)=%%</p>
         %%[ ENDIF ]%%
       </div>
-
-      <div id="buildsPaginationSection">
+      <div class="recent-builds-header-right">
+        %%[ IF @browseMode == "1" THEN ]%%
+        <a href="%%=v(@hubUrl)=%%" class="filter-btn">Cancel</a>
+        %%[ ELSE ]%%
+        <button type="button" class="btn-add-journey" id="browseJourneysBtn" onclick="openBrowseJourneys()" title="Add existing journey" aria-label="Add existing journey">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+        </button>
+        %%[ ENDIF ]%%
+        <div class="search-section">
+          <input class="search-input" type="text" placeholder="Search journeys by name or ID..." id="journeySearch" onkeyup="searchJourneys()">
+          <button class="filter-btn" onclick="toggleFilter()">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/>
+            </svg>
+            Filter
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="surveys-grid" id="surveysGrid">
+      %%[ IF @browseMode == "1" THEN ]%%
+      %%[ IF NOT Empty(@jaBrowseError) THEN ]%%
+      <div class="no-surveys-message" style="grid-column: 1 / -1;">
+        <div class="empty-state">
+          <h3>Could not load journeys
+          </h3>
+          <p>%%=v(@jaBrowseError)=%%</p>
+          <a href="%%=v(@hubUrl)=%%" class="btn-primary" style="display:inline-block;margin-top:12px;text-decoration:none;">Back to Recent builds</a>
+        </div>
+      </div>
+      %%[ ELSE ]%%
+      %%=TreatAsContent(@jaBrowseMarkup)=%%
+      %%[ ENDIF ]%%
+      %%[ ELSEIF @recentBuildsOk == "true" AND @jaEmpty == "1" THEN ]%%
+      <div class="no-surveys-message">
+        <div class="empty-state">
+          <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+            <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/>
+            <path d="M9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/>
+          </svg>
+          <h3>No builds yet
+          </h3>
+          <p>You haven't built anything yet.
+          </p>
+        </div>
+      </div>
+      %%[ ELSEIF @recentBuildsOk == "true" THEN ]%%
+      %%=TreatAsContent(@jaRecentBuildsMarkup)=%%
+      %%[ ELSE ]%%
+      %%[ IF NOT Empty(@jaBuildsLoadError) THEN ]%%
+      <div class="no-surveys-message" style="grid-column: 1 / -1; margin-bottom: 0;">
+        <div class="empty-state" style="padding: 16px 20px;">
+          <p style="margin: 0; font-size: 14px;">Recent builds could not be loaded from the log.
+          </p>
+          <p style="margin: 8px 0 0; font-size: 12px; opacity: 0.85;">%%=Replace(Replace(@jaBuildsLoadError,"\n"," "),"\r","")=%%</p>
+        </div>
+      </div>
+      %%[ ENDIF ]%%
+      %%[ ENDIF ]%%
+    </div>
+    <div id="buildsPaginationSection">
       %%[ IF @browseMode == "1" AND NOT Empty(@jaBrowsePagination) THEN ]%%
       %%=TreatAsContent(@jaBrowsePagination)=%%
       %%[ ELSEIF @browseMode != "1" AND NOT Empty(@jaBuildsPagination) THEN ]%%
       %%=TreatAsContent(@jaBuildsPagination)=%%
       %%[ ENDIF ]%%
-      </div>
-  
-      <!-- Reports Section (Hidden by default) -->
-      <div class="reports-section" id="reportsSection" style="display: none;">
-        <div class="section-header">
-          <h2>Performance</h2>
-          <div class="activity-filters">
-            <button class="activity-filter active" onclick="filterActivity('12months')" data-period="12months">12 months</button>
-            <button class="activity-filter" onclick="filterActivity('6months')" data-period="6months">6 months</button>
-            <button class="activity-filter" onclick="filterActivity('30days')" data-period="30days">30 days</button>
-          </div>
-        </div>
-        
-        <div class="chart-container">
-          <div class="chart-header">
-            <div class="chart-number">☈</div>
-            <div class="chart-content">
-              <div class="chart-text">Engagement Trends</div>
-              <div class="chart-type">Emails sent over time</div>
-            </div>
-          </div>
-          <div class="chart-wrapper">
-            <canvas id="reportsChart"></canvas>
-          </div>
-        </div>
-
-        <div class="chart-container">
-          <div class="chart-header">
-            <div class="chart-number">🏞</div>
-            <div class="chart-content">
-              <div class="chart-text">Primary Specialty Distribution</div>
-              <div class="chart-type">Email engagement by specialty (12 months)</div>
-            </div>
-          </div>
-          <div class="chart-wrapper home-specialty-chart-wrapper">
-            <canvas id="reportsSpecialtyChart"
-              data-de-count="%%=DataExtensionRowCount(@specDE)=%%"
-              data-labels="%%=v(@specLabelsOut)=%%"
-              data-opened="%%=v(@specOpenOut)=%%"
-              data-didnotopen="%%=v(@specDnoOut)=%%"
-              data-bounced="%%=v(@specBncOut)=%%"
-              data-clicked="%%=v(@specClkOut)=%%"
-              data-totals="%%=v(@specTotOut)=%%"></canvas>
-          </div>
-        </div>
-
-        <div class="chart-container">
-          <div class="chart-header">
-            <div class="chart-number">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <polyline points="3 17 9 11 13 15 21 7"></polyline>
-              </svg>
-            </div>
-            <div class="chart-content">
-              <div class="chart-text">Engagement Over Time</div>
-              <div class="chart-type" id="reportsOpenClickChartSubtitle">Monthly opens, clicks, bounces and unsubscribes (12 months)</div>
-            </div>
-          </div>
-          <div class="chart-wrapper">
-            <canvas id="reportsOpenClickChart"
-              data-labels="%%=v(@monthLabelsOut)=%%"
-              data-opens="%%=v(@monthOpensOut)=%%"
-              data-clicks="%%=v(@monthClicksOut)=%%"
-              data-unsubscribed="%%=v(@monthUnsubOut)=%%"
-              data-bounced="%%=v(@monthBouncedOut)=%%"></canvas>
-          </div>
+    </div>
+    <!-- Reports Section (Hidden by default) -->
+    <div class="reports-section" id="reportsSection" style="display: none;">
+      <div class="section-header">
+        <h2>Performance
+        </h2>
+        <div class="activity-filters">
+          <button class="activity-filter active" onclick="filterActivity('12months')" data-period="12months">12 months</button>
+          <button class="activity-filter" onclick="filterActivity('6months')" data-period="6months">6 months</button>
+          <button class="activity-filter" onclick="filterActivity('30days')" data-period="30days">30 days</button>
         </div>
       </div>
-  
-      <!-- Responses Section (Hidden by default) -->
-       
-      <div class="responses-section" id="responsesSection" style="display: none;">
-        <div class="section-header deploy-checklist-header">
-          <div>
-            <h2>Deployment</h2>
-            <p class="deploy-checklist-intro">Deployment checklist — check items off as you complete Prod validation.</p>
+      <div class="chart-container">
+        <div class="chart-header">
+          <div class="chart-number">☈
           </div>
-          <button type="button" class="filter-btn" id="deployChecklistResetBtn">Reset checklist</button>
+          <div class="chart-content">
+            <div class="chart-text">Engagement Trends
+            </div>
+            <div class="chart-type">Emails sent over time
+            </div>
+          </div>
         </div>
-        <div class="deploy-checklist-panel">
-          <ul class="deploy-checklist-list" id="deployChecklistList">
-            <li class="deploy-checklist-item">
-              <label class="deploy-checklist-label">
-                <input type="checkbox" class="deploy-checklist-input" data-check-id="campaign-prod">
-                <span class="deploy-checklist-body">
-                  <span class="deploy-checklist-title">Use correct campaign numbers from SF Prod (BD setups)</span>
-                  <span class="deploy-checklist-desc">Confirm Salesforce Campaign IDs match Production BD campaign setup records, not UAT or stale values.</span>
-                </span>
-              </label>
-            </li>
-            <li class="deploy-checklist-item">
-              <label class="deploy-checklist-label">
-                <input type="checkbox" class="deploy-checklist-input" data-check-id="verify-queries">
-                <span class="deploy-checklist-body">
-                  <span class="deploy-checklist-title">Verify queries return the required records</span>
-                  <span class="deploy-checklist-desc">Run or preview audience queries and confirm row counts and filters match the intended send population.</span>
-                </span>
-              </label>
-            </li>
-            <li class="deploy-checklist-item">
-              <label class="deploy-checklist-label">
-                <input type="checkbox" class="deploy-checklist-input" data-check-id="sf-tracking">
-                <span class="deploy-checklist-body">
-                  <span class="deploy-checklist-title">Enable Send to Salesforce tracking (for IER creation)</span>
-                  <span class="deploy-checklist-desc">Turn on Send to Salesforce tracking on the journey email so Individual Email Results are created in Salesforce.</span>
-                </span>
-              </label>
-            </li>
-            <li class="deploy-checklist-item">
-              <label class="deploy-checklist-label">
-                <input type="checkbox" class="deploy-checklist-input" data-check-id="prod-cloudpages">
-                <span class="deploy-checklist-body">
-                  <span class="deploy-checklist-title">Ensure Unsubscribe and Manage Preferences links go to Prod CloudPages</span>
-                  <span class="deploy-checklist-desc">Check footer links point to Production CloudPages URLs, not UAT or placeholder pages.</span>
-                </span>
-              </label>
-            </li>
-            <li class="deploy-checklist-item">
-              <label class="deploy-checklist-label">
-                <input type="checkbox" class="deploy-checklist-input" data-check-id="review-email">
-                <span class="deploy-checklist-body">
-                  <span class="deploy-checklist-title">Review the email in the journey</span>
-                  <span class="deploy-checklist-desc">Open the email activity in Journey Builder and confirm content, links, and dynamic content render as expected.</span>
-                </span>
-              </label>
-            </li>
-            <li class="deploy-checklist-item">
-              <label class="deploy-checklist-label">
-                <input type="checkbox" class="deploy-checklist-input" data-check-id="subject-line">
-                <span class="deploy-checklist-body">
-                  <span class="deploy-checklist-title">Confirm the subject line is correct (no UAT prefix)</span>
-                  <span class="deploy-checklist-desc">Verify the subject line matches Production standards and does not include UAT prefixes or test wording.</span>
-                </span>
-              </label>
-            </li>
-            <li class="deploy-checklist-item">
-              <label class="deploy-checklist-label">
-                <input type="checkbox" class="deploy-checklist-input" data-check-id="sender-profile">
-                <span class="deploy-checklist-body">
-                  <span class="deploy-checklist-title">Confirm the sender profile is correct</span>
-                  <span class="deploy-checklist-desc">Validate From name, From address, and send classification match the approved Production sender profile.</span>
-                </span>
-              </label>
-            </li>
-            <li class="deploy-checklist-item">
-              <label class="deploy-checklist-label">
-                <input type="checkbox" class="deploy-checklist-input" data-check-id="email-test">
-                <span class="deploy-checklist-body">
-                  <span class="deploy-checklist-title">Validate a successful email test</span>
-                  <span class="deploy-checklist-desc">Send a test to a subscribed contact. Some AMPscript issues do not surface as errors in Marketing Cloud; if the test will not deploy, AMPscript may be faulty or the contact may be unsubscribed.</span>
-                </span>
-              </label>
-            </li>
-            <li class="deploy-checklist-item">
-              <label class="deploy-checklist-label">
-                <input type="checkbox" class="deploy-checklist-input" data-check-id="confirm-tracking">
-                <span class="deploy-checklist-body">
-                  <span class="deploy-checklist-title">Confirm tracking after deployment</span>
-                  <span class="deploy-checklist-desc">One-time sends: verify within the hour or by the next day. Features or automations from other systems: verify within the same week.</span>
-                </span>
-              </label>
-            </li>
-            <li class="deploy-checklist-item">
-              <label class="deploy-checklist-label">
-                <input type="checkbox" class="deploy-checklist-input" data-check-id="bcc-address">
-                <span class="deploy-checklist-body">
-                  <span class="deploy-checklist-title">Add a BCC address if needed to track deployments</span>
-                  <span class="deploy-checklist-desc">Configure BCC on the triggered send when you need a copy of production sends for monitoring.</span>
-                </span>
-              </label>
-            </li>
-            <li class="deploy-checklist-item">
-              <label class="deploy-checklist-label">
-                <input type="checkbox" class="deploy-checklist-input" data-check-id="event-portal">
-                <span class="deploy-checklist-body">
-                  <span class="deploy-checklist-title">Event Portal: test new features after deployment</span>
-                  <span class="deploy-checklist-desc">After go-live, exercise new Event Portal functionality in Production to confirm end-to-end behavior.</span>
-                </span>
-              </label>
-            </li>
-          </ul>
-          <p class="deploy-checklist-progress" id="deployChecklistProgress" aria-live="polite"></p>
+        <div class="chart-wrapper">
+          <canvas id="reportsChart">
+          </canvas>
         </div>
       </div>
-  
-      <!-- Team Section (Hidden by default) -->
-      <div class="team-section" id="teamSection" style="display: none;">
-        <div class="section-header">
-          <h2>Builder team</h2>
-          <div class="team-filters">
-            <button class="activity-filter active" onclick="filterTeam('all')" data-team-filter="all">All Users</button>
-            <button class="activity-filter" onclick="filterTeam('online')" data-team-filter="online">Online</button>
-            <button class="activity-filter" onclick="filterTeam('recent')" data-team-filter="recent">Recent Activity</button>
+      <div class="chart-container">
+        <div class="chart-header">
+          <div class="chart-number">🏞
+          </div>
+          <div class="chart-content">
+            <div class="chart-text">Primary Specialty Distribution
+            </div>
+            <div class="chart-type">Email engagement by specialty (12 months)
+            </div>
           </div>
         </div>
-        
-        <div class="team-grid">
-          <div class="team-card">
-            <div class="team-avatar">JD</div>
-            <div class="team-info">
-              <h4>John Doe</h4>
-              <p class="team-role">Administrator</p>
-              <p class="team-status online">Online</p>
-              <p class="team-last-seen">Last active: 2 minutes ago</p>
-            </div>
-            <div class="team-activity">
-              <div class="activity-item">
-                <span class="activity-icon">📸</span>
-                <span class="activity-text">Reviewed journey canvas</span>
-              </div>
-            
-            </div>
-          </div>       
-          <div class="team-card">
-            <div class="team-avatar">JS</div>
-            <div class="team-info">
-              <h4>Jane Smith</h4>
-              <p class="team-role">Journey editor</p>
-              <p class="team-status online">Online</p>
-              <p class="team-last-seen">Last active: 5 minutes ago</p>
-            </div>
-            <div class="team-activity">
-              <div class="activity-item">
-                <span class="activity-icon">📸</span>
-                <span class="activity-text">Reviewed journey canvas</span>
-              </div>
-           
-            </div>
-          </div>
+        <div class="chart-wrapper home-specialty-chart-wrapper">
+          <canvas id="reportsSpecialtyChart"
+                  data-de-count="%%=DataExtensionRowCount(@specDE)=%%"
+                  data-labels="%%=v(@specLabelsOut)=%%"
+                  data-opened="%%=v(@specOpenOut)=%%"
+                  data-didnotopen="%%=v(@specDnoOut)=%%"
+                  data-bounced="%%=v(@specBncOut)=%%"
+                  data-clicked="%%=v(@specClkOut)=%%"
+                  data-totals="%%=v(@specTotOut)=%%">
+          </canvas>
         </div>
       </div>
-      <footer class="maker-main-footer">
-        <span>Self Service</span>
-        <div class="maker-main-footer-end">
-  %%[ IF NOT Empty(@environmentSwitchUrl) THEN ]%%
-          <a href="%%=v(@environmentSwitchUrl)=%%" class="home-env-switch" aria-label="%%=v(@envSwitchLabel)=%%">
-            <svg class="home-env-switch-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M6.99 11L3 15l3.99 4v-3H14v-2H6.99v-3zM21 9l-3.99-4v3H10v2h7.01v3L21 9z"/>
+      <div class="chart-container">
+        <div class="chart-header">
+          <div class="chart-number">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="3 17 9 11 13 15 21 7">
+              </polyline>
             </svg>
-            <span>%%=v(@envDisplayName)=%%</span>
-          </a>
-  %%[ ENDIF ]%%
-          <span>© 2026 All rights reserved | MagMutual</span>
+          </div>
+          <div class="chart-content">
+            <div class="chart-text">Engagement Over Time
+            </div>
+            <div class="chart-type" id="reportsOpenClickChartSubtitle">Monthly opens, clicks, bounces and unsubscribes (12 months)
+            </div>
+          </div>
         </div>
-      </footer>
-    </main>
-  </div>
-  
-  <style>
+        <div class="chart-wrapper">
+          <canvas id="reportsOpenClickChart"
+                  data-labels="%%=v(@monthLabelsOut)=%%"
+                  data-opens="%%=v(@monthOpensOut)=%%"
+                  data-clicks="%%=v(@monthClicksOut)=%%"
+                  data-unsubscribed="%%=v(@monthUnsubOut)=%%"
+                  data-bounced="%%=v(@monthBouncedOut)=%%">
+          </canvas>
+        </div>
+      </div>
+    </div>
+    <!-- Responses Section (Hidden by default) -->
+    <div class="responses-section" id="responsesSection" style="display: none;">
+      <div class="section-header deploy-checklist-header">
+        <div>
+          <h2>Deployment
+          </h2>
+          <p class="deploy-checklist-intro">Deployment checklist — check items off as you complete Prod validation.
+          </p>
+        </div>
+        <button type="button" class="filter-btn" id="deployChecklistResetBtn">Reset checklist</button>
+      </div>
+      <div class="deploy-checklist-panel">
+        <ul class="deploy-checklist-list" id="deployChecklistList">
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="campaign-prod">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Use correct campaign numbers from SF Prod (BD setups)</span>
+                <span class="deploy-checklist-desc">Confirm Salesforce Campaign IDs match Production BD campaign setup records, not UAT or stale values.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="verify-queries">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Verify queries return the required records</span>
+                <span class="deploy-checklist-desc">Run or preview audience queries and confirm row counts and filters match the intended send population.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="sf-tracking">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Enable Send to Salesforce tracking (for IER creation)</span>
+                <span class="deploy-checklist-desc">Turn on Send to Salesforce tracking on the journey email so Individual Email Results are created in Salesforce.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="prod-cloudpages">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Ensure Unsubscribe and Manage Preferences links go to Prod CloudPages</span>
+                <span class="deploy-checklist-desc">Check footer links point to Production CloudPages URLs, not UAT or placeholder pages.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="review-email">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Review the email in the journey</span>
+                <span class="deploy-checklist-desc">Open the email activity in Journey Builder and confirm content, links, and dynamic content render as expected.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="subject-line">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Confirm the subject line is correct (no UAT prefix)</span>
+                <span class="deploy-checklist-desc">Verify the subject line matches Production standards and does not include UAT prefixes or test wording.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="sender-profile">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Confirm the sender profile is correct</span>
+                <span class="deploy-checklist-desc">Validate From name, From address, and send classification match the approved Production sender profile.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="email-test">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Validate a successful email test</span>
+                <span class="deploy-checklist-desc">Send a test to a subscribed contact. Some AMPscript issues do not surface as errors in Marketing Cloud; if the test will not deploy, AMPscript may be faulty or the contact may be unsubscribed.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="confirm-tracking">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Confirm tracking after deployment</span>
+                <span class="deploy-checklist-desc">One-time sends: verify within the hour or by the next day. Features or automations from other systems: verify within the same week.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="bcc-address">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Add a BCC address if needed to track deployments</span>
+                <span class="deploy-checklist-desc">Configure BCC on the triggered send when you need a copy of production sends for monitoring.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="event-portal">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Event Portal: test new features after deployment</span>
+                <span class="deploy-checklist-desc">After go-live, exercise new Event Portal functionality in Production to confirm end-to-end behavior.</span>
+              </span>
+            </label>
+          </li>
+        </ul>
+        <p class="deploy-checklist-progress" id="deployChecklistProgress" aria-live="polite">
+        </p>
+      </div>
+    </div>
+    <!-- Team Section (Hidden by default) -->
+    <div class="team-section" id="teamSection" style="display: none;">
+      <div class="section-header">
+        <h2>Builder team
+        </h2>
+        <div class="team-filters">
+          <button class="activity-filter active" onclick="filterTeam('all')" data-team-filter="all">All Users</button>
+          <button class="activity-filter" onclick="filterTeam('online')" data-team-filter="online">Online</button>
+          <button class="activity-filter" onclick="filterTeam('recent')" data-team-filter="recent">Recent Activity</button>
+        </div>
+      </div>
+      <div class="team-grid">
+        <div class="team-card">
+          <div class="team-avatar">JD
+          </div>
+          <div class="team-info">
+            <h4>John Doe
+            </h4>
+            <p class="team-role">Administrator
+            </p>
+            <p class="team-status online">Online
+            </p>
+            <p class="team-last-seen">Last active: 2 minutes ago
+            </p>
+          </div>
+          <div class="team-activity">
+            <div class="activity-item">
+              <span class="activity-icon">📸</span>
+              <span class="activity-text">Reviewed journey canvas</span>
+            </div>
+          </div>
+        </div>       
+        <div class="team-card">
+          <div class="team-avatar">JS
+          </div>
+          <div class="team-info">
+            <h4>Jane Smith
+            </h4>
+            <p class="team-role">Journey editor
+            </p>
+            <p class="team-status online">Online
+            </p>
+            <p class="team-last-seen">Last active: 5 minutes ago
+            </p>
+          </div>
+          <div class="team-activity">
+            <div class="activity-item">
+              <span class="activity-icon">📸</span>
+              <span class="activity-text">Reviewed journey canvas</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <footer class="maker-main-footer">
+      <span>Self Service</span>
+      <div class="maker-main-footer-end">
+        %%[ IF NOT Empty(@environmentSwitchUrl) THEN ]%%
+        <a href="%%=v(@environmentSwitchUrl)=%%" class="home-env-switch" aria-label="%%=v(@envSwitchLabel)=%%">
+          <svg class="home-env-switch-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M6.99 11L3 15l3.99 4v-3H14v-2H6.99v-3zM21 9l-3.99-4v3H10v2h7.01v3L21 9z"/>
+          </svg>
+          <span>%%=v(@envDisplayName)=%%</span>
+        </a>
+        %%[ ENDIF ]%%
+        <span>© 2026 All rights reserved | MagMutual</span>
+      </div>
+    </footer>
+  </main>
+</div>
+<style>
   /* Modern Design System */
   :root {
     --primary-gradient: linear-gradient(135deg, #000000 0%, #060507 100%);
@@ -2029,13 +2153,11 @@
     --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
     --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
   }
-  
   * {
     margin: 0;
     padding: 0;
     box-sizing: border-box;
   }
-  
   body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     background: var(--gray-50);
@@ -2043,7 +2165,6 @@
     line-height: 1.6;
     margin: 0;
   }
-  
   /* Layout */
   .dashboard-layout {
     display: flex;
@@ -2051,7 +2172,6 @@
     min-height: 100vh;
     overflow: hidden;
   }
-  
   /* Sidebar */
   .sidebar {
     width: 280px;
@@ -2065,14 +2185,12 @@
     padding: 32px 0 0 0;
     box-shadow: var(--shadow-sm);
   }
-  
   .sidebar-logo {
     padding: 0 20px;
     margin-bottom: 40px;
     border-bottom: 1px solid #ded5d563;
-   padding-bottom: 25px;
+    padding-bottom: 25px;
   }
-  
   .nav-section-title {
     font-size: 11px;
     font-weight: 600;
@@ -2082,13 +2200,11 @@
     padding: 0 32px;
     margin-bottom: 16px;
   }
-  
   .sidebar-nav {
     flex: 1;
     min-height: 0;
     overflow: hidden;
   }
-  
   .nav-link {
     display: flex;
     align-items: center;
@@ -2100,41 +2216,34 @@
     transition: all 0.2s ease;
     border-right: 3px solid transparent;
   }
-  
   .nav-link:hover {
     background: var(--gray-50);
     color: var(--gray-900);
   }
-  
   .nav-link.active {
     background: linear-gradient(90deg, rgb(119 120 196 / 10%) 0%, rgb(2 3 22 / 5%) 100%);
-      color: #000000;
-      border-right-color: #2c2c31;
+    color: #000000;
+    border-right-color: #2c2c31;
   }
-  
   .nav-icon {
     width: 20px;
     height: 20px;
     opacity: 0.7;
   }
-  
   .nav-link.active .nav-icon {
     opacity: 1;
   }
-  
   .sidebar-footer {
     flex-shrink: 0;
     padding: 24px 32px 20px;
     border-top: 1px solid var(--gray-200);
     background: #fff;
   }
-  
   .sidebar-user {
     display: flex;
     align-items: center;
     gap: 12px;
   }
-  
   .user-avatar {
     width: 40px;
     height: 40px;
@@ -2147,18 +2256,15 @@
     font-weight: 600;
     font-size: 16px;
   }
-  
   .user-name {
     font-weight: 600;
     color: var(--gray-900);
     font-size: 14px;
   }
-  
   .user-email {
     color: var(--gray-500);
     font-size: 12px;
   }
-  
   /* Main Content */
   .main-content {
     flex: 1;
@@ -2168,7 +2274,6 @@
     overflow-y: auto;
     background: var(--gray-50);
   }
-  
   .maker-main-footer {
     display: flex;
     align-items: center;
@@ -2180,14 +2285,12 @@
     font-size: 13px;
     color: var(--gray-500);
   }
-  
   .maker-main-footer-end {
     display: flex;
     align-items: center;
     gap: 16px;
     flex-wrap: wrap;
   }
-  
   .home-env-switch {
     display: inline-flex;
     align-items: center;
@@ -2199,16 +2302,13 @@
     font-weight: 600;
     text-decoration: none;
   }
-  
   .home-env-switch:hover {
     color: var(--gray-900);
   }
-  
   .home-env-switch-icon {
     display: block;
     color: var(--gray-500);
   }
-  
   /* Demo Notice */
   .demo-notice {
     background: linear-gradient(90deg, #fef3c7, #fde68a);
@@ -2221,48 +2321,47 @@
     gap: 12px;
     animation: slideIn 0.5s ease-out;
   }
-  
   @keyframes slideIn {
-    from { transform: translateY(-10px); opacity: 0; }
-    to { transform: translateY(0); opacity: 1; }
+    from {
+      transform: translateY(-10px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
   }
-  
   .demo-icon {
     font-size: 20px;
   }
-  
   .demo-content {
     flex: 1;
     font-size: 14px;
     color: #92400e;
   }
-  
   .demo-content strong {
     color: #78350f;
   }
-  
   /* Hero Section */
   .hero-section {
-       background: url(https://image.go.magmutual.com/lib/fe3411747364047e771073/m/1/662fb4a6-136a-4eaa-96d5-24ae513bb1bd.png);
-      border-radius: 20px;
-      padding: 48px 48px 48px 48px;
-      margin-bottom: 40px;
-      color: white;
-      position: relative;
-      overflow: hidden;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      background-position: right;
-      background-repeat: no-repeat;
-      background-color: #52575a;
+    background: url(https://image.go.magmutual.com/lib/fe3411747364047e771073/m/1/662fb4a6-136a-4eaa-96d5-24ae513bb1bd.png);
+    border-radius: 20px;
+    padding: 48px 48px 48px 48px;
+    margin-bottom: 40px;
+    color: white;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background-position: right;
+    background-repeat: no-repeat;
+    background-color: #52575a;
   }
-  
   .hero-content {
     flex: 1;
     z-index: 2;
   }
-  
   .hero-badge {
     background: rgba(255, 255, 255, 0.2);
     color: white;
@@ -2274,21 +2373,18 @@
     display: inline-block;
     margin-bottom: 24px;
   }
-  
   .hero-section h1 {
     font-size: 42px;
     font-weight: 700;
     line-height: 1.2;
     margin-bottom: 16px;
   }
-  
   .hero-section p {
     font-size: 18px;
     opacity: 0.9;
     margin-bottom: 32px;
     max-width: 500px;
   }
-  
   .hero-cta {
     background: #0053ff;
     color: #fdfdff;
@@ -2303,13 +2399,10 @@
     gap: 8px;
     transition: all 0.2s ease;
   }
-  
   .hero-cta:hover {
     background: white;
     color: var(--primary-color);
-    
   }
-  
   .journey-builder-panel-wrap {
     max-height: 0;
     overflow: hidden;
@@ -2317,13 +2410,11 @@
     transition: max-height 0.45s ease, opacity 0.3s ease, margin 0.3s ease;
     margin-bottom: 0;
   }
-  
   .journey-builder-panel-wrap.is-open {
     max-height: 480px;
     opacity: 1;
     margin-bottom: 32px;
   }
-  
   .journey-builder-panel {
     background: white;
     border: 1px solid var(--gray-200);
@@ -2331,7 +2422,6 @@
     padding: 24px 28px 28px;
     box-shadow: var(--shadow-md);
   }
-  
   .journey-builder-panel-head {
     display: flex;
     align-items: center;
@@ -2339,14 +2429,12 @@
     gap: 16px;
     margin-bottom: 20px;
   }
-  
   .journey-builder-panel-title {
     font-size: 1.125rem;
     font-weight: 700;
     color: var(--gray-900);
     margin: 0;
   }
-  
   .journey-builder-panel-close {
     flex-shrink: 0;
     width: 36px;
@@ -2360,19 +2448,16 @@
     color: var(--gray-600);
     transition: background 0.2s ease, border-color 0.2s ease;
   }
-  
   .journey-builder-panel-close:hover {
     background: var(--gray-100);
     border-color: var(--gray-300);
     color: var(--gray-900);
   }
-  
   .journey-builder-panel-cards {
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 16px;
   }
-  
   .journey-builder-choice {
     display: flex;
     flex-direction: column;
@@ -2387,38 +2472,31 @@
     transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
     cursor: pointer;
   }
-  
   .journey-builder-choice:hover {
-   
     border-color: var(--gray-400);
     /*-- background: #f9fafb0a;
-   filter: drop-shadow(3px 3px 1px #e5e7eb);*/
-    background: #f9fafb0a; 
-      filter: drop-shadow(3px 3px 2px #e5e7eb);
+    filter: drop-shadow(3px 3px 1px #e5e7eb);*/
+    background: #f9fafb0a;
+    filter: drop-shadow(3px 3px 2px #e5e7eb);
   }
-  
   .journey-builder-choice-featured {
     border-color: #121314;
     background: linear-gradient(145deg, #f8fafc 0%, #eef2ff 100%);
   }
-  
   .journey-builder-choice-featured:hover {
     border-color: var(--primary-dark);
     box-shadow: var(--shadow-md);
   }
-  
   .journey-builder-choice-label {
     font-size: 1rem;
     font-weight: 700;
     color: var(--gray-900);
   }
-  
   .journey-builder-choice-hint {
     font-size: 0.8125rem;
     color: var(--gray-600);
     line-height: 1.35;
   }
-  
   @media (max-width: 900px) {
     .journey-builder-panel-cards {
       grid-template-columns: 1fr;
@@ -2428,13 +2506,11 @@
       overflow: visible;
     }
   }
-  
   .hero-illustration {
     position: relative;
     width: 300px;
     height: 200px;
   }
-  
   .floating-card {
     position: absolute;
     background: rgba(255, 255, 255, 0.15);
@@ -2443,43 +2519,40 @@
     padding: 16px;
     animation: float 6s ease-in-out infinite;
   }
-  
   .card-1 {
     top: 20px;
     right: 40px;
     animation-delay: 0s;
   }
-  
   .card-2 {
     top: 80px;
     right: 120px;
     animation-delay: 2s;
   }
-  
   .card-3 {
     top: 140px;
     right: 20px;
     animation-delay: 4s;
   }
-  
   @keyframes float {
-    0%, 100% { transform: translateY(0px); }
-    50% { transform: translateY(-10px); }
+    0%, 100% {
+      transform: translateY(0px);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
   }
-  
   .mini-chart {
     width: 40px;
     height: 20px;
     background: linear-gradient(45deg, rgba(255,255,255,0.3) 0%, rgba(255,255,255,0.1) 100%);
     border-radius: 4px;
   }
-  
   .mini-stat {
     font-weight: 700;
     font-size: 18px;
     color: white;
   }
-  
   .mini-progress {
     width: 50px;
     height: 6px;
@@ -2487,7 +2560,6 @@
     border-radius: 3px;
     position: relative;
   }
-  
   .mini-progress::after {
     content: '';
     position: absolute;
@@ -2498,7 +2570,6 @@
     background: white;
     border-radius: 3px;
   }
-  
   /* Statistics Grid */
   .stats-grid {
     display: grid;
@@ -2506,7 +2577,6 @@
     gap: 24px;
     margin-bottom: 40px;
   }
-  
   .stat-card {
     background: white;
     padding: 10px 28px;
@@ -2518,20 +2588,17 @@
     gap: 20px;
     transition: all 0.2s ease;
   }
-  
   .stat-card:hover {
     transform: translateY(-2px);
     box-shadow: var(--shadow-md);
   }
-  
   .stat-card.primary {
-       background: url("https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/megaphone-new.png");
-      /* color: white; */
-      border: 1px solid #e5e7eb;
-      background-size: cover;
-      background-position: bottom;
+    background: url("https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/megaphone-new.png");
+    /* color: white; */
+    border: 1px solid #e5e7eb;
+    background-size: cover;
+    background-position: bottom;
   }
-  
   .stat-icon {
     width: 56px;
     height: 56px;
@@ -2542,55 +2609,38 @@
     color: var(--gray-600);
     font-size: 43px;
   }
-  
   .stat-card.primary .stat-icon {
-   
     color: white;
-   font-size: 43px;
+    font-size: 43px;
   }
-  
   .stat-icon.success {
-  
     color: var(--success-color);
-   
-    
   }
-  
   .stat-icon.warning {
-   
     color: var(--warning-color);
-  
   }
-  
   .stat-icon.info {
-  
     color: var(--info-color);
-   
   }
-  
   .stat-value {
     font-size: 32px;
     font-weight: 700;
     line-height: 1;
     margin-bottom: 4px;
   }
-  
   .stat-label {
     font-size: 14px;
     font-weight: 500;
     opacity: 0.8;
     margin-bottom: 4px;
   }
-  
   .stat-change {
     font-size: 12px;
     opacity: 0.7;
   }
-  
   .stat-change.success {
     color: var(--success-color);
   }
-  
   /* Section Headers */
   .section-header {
     display: flex;
@@ -2598,23 +2648,19 @@
     justify-content: space-between;
     margin-bottom: 24px;
   }
-  
   .section-header h2 {
     font-size: 24px;
     font-weight: 700;
     color: var(--gray-900);
   }
-
   .recent-builds-header {
     align-items: flex-start;
     gap: 16px;
   }
-
   .recent-builds-header-left {
     flex: 1;
     min-width: 200px;
   }
-
   .recent-builds-header-right {
     display: flex;
     align-items: center;
@@ -2623,24 +2669,20 @@
     flex-wrap: wrap;
     justify-content: flex-end;
   }
-
   .recent-builds-browse-hint {
     margin: 6px 0 0;
     font-size: 14px;
     color: var(--gray-500);
   }
-
   .recent-builds-flash {
     margin: 8px 0 0;
     font-size: 14px;
     color: var(--success-color);
     font-weight: 500;
   }
-
   .recent-builds-flash-error {
     color: #dc2626;
   }
-
   .btn-add-journey {
     width: 42px;
     height: 42px;
@@ -2655,29 +2697,24 @@
     transition: all 0.2s ease;
     flex-shrink: 0;
   }
-
   .btn-add-journey:hover {
     background: var(--gray-100);
     border-color: var(--gray-400);
   }
-
   .survey-card-browse .survey-actions {
     margin-top: auto;
     padding-top: 16px;
   }
-
   .survey-card-browse .survey-actions .btn-secondary[disabled] {
     opacity: 0.6;
     cursor: not-allowed;
   }
-
   .browse-pagination {
     display: flex;
     justify-content: center;
     padding: 4px 0 24px;
     margin-top: 8px;
   }
-
   .browse-pagination-inner {
     display: flex;
     align-items: center;
@@ -2685,22 +2722,18 @@
     flex-wrap: wrap;
     justify-content: center;
   }
-
   .browse-page-label {
     font-size: 14px;
     color: var(--gray-600);
   }
-
   .browse-page-disabled {
     opacity: 0.45;
     pointer-events: none;
   }
-  
   .activity-filters {
     display: flex;
     gap: 8px;
   }
-  
   .activity-filter {
     background: var(--gray-100);
     border: none;
@@ -2712,22 +2745,19 @@
     transition: all 0.2s ease;
     font-size: 14px;
   }
-  
   .activity-filter.active  {
     background: #121314;
     color: white;
   }
-    .activity-filter:hover {
-      background: #52575a;
-      color: white;
-    }
-  
+  .activity-filter:hover {
+    background: #52575a;
+    color: white;
+  }
   .search-section {
     display: flex;
     align-items: center;
     gap: 12px;
   }
-  
   .search-input {
     padding: 10px 16px;
     border: 1px solid var(--gray-300);
@@ -2737,12 +2767,10 @@
     outline: none;
     transition: all 0.2s ease;
   }
-  
   .search-input:focus {
     border-color: var(--primary-color);
     box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
   }
-  
   .filter-btn {
     background: var(--gray-100);
     border: none;
@@ -2756,11 +2784,9 @@
     gap: 8px;
     font-weight: 500;
   }
-  
   .filter-btn:hover {
     background: var(--gray-200);
   }
-  
   .chart-container {
     background: white;
     border: 1px solid var(--gray-200);
@@ -2769,13 +2795,11 @@
     margin-bottom: 32px;
     box-shadow: var(--shadow-sm);
   }
-
   .chart-container .chart-header {
     display: flex;
     align-items: center;
     margin-bottom: 20px;
   }
-
   .chart-number {
     background: #000000;
     color: white;
@@ -2790,35 +2814,29 @@
     margin-right: 16px;
     flex-shrink: 0;
   }
-
   .chart-number svg {
     display: block;
   }
-
   .chart-content {
     flex: 1;
   }
-
   .chart-text {
     font-size: 1.125rem;
     font-weight: 600;
     color: var(--gray-900);
     margin-bottom: 8px;
   }
-
   .chart-type {
     font-size: 0.875rem;
     color: var(--gray-500);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
-
   .chart-container .chart-wrapper {
     position: relative;
     height: 300px;
     margin-top: 20px;
   }
-
   .home-specialty-chart-wrapper {
     height: 320px;
   }
@@ -2831,7 +2849,6 @@
     width: 100%;
     align-items: stretch;
   }
-  
   .survey-card {
     display: flex;
     flex-direction: column;
@@ -2845,19 +2862,16 @@
     width: 100%;
     max-width: 400px;
   }
-  
   .survey-card:hover {
     transform: translateY(-2px);
     box-shadow: var(--shadow-md);
   }
-  
   .survey-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     margin-bottom: 16px;
   }
-  
   .survey-icon {
     width: 40px;
     height: 40px;
@@ -2869,7 +2883,6 @@
     color: var(--gray-600);
     font-size: 30;
   }
-  
   .survey-status {
     padding: 4px 12px;
     border-radius: 20px;
@@ -2877,22 +2890,18 @@
     font-weight: 600;
     text-transform: capitalize;
   }
-  
   .status-Active {
     background: rgba(16, 185, 129, 0.1);
     color: var(--success-color);
   }
-  
   .status-Completed {
     background: rgba(59, 130, 246, 0.1);
     color: var(--info-color);
   }
-  
   .status-Draft {
     background: rgba(245, 158, 11, 0.1);
     color: var(--warning-color);
   }
-  
   .survey-title {
     font-size: 18px;
     font-weight: 600;
@@ -2908,7 +2917,6 @@
     overflow-wrap: anywhere;
     word-break: break-word;
   }
-  
   .survey-meta {
     display: flex;
     justify-content: space-between;
@@ -2919,7 +2927,6 @@
     color: var(--gray-500);
     text-transform: uppercase;
   }
-
   .survey-id {
     min-width: 0;
     overflow: hidden;
@@ -2927,19 +2934,16 @@
     white-space: nowrap;
     flex: 1 1 auto;
   }
-
   .survey-date {
     flex: 0 0 auto;
     white-space: nowrap;
     text-align: right;
     text-transform: none;
   }
-  
   .survey-progress {
     margin-top: auto;
     margin-bottom: 20px;
   }
-  
   .progress-info {
     display: flex;
     justify-content: space-between;
@@ -2947,76 +2951,65 @@
     margin-bottom: 8px;
     font-size: 14px;
   }
-  
   .progress-percentage {
     font-weight: 600;
     color: var(--primary-color);
   }
-
   .progress-percentage--draft {
     color: #6b7280;
   }
-
   .progress-percentage--running {
     color: #059669;
   }
-
   .progress-percentage--stopped {
     color: #d97706;
   }
-
   .progress-percentage--ready {
     color: var(--primary-color);
   }
-
   .progress-sent-count {
     font-size: 13px;
     font-weight: 500;
     color: var(--gray-500);
     margin-left: auto;
   }
-  
   .progress-bar {
     height: 6px;
     background: var(--gray-200);
     border-radius: 3px;
     overflow: hidden;
   }
-  
   .progress-fill {
     height: 100%;
     border-radius: 3px;
     transition: width 0.3s ease, background 0.3s ease;
   }
-
   .progress-fill--draft {
     background: #9ca3af;
   }
-
   .progress-fill--running {
     background: #10b981;
     animation: progress-running-pulse 2s ease-in-out infinite;
   }
-
   .progress-fill--stopped {
     background: #f59e0b;
   }
-
   .progress-fill--ready {
     background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%);
   }
-
   @keyframes progress-running-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.72; }
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.72;
+    }
   }
-  
   .survey-actions {
     display: flex;
     align-items: center;
     gap: 12px;
   }
-  
   .btn-secondary {
     background: var(--gray-100);
     color: var(--gray-700);
@@ -3029,12 +3022,10 @@
     flex: 1;
     text-align: center;
   }
-  
   .btn-secondary:hover {
     background: #000000;
     color: #ffffff;
   }
-  
   .btn-icon {
     width: 36px;
     height: 36px;
@@ -3048,16 +3039,13 @@
     cursor: pointer;
     transition: all 0.2s ease;
   }
-  
   .btn-icon:hover {
     background: var(--gray-200);
   }
-  
   /* Empty State */
   .no-surveys-message {
     grid-column: 1 / -1;
   }
-  
   .empty-state {
     text-align: center;
     padding: 60px 40px;
@@ -3065,19 +3053,16 @@
     border-radius: 16px;
     border: 1px solid var(--gray-200);
   }
-  
   .empty-state svg {
     color: var(--gray-400);
     margin-bottom: 24px;
   }
-  
   .empty-state h3 {
     font-size: 20px;
     font-weight: 600;
     color: var(--gray-900);
     margin-bottom: 12px;
   }
-  
   .empty-state p {
     color: var(--gray-600);
     margin-bottom: 32px;
@@ -3085,7 +3070,6 @@
     margin-left: auto;
     margin-right: auto;
   }
-  
   .btn-primary {
     background: var(--primary-gradient);
     color: white;
@@ -3096,17 +3080,14 @@
     cursor: pointer;
     transition: all 0.2s ease;
   }
-  
   .btn-primary:hover {
     transform: translateY(-1px);
     box-shadow: var(--shadow-md);
   }
-  
   /* Breadcrumb Styles */
   .breadcrumb-section {
     padding: 16px 0;
   }
-  
   .breadcrumb {
     display: flex;
     align-items: center;
@@ -3114,28 +3095,23 @@
     font-size: 14px;
     color: var(--gray-600);
   }
-  
   .breadcrumb-link {
     color: var(--primary-color);
     text-decoration: none;
     font-weight: 500;
     transition: color 0.2s ease;
   }
-  
   .breadcrumb-link:hover {
     color: var(--primary-dark);
     text-decoration: underline;
   }
-  
   .breadcrumb-separator {
     color: var(--gray-400);
   }
-  
   .breadcrumb-current {
     color: var(--gray-900);
     font-weight: 500;
   }
-  
   /* Deployment checklist (Activity tab) */
   .deploy-checklist-header {
     align-items: flex-start;
@@ -3221,7 +3197,6 @@
     border-top: 1px solid var(--gray-200);
     background: var(--gray-50);
   }
-  
   /* Responses Grid */
   .responses-grid {
     display: grid;
@@ -3229,7 +3204,6 @@
     gap: 24px;
     margin-bottom: 40px;
   }
-  
   .response-card {
     background: white;
     border-radius: 16px;
@@ -3238,19 +3212,16 @@
     border: 1px solid var(--gray-200);
     transition: all 0.2s ease;
   }
-  
   .response-card:hover {
     transform: translateY(-2px);
     box-shadow: var(--shadow-md);
   }
-  
   .response-header {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
     margin-bottom: 16px;
   }
-  
   .response-survey h4 {
     font-size: 16px;
     font-weight: 600;
@@ -3258,12 +3229,10 @@
     margin-bottom: 4px;
     line-height: 1.3;
   }
-  
   .response-id {
     font-size: 12px;
     color: var(--gray-500);
   }
-  
   .response-status {
     padding: 4px 12px;
     border-radius: 20px;
@@ -3271,12 +3240,10 @@
     font-weight: 600;
     text-transform: capitalize;
   }
-  
   .status-Completed {
     background: rgba(16, 185, 129, 0.1);
     color: var(--success-color);
   }
-  
   .response-meta {
     display: flex;
     gap: 16px;
@@ -3284,24 +3251,20 @@
     font-size: 12px;
     color: var(--gray-500);
   }
-  
   .response-answers {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 12px;
   }
-  
   .answer-item {
     font-size: 13px;
     color: var(--gray-700);
     line-height: 1.4;
   }
-  
   .answer-item strong {
     color: var(--gray-900);
     font-weight: 600;
   }
-  
   /* Team Grid */
   .team-grid {
     display: grid;
@@ -3309,21 +3272,18 @@
     gap: 24px;
     margin-bottom: 40px;
   }
-  
   .team-card {
     background: white;
-      border-radius: 12px;
-      padding: 20px 24px;
-      /* box-shadow: var(--shadow-sm); */
-      border: 1px solid var(--gray-200);
-      transition: all 0.2s ease;
+    border-radius: 12px;
+    padding: 20px 24px;
+    /* box-shadow: var(--shadow-sm); */
+    border: 1px solid var(--gray-200);
+    transition: all 0.2s ease;
   }
-  
   .team-card:hover {
     transform: translateY(-2px);
     box-shadow: var(--shadow-md);
   }
-  
   .team-avatar {
     width: 48px;
     height: 48px;
@@ -3337,45 +3297,37 @@
     font-size: 18px;
     margin-bottom: 16px;
   }
-  
   .team-info h4 {
     font-size: 18px;
     font-weight: 600;
     color: var(--gray-900);
     margin-bottom: 4px;
   }
-  
   .team-role {
     font-size: 14px;
     color: var(--gray-600);
     margin-bottom: 8px;
   }
-  
   .team-status {
     font-size: 12px;
     font-weight: 600;
     margin-bottom: 4px;
   }
-  
   .team-status.online {
     color: var(--success-color);
   }
-  
   .team-status.offline {
     color: var(--gray-500);
   }
-  
   .team-last-seen {
     font-size: 12px;
     color: var(--gray-500);
     margin-bottom: 16px;
   }
-  
   .team-activity {
     border-top: 1px solid var(--gray-200);
     padding-top: 16px;
   }
-  
   .activity-item {
     display: flex;
     align-items: center;
@@ -3384,48 +3336,38 @@
     font-size: 13px;
     color: var(--gray-600);
   }
-  
   .activity-item:last-child {
     margin-bottom: 0;
   }
-  
   .activity-icon {
     font-size: 16px;
   }
-  
   .activity-text {
     flex: 1;
   }
-  
   .team-filters {
     display: flex;
     gap: 8px;
   }
-  
   /* Responsive Design */
-    .main-content {
-      padding: 24px;
-    }
-    
-    .hero-section {
-      flex-direction: row;
-      text-align: left;
-      padding: 40px 32px;
-    }
-    
-    .hero-illustration {
-      display: none;
-    }
-    
-    .stats-grid {
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    }
-    
-    .surveys-grid {
-      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    }
+  .main-content {
+    padding: 24px;
   }
-  
+  .hero-section {
+    flex-direction: row;
+    text-align: left;
+    padding: 40px 32px;
+  }
+  .hero-illustration {
+    display: none;
+  }
+  .stats-grid {
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  }
+  .surveys-grid {
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  }
+  }
   @media (max-width: 768px) {
     .dashboard-layout {
       flex-direction: column;
@@ -3445,18 +3387,15 @@
       overflow-x: auto;
       overflow-y: visible;
     }
-    
     .sidebar-logo {
       padding: 0 16px;
       margin-bottom: 0;
     }
-    
     .sidebar-nav {
       display: flex;
       gap: 8px;
       padding: 0 16px;
     }
-    
     .nav-link {
       white-space: nowrap;
       padding: 8px 16px;
@@ -3473,58 +3412,47 @@
       padding-top: 0;
       padding-bottom: 0;
     }
-  
     .maker-main-footer {
       margin-top: 32px;
       flex-direction: column;
       align-items: flex-start;
       gap: 10px;
     }
-  
     .maker-main-footer-end {
       gap: 12px;
     }
-  
     .main-content {
       height: auto;
       padding: 16px;
     }
-    
     .hero-section h1 {
       font-size: 28px;
     }
-    
     .stats-grid {
       grid-template-columns: 1fr;
     }
-    
     .section-header {
       flex-direction: column;
       gap: 16px;
       align-items: flex-start;
     }
-    
     .search-section {
       width: 100%;
     }
-    
     .search-input {
       flex: 1;
     }
-    
     .responses-grid {
       grid-template-columns: 1fr;
     }
-    
     .team-grid {
       grid-template-columns: 1fr;
     }
   }
-  </style>
-
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <span id="homeHubUrlData" data-url="%%=v(@hubUrl)=%%" hidden></span>
-  <script>
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<span id="homeHubUrlData" data-url="%%=v(@hubUrl)=%%" hidden></span>
+<script>
   function openBrowseJourneys() {
     var dataEl = document.getElementById('homeHubUrlData');
     var base = dataEl ? (dataEl.getAttribute('data-url') || '') : '';
@@ -3532,62 +3460,56 @@
     var sep = base.indexOf('?') >= 0 ? '&' : '?';
     window.location.href = base + sep + 'browseJourneys=1';
   }
-
   // Journey roster search
   function searchJourneys() {
     const searchInput = document.getElementById('journeySearch');
     const searchTerm = searchInput.value.toLowerCase();
     const journeyCards = document.querySelectorAll('.survey-card');
     let visibleCount = 0;
-  
     journeyCards.forEach(card => {
       const journeyTitle = card.querySelector('.survey-title').textContent.toLowerCase();
       const journeyId = card.querySelector('.survey-id').textContent.toLowerCase();
       const journeyStatus = card.querySelector('.survey-status').textContent.toLowerCase();
-      
       const isMatch = journeyTitle.includes(searchTerm) || 
-                     journeyId.includes(searchTerm) || 
-                     journeyStatus.includes(searchTerm);
-      
+            journeyId.includes(searchTerm) || 
+            journeyStatus.includes(searchTerm);
       if (isMatch) {
         card.style.display = 'block';
         visibleCount++;
-      } else {
+      }
+      else {
         card.style.display = 'none';
       }
-    });
-  
+    }
+                        );
     toggleNoResultsMessage(visibleCount === 0 && searchTerm !== '');
   }
-  
   function toggleFilter() {
     alert('Filter is not available yet. Use search to find journeys by name, ID, or status.');
   }
-  
   function toggleNoResultsMessage(show) {
     let noResultsMsg = document.querySelector('.no-search-results');
-    
     if (show && !noResultsMsg) {
       const grid = document.querySelector('.surveys-grid');
       noResultsMsg = document.createElement('div');
       noResultsMsg.className = 'no-search-results';
       noResultsMsg.innerHTML = `
-        <div class="empty-state">
-          <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-            <circle cx="11" cy="11" r="8"></circle>
-            <path d="m21 21-4.35-4.35"></path>
-          </svg>
-          <h3>No journeys found</h3>
-          <p>Adjust your search or clear it to see the full list.</p>
-          <button class="btn-primary" onclick="clearSearch()">Clear search</button>
-        </div>
-      `;
+<div class="empty-state">
+<svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+<circle cx="11" cy="11" r="8"></circle>
+<path d="m21 21-4.35-4.35"></path>
+  </svg>
+<h3>No journeys found</h3>
+<p>Adjust your search or clear it to see the full list.</p>
+<button class="btn-primary" onclick="clearSearch()">Clear search</button>
+  </div>
+`;
       grid.appendChild(noResultsMsg);
-    } else if (!show && noResultsMsg) {
+    }
+    else if (!show && noResultsMsg) {
       noResultsMsg.remove();
     }
   }
-  
   function clearSearch() {
     var searchInput = document.getElementById('journeySearch');
     if (searchInput) {
@@ -3595,7 +3517,6 @@
     }
     searchJourneys();
   }
-  
   document.addEventListener('DOMContentLoaded', function() {
     const searchInput = document.getElementById('journeySearch');
     if (searchInput) {
@@ -3604,12 +3525,12 @@
           e.preventDefault();
           searchJourneys();
         }
-      });
+      }
+                                  );
     }
-    
     initializeActivityChart();
-  });
-  
+  }
+                           );
   function toggleJourneyBuilderPanel(ev) {
     if (ev) ev.stopPropagation();
     const wrap = document.getElementById('journeyBuilderPanel');
@@ -3617,16 +3538,16 @@
     const next = !wrap.classList.contains('is-open');
     wrap.classList.toggle('is-open', next);
     wrap.setAttribute('aria-hidden', next ? 'false' : 'true');
-    if (next) wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (next) wrap.scrollIntoView({
+      behavior: 'smooth', block: 'nearest' }
+                                 );
   }
-  
   function closeJourneyBuilderPanel() {
     const wrap = document.getElementById('journeyBuilderPanel');
     if (!wrap) return;
     wrap.classList.remove('is-open');
     wrap.setAttribute('aria-hidden', 'true');
   }
-  
   document.addEventListener('click', function(e) {
     const wrap = document.getElementById('journeyBuilderPanel');
     const btn = document.getElementById('heroOpenBuilderBtn');
@@ -3634,53 +3555,52 @@
     if (btn && btn.contains(e.target)) return;
     if (wrap.contains(e.target)) return;
     closeJourneyBuilderPanel();
-  });
-  
+  }
+                           );
   document.addEventListener('DOMContentLoaded', function () {
     %%[ IF @browseMode == "1" THEN ]%%
     showAllJourneys();
     %%[ ENDIF ]%%
-  });
-
+  }
+                           );
   document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') closeJourneyBuilderPanel();
-  });
-  
-  let homeEngagementCharts = {};
+  }
+                           );
+  let homeEngagementCharts = {
+  };
   let homeSpecialtyChart = null;
   let homeOpenClickChart = null;
-
   function getSendLogChartData() {
     var el = document.getElementById('activityChartData');
     if (!el) return null;
     try {
       return JSON.parse(el.textContent);
-    } catch (e) {
+    }
+    catch (e) {
       return null;
     }
   }
-
   function getActivePeriod(scope) {
     var root = scope || document;
     var activeBtn = root.querySelector('.activity-filter.active');
     return activeBtn ? activeBtn.getAttribute('data-period') : '12months';
   }
-
   function renderEngagementTrendChart(canvasId, periodData) {
     var canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
-
     if (homeEngagementCharts[canvasId]) {
       homeEngagementCharts[canvasId].destroy();
       homeEngagementCharts[canvasId] = null;
     }
-
     var labels = (periodData && periodData.labels) ? periodData.labels.slice() : [];
     var responses = (periodData && periodData.responses) ? periodData.responses.slice() : [];
-    var allValues = responses.filter(function (v) { return !isNaN(v); });
+    var allValues = responses.filter(function (v) {
+      return !isNaN(v);
+    }
+                                    );
     var maxValue = allValues.length > 0 ? Math.max.apply(null, allValues) : 1;
     var stepSize = Math.max(1, Math.ceil(maxValue / 10));
-
     homeEngagementCharts[canvasId] = new Chart(canvas, {
       type: 'line',
       data: {
@@ -3701,8 +3621,10 @@
           pointHoverBackgroundColor: '#4f46e5',
           pointHoverBorderColor: '#ffffff',
           pointHoverBorderWidth: 3
-        }]
-      },
+        }
+                  ]
+      }
+      ,
       options: {
         responsive: true,
         maintainAspectRatio: false,
@@ -3712,7 +3634,8 @@
           delay: function (context) {
             return context.dataIndex * 50;
           }
-        },
+        }
+        ,
         plugins: {
           legend: {
             display: true,
@@ -3726,10 +3649,12 @@
                 size: 13,
                 weight: '500',
                 family: "'Inter', sans-serif"
-              },
+              }
+              ,
               color: '#374151'
             }
-          },
+          }
+          ,
           tooltip: {
             backgroundColor: 'rgba(17, 24, 39, 0.95)',
             titleColor: '#ffffff',
@@ -3742,25 +3667,29 @@
               size: 14,
               weight: '600',
               family: "'Inter', sans-serif"
-            },
+            }
+            ,
             bodyFont: {
               size: 13,
               weight: '500',
               family: "'Inter', sans-serif"
-            },
+            }
+            ,
             mode: 'index',
             intersect: false,
             displayColors: true,
             callbacks: {
               title: function (context) {
                 return context[0].label;
-              },
+              }
+              ,
               label: function (context) {
                 return 'Emails sent: ' + context.parsed.y.toLocaleString();
               }
             }
           }
-        },
+        }
+        ,
         scales: {
           x: {
             grid: {
@@ -3768,19 +3697,22 @@
               color: 'rgba(229, 231, 235, 0.8)',
               borderColor: 'rgba(229, 231, 235, 0.8)',
               lineWidth: 1
-            },
+            }
+            ,
             border: {
               display: true,
               color: 'rgba(209, 213, 219, 0.8)',
               width: 2
-            },
+            }
+            ,
             ticks: {
               color: '#6b7280',
               font: {
                 size: 12,
                 weight: '500',
                 family: "'Inter', sans-serif"
-              },
+              }
+              ,
               maxRotation: 45,
               minRotation: 0,
               padding: 12,
@@ -3789,7 +3721,8 @@
                 return label.length > 15 ? label.substring(0, 15) + '...' : label;
               }
             }
-          },
+          }
+          ,
           y: {
             beginAtZero: true,
             grid: {
@@ -3798,19 +3731,22 @@
               borderColor: 'rgba(229, 231, 235, 0.8)',
               lineWidth: 1,
               drawBorder: true
-            },
+            }
+            ,
             border: {
               display: true,
               color: 'rgba(209, 213, 219, 0.8)',
               width: 2
-            },
+            }
+            ,
             ticks: {
               color: '#6b7280',
               font: {
                 size: 12,
                 weight: '500',
                 family: "'Inter', sans-serif"
-              },
+              }
+              ,
               stepSize: stepSize,
               padding: 12,
               callback: function (value) {
@@ -3818,15 +3754,16 @@
               }
             }
           }
-        },
+        }
+        ,
         interaction: {
           intersect: false,
           mode: 'index'
         }
       }
-    });
+    }
+                                              );
   }
-
   function updateEngagementTrendCharts(period) {
     var chartData = getSendLogChartData();
     if (!chartData) return;
@@ -3834,15 +3771,14 @@
     renderEngagementTrendChart('activityChart', periodData);
     renderEngagementTrendChart('reportsChart', periodData);
   }
-
   function splitPipeNumbers(raw) {
     if (!raw) return [];
     return raw.split('|').map(function (v) {
       var n = parseInt(v, 10);
       return isNaN(n) ? 0 : n;
-    });
+    }
+                             );
   }
-
   function getSpecialtyChartData() {
     var canvas = document.getElementById('reportsSpecialtyChart');
     if (canvas) {
@@ -3864,40 +3800,37 @@
     if (!raw) return null;
     try {
       return JSON.parse(raw);
-    } catch (e) {
+    }
+    catch (e) {
       return null;
     }
   }
-
   function renderSpecialtyChart() {
     var canvas = document.getElementById('reportsSpecialtyChart');
     if (!canvas || typeof Chart === 'undefined') return;
-
     if (homeSpecialtyChart) {
       homeSpecialtyChart.destroy();
       homeSpecialtyChart = null;
     }
-
     var chartData = getSpecialtyChartData();
     if (!chartData || !chartData.labels || !chartData.labels.length) {
       var deCount = canvas.getAttribute('data-de-count');
       var emptyMsg = 'No specialty data available';
       if (deCount === '0') {
         emptyMsg += '. DE sst_de_specialty_log_12_months has 0 rows in this BU or external key does not match.';
-      } else if (deCount && deCount !== '0') {
+      }
+      else if (deCount && deCount !== '0') {
         emptyMsg += '. DE has ' + deCount + ' rows but lookup returned no chart data. Check MonthIndex values (expected 1–24).';
       }
       canvas.parentElement.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">' + emptyMsg + '</div>';
       return;
     }
-
     var labels = chartData.labels || [];
     var opened = chartData.opened || [];
     var didNotOpen = chartData.didNotOpen || [];
     var bounced = chartData.bounced || [];
     var clicked = chartData.clicked || [];
     var totals = chartData.totals || [];
-
     homeSpecialtyChart = new Chart(canvas, {
       type: 'bar',
       data: {
@@ -3908,19 +3841,22 @@
             data: opened,
             backgroundColor: '#3fc699',
             borderWidth: 0
-          },
+          }
+          ,
           {
             label: 'Did Not Open',
             data: didNotOpen,
             backgroundColor: '#000000',
             borderWidth: 0
-          },
+          }
+          ,
           {
             label: 'Bounced',
             data: bounced,
             backgroundColor: 'rgba(220, 38, 38, 0.8)',
             borderWidth: 0
-          },
+          }
+          ,
           {
             label: 'Clicked',
             data: clicked,
@@ -3928,7 +3864,8 @@
             borderWidth: 0
           }
         ]
-      },
+      }
+      ,
       options: {
         responsive: true,
         maintainAspectRatio: false,
@@ -3944,10 +3881,12 @@
                 size: 13,
                 weight: '500',
                 family: "'Inter', sans-serif"
-              },
+              }
+              ,
               color: '#374151'
             }
-          },
+          }
+          ,
           tooltip: {
             backgroundColor: 'rgba(17, 24, 39, 0.95)',
             titleColor: '#ffffff',
@@ -3971,41 +3910,47 @@
               }
             }
           }
-        },
+        }
+        ,
         scales: {
           x: {
             stacked: true,
             grid: {
               display: false
-            },
+            }
+            ,
             ticks: {
               font: {
                 size: 12,
                 family: "'Inter', sans-serif"
-              },
+              }
+              ,
               color: '#6b7280'
             }
-          },
+          }
+          ,
           y: {
             stacked: true,
             beginAtZero: true,
             maxBarThickness: 60,
             grid: {
               color: 'rgba(0, 0, 0, 0.05)'
-            },
+            }
+            ,
             ticks: {
               font: {
                 size: 12,
                 family: "'Inter', sans-serif"
-              },
+              }
+              ,
               color: '#6b7280'
             }
           }
         }
       }
-    });
+    }
+                                  );
   }
-
   function getOpenClickChartData() {
     var canvas = document.getElementById('reportsOpenClickChart');
     if (!canvas) return null;
@@ -4019,29 +3964,24 @@
       bounced: splitPipeNumbers(canvas.getAttribute('data-bounced'))
     };
   }
-
   function sumChartValues(values) {
     var total = 0;
     var i;
     for (i = 0; i < values.length; i++) total += values[i] || 0;
     return total;
   }
-
   function renderOpenClickChart() {
     var canvas = document.getElementById('reportsOpenClickChart');
     if (!canvas || typeof Chart === 'undefined') return;
-
     if (homeOpenClickChart) {
       homeOpenClickChart.destroy();
       homeOpenClickChart = null;
     }
-
     var chartData = getOpenClickChartData();
     if (!chartData || !chartData.labels || !chartData.labels.length) {
       canvas.parentElement.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">No opens and clicks data available</div>';
       return;
     }
-
     var labels = chartData.labels;
     var opens = chartData.opens;
     var clicks = chartData.clicks;
@@ -4059,10 +3999,12 @@
         bounceTotal.toLocaleString() + ' bounces · ' +
         unsubTotal.toLocaleString() + ' unsubscribes (12 months)';
     }
-    var allValues = opens.concat(clicks).concat(unsubscribed).concat(bounced).filter(function (v) { return !isNaN(v); });
+    var allValues = opens.concat(clicks).concat(unsubscribed).concat(bounced).filter(function (v) {
+      return !isNaN(v);
+    }
+                                                                                    );
     var maxValue = allValues.length > 0 ? Math.max.apply(null, allValues) : 1;
     var stepSize = Math.max(1, Math.ceil(maxValue / 10));
-
     homeOpenClickChart = new Chart(canvas, {
       type: 'line',
       data: {
@@ -4081,7 +4023,8 @@
             pointBorderWidth: 2,
             pointRadius: 5,
             pointHoverRadius: 7
-          },
+          }
+          ,
           {
             label: 'Clicks (' + clickTotal.toLocaleString() + ')',
             data: clicks,
@@ -4095,7 +4038,8 @@
             pointBorderWidth: 2,
             pointRadius: 5,
             pointHoverRadius: 7
-          },
+          }
+          ,
           {
             label: 'Unsubscribed (' + unsubTotal.toLocaleString() + ')',
             data: unsubscribed,
@@ -4109,7 +4053,8 @@
             pointBorderWidth: 2,
             pointRadius: 5,
             pointHoverRadius: 7
-          },
+          }
+          ,
           {
             label: 'Bounced (' + bounceTotal.toLocaleString() + ')',
             data: bounced,
@@ -4125,7 +4070,8 @@
             pointHoverRadius: 7
           }
         ]
-      },
+      }
+      ,
       options: {
         responsive: true,
         maintainAspectRatio: false,
@@ -4141,10 +4087,12 @@
                 size: 13,
                 weight: '500',
                 family: "'Inter', sans-serif"
-              },
+              }
+              ,
               color: '#374151'
             }
-          },
+          }
+          ,
           tooltip: {
             backgroundColor: 'rgba(17, 24, 39, 0.95)',
             titleColor: '#ffffff',
@@ -4156,49 +4104,58 @@
             mode: 'index',
             intersect: false
           }
-        },
+        }
+        ,
         scales: {
           x: {
-            grid: { display: false },
+            grid: {
+              display: false }
+            ,
             ticks: {
-              font: { size: 12, family: "'Inter', sans-serif" },
+              font: {
+                size: 12, family: "'Inter', sans-serif" }
+              ,
               color: '#6b7280'
             }
-          },
+          }
+          ,
           y: {
             beginAtZero: true,
             ticks: {
               stepSize: stepSize,
-              font: { size: 12, family: "'Inter', sans-serif" },
+              font: {
+                size: 12, family: "'Inter', sans-serif" }
+              ,
               color: '#6b7280'
-            },
-            grid: { color: 'rgba(0, 0, 0, 0.05)' }
+            }
+            ,
+            grid: {
+              color: 'rgba(0, 0, 0, 0.05)' }
           }
-        },
+        }
+        ,
         interaction: {
           intersect: false,
           mode: 'index'
         }
       }
-    });
+    }
+                                  );
   }
-
   function initializeActivityChart() {
     var chartData = getSendLogChartData();
     if (!chartData) return;
     renderEngagementTrendChart('activityChart', chartData['12months']);
   }
-
   function filterActivity(period) {
     document.querySelectorAll('.activity-filter').forEach(function (btn) {
       btn.classList.toggle('active', btn.getAttribute('data-period') === period);
-    });
+    }
+                                                         );
     updateEngagementTrendCharts(period);
   }
-
   function showAllJourneys() {
     hideAllSections();
-    
     document.getElementById('allSurveysSection').style.display = 'block';
     var surveysGrid = document.getElementById('surveysGrid');
     if (surveysGrid) {
@@ -4208,15 +4165,15 @@
     if (buildsPaginationSection) {
       buildsPaginationSection.style.display = 'block';
     }
-    
     document.querySelectorAll('.nav-link').forEach(link => {
       link.classList.remove('active');
-    });
+    }
+                                                  );
     document.querySelector('.nav-link[onclick*="showAllJourneys"]').classList.add('active');
-    
-    document.getElementById('allSurveysSection').scrollIntoView({ behavior: 'smooth' });
+    document.getElementById('allSurveysSection').scrollIntoView({
+      behavior: 'smooth' }
+                                                               );
   }
-  
   // Show Dashboard functionality
   function showDashboard() {
     hideAllSections();
@@ -4224,48 +4181,42 @@
     document.querySelector('.stats-grid').style.display = 'grid';
     document.querySelector('.section-header').style.display = 'flex';
     document.getElementById('homeEngagementChartWrap').style.display = 'block';
-  
     document.querySelectorAll('.nav-link').forEach(link => {
       link.classList.remove('active');
-    });
+    }
+                                                  );
     document.querySelector('.nav-link:first-of-type').classList.add('active');
-  
     window.scrollTo(0, 0);
   }
-  
   // Show Reports functionality
   function showReports() {
     // Hide all sections first
     hideAllSections();
-    
     // Show reports section
     document.getElementById('reportsSection').style.display = 'block';
-    
     // Update navigation active state
     document.querySelectorAll('.nav-link').forEach(link => {
       link.classList.remove('active');
-    });
+    }
+                                                  );
     document.querySelector('.nav-link[onclick*="showReports"]').classList.add('active');
-    
     // Initialize reports chart
     initializeReportsChart();
-    
     // Scroll to top
     window.scrollTo(0, 0);
   }
-  
   // Show Responses functionality
   function showResponses() {
     hideAllSections();
     document.getElementById('responsesSection').style.display = 'block';
     document.querySelectorAll('.nav-link').forEach(link => {
       link.classList.remove('active');
-    });
+    }
+                                                  );
     document.querySelector('.nav-link[onclick*="showResponses"]').classList.add('active');
     initDeployChecklist();
     window.scrollTo(0, 0);
   }
-  
   function updateDeployChecklistProgress() {
     var inputs = document.querySelectorAll('.deploy-checklist-input');
     var progressEl = document.getElementById('deployChecklistProgress');
@@ -4273,10 +4224,10 @@
     var done = 0;
     inputs.forEach(function (input) {
       if (input.checked) done++;
-    });
+    }
+                  );
     progressEl.textContent = done + ' of ' + inputs.length + ' complete';
   }
-  
   function initDeployChecklist() {
     var inputs = document.querySelectorAll('.deploy-checklist-input');
     if (!inputs.length) return;
@@ -4289,11 +4240,12 @@
         var row = input.closest('.deploy-checklist-item');
         if (row) row.classList.toggle('is-checked', input.checked);
         updateDeployChecklistProgress();
-      });
-    });
+      }
+                            );
+    }
+                  );
     updateDeployChecklistProgress();
   }
-  
   document.addEventListener('DOMContentLoaded', function () {
     initDeployChecklist();
     var resetBtn = document.getElementById('deployChecklistResetBtn');
@@ -4303,30 +4255,29 @@
           input.checked = false;
           var item = input.closest('.deploy-checklist-item');
           if (item) item.classList.remove('is-checked');
-        });
+        }
+                                                                    );
         updateDeployChecklistProgress();
-      });
+      }
+                               );
     }
-  });
-  
+  }
+                           );
   // Show Team functionality
   function showTeam() {
     // Hide all sections first
     hideAllSections();
-    
     // Show team section
     document.getElementById('teamSection').style.display = 'block';
-    
     // Update navigation active state
     document.querySelectorAll('.nav-link').forEach(link => {
       link.classList.remove('active');
-    });
+    }
+                                                  );
     document.querySelector('.nav-link[onclick*="showTeam"]').classList.add('active');
-    
     // Scroll to top
     window.scrollTo(0, 0);
   }
-  
   // Hide all sections helper function
   function hideAllSections() {
     document.getElementById('breadcrumbSection').style.display = 'none';
@@ -4348,7 +4299,6 @@
     document.getElementById('responsesSection').style.display = 'none';
     document.getElementById('teamSection').style.display = 'none';
   }
-  
   function initializeReportsChart() {
     var reportsSection = document.getElementById('reportsSection');
     var period = reportsSection ? getActivePeriod(reportsSection) : '12months';
@@ -4356,138 +4306,91 @@
     renderSpecialtyChart();
     renderOpenClickChart();
   }
-  
   // Search responses functionality
   function searchResponses() {
     const searchInput = document.getElementById('responseSearch');
     const searchTerm = searchInput.value.toLowerCase();
     const responseCards = document.querySelectorAll('.response-card');
     let visibleCount = 0;
-  
     responseCards.forEach(card => {
       const journeyTitle = card.querySelector('.response-survey h4').textContent.toLowerCase();
       const journeyKey = card.querySelector('.response-id').textContent.toLowerCase();
       const contact = card.querySelector('.response-contact').textContent.toLowerCase();
       const status = card.querySelector('.response-status').textContent.toLowerCase();
-  
       const isMatch = journeyTitle.includes(searchTerm) ||
-                     journeyKey.includes(searchTerm) ||
-                     contact.includes(searchTerm) || 
-                     status.includes(searchTerm);
-      
+            journeyKey.includes(searchTerm) ||
+            contact.includes(searchTerm) || 
+            status.includes(searchTerm);
       if (isMatch) {
         card.style.display = 'block';
         visibleCount++;
-      } else {
+      }
+      else {
         card.style.display = 'none';
       }
-    });
-  
+    }
+                         );
     // Show/hide no results message
     toggleNoResponsesMessage(visibleCount === 0 && searchTerm !== '');
   }
-  
   // Toggle response filter (placeholder for future functionality)
   function toggleResponseFilter() {
     alert('Response filters are not available yet. Search by journey name, ID, contact, or status.');
   }
-  
   // Show/hide no responses message
   function toggleNoResponsesMessage(show) {
     let noResultsMsg = document.querySelector('.no-responses-message');
-    
     if (show && !noResultsMsg) {
       // Create no results message
       const responsesGrid = document.querySelector('.responses-grid');
       noResultsMsg = document.createElement('div');
       noResultsMsg.className = 'no-responses-message';
       noResultsMsg.innerHTML = `
-        <div class="empty-state">
-          <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-            <circle cx="11" cy="11" r="8"></circle>
-            <path d="m21 21-4.35-4.35"></path>
-          </svg>
-          <h3>No activity rows found</h3>
-          <p>Adjust your search or clear it to reload the subscriber log demo.</p>
-          <button class="btn-primary" onclick="clearResponseSearch()">Clear search</button>
-        </div>
-      `;
+<div class="empty-state">
+<svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+<circle cx="11" cy="11" r="8"></circle>
+<path d="m21 21-4.35-4.35"></path>
+  </svg>
+<h3>No activity rows found</h3>
+<p>Adjust your search or clear it to reload the subscriber log demo.</p>
+<button class="btn-primary" onclick="clearResponseSearch()">Clear search</button>
+  </div>
+`;
       responsesGrid.appendChild(noResultsMsg);
-    } else if (!show && noResultsMsg) {
+    }
+    else if (!show && noResultsMsg) {
       noResultsMsg.remove();
     }
   }
-  
   // Clear response search functionality
   function clearResponseSearch() {
     document.getElementById('responseSearch').value = '';
     searchResponses();
   }
-  
   // Filter team functionality
   function filterTeam(filter) {
     // Update active filter button
     document.querySelectorAll('[data-team-filter]').forEach(btn => {
       btn.classList.remove('active');
-    });
-    document.querySelector(`[data-team-filter="${filter}"]`).classList.add('active');
-    
+    }
+                                                           );
+    document.querySelector(`[data-team-filter="${filter}
+"]`).classList.add('active');
     const teamCards = document.querySelectorAll('.team-card');
-    
     teamCards.forEach(card => {
       const status = card.querySelector('.team-status').textContent.toLowerCase();
       const lastSeen = card.querySelector('.team-last-seen').textContent.toLowerCase();
-      
       let shouldShow = true;
-      
       if (filter === 'online') {
         shouldShow = status === 'online';
-      } else if (filter === 'recent') {
+      }
+      else if (filter === 'recent') {
         // Show users active in last 30 minutes
         shouldShow = lastSeen.includes('minutes ago') || lastSeen.includes('minute ago');
       }
       // 'all' shows everything
-      
       card.style.display = shouldShow ? 'block' : 'none';
-    });
+    }
+                     );
   }
-  
-  
-  </script>
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-
+</script>
