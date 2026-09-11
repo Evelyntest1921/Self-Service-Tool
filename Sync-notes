@@ -1,17 +1,110 @@
-Content Block (paste contentblock-update-campaignmember-status) — set ID in SSJS.
+%%[
+SET @campaignId = Trim(@sfCampaignId)
+SET @fromStatus = Trim(@sfFromStatus)
+SET @toStatus = Trim(@sfToStatus)
+SET @subscriberKey = Trim(@sfSubscriberKey)
+SET @maxRows = 2000
+SET @logDe = "sst_de_journey_exit_log"
 
-SSJS Script Activity pattern:
-<script runat="server">
-Platform.Load("Core","1");
-try {
-	Platform.Variable.SetValue("@sfCampaignId", "701XXXXXXXXXXXXXXX");
-	Platform.Variable.SetValue("@sfFromStatus", "Sent");
-	Platform.Variable.SetValue("@sfToStatus", "Responded");
-	Platform.Function.TreatAsContent('\%\%=contentblockbyid("0357")=\%\%');
-}
-catch(error) {
-	Write('Message: '+ Stringify(error));
-}
-</script>
+IF Empty(@toStatus) THEN
+  SET @toStatus = "Responded"
+ENDIF
 
-Use stack-update-campaignmember-status for the full version with log DE writes.
+SET @updated = 0
+SET @failed = 0
+SET @skipped = 0
+SET @cnt = 0
+SET @err = ""
+SET @logMsg = ""
+SET @cmId = ""
+
+IF Empty(@campaignId) THEN
+  SET @err = "Missing @sfCampaignId"
+ELSEIF NOT Empty(@subscriberKey) THEN
+  SET @cmRows = RetrieveSalesforceObjects(
+    "CampaignMember",
+    "Id,Status,CampaignId",
+    "CampaignId", "=", @campaignId,
+    "ContactId", "=", @subscriberKey
+  )
+  IF RowCount(@cmRows) == 0 THEN
+    SET @cmRows = RetrieveSalesforceObjects(
+      "CampaignMember",
+      "Id,Status,CampaignId",
+      "CampaignId", "=", @campaignId,
+      "LeadId", "=", @subscriberKey
+    )
+  ENDIF
+  SET @cnt = RowCount(@cmRows)
+  IF @cnt > 0 THEN
+    SET @cmId = Trim(Field(Row(@cmRows, 1), "Id"))
+  ENDIF
+  IF Empty(@cmId) THEN
+    SET @err = Concat("No CampaignMember for campaign=", @campaignId, " sk=", @subscriberKey)
+  ELSE
+    SET @ok = UpdateSingleSalesforceObject(
+      "CampaignMember",
+      @cmId,
+      "Status",
+      @toStatus
+    )
+    IF @ok == 1 THEN
+      SET @updated = 1
+    ELSE
+      SET @failed = 1
+      SET @err = Concat("Update failed cmId=", @cmId)
+    ENDIF
+  ENDIF
+ELSEIF Empty(@fromStatus) THEN
+  SET @err = "Missing @sfFromStatus (bulk) or @sfSubscriberKey (single)"
+ELSE
+  SET @cmRows = RetrieveSalesforceObjects(
+    "CampaignMember",
+    "Id,Status,CampaignId",
+    "CampaignId", "=", @campaignId,
+    "Status", "=", @fromStatus
+  )
+  SET @cnt = RowCount(@cmRows)
+  IF @cnt > @maxRows THEN
+    SET @cnt = @maxRows
+  ENDIF
+
+  FOR @i = 1 TO @cnt DO
+    SET @cmRow = Row(@cmRows, @i)
+    SET @cmId = Trim(Field(@cmRow, "Id"))
+    IF Empty(@cmId) THEN
+      SET @skipped = Add(@skipped, 1)
+    ELSE
+      SET @ok = UpdateSingleSalesforceObject(
+        "CampaignMember",
+        @cmId,
+        "Status",
+        @toStatus
+      )
+      IF @ok == 1 THEN
+        SET @updated = Add(@updated, 1)
+      ELSE
+        SET @failed = Add(@failed, 1)
+      ENDIF
+    ENDIF
+  NEXT @i
+ENDIF
+
+IF Empty(@err) THEN
+  SET @logMsg = Concat(
+    "CM status update OK campaign=", @campaignId,
+    " sk=", @subscriberKey,
+    " from=", @fromStatus,
+    " to=", @toStatus,
+    " found=", @cnt,
+    " updated=", @updated,
+    " failed=", @failed,
+    " skipped=", @skipped
+  )
+ELSE
+  SET @logMsg = Concat("CM status update ERROR ", @err)
+ENDIF
+
+InsertDE(@logDe, "log", @logMsg)
+]%%
+%%=v(@logMsg)=%%

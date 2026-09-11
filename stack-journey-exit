@@ -2,13 +2,16 @@
 Platform.Load("core", "1");
 
 var EXIT_QUEUE_DE = "bd_sst_journey_exit";
+var BATCH_DE = "bd_sst_journey_exit_batch";
 var LOG_DE = "sst_de_journey_exit_log";
 var LOG_FIELD = "log";
 var LOG_MAX_LEN = 4000;
 var EXIT_BATCH_SIZE = 50;
+var CM_STATUS_TO = "Responded";
 
 var resultLines = [];
 var debugLines = [];
+var batchMetaCache = {};
 
 function strTrim(v) {
   if (v === null || typeof v === "undefined") {
@@ -528,6 +531,70 @@ function exitErrorMap(body) {
   return map;
 }
 
+function lookupBatchMeta(batchId) {
+  var bid = strTrim(batchId);
+  if (!bid) {
+    return { ok: false, sourceType: "", campaignId: "" };
+  }
+  var cacheKey = asLower(bid);
+  if (batchMetaCache[cacheKey]) {
+    return batchMetaCache[cacheKey];
+  }
+  var meta = { ok: false, sourceType: "", campaignId: "", batchId: bid };
+  try {
+    var rows = Platform.Function.LookupRows(BATCH_DE, "batchId", bid);
+    if (rows && rows.length) {
+      var row = rows[0];
+      meta.ok = true;
+      meta.sourceType = asLower(
+        strTrim(row.sourceType || row.SourceType || "")
+      );
+      meta.campaignId = strTrim(
+        row.campaignId || row.CampaignId || row.CAMPAIGNID || ""
+      );
+    }
+  } catch (lookEx) {
+    meta.error = lookEx.message || String(lookEx);
+  }
+  if (!meta.ok) {
+    try {
+      var rows2 = Platform.Function.LookupRows(BATCH_DE, "BatchId", bid);
+      if (rows2 && rows2.length) {
+        var row2 = rows2[0];
+        meta.ok = true;
+        meta.sourceType = asLower(
+          strTrim(row2.sourceType || row2.SourceType || "")
+        );
+        meta.campaignId = strTrim(
+          row2.campaignId || row2.CampaignId || row2.CAMPAIGNID || ""
+        );
+      }
+    } catch (lookEx2) {
+      meta.error = lookEx2.message || String(lookEx2);
+    }
+  }
+  batchMetaCache[cacheKey] = meta;
+  return meta;
+}
+
+function markCampaignMemberResponded(campaignId, subscriberKey) {
+  var camp = strTrim(campaignId);
+  var sk = strTrim(subscriberKey);
+  if (!camp || !sk) {
+    return { ok: false, error: "Missing campaignId or subscriberKey." };
+  }
+  try {
+    Platform.Variable.SetValue("@sfCampaignId", camp);
+    Platform.Variable.SetValue("@sfSubscriberKey", sk);
+    Platform.Variable.SetValue("@sfToStatus", CM_STATUS_TO);
+    Platform.Variable.SetValue("@sfFromStatus", "");
+    Platform.Function.TreatAsContent('\%\%=contentblockbyid("0357")=\%\%');
+    return { ok: true };
+  } catch (sfEx) {
+    return { ok: false, error: sfEx.message || String(sfEx) };
+  }
+}
+
 function processJourneyGroup(auth, token, group, definition) {
   var label =
     (group.journeyName || definition.name || "(no name)") +
@@ -548,9 +615,9 @@ function processJourneyGroup(auth, token, group, definition) {
   for (var c = 0; c < chunks.length; c++) {
     var chunk = chunks[c];
     var payload = [];
-    for (var p = 0; p < chunk.length; p++) {
+    for (var p2 = 0; p2 < chunk.length; p2++) {
       payload.push({
-        ContactKey: chunk[p].subscriberKey,
+        ContactKey: chunk[p2].subscriberKey,
         DefinitionKey: definition.key
       });
     }
@@ -612,11 +679,30 @@ function processJourneyGroup(auth, token, group, definition) {
         continue;
       }
       okCount++;
+      var cmNote = "";
+      var batchMeta = lookupBatchMeta(contact.batchId);
+      if (
+        batchMeta.ok &&
+        batchMeta.sourceType === "campaign" &&
+        batchMeta.campaignId
+      ) {
+        var cmUp = markCampaignMemberResponded(
+          batchMeta.campaignId,
+          contact.subscriberKey
+        );
+        if (cmUp.ok) {
+          cmNote = " CM Status→" + CM_STATUS_TO + " requested.";
+        } else {
+          cmNote =
+            " CM Status update FAILED: " + (cmUp.error || "unknown");
+        }
+      }
       lines.push(
         contact.subscriberKey +
           " @ " +
           label +
-          " — EXIT ACCEPTED, queue row removed."
+          " — EXIT ACCEPTED, queue row removed." +
+          cmNote
       );
     }
     lines.push(
