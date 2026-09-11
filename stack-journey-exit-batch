@@ -236,6 +236,16 @@ function fetchPendingBatches(prox) {
         );
         continue;
       }
+      var sourceType = asLower(row.sourceType) || "dataextension";
+      if (sourceType === "campaign") {
+        notes.push(
+          sourceLabel +
+            " skipped batchId=" +
+            row.batchId +
+            " sourceType=campaign (Query Activity owns seeding)"
+        );
+        continue;
+      }
       var id = asLower(row.batchId);
       if (seen[id]) {
         continue;
@@ -730,15 +740,12 @@ function processBatch(prox, batch) {
     return label + " — SKIP missing batchId.";
   }
   if (sourceType === "campaign") {
-    if (!strTrim(batch.campaignId)) {
-      updateBatchRow(batchId, "Failed", "Missing campaignId.");
-      return label + " — FAILED missing campaignId.";
-    }
-    if (!strTrim(batch.memberStatus)) {
-      updateBatchRow(batchId, "Failed", "Missing memberStatus.");
-      return label + " — FAILED missing memberStatus.";
-    }
-  } else if (!strTrim(batch.sourceDeName)) {
+    return (
+      label +
+      " — SKIP campaign batch (seeded by Query Activity; exit worker updates batch status)."
+    );
+  }
+  if (!strTrim(batch.sourceDeName)) {
     updateBatchRow(batchId, "Failed", "Missing sourceDeName.");
     return label + " — FAILED missing sourceDeName.";
   }
@@ -750,9 +757,7 @@ function processBatch(prox, batch) {
   var markProcessing = updateBatchRow(
     batchId,
     "Processing",
-    sourceType === "campaign"
-      ? "Finalizing campaign queue from Query Activity."
-      : "Seeder started."
+    "Seeder started."
   );
   if (!markProcessing.ok) {
     return (
@@ -760,32 +765,6 @@ function processBatch(prox, batch) {
       " — could not mark Processing: " +
       (markProcessing.error || "unknown")
     );
-  }
-
-  if (sourceType === "campaign") {
-    var queued = countExitQueueForBatch(prox, batchId);
-    debugLines.push(
-      batchId +
-        " campaign queue count=" +
-        queued.count +
-        " notes=" +
-        (queued.notes || "")
-    );
-    if (!queued.count) {
-      var failMsg =
-        "Campaign Query Activity queued 0 rows for this batch. Check automation order (Query before seeder), CampaignMember_Salesforce_2, CampaignId, Status, and LeadOrContactId. " +
-        (queued.notes || "");
-      updateBatchRow(batchId, "Failed", failMsg, 0);
-      return label + " — FAILED " + failMsg;
-    }
-    var campSummary =
-      "Campaign Query seeded " +
-      queued.count +
-      " row(s) into " +
-      EXIT_QUEUE_DE +
-      " using LeadOrContactId.";
-    updateBatchRow(batchId, "Done", campSummary, queued.count);
-    return label + " — DONE " + campSummary;
   }
 
   var identity = resolveDeIdentity(prox, batch.sourceDeName);
