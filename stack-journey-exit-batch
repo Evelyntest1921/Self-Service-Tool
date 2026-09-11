@@ -191,13 +191,7 @@ function isWorkableBatchStatus(status) {
   if (!s) {
     return true;
   }
-  return (
-    s === "pending" ||
-    s === "failed" ||
-    s === "queued" ||
-    s === "processing" ||
-    s === "done"
-  );
+  return s === "pending" || s === "failed";
 }
 
 function fetchPendingBatches(prox) {
@@ -254,6 +248,33 @@ function fetchPendingBatches(prox) {
     }
   }
 
+  function finalizeFetch(errorText) {
+    collected.sort(function (a, b) {
+      var as = asLower(a.status);
+      var bs = asLower(b.status);
+      if (as === "pending" && bs !== "pending") {
+        return -1;
+      }
+      if (bs === "pending" && as !== "pending") {
+        return 1;
+      }
+      return 0;
+    });
+    var countBits = [];
+    for (var ck in statusCounts) {
+      if (statusCounts.hasOwnProperty(ck)) {
+        countBits.push(ck + "=" + statusCounts[ck]);
+      }
+    }
+    return {
+      rows: collected,
+      error: errorText || "",
+      notes: notes.join(" | "),
+      statusCounts: statusCounts,
+      statusSummary: countBits.join(", ")
+    };
+  }
+
   for (var v = 0; v < keyVariants.length; v++) {
     var deKey = keyVariants[v];
     try {
@@ -261,12 +282,7 @@ function fetchPendingBatches(prox) {
       var initRows = de.Rows.Retrieve();
       addRows(initRows, "Init(" + deKey + ")");
       if (collected.length) {
-        return {
-          rows: collected,
-          error: "",
-          notes: notes.join(" | "),
-          statusCounts: statusCounts
-        };
+        return finalizeFetch("");
       }
     } catch (deEx) {
       errors.push(
@@ -278,7 +294,8 @@ function fetchPendingBatches(prox) {
   var filters = [
     { Property: "batchId", SimpleOperator: "isNotNull" },
     { Property: "status", SimpleOperator: "isNotNull" },
-    { Property: "sourceDeName", SimpleOperator: "isNotNull" }
+    { Property: "sourceType", SimpleOperator: "isNotNull" },
+    { Property: "campaignId", SimpleOperator: "isNotNull" }
   ];
   for (var f = 0; f < filters.length; f++) {
     for (var k = 0; k < keyVariants.length; k++) {
@@ -293,12 +310,7 @@ function fetchPendingBatches(prox) {
           "WSProxy[" + keyVariants[k] + "]/" + filters[f].Property
         );
         if (collected.length) {
-          return {
-            rows: collected,
-            error: "",
-            notes: notes.join(" | "),
-            statusCounts: statusCounts
-          };
+          return finalizeFetch("");
         }
       } catch (wsEx) {
         errors.push(
@@ -313,7 +325,7 @@ function fetchPendingBatches(prox) {
     }
   }
 
-  var statusValues = ["Pending", "Failed", "Queued", "Processing", "Done"];
+  var statusValues = ["Pending", "Failed"];
   for (var s = 0; s < statusValues.length; s++) {
     for (var k2 = 0; k2 < keyVariants.length; k2++) {
       try {
@@ -342,28 +354,10 @@ function fetchPendingBatches(prox) {
   }
 
   if (collected.length) {
-    return {
-      rows: collected,
-      error: "",
-      notes: notes.join(" | "),
-      statusCounts: statusCounts
-    };
+    return finalizeFetch("");
   }
 
-  var countBits = [];
-  for (var ck in statusCounts) {
-    if (statusCounts.hasOwnProperty(ck)) {
-      countBits.push(ck + "=" + statusCounts[ck]);
-    }
-  }
-
-  return {
-    rows: [],
-    error: errors.join(" | "),
-    notes: notes.join(" | "),
-    statusCounts: statusCounts,
-    statusSummary: countBits.join(", ")
-  };
+  return finalizeFetch(errors.join(" | "));
 }
 
 function updateBatchRow(batchId, status, message, contactsProcessed) {
@@ -942,9 +936,9 @@ try {
 
   if (!batches.length) {
     resultLines.push(
-      "No workable batches found. Check Fetch notes/Status counts in the log. Expected DE external key: " +
+        "No workable batches found. Check Fetch notes/Status counts in the log. Expected DE external key: " +
         BATCH_DE +
-        ". Workable statuses: Pending, Failed, Queued, Processing, Done, or blank."
+        ". Workable statuses: Pending, Failed, or blank."
     );
   } else {
     var runCount =
@@ -966,8 +960,12 @@ try {
           (batches[b].batchId || "") +
           " status=" +
           (batches[b].status || "") +
+          " sourceType=" +
+          (batches[b].sourceType || "") +
           " sourceDeName=" +
           (batches[b].sourceDeName || "") +
+          " campaignId=" +
+          (batches[b].campaignId || "") +
           " journeyId=" +
           (batches[b].journeyID || "")
       );

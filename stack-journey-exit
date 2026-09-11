@@ -13,6 +13,7 @@ var resultLines = [];
 var debugLines = [];
 var batchMetaCache = {};
 var cmUpdatePairs = [];
+var batchExitStats = {};
 
 function strTrim(v) {
   if (v === null || typeof v === "undefined") {
@@ -588,6 +589,125 @@ function queueCampaignMemberResponded(campaignId, subscriberKey) {
   return true;
 }
 
+function recordBatchExitResult(batchId, accepted) {
+  var bid = strTrim(batchId);
+  if (!bid) {
+    return;
+  }
+  var key = asLower(bid);
+  if (!batchExitStats[key]) {
+    batchExitStats[key] = { batchId: bid, accepted: 0, failed: 0 };
+  }
+  if (accepted) {
+    batchExitStats[key].accepted++;
+  } else {
+    batchExitStats[key].failed++;
+  }
+}
+
+function updateBatchRow(batchId, status, message, contactsProcessed) {
+  var id = strTrim(batchId);
+  if (!id) {
+    return { ok: false, error: "Missing batchId." };
+  }
+  var msg = strTrim(message).substring(0, 3900);
+  var countVal =
+    contactsProcessed === null || typeof contactsProcessed === "undefined"
+      ? ""
+      : String(contactsProcessed);
+  try {
+    if (countVal !== "") {
+      Platform.Function.UpdateData(
+        BATCH_DE,
+        ["batchId"],
+        [id],
+        ["status", "processedAt", "message", "contactsProcessed"],
+        [status, new Date(), msg, countVal]
+      );
+    } else {
+      Platform.Function.UpdateData(
+        BATCH_DE,
+        ["batchId"],
+        [id],
+        ["status", "processedAt", "message"],
+        [status, new Date(), msg]
+      );
+    }
+    return { ok: true };
+  } catch (upEx) {
+    try {
+      if (countVal !== "") {
+        Platform.Function.UpdateData(
+          BATCH_DE,
+          ["batchId"],
+          [id],
+          ["status", "message", "contactsProcessed"],
+          [status, msg, countVal]
+        );
+      } else {
+        Platform.Function.UpdateData(
+          BATCH_DE,
+          ["batchId"],
+          [id],
+          ["status", "message"],
+          [status, msg]
+        );
+      }
+      return { ok: true };
+    } catch (upEx2) {
+      return {
+        ok: false,
+        error:
+          (upEx.message || String(upEx)) +
+          " | " +
+          (upEx2.message || String(upEx2))
+      };
+    }
+  }
+}
+
+function flushBatchStatusUpdates() {
+  var lines = [];
+  for (var key in batchExitStats) {
+    if (!batchExitStats.hasOwnProperty(key)) {
+      continue;
+    }
+    var stat = batchExitStats[key];
+    var status =
+      stat.accepted > 0 ? "Done" : "Failed";
+    var message =
+      "Exit worker finished: accepted=" +
+      stat.accepted +
+      ", failed=" +
+      stat.failed +
+      ".";
+    var updated = updateBatchRow(
+      stat.batchId,
+      status,
+      message,
+      stat.accepted
+    );
+    if (updated.ok) {
+      lines.push(
+        "Batch " +
+          stat.batchId +
+          " → " +
+          status +
+          " contactsProcessed=" +
+          stat.accepted
+      );
+    } else {
+      lines.push(
+        "Batch " +
+          stat.batchId +
+          " status update FAILED: " +
+          (updated.error || "unknown")
+      );
+    }
+  }
+  return lines;
+}
+
 function flushCampaignMemberStatusUpdates() {
   if (!cmUpdatePairs.length) {
     return { ok: true, skipped: true, count: 0 };
@@ -678,6 +798,7 @@ function processJourneyGroup(auth, token, group, definition) {
       var err = errMap[asLower(contact.subscriberKey)];
       if (err) {
         failCount++;
+        recordBatchExitResult(contact.batchId, false);
         lines.push(
           contact.subscriberKey +
             " @ " +
@@ -696,6 +817,7 @@ function processJourneyGroup(auth, token, group, definition) {
       );
       if (!removed.ok) {
         failCount++;
+        recordBatchExitResult(contact.batchId, false);
         lines.push(
           contact.subscriberKey +
             " @ " +
@@ -706,6 +828,7 @@ function processJourneyGroup(auth, token, group, definition) {
         continue;
       }
       okCount++;
+      recordBatchExitResult(contact.batchId, true);
       var cmNote = "";
       var batchMeta = lookupBatchMeta(contact.batchId);
       if (
@@ -824,6 +947,11 @@ try {
           " detail=" +
           (cmFlush.error || "unknown")
       );
+    }
+
+    var batchFlushLines = flushBatchStatusUpdates();
+    for (var bf = 0; bf < batchFlushLines.length; bf++) {
+      resultLines.push(batchFlushLines[bf]);
     }
   }
 } catch (runEx) {
