@@ -654,576 +654,66 @@ function insertExitQueueRow(subscriberKey, journeyName, journeyId, batchId) {
   return { ok: false, error: errors.join(" | "), key: rowKey, batchId: bid };
 }
 
-function lookupEnvironment() {
-  try {
-    return asLower(
-      Platform.Function.Lookup(
-        "bd_sst_page_navigation",
-        "environment",
-        "type",
-        "cloudpage"
-      ) || ""
-    );
-  } catch (e) {
-    return "";
+function countExitQueueForBatch(prox, batchId) {
+  var bid = strTrim(batchId);
+  if (!bid) {
+    return { ok: false, count: 0, notes: "Missing batchId." };
   }
-}
-
-function campaignIdVariants(campaignId) {
-  var c = strTrim(campaignId);
-  var out = [];
-  var seen = {};
-  function add(v) {
-    var s = strTrim(v);
-    if (!s || seen[asLower(s)]) {
-      return;
-    }
-    seen[asLower(s)] = true;
-    out.push(s);
-  }
-  add(c);
-  if (c.length >= 18) {
-    add(c.substring(0, 18));
-  }
-  if (c.length >= 15) {
-    add(c.substring(0, 15));
-  }
-  return out;
-}
-
-function campaignIdsMatch(left, right) {
-  var a = asLower(strTrim(left));
-  var b = asLower(strTrim(right));
-  if (!a || !b) {
-    return false;
-  }
-  if (a === b) {
-    return true;
-  }
-  if (a.length >= 15 && b.length >= 15 && a.substring(0, 15) === b.substring(0, 15)) {
-    return true;
-  }
-  return false;
-}
-
-function statusesMatch(left, right) {
-  return asLower(strTrim(left)) === asLower(strTrim(right));
-}
-
-function campaignMemberDeKeys(environment) {
-  if (asLower(environment) === "uat") {
-    return ["CampaignMember_Salesforce_2", "CampaignMember_Salesforce_1", "CampaignMember_Salesforce"];
-  }
-  return ["CampaignMember_Salesforce_1", "CampaignMember_Salesforce", "CampaignMember_Salesforce_2"];
-}
-
-function ampEscape(value) {
-  return strTrim(value)
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '""')
-    .replace(/'/g, "");
-}
-
-function soqlEscape(value) {
-  return strTrim(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-}
-
-function filterCampaignMemberRows(rows, campaignId, memberStatus) {
-  var out = [];
-  var statusSamples = {};
-  var campSampleList = [];
-  var campSampleSeen = {};
-  var i;
-  for (i = 0; i < rows.length; i++) {
-    var rowCamp = strTrim(
-      fieldFromRow(rows[i], [
-        "CampaignId",
-        "campaignId",
-        "CAMPAIGNID",
-        "CampaignID"
-      ])
-    );
-    var rowStatus = strTrim(
-      fieldFromRow(rows[i], ["Status", "status", "STATUS", "MemberStatus"])
-    );
-    if (rowCamp && !campSampleSeen[asLower(rowCamp)] && campSampleList.length < 5) {
-      campSampleSeen[asLower(rowCamp)] = true;
-      campSampleList.push(rowCamp);
-    }
-    if (campaignIdsMatch(rowCamp, campaignId)) {
-      if (rowStatus) {
-        statusSamples[rowStatus] = (statusSamples[rowStatus] || 0) + 1;
-      }
-      if (statusesMatch(rowStatus, memberStatus)) {
-        var contactId = strTrim(
-          fieldFromRow(rows[i], [
-            "ContactId",
-            "contactId",
-            "CONTACTID",
-            "SubscriberKey",
-            "subscriberKey"
-          ])
-        );
-        if (contactId) {
-          out.push(rows[i]);
-        }
-      }
-    }
-  }
-  var statusBits = [];
-  for (var st in statusSamples) {
-    if (statusSamples.hasOwnProperty(st)) {
-      statusBits.push(st + "=" + statusSamples[st]);
-    }
-  }
-  return {
-    rows: out,
-    statusSummary: statusBits.join(", "),
-    campaignSamples: campSampleList.join(", ")
-  };
-}
-
-function contactRowsFromIds(contactIds) {
-  var rows = [];
-  var i;
-  for (i = 0; i < contactIds.length; i++) {
-    var id = strTrim(contactIds[i]);
-    if (id) {
-      rows.push({ ContactId: id, contactId: id, SubscriberKey: id });
-    }
-  }
-  return rows;
-}
-
-function retrieveCampaignMembersViaConnect(campaignId, memberStatus) {
   var notes = [];
-  var variants = campaignIdVariants(campaignId);
-  var v;
-  for (v = 0; v < variants.length; v++) {
-    var camp = ampEscape(variants[v]);
-    var st = ampEscape(memberStatus);
-    if (!camp || !st) {
-      continue;
-    }
+  var countFields = ["batchID", "batchId"];
+  var c;
+  for (c = 0; c < countFields.length; c++) {
     try {
-      var amp = "";
-      amp += "%%[";
-      amp += 'SET @cmRows = RetrieveSalesforceObjects("CampaignMember","Id,ContactId,CampaignId,Status","CampaignId","=","' + camp + '","Status","=","' + st + '") ';
-      amp += "SET @cmOut = \"\" ";
-      amp += "SET @cmCount = RowCount(@cmRows) ";
-      amp += "IF @cmCount > 0 THEN ";
-      amp += "FOR @cmI = 1 TO @cmCount DO ";
-      amp += "SET @cmRow = Row(@cmRows,@cmI) ";
-      amp += 'SET @cmContactId = Field(@cmRow,"ContactId") ';
-      amp += "IF NOT Empty(@cmContactId) THEN ";
-      amp += 'SET @cmOut = Concat(@cmOut, Trim(@cmContactId), "|") ';
-      amp += "ENDIF ";
-      amp += "NEXT @cmI ";
-      amp += "ENDIF ";
-      amp += "]%%%%=v(@cmOut)=%%";
-      var rendered = Platform.Function.TreatAsContent(amp);
-      var text = strTrim(rendered);
-      notes.push("Connect[" + variants[v] + "] rawLen=" + text.length);
-      if (!text) {
-        continue;
+      var rows = Platform.Function.LookupRows(EXIT_QUEUE_DE, countFields[c], bid);
+      var n = rows && rows.length ? rows.length : 0;
+      notes.push("LookupRows(" + countFields[c] + ")=" + n);
+      if (n > 0) {
+        return { ok: true, count: n, notes: notes.join(" | ") };
       }
-      var parts = text.split("|");
-      var ids = [];
-      var seen = {};
-      var i;
-      for (i = 0; i < parts.length; i++) {
-        var id = strTrim(parts[i]);
-        if (!id || seen[asLower(id)]) {
-          continue;
-        }
-        seen[asLower(id)] = true;
-        ids.push(id);
-      }
-      notes.push("Connect[" + variants[v] + "] contacts=" + ids.length);
-      if (ids.length) {
-        return {
-          ok: true,
-          deKey: "Salesforce.CampaignMember",
-          rows: contactRowsFromIds(ids),
-          notes: notes.join(" | ")
-        };
-      }
-    } catch (connectEx) {
+    } catch (lookEx) {
       notes.push(
-        "Connect[" + variants[v] + "] ERROR " + (connectEx.message || String(connectEx))
+        "LookupRows(" +
+          countFields[c] +
+          ") ERROR " +
+          (lookEx.message || String(lookEx))
       );
     }
   }
-  return { ok: false, rows: [], notes: notes.join(" | ") };
-}
 
-function lookupFieldFromAuthRow(row, names) {
-  return strTrim(fieldFromRow(row, names));
-}
-
-function getSalesforceAuthConfig() {
-  var sources = [
-    { de: "SF_AUTH", user: "Admin" },
-    { de: "SFMC_AUTH", user: "Admin" }
-  ];
-  var s;
-  for (s = 0; s < sources.length; s++) {
+  var props = ["key", "subscriberKey", "batchID", "batchId"];
+  var f;
+  for (f = 0; f < countFields.length; f++) {
     try {
-      var rows = Platform.Function.LookupRows(sources[s].de, "User", sources[s].user);
-      if (!rows || !rows.length) {
+      var wsResp = prox.retrieve(
+        "DataExtensionObject[" + EXIT_QUEUE_DE + "]",
+        props,
+        {
+          Property: countFields[f],
+          SimpleOperator: "equals",
+          Value: bid
+        }
+      );
+      var topStatus = wsResp && wsResp.Status ? String(wsResp.Status) : "";
+      if (topStatus && topStatus !== "OK") {
+        notes.push("WSProxy(" + countFields[f] + ") STATUS " + topStatus);
         continue;
       }
-      var row = rows[0];
-      var clientId = lookupFieldFromAuthRow(row, [
-        "sfClientId",
-        "salesforceClientId",
-        "SF_ClientId",
-        "clientId_sf"
-      ]);
-      var clientSecret = lookupFieldFromAuthRow(row, [
-        "sfClientSecret",
-        "salesforceClientSecret",
-        "SF_ClientSecret",
-        "clientSecret_sf"
-      ]);
-      var refreshToken = lookupFieldFromAuthRow(row, [
-        "sfRefreshToken",
-        "salesforceRefreshToken",
-        "SF_RefreshToken",
-        "refreshToken"
-      ]);
-      var loginUrl = lookupFieldFromAuthRow(row, [
-        "sfLoginUrl",
-        "salesforceLoginUrl",
-        "SF_LoginUrl",
-        "loginUrl"
-      ]);
-      var username = lookupFieldFromAuthRow(row, [
-        "sfUsername",
-        "salesforceUsername",
-        "SF_Username",
-        "username"
-      ]);
-      var password = lookupFieldFromAuthRow(row, [
-        "sfPassword",
-        "salesforcePassword",
-        "SF_Password",
-        "password"
-      ]);
-      var securityToken = lookupFieldFromAuthRow(row, [
-        "sfSecurityToken",
-        "salesforceSecurityToken",
-        "SF_SecurityToken",
-        "securityToken"
-      ]);
-      if (!loginUrl) {
-        loginUrl = "https://login.salesforce.com";
+      var wsRows = coerceRows(wsResp && wsResp.Results ? wsResp.Results : []);
+      notes.push("WSProxy(" + countFields[f] + ")=" + wsRows.length);
+      if (wsRows.length > 0) {
+        return { ok: true, count: wsRows.length, notes: notes.join(" | ") };
       }
-      if (clientId && clientSecret && (refreshToken || (username && password))) {
-        return {
-          ok: true,
-          source: sources[s].de,
-          clientId: clientId,
-          clientSecret: clientSecret,
-          refreshToken: refreshToken,
-          loginUrl: loginUrl.replace(/\/$/, ""),
-          username: username,
-          password: password,
-          securityToken: securityToken
-        };
-      }
-    } catch (authEx) {}
-  }
-  return { ok: false, error: "No Salesforce API credentials in SF_AUTH or SFMC_AUTH." };
-}
-
-function getSalesforceAccessToken(sfAuth) {
-  var tokenUrl = sfAuth.loginUrl + "/services/oauth2/token";
-  var body = "";
-  if (sfAuth.refreshToken) {
-    body =
-      "grant_type=refresh_token" +
-      "&client_id=" +
-      encodeURIComponent(sfAuth.clientId) +
-      "&client_secret=" +
-      encodeURIComponent(sfAuth.clientSecret) +
-      "&refresh_token=" +
-      encodeURIComponent(sfAuth.refreshToken);
-  } else {
-    body =
-      "grant_type=password" +
-      "&client_id=" +
-      encodeURIComponent(sfAuth.clientId) +
-      "&client_secret=" +
-      encodeURIComponent(sfAuth.clientSecret) +
-      "&username=" +
-      encodeURIComponent(sfAuth.username) +
-      "&password=" +
-      encodeURIComponent(sfAuth.password + (sfAuth.securityToken || ""));
-  }
-  var req = new Script.Util.HttpRequest(tokenUrl);
-  req.emptyContent = true;
-  req.method = "POST";
-  req.contentType = "application/x-www-form-urlencoded";
-  req.postData = body;
-  var resp = req.send();
-  var content = String(resp.content || "");
-  var parsed = {};
-  try {
-    parsed = Platform.Function.ParseJSON(content);
-  } catch (e) {
-    throw "Salesforce token parse failed: " + content;
-  }
-  if (!parsed.access_token || !parsed.instance_url) {
-    throw "Salesforce token failed: " + content;
-  }
-  return {
-    accessToken: String(parsed.access_token),
-    instanceUrl: String(parsed.instance_url).replace(/\/$/, "")
-  };
-}
-
-function httpGetJson(url, accessToken) {
-  var req = new Script.Util.HttpRequest(url);
-  req.emptyContent = true;
-  req.method = "GET";
-  req.setHeader("Authorization", "Bearer " + accessToken);
-  req.setHeader("Accept", "application/json");
-  var resp = req.send();
-  var content = String(resp.content || "");
-  try {
-    return Platform.Function.ParseJSON(content);
-  } catch (e) {
-    throw "Salesforce query parse failed: " + content;
-  }
-}
-
-function retrieveCampaignMembersViaRest(campaignId, memberStatus) {
-  var notes = [];
-  var sfAuth = getSalesforceAuthConfig();
-  if (!sfAuth.ok) {
-    return { ok: false, rows: [], notes: sfAuth.error || "No SF auth." };
-  }
-  notes.push("SF auth source=" + sfAuth.source);
-  try {
-    var tokenInfo = getSalesforceAccessToken(sfAuth);
-    var variants = campaignIdVariants(campaignId);
-    var allIds = [];
-    var seen = {};
-    var v;
-    for (v = 0; v < variants.length; v++) {
-      var soql =
-        "SELECT Id, ContactId, CampaignId, Status FROM CampaignMember WHERE CampaignId = '" +
-        soqlEscape(variants[v]) +
-        "' AND Status = '" +
-        soqlEscape(memberStatus) +
-        "' AND ContactId != null";
-      var url =
-        tokenInfo.instanceUrl +
-        "/services/data/v59.0/query?q=" +
-        encodeURIComponent(soql);
-      var page = 0;
-      while (url && page < 20) {
-        page++;
-        var parsed = httpGetJson(url, tokenInfo.accessToken);
-        var records = parsed.records || [];
-        var r;
-        for (r = 0; r < records.length; r++) {
-          var contactId = strTrim(records[r].ContactId);
-          if (!contactId || seen[asLower(contactId)]) {
-            continue;
-          }
-          seen[asLower(contactId)] = true;
-          allIds.push(contactId);
-          if (allIds.length >= MAX_ROWS_PER_BATCH) {
-            break;
-          }
-        }
-        notes.push(
-          "REST[" +
-            variants[v] +
-            "] page=" +
-            page +
-            " records=" +
-            records.length +
-            " totalIds=" +
-            allIds.length
-        );
-        if (allIds.length >= MAX_ROWS_PER_BATCH) {
-          break;
-        }
-        if (parsed.done === false && parsed.nextRecordsUrl) {
-          url = tokenInfo.instanceUrl + String(parsed.nextRecordsUrl);
-        } else {
-          url = "";
-        }
-      }
-      if (allIds.length) {
-        break;
-      }
-    }
-    if (!allIds.length) {
-      return {
-        ok: false,
-        rows: [],
-        notes: notes.join(" | ") + " | REST returned 0 ContactIds."
-      };
-    }
-    return {
-      ok: true,
-      deKey: "Salesforce.REST.CampaignMember",
-      rows: contactRowsFromIds(allIds),
-      notes: notes.join(" | ")
-    };
-  } catch (restEx) {
-    return {
-      ok: false,
-      rows: [],
-      notes: notes.join(" | ") + " | REST ERROR " + (restEx.message || String(restEx))
-    };
-  }
-}
-
-function retrieveCampaignMembersViaLocalDe(prox, campaignId, memberStatus, environment) {
-  var keys = campaignMemberDeKeys(environment);
-  var campVariants = campaignIdVariants(campaignId);
-  var notes = [];
-  var campaignFields = ["CampaignId", "campaignId"];
-  var propSets = [
-    ["ContactId", "CampaignId", "Status", "Id"],
-    ["ContactId", "CampaignId", "Status"]
-  ];
-  var k;
-  var v;
-  var f;
-  var p;
-  for (k = 0; k < keys.length; k++) {
-    for (v = 0; v < campVariants.length; v++) {
-      for (f = 0; f < campaignFields.length; f++) {
-        for (p = 0; p < propSets.length; p++) {
-          try {
-            var wsResp = prox.retrieve(
-              "DataExtensionObject[" + keys[k] + "]",
-              propSets[p],
-              {
-                Property: campaignFields[f],
-                SimpleOperator: "equals",
-                Value: campVariants[v]
-              }
-            );
-            var topStatus = wsResp && wsResp.Status ? String(wsResp.Status) : "";
-            if (topStatus && topStatus !== "OK") {
-              continue;
-            }
-            var rows = coerceRows(wsResp && wsResp.Results ? wsResp.Results : []);
-            var filtered = filterCampaignMemberRows(rows, campaignId, memberStatus);
-            notes.push(
-              "LocalDE[" +
-                keys[k] +
-                "] raw=" +
-                rows.length +
-                " matched=" +
-                filtered.rows.length
-            );
-            if (filtered.rows.length) {
-              return {
-                ok: true,
-                deKey: keys[k],
-                rows: filtered.rows,
-                notes: notes.join(" | ")
-              };
-            }
-          } catch (wsEx) {
-            notes.push(
-              "LocalDE[" + keys[k] + "] ERROR " + (wsEx.message || String(wsEx))
-            );
-          }
-        }
-      }
+    } catch (wsEx) {
+      notes.push(
+        "WSProxy(" +
+          countFields[f] +
+          ") ERROR " +
+          (wsEx.message || String(wsEx))
+      );
     }
   }
-  return { ok: false, rows: [], notes: notes.join(" | ") };
-}
 
-function retrieveCampaignMemberRows(prox, campaignId, memberStatus, environment) {
-  var camp = strTrim(campaignId);
-  var statusVal = strTrim(memberStatus);
-  if (!camp) {
-    return { ok: false, error: "Missing campaignId.", rows: [], notes: "" };
-  }
-  if (!statusVal) {
-    return { ok: false, error: "Missing memberStatus.", rows: [], notes: "" };
-  }
-  var notes = [];
-  notes.push("env=" + (environment || "(blank)"));
-  notes.push("campaign=" + camp);
-  notes.push("status=" + statusVal);
-
-  var connectResult = retrieveCampaignMembersViaConnect(camp, statusVal);
-  if (connectResult.notes) {
-    notes.push(connectResult.notes);
-  }
-  if (connectResult.ok && connectResult.rows && connectResult.rows.length) {
-    return {
-      ok: true,
-      deKey: connectResult.deKey,
-      rows: connectResult.rows,
-      notes: notes.join(" | ")
-    };
-  }
-
-  var restResult = retrieveCampaignMembersViaRest(camp, statusVal);
-  if (restResult.notes) {
-    notes.push(restResult.notes);
-  }
-  if (restResult.ok && restResult.rows && restResult.rows.length) {
-    return {
-      ok: true,
-      deKey: restResult.deKey,
-      rows: restResult.rows,
-      notes: notes.join(" | ")
-    };
-  }
-
-  var localResult = retrieveCampaignMembersViaLocalDe(
-    prox,
-    camp,
-    statusVal,
-    environment
-  );
-  if (localResult.notes) {
-    notes.push(localResult.notes);
-  }
-  if (localResult.ok && localResult.rows && localResult.rows.length) {
-    return {
-      ok: true,
-      deKey: localResult.deKey,
-      rows: localResult.rows,
-      notes: notes.join(" | ")
-    };
-  }
-
-  return {
-    ok: false,
-    error:
-      "No CampaignMember contacts found from Salesforce Connect, Salesforce REST, or local synced DEs (ENT skipped). " +
-      notes.join(" | "),
-    rows: [],
-    notes: notes.join(" | ")
-  };
-}
-
-function subscriberKeyFromCampaignRow(row) {
-  return strTrim(
-    fieldFromRow(row, [
-      "ContactId",
-      "contactId",
-      "CONTACTID",
-      "SubscriberKey",
-      "subscriberKey",
-      "Id"
-    ])
-  );
+  return { ok: true, count: 0, notes: notes.join(" | ") };
 }
 
 function processBatch(prox, batch) {
@@ -1265,7 +755,9 @@ function processBatch(prox, batch) {
   var markProcessing = updateBatchRow(
     batchId,
     "Processing",
-    "Seeder started."
+    sourceType === "campaign"
+      ? "Finalizing campaign queue from Query Activity."
+      : "Seeder started."
   );
   if (!markProcessing.ok) {
     return (
@@ -1275,66 +767,55 @@ function processBatch(prox, batch) {
     );
   }
 
-  var sourceRows = [];
-  var sourceNotes = "";
-  var sourceDeKey = "";
   if (sourceType === "campaign") {
-    var environment = lookupEnvironment();
-    var campaignSource = retrieveCampaignMemberRows(
-      prox,
-      batch.campaignId,
-      batch.memberStatus,
-      environment
-    );
-    if (!campaignSource.ok) {
-      updateBatchRow(
-        batchId,
-        "Failed",
-        campaignSource.error || "Campaign member retrieve failed."
-      );
-      return (
-        label +
-        " — FAILED " +
-        (campaignSource.error || "campaign member retrieve failed")
-      );
-    }
-    sourceRows = campaignSource.rows || [];
-    sourceNotes = campaignSource.notes || "";
-    sourceDeKey = campaignSource.deKey || "";
+    var queued = countExitQueueForBatch(prox, batchId);
     debugLines.push(
       batchId +
-        " campaign source deKey=" +
-        sourceDeKey +
-        " rows=" +
-        sourceRows.length +
+        " campaign queue count=" +
+        queued.count +
         " notes=" +
-        sourceNotes
+        (queued.notes || "")
     );
-  } else {
-    var identity = resolveDeIdentity(prox, batch.sourceDeName);
-    if (!identity.ok) {
-      updateBatchRow(batchId, "Failed", identity.error || "Source DE resolve failed.");
-      return label + " — FAILED " + (identity.error || "source resolve failed");
+    if (!queued.count) {
+      var failMsg =
+        "Campaign Query Activity queued 0 rows for this batch. Check automation order (Query before seeder), CampaignMember_Salesforce_2, CampaignId, Status, and LeadOrContactId. " +
+        (queued.notes || "");
+      updateBatchRow(batchId, "Failed", failMsg, 0);
+      return label + " — FAILED " + failMsg;
     }
-
-    var source = retrieveSourceRows(prox, identity);
-    if (!source.ok) {
-      updateBatchRow(batchId, "Failed", source.error || "Source retrieve failed.");
-      return label + " — FAILED " + (source.error || "source retrieve failed");
-    }
-    sourceRows = source.rows || [];
-    sourceNotes = source.notes || "";
-    sourceDeKey = source.deKey || "";
-    debugLines.push(
-      batchId +
-        " source deKey=" +
-        sourceDeKey +
-        " rows=" +
-        sourceRows.length +
-        " notes=" +
-        sourceNotes
-    );
+    var campSummary =
+      "Campaign Query seeded " +
+      queued.count +
+      " row(s) into " +
+      EXIT_QUEUE_DE +
+      " using LeadOrContactId.";
+    updateBatchRow(batchId, "Done", campSummary, queued.count);
+    return label + " — DONE " + campSummary;
   }
+
+  var identity = resolveDeIdentity(prox, batch.sourceDeName);
+  if (!identity.ok) {
+    updateBatchRow(batchId, "Failed", identity.error || "Source DE resolve failed.");
+    return label + " — FAILED " + (identity.error || "source resolve failed");
+  }
+
+  var source = retrieveSourceRows(prox, identity);
+  if (!source.ok) {
+    updateBatchRow(batchId, "Failed", source.error || "Source retrieve failed.");
+    return label + " — FAILED " + (source.error || "source retrieve failed");
+  }
+  var sourceRows = source.rows || [];
+  var sourceNotes = source.notes || "";
+  var sourceDeKey = source.deKey || "";
+  debugLines.push(
+    batchId +
+      " source deKey=" +
+      sourceDeKey +
+      " rows=" +
+      sourceRows.length +
+      " notes=" +
+      sourceNotes
+  );
 
   if (sourceRows.length) {
     debugLines.push(
@@ -1343,9 +824,7 @@ function processBatch(prox, batch) {
     debugLines.push(
       batchId +
         " firstSubscriberKey=" +
-        ((sourceType === "campaign"
-          ? subscriberKeyFromCampaignRow(sourceRows[0])
-          : subscriberKeyFromRow(sourceRows[0])) || "(empty)")
+        (subscriberKeyFromRow(sourceRows[0]) || "(empty)")
     );
   }
 
@@ -1353,9 +832,7 @@ function processBatch(prox, batch) {
     updateBatchRow(
       batchId,
       "Failed",
-      (sourceType === "campaign"
-        ? "Campaign member query returned 0 rows. "
-        : "Source DE returned 0 rows. ") + sourceNotes
+      "Source DE returned 0 rows. " + sourceNotes
     );
     return label + " — FAILED source returned 0 rows.";
   }
@@ -1375,10 +852,7 @@ function processBatch(prox, batch) {
       limitHit = true;
       break;
     }
-    var sk =
-      sourceType === "campaign"
-        ? subscriberKeyFromCampaignRow(sourceRows[i])
-        : subscriberKeyFromRow(sourceRows[i]);
+    var sk = subscriberKeyFromRow(sourceRows[i]);
     if (!sk) {
       skipped++;
       if (skipped <= 3) {
