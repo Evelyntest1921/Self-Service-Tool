@@ -47,12 +47,32 @@ function queueField(row, names) {
   if (!row) {
     return "";
   }
-  for (var i = 0; i < names.length; i++) {
+  var i;
+  for (i = 0; i < names.length; i++) {
     var val = row[names[i]];
     if (val !== undefined && val !== null && String(val) !== "") {
       return String(val);
     }
   }
+  try {
+    var props = row.Properties;
+    if (props && typeof props.length === "number") {
+      var want = {};
+      for (i = 0; i < names.length; i++) {
+        want[asLower(names[i])] = true;
+      }
+      for (i = 0; i < props.length; i++) {
+        var pname = props[i].Name || props[i].name;
+        var pval = props[i].Value;
+        if (pval === undefined || pval === null) {
+          pval = props[i].value;
+        }
+        if (want[asLower(pname)] && pval !== undefined && pval !== null && String(pval) !== "") {
+          return String(pval);
+        }
+      }
+    }
+  } catch (propEx) {}
   return "";
 }
 
@@ -114,7 +134,23 @@ function normalizeQueueRows(rawRows) {
 
 function fetchExitQueueRows(prox) {
   var errors = [];
+  var notes = [];
   var keyVariants = [EXIT_QUEUE_DE, String(EXIT_QUEUE_DE).toLowerCase()];
+  var propSets = [
+    ["key", "subscriberKey", "journeyName", "journeyId"],
+    ["key", "subscriberKey", "journeyName", "journeyID"],
+    ["Key", "subscriberKey", "journeyName", "journeyId"],
+    ["key", "SubscriberKey", "journeyName", "journeyId"],
+    ["key", "SubscriberKey", "JourneyName", "JourneyID"]
+  ];
+  var filters = [
+    { Property: "key", SimpleOperator: "notEquals", Value: "" },
+    { Property: "subscriberKey", SimpleOperator: "notEquals", Value: "" },
+    { Property: "SubscriberKey", SimpleOperator: "notEquals", Value: "" },
+    { Property: "journeyId", SimpleOperator: "notEquals", Value: "" },
+    { Property: "journeyID", SimpleOperator: "notEquals", Value: "" }
+  ];
+  var initSucceeded = false;
 
   for (var v = 0; v < keyVariants.length; v++) {
     var deKey = keyVariants[v];
@@ -125,8 +161,10 @@ function fetchExitQueueRows(prox) {
       var de = DataExtension.Init(deKey);
       var deRows = de.Rows.Retrieve();
       var normalized = normalizeQueueRows(deRows);
+      initSucceeded = true;
+      notes.push("Init(" + deKey + ") rows=" + normalized.length);
       if (normalized.length) {
-        return { rows: normalized, error: "" };
+        return { rows: normalized, error: "", notes: notes.join(" | ") };
       }
     } catch (deEx) {
       errors.push(
@@ -135,15 +173,6 @@ function fetchExitQueueRows(prox) {
     }
   }
 
-  var filters = [
-    { Property: "key", SimpleOperator: "isNotNull" },
-    { Property: "subscriberKey", SimpleOperator: "isNotNull" },
-    { Property: "journeyId", SimpleOperator: "isNotNull" }
-  ];
-  var propSets = [
-    ["key", "subscriberKey", "journeyName", "journeyId"],
-    ["key", "subscriberKey", "journeyName", "journeyID"]
-  ];
   for (var f = 0; f < filters.length; f++) {
     for (var k = 0; k < keyVariants.length; k++) {
       for (var p = 0; p < propSets.length; p++) {
@@ -153,8 +182,39 @@ function fetchExitQueueRows(prox) {
             propSets[p],
             filters[f]
           );
-          if (wsResp && wsResp.Results && wsResp.Results.length) {
-            return { rows: normalizeQueueRows(wsResp.Results), error: "" };
+          var topStatus = wsResp && wsResp.Status ? String(wsResp.Status) : "";
+          if (topStatus && topStatus !== "OK") {
+            var msg = topStatus;
+            try {
+              if (wsResp.Results && wsResp.Results.length && wsResp.Results[0].StatusMessage) {
+                msg = String(wsResp.Results[0].StatusMessage);
+              }
+            } catch (msgEx) {}
+            errors.push(
+              "WSProxy " +
+                keyVariants[k] +
+                " " +
+                filters[f].Property +
+                " props=" +
+                propSets[p].join(",") +
+                ": " +
+                msg
+            );
+            continue;
+          }
+          var wsRows = normalizeQueueRows(
+            wsResp && wsResp.Results ? wsResp.Results : []
+          );
+          notes.push(
+            "WSProxy[" +
+              keyVariants[k] +
+              "]/" +
+              filters[f].Property +
+              " rows=" +
+              wsRows.length
+          );
+          if (wsRows.length) {
+            return { rows: wsRows, error: "", notes: notes.join(" | ") };
           }
         } catch (wsEx) {
           errors.push(
@@ -162,6 +222,8 @@ function fetchExitQueueRows(prox) {
               keyVariants[k] +
               " " +
               filters[f].Property +
+              " props=" +
+              propSets[p].join(",") +
               ": " +
               (wsEx.message || String(wsEx))
           );
@@ -170,7 +232,22 @@ function fetchExitQueueRows(prox) {
     }
   }
 
-  return { rows: [], error: errors.join(" | ") };
+  if (initSucceeded) {
+    return {
+      rows: [],
+      error: "",
+      notes:
+        (notes.length ? notes.join(" | ") + " | " : "") +
+        "Queue empty or no readable rows." +
+        (errors.length ? " WSProxy notes: " + errors.join(" | ") : "")
+    };
+  }
+
+  return {
+    rows: [],
+    error: errors.join(" | ") || "Could not open " + EXIT_QUEUE_DE + ".",
+    notes: notes.join(" | ")
+  };
 }
 
 function removeExitQueueRow(rowKey, subscriberKey, journeyId) {
@@ -552,8 +629,11 @@ try {
   resultLines.push(
     "bd_sst_journey_exit worker — " + queueRows.length + " row(s)."
   );
+  if (queueFetch.notes) {
+    debugLines.push("Retrieve notes: " + queueFetch.notes);
+  }
   if (queueFetch.error) {
-    debugLines.push("Retrieve notes: " + queueFetch.error);
+    debugLines.push("Retrieve errors: " + queueFetch.error);
   }
 
   if (!queueRows.length) {
