@@ -120,6 +120,9 @@ function normalizeQueueRows(rawRows) {
       queueField(row, ["batchID", "batchId", "BatchId", "BATCHID"])
     );
     var rowKey = strTrim(queueField(row, ["key", "Key"]));
+    if (!rowKey && batchId && subscriberKey) {
+      rowKey = batchId + "|" + subscriberKey;
+    }
     if (!rowKey && subscriberKey && journeyId) {
       rowKey = subscriberKey + "|" + journeyId;
     }
@@ -258,15 +261,18 @@ function fetchExitQueueRows(prox) {
   };
 }
 
-function removeExitQueueRow(rowKey, subscriberKey, journeyId) {
+function removeExitQueueRow(rowKey, subscriberKey, journeyId, batchId) {
   var key = strTrim(rowKey);
+  if (!key && strTrim(batchId) && strTrim(subscriberKey)) {
+    key = strTrim(batchId) + "|" + strTrim(subscriberKey);
+  }
   if (!key && strTrim(subscriberKey) && strTrim(journeyId)) {
     key = strTrim(subscriberKey) + "|" + strTrim(journeyId);
   }
   if (!key) {
     return {
       ok: false,
-      error: "Need key (or subscriberKey + journeyId) to remove queue row."
+      error: "Need key (or batchId + subscriberKey) to remove queue row."
     };
   }
   try {
@@ -473,7 +479,7 @@ function groupQueueByJourney(rows) {
       groups[gkey].journeyName = strTrim(row.journeyName);
     }
     groups[gkey].contacts.push({
-      key: strTrim(row.key) || sk + "|" + jid,
+      key: strTrim(row.key) || (strTrim(row.batchId) ? strTrim(row.batchId) + "|" + sk : sk + "|" + jid),
       batchId: strTrim(row.batchId),
       subscriberKey: sk,
       journeyName: strTrim(row.journeyName),
@@ -591,7 +597,8 @@ function processJourneyGroup(auth, token, group, definition) {
       var removed = removeExitQueueRow(
         contact.key,
         contact.subscriberKey,
-        contact.journeyId
+        contact.journeyId,
+        contact.batchId
       );
       if (!removed.ok) {
         failCount++;

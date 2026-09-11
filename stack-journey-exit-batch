@@ -554,30 +554,51 @@ function insertExitQueueRow(subscriberKey, journeyName, journeyId, batchId) {
   var sk = strTrim(subscriberKey);
   var jid = strTrim(journeyId);
   var bid = strTrim(batchId);
-  var rowKey = sk + "|" + jid;
-  if (!sk || !jid) {
-    return { ok: false, error: "Need subscriberKey and journeyId for insert." };
+  if (!sk) {
+    return { ok: false, error: "Need subscriberKey for insert." };
   }
+  if (!bid) {
+    return { ok: false, error: "Need batchId for insert." };
+  }
+  var rowKey = bid + "|" + sk;
   var attempts = [
     ["key", "subscriberKey", "journeyName", "journeyId", "batchID"],
     ["key", "subscriberKey", "journeyName", "journeyId", "batchId"],
     ["key", "subscriberKey", "journeyName", "journeyID", "batchID"],
     ["key", "subscriberKey", "journeyName", "journeyID", "batchId"],
-    ["Key", "subscriberKey", "journeyName", "journeyId", "batchID"]
+    ["Key", "subscriberKey", "journeyName", "journeyId", "batchID"],
+    ["Key", "subscriberKey", "journeyName", "journeyId", "batchId"]
   ];
   var errors = [];
-  for (var a = 0; a < attempts.length; a++) {
+  var a;
+  for (a = 0; a < attempts.length; a++) {
     try {
-      Platform.Function.InsertData(
-        EXIT_QUEUE_DE,
-        attempts[a],
-        [rowKey, sk, journeyName || "", jid, bid]
-      );
+      var cols = attempts[a];
+      var vals = [];
+      var c;
+      for (c = 0; c < cols.length; c++) {
+        var colLower = asLower(cols[c]);
+        if (colLower === "key") {
+          vals.push(rowKey);
+        } else if (colLower === "subscriberkey") {
+          vals.push(sk);
+        } else if (colLower === "journeyname") {
+          vals.push(journeyName || "");
+        } else if (colLower === "journeyid") {
+          vals.push(jid || "");
+        } else if (colLower === "batchid") {
+          vals.push(bid);
+        } else {
+          vals.push("");
+        }
+      }
+      Platform.Function.InsertData(EXIT_QUEUE_DE, cols, vals);
       return {
         ok: true,
         duplicate: false,
-        fields: attempts[a].join(","),
-        key: rowKey
+        fields: cols.join(","),
+        key: rowKey,
+        batchId: bid
       };
     } catch (insEx) {
       var msg = asLower(insEx.message || String(insEx));
@@ -588,17 +609,37 @@ function insertExitQueueRow(subscriberKey, journeyName, journeyId, batchId) {
         msg.indexOf("violation") >= 0 ||
         msg.indexOf("cannot insert duplicate") >= 0
       ) {
+        try {
+          Platform.Function.UpdateData(
+            EXIT_QUEUE_DE,
+            ["key"],
+            [rowKey],
+            ["batchID", "journeyName", "journeyId", "subscriberKey"],
+            [bid, journeyName || "", jid || "", sk]
+          );
+        } catch (upEx1) {
+          try {
+            Platform.Function.UpdateData(
+              EXIT_QUEUE_DE,
+              ["key"],
+              [rowKey],
+              ["batchId", "journeyName", "journeyId", "subscriberKey"],
+              [bid, journeyName || "", jid || "", sk]
+            );
+          } catch (upEx2) {}
+        }
         return {
           ok: true,
           duplicate: true,
           fields: attempts[a].join(","),
-          key: rowKey
+          key: rowKey,
+          batchId: bid
         };
       }
       errors.push(attempts[a].join("/") + ": " + (insEx.message || String(insEx)));
     }
   }
-  return { ok: false, error: errors.join(" | "), key: rowKey };
+  return { ok: false, error: errors.join(" | "), key: rowKey, batchId: bid };
 }
 
 function processBatch(prox, batch) {
