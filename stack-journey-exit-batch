@@ -669,19 +669,120 @@ function lookupEnvironment() {
   }
 }
 
-function campaignMemberDeKeys(environment) {
-  if (asLower(environment) === "uat") {
-    return [
-      "ENT.CampaignMember_Salesforce_2",
-      "CampaignMember_Salesforce_2",
-      "CampaignMember_Salesforce"
-    ];
+function campaignIdVariants(campaignId) {
+  var c = strTrim(campaignId);
+  var out = [];
+  var seen = {};
+  function add(v) {
+    var s = strTrim(v);
+    if (!s || seen[asLower(s)]) {
+      return;
+    }
+    seen[asLower(s)] = true;
+    out.push(s);
   }
-  return [
-    "CampaignMember_Salesforce_1",
-    "CampaignMember_Salesforce",
-    "ENT.CampaignMember_Salesforce_1"
-  ];
+  add(c);
+  if (c.length >= 18) {
+    add(c.substring(0, 18));
+  }
+  if (c.length >= 15) {
+    add(c.substring(0, 15));
+  }
+  return out;
+}
+
+function campaignIdsMatch(left, right) {
+  var a = asLower(strTrim(left));
+  var b = asLower(strTrim(right));
+  if (!a || !b) {
+    return false;
+  }
+  if (a === b) {
+    return true;
+  }
+  if (a.length >= 15 && b.length >= 15 && a.substring(0, 15) === b.substring(0, 15)) {
+    return true;
+  }
+  return false;
+}
+
+function statusesMatch(left, right) {
+  return asLower(strTrim(left)) === asLower(strTrim(right));
+}
+
+function campaignMemberDeKeys(environment) {
+  var preferred =
+    asLower(environment) === "uat"
+      ? [
+          "ENT.CampaignMember_Salesforce_2",
+          "CampaignMember_Salesforce_2",
+          "CampaignMember_Salesforce_1",
+          "CampaignMember_Salesforce",
+          "ENT.CampaignMember_Salesforce_1"
+        ]
+      : [
+          "CampaignMember_Salesforce_1",
+          "CampaignMember_Salesforce",
+          "ENT.CampaignMember_Salesforce_1",
+          "ENT.CampaignMember_Salesforce_2",
+          "CampaignMember_Salesforce_2"
+        ];
+  return preferred;
+}
+
+function filterCampaignMemberRows(rows, campaignId, memberStatus) {
+  var out = [];
+  var statusSamples = {};
+  var campSampleList = [];
+  var campSampleSeen = {};
+  var i;
+  for (i = 0; i < rows.length; i++) {
+    var rowCamp = strTrim(
+      fieldFromRow(rows[i], [
+        "CampaignId",
+        "campaignId",
+        "CAMPAIGNID",
+        "CampaignID"
+      ])
+    );
+    var rowStatus = strTrim(
+      fieldFromRow(rows[i], ["Status", "status", "STATUS", "MemberStatus"])
+    );
+    if (rowCamp && !campSampleSeen[asLower(rowCamp)] && campSampleList.length < 5) {
+      campSampleSeen[asLower(rowCamp)] = true;
+      campSampleList.push(rowCamp);
+    }
+    if (campaignIdsMatch(rowCamp, campaignId)) {
+      if (rowStatus) {
+        statusSamples[rowStatus] = (statusSamples[rowStatus] || 0) + 1;
+      }
+      if (statusesMatch(rowStatus, memberStatus)) {
+        var contactId = strTrim(
+          fieldFromRow(rows[i], [
+            "ContactId",
+            "contactId",
+            "CONTACTID",
+            "SubscriberKey",
+            "subscriberKey"
+          ])
+        );
+        if (contactId) {
+          out.push(rows[i]);
+        }
+      }
+    }
+  }
+  var statusBits = [];
+  for (var st in statusSamples) {
+    if (statusSamples.hasOwnProperty(st)) {
+      statusBits.push(st + "=" + statusSamples[st]);
+    }
+  }
+  return {
+    rows: out,
+    statusSummary: statusBits.join(", "),
+    campaignSamples: campSampleList.join(", ")
+  };
 }
 
 function retrieveCampaignMemberRows(prox, campaignId, memberStatus, environment) {
@@ -694,97 +795,117 @@ function retrieveCampaignMemberRows(prox, campaignId, memberStatus, environment)
     return { ok: false, error: "Missing memberStatus.", rows: [], notes: "" };
   }
   var keys = campaignMemberDeKeys(environment);
+  var campVariants = campaignIdVariants(camp);
   var notes = [];
+  notes.push("env=" + (environment || "(blank)"));
+  notes.push("campaignVariants=" + campVariants.join(","));
+  notes.push("status=" + statusVal);
+  var campaignFields = ["CampaignId", "campaignId", "CAMPAIGNID"];
   var propSets = [
     ["ContactId", "CampaignId", "Status", "Id"],
+    ["ContactId", "CampaignId", "Status"],
     ["contactId", "CampaignId", "Status", "Id"],
     ["ContactId", "campaignId", "Status", "Id"]
   ];
+  var lastFilter = { rows: [], statusSummary: "", campaignSamples: "" };
   var k;
+  var v;
+  var f;
   var p;
+
   for (k = 0; k < keys.length; k++) {
-    for (p = 0; p < propSets.length; p++) {
-      try {
-        var wsResp = prox.retrieve(
-          "DataExtensionObject[" + keys[k] + "]",
-          propSets[p],
-          {
-            LeftOperand: {
-              Property: propSets[p][1],
-              SimpleOperator: "equals",
-              Value: camp
-            },
-            LogicalOperator: "AND",
-            RightOperand: {
-              Property: "Status",
-              SimpleOperator: "equals",
-              Value: statusVal
+    for (v = 0; v < campVariants.length; v++) {
+      for (f = 0; f < campaignFields.length; f++) {
+        for (p = 0; p < propSets.length; p++) {
+          try {
+            var wsResp = prox.retrieve(
+              "DataExtensionObject[" + keys[k] + "]",
+              propSets[p],
+              {
+                Property: campaignFields[f],
+                SimpleOperator: "equals",
+                Value: campVariants[v]
+              }
+            );
+            var topStatus = wsResp && wsResp.Status ? String(wsResp.Status) : "";
+            if (topStatus && topStatus !== "OK") {
+              var errMsg = topStatus;
+              try {
+                if (
+                  wsResp.Results &&
+                  wsResp.Results.length &&
+                  wsResp.Results[0].StatusMessage
+                ) {
+                  errMsg = String(wsResp.Results[0].StatusMessage);
+                }
+              } catch (msgEx) {}
+              notes.push(
+                "WSProxy[" +
+                  keys[k] +
+                  "]/" +
+                  campaignFields[f] +
+                  "=" +
+                  campVariants[v] +
+                  " STATUS " +
+                  errMsg
+              );
+              continue;
             }
+            var rows = coerceRows(wsResp && wsResp.Results ? wsResp.Results : []);
+            var filtered = filterCampaignMemberRows(rows, camp, statusVal);
+            lastFilter = filtered;
+            notes.push(
+              "WSProxy[" +
+                keys[k] +
+                "]/" +
+                campaignFields[f] +
+                "=" +
+                campVariants[v] +
+                " raw=" +
+                rows.length +
+                " matched=" +
+                filtered.rows.length
+            );
+            if (filtered.rows.length) {
+              return {
+                ok: true,
+                deKey: keys[k],
+                rows: filtered.rows,
+                notes: notes.join(" | ")
+              };
+            }
+          } catch (wsEx) {
+            notes.push(
+              "WSProxy[" +
+                keys[k] +
+                "]/" +
+                campaignFields[f] +
+                " ERROR " +
+                (wsEx.message || String(wsEx))
+            );
           }
-        );
-        var rows = coerceRows(wsResp && wsResp.Results ? wsResp.Results : []);
-        notes.push(
-          "WSProxy[" +
-            keys[k] +
-            "] props=" +
-            propSets[p].join(",") +
-            " rows=" +
-            rows.length
-        );
-        if (rows.length) {
-          return {
-            ok: true,
-            deKey: keys[k],
-            rows: rows,
-            notes: notes.join(" | ")
-          };
-        }
-      } catch (wsEx) {
-        notes.push(
-          "WSProxy[" +
-            keys[k] +
-            "] ERROR " +
-            (wsEx.message || String(wsEx))
-        );
-      }
-    }
-    try {
-      var de = DataExtension.Init(keys[k]);
-      var allRows = coerceRows(de.Rows.Retrieve());
-      var filtered = [];
-      var i;
-      for (i = 0; i < allRows.length; i++) {
-        var rowCamp = strTrim(
-          fieldFromRow(allRows[i], ["CampaignId", "campaignId", "CAMPAIGNID"])
-        );
-        var rowStatus = strTrim(
-          fieldFromRow(allRows[i], ["Status", "status", "STATUS"])
-        );
-        if (
-          asLower(rowCamp) === asLower(camp) &&
-          asLower(rowStatus) === asLower(statusVal)
-        ) {
-          filtered.push(allRows[i]);
         }
       }
-      notes.push("Init(" + keys[k] + ") filtered=" + filtered.length);
-      if (filtered.length) {
-        return {
-          ok: true,
-          deKey: keys[k],
-          rows: filtered,
-          notes: notes.join(" | ")
-        };
-      }
-    } catch (deEx) {
-      notes.push(
-        "Init(" + keys[k] + ") ERROR " + (deEx.message || String(deEx))
-      );
     }
   }
+
+  var hint = "";
+  if (lastFilter.statusSummary) {
+    hint += " Statuses seen for campaign: " + lastFilter.statusSummary + ".";
+  } else if (lastFilter.campaignSamples) {
+    hint += " CampaignId samples seen: " + lastFilter.campaignSamples + ".";
+  } else {
+    hint +=
+      " No CampaignMember rows returned for this CampaignId from synced DEs. Check sync DE name/env and that Status matches exactly (case-insensitive).";
+  }
+
   return {
     ok: false,
-    error: "No CampaignMember rows for campaign/status. " + notes.join(" | "),
+    error:
+      "No CampaignMember rows for campaign/status." +
+      hint +
+      " Notes: " +
+      notes.join(" | "),
     rows: [],
     notes: notes.join(" | ")
   };
