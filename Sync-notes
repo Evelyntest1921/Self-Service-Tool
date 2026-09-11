@@ -1,15 +1,54 @@
-<script runat="server">
-Platform.Load("Core","1");
-try {
-	Platform.Function.TreatAsContent('\%\%=contentblockbyid("0357")=\%\%');
-}
-catch(error) {
-	Write('Message: '+ Stringify(error));
-}
-</script>
+%%[
+SET @campaignId = Trim(@sfCampaignId)
+SET @fromStatus = Trim(@sfFromStatus)
+SET @toStatus = Trim(@sfToStatus)
+SET @maxRows = 2000
 
-CM Status update (testing):
-1. Create Content Block key sst_sf_update_cm_status — paste contentblock-update-campaignmember-status
-2. Script Activity — paste stack-update-campaignmember-status
-3. Set campaignId + fromStatus (members currently in that status) → updates to Responded
-4. Or set CONTENT_BLOCK_ID and use ContentBlockById like the sample above
+IF Empty(@toStatus) THEN
+  SET @toStatus = "Responded"
+ENDIF
+
+SET @updated = 0
+SET @failed = 0
+SET @skipped = 0
+SET @cnt = 0
+SET @err = ""
+
+IF Empty(@campaignId) THEN
+  SET @err = "Missing @sfCampaignId"
+ELSEIF Empty(@fromStatus) THEN
+  SET @err = "Missing @sfFromStatus"
+ELSE
+  SET @cmRows = RetrieveSalesforceObjects(
+    "CampaignMember",
+    "Id,Status,CampaignId",
+    "CampaignId", "=", @campaignId,
+    "Status", "=", @fromStatus
+  )
+  SET @cnt = RowCount(@cmRows)
+  IF @cnt > @maxRows THEN
+    SET @cnt = @maxRows
+  ENDIF
+
+  FOR @i = 1 TO @cnt DO
+    SET @cmRow = Row(@cmRows, @i)
+    SET @cmId = Trim(Field(@cmRow, "Id"))
+    IF Empty(@cmId) THEN
+      SET @skipped = Add(@skipped, 1)
+    ELSE
+      SET @ok = UpdateSingleSalesforceObject(
+        "CampaignMember",
+        @cmId,
+        "Status",
+        @toStatus
+      )
+      IF @ok == 1 THEN
+        SET @updated = Add(@updated, 1)
+      ELSE
+        SET @failed = Add(@failed, 1)
+      ENDIF
+    ENDIF
+  NEXT @i
+ENDIF
+]%%
+%%=IIF(Empty(@err), Concat("OK campaign=", @campaignId, " from=", @fromStatus, " to=", @toStatus, " found=", @cnt, " updated=", @updated, " failed=", @failed, " skipped=", @skipped), Concat("ERROR ", @err))=%%
