@@ -659,68 +659,6 @@ function insertExitQueueRow(subscriberKey, journeyName, journeyId, batchId) {
   return { ok: false, error: errors.join(" | "), key: rowKey, batchId: bid };
 }
 
-function countExitQueueForBatch(prox, batchId) {
-  var bid = strTrim(batchId);
-  if (!bid) {
-    return { ok: false, count: 0, notes: "Missing batchId." };
-  }
-  var notes = [];
-  var countFields = ["batchID", "batchId"];
-  var c;
-  for (c = 0; c < countFields.length; c++) {
-    try {
-      var rows = Platform.Function.LookupRows(EXIT_QUEUE_DE, countFields[c], bid);
-      var n = rows && rows.length ? rows.length : 0;
-      notes.push("LookupRows(" + countFields[c] + ")=" + n);
-      if (n > 0) {
-        return { ok: true, count: n, notes: notes.join(" | ") };
-      }
-    } catch (lookEx) {
-      notes.push(
-        "LookupRows(" +
-          countFields[c] +
-          ") ERROR " +
-          (lookEx.message || String(lookEx))
-      );
-    }
-  }
-
-  var props = ["key", "subscriberKey", "batchID", "batchId"];
-  var f;
-  for (f = 0; f < countFields.length; f++) {
-    try {
-      var wsResp = prox.retrieve(
-        "DataExtensionObject[" + EXIT_QUEUE_DE + "]",
-        props,
-        {
-          Property: countFields[f],
-          SimpleOperator: "equals",
-          Value: bid
-        }
-      );
-      var topStatus = wsResp && wsResp.Status ? String(wsResp.Status) : "";
-      if (topStatus && topStatus !== "OK") {
-        notes.push("WSProxy(" + countFields[f] + ") STATUS " + topStatus);
-        continue;
-      }
-      var wsRows = coerceRows(wsResp && wsResp.Results ? wsResp.Results : []);
-      notes.push("WSProxy(" + countFields[f] + ")=" + wsRows.length);
-      if (wsRows.length > 0) {
-        return { ok: true, count: wsRows.length, notes: notes.join(" | ") };
-      }
-    } catch (wsEx) {
-      notes.push(
-        "WSProxy(" +
-          countFields[f] +
-          ") ERROR " +
-          (wsEx.message || String(wsEx))
-      );
-    }
-  }
-
-  return { ok: true, count: 0, notes: notes.join(" | ") };
-}
-
 function processBatch(prox, batch) {
   var batchId = strTrim(batch.batchId);
   var sourceType = asLower(batch.sourceType) || "dataextension";
