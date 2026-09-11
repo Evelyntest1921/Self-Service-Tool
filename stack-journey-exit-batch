@@ -711,23 +711,21 @@ function statusesMatch(left, right) {
 }
 
 function campaignMemberDeKeys(environment) {
-  var preferred =
-    asLower(environment) === "uat"
-      ? [
-          "ENT.CampaignMember_Salesforce_2",
-          "CampaignMember_Salesforce_2",
-          "CampaignMember_Salesforce_1",
-          "CampaignMember_Salesforce",
-          "ENT.CampaignMember_Salesforce_1"
-        ]
-      : [
-          "CampaignMember_Salesforce_1",
-          "CampaignMember_Salesforce",
-          "ENT.CampaignMember_Salesforce_1",
-          "ENT.CampaignMember_Salesforce_2",
-          "CampaignMember_Salesforce_2"
-        ];
-  return preferred;
+  if (asLower(environment) === "uat") {
+    return ["CampaignMember_Salesforce_2", "CampaignMember_Salesforce_1", "CampaignMember_Salesforce"];
+  }
+  return ["CampaignMember_Salesforce_1", "CampaignMember_Salesforce", "CampaignMember_Salesforce_2"];
+}
+
+function ampEscape(value) {
+  return strTrim(value)
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '""')
+    .replace(/'/g, "");
+}
+
+function soqlEscape(value) {
+  return strTrim(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
 
 function filterCampaignMemberRows(rows, campaignId, memberStatus) {
@@ -785,34 +783,320 @@ function filterCampaignMemberRows(rows, campaignId, memberStatus) {
   };
 }
 
-function retrieveCampaignMemberRows(prox, campaignId, memberStatus, environment) {
-  var camp = strTrim(campaignId);
-  var statusVal = strTrim(memberStatus);
-  if (!camp) {
-    return { ok: false, error: "Missing campaignId.", rows: [], notes: "" };
+function contactRowsFromIds(contactIds) {
+  var rows = [];
+  var i;
+  for (i = 0; i < contactIds.length; i++) {
+    var id = strTrim(contactIds[i]);
+    if (id) {
+      rows.push({ ContactId: id, contactId: id, SubscriberKey: id });
+    }
   }
-  if (!statusVal) {
-    return { ok: false, error: "Missing memberStatus.", rows: [], notes: "" };
-  }
-  var keys = campaignMemberDeKeys(environment);
-  var campVariants = campaignIdVariants(camp);
+  return rows;
+}
+
+function retrieveCampaignMembersViaConnect(campaignId, memberStatus) {
   var notes = [];
-  notes.push("env=" + (environment || "(blank)"));
-  notes.push("campaignVariants=" + campVariants.join(","));
-  notes.push("status=" + statusVal);
-  var campaignFields = ["CampaignId", "campaignId", "CAMPAIGNID"];
+  var variants = campaignIdVariants(campaignId);
+  var v;
+  for (v = 0; v < variants.length; v++) {
+    var camp = ampEscape(variants[v]);
+    var st = ampEscape(memberStatus);
+    if (!camp || !st) {
+      continue;
+    }
+    try {
+      var amp = "";
+      amp += "%%[";
+      amp += 'SET @cmRows = RetrieveSalesforceObjects("CampaignMember","Id,ContactId,CampaignId,Status","CampaignId","=","' + camp + '","Status","=","' + st + '") ';
+      amp += "SET @cmOut = \"\" ";
+      amp += "SET @cmCount = RowCount(@cmRows) ";
+      amp += "IF @cmCount > 0 THEN ";
+      amp += "FOR @cmI = 1 TO @cmCount DO ";
+      amp += "SET @cmRow = Row(@cmRows,@cmI) ";
+      amp += 'SET @cmContactId = Field(@cmRow,"ContactId") ';
+      amp += "IF NOT Empty(@cmContactId) THEN ";
+      amp += 'SET @cmOut = Concat(@cmOut, Trim(@cmContactId), "|") ';
+      amp += "ENDIF ";
+      amp += "NEXT @cmI ";
+      amp += "ENDIF ";
+      amp += "]%%%%=v(@cmOut)=%%";
+      var rendered = Platform.Function.TreatAsContent(amp);
+      var text = strTrim(rendered);
+      notes.push("Connect[" + variants[v] + "] rawLen=" + text.length);
+      if (!text) {
+        continue;
+      }
+      var parts = text.split("|");
+      var ids = [];
+      var seen = {};
+      var i;
+      for (i = 0; i < parts.length; i++) {
+        var id = strTrim(parts[i]);
+        if (!id || seen[asLower(id)]) {
+          continue;
+        }
+        seen[asLower(id)] = true;
+        ids.push(id);
+      }
+      notes.push("Connect[" + variants[v] + "] contacts=" + ids.length);
+      if (ids.length) {
+        return {
+          ok: true,
+          deKey: "Salesforce.CampaignMember",
+          rows: contactRowsFromIds(ids),
+          notes: notes.join(" | ")
+        };
+      }
+    } catch (connectEx) {
+      notes.push(
+        "Connect[" + variants[v] + "] ERROR " + (connectEx.message || String(connectEx))
+      );
+    }
+  }
+  return { ok: false, rows: [], notes: notes.join(" | ") };
+}
+
+function lookupFieldFromAuthRow(row, names) {
+  return strTrim(fieldFromRow(row, names));
+}
+
+function getSalesforceAuthConfig() {
+  var sources = [
+    { de: "SF_AUTH", user: "Admin" },
+    { de: "SFMC_AUTH", user: "Admin" }
+  ];
+  var s;
+  for (s = 0; s < sources.length; s++) {
+    try {
+      var rows = Platform.Function.LookupRows(sources[s].de, "User", sources[s].user);
+      if (!rows || !rows.length) {
+        continue;
+      }
+      var row = rows[0];
+      var clientId = lookupFieldFromAuthRow(row, [
+        "sfClientId",
+        "salesforceClientId",
+        "SF_ClientId",
+        "clientId_sf"
+      ]);
+      var clientSecret = lookupFieldFromAuthRow(row, [
+        "sfClientSecret",
+        "salesforceClientSecret",
+        "SF_ClientSecret",
+        "clientSecret_sf"
+      ]);
+      var refreshToken = lookupFieldFromAuthRow(row, [
+        "sfRefreshToken",
+        "salesforceRefreshToken",
+        "SF_RefreshToken",
+        "refreshToken"
+      ]);
+      var loginUrl = lookupFieldFromAuthRow(row, [
+        "sfLoginUrl",
+        "salesforceLoginUrl",
+        "SF_LoginUrl",
+        "loginUrl"
+      ]);
+      var username = lookupFieldFromAuthRow(row, [
+        "sfUsername",
+        "salesforceUsername",
+        "SF_Username",
+        "username"
+      ]);
+      var password = lookupFieldFromAuthRow(row, [
+        "sfPassword",
+        "salesforcePassword",
+        "SF_Password",
+        "password"
+      ]);
+      var securityToken = lookupFieldFromAuthRow(row, [
+        "sfSecurityToken",
+        "salesforceSecurityToken",
+        "SF_SecurityToken",
+        "securityToken"
+      ]);
+      if (!loginUrl) {
+        loginUrl = "https://login.salesforce.com";
+      }
+      if (clientId && clientSecret && (refreshToken || (username && password))) {
+        return {
+          ok: true,
+          source: sources[s].de,
+          clientId: clientId,
+          clientSecret: clientSecret,
+          refreshToken: refreshToken,
+          loginUrl: loginUrl.replace(/\/$/, ""),
+          username: username,
+          password: password,
+          securityToken: securityToken
+        };
+      }
+    } catch (authEx) {}
+  }
+  return { ok: false, error: "No Salesforce API credentials in SF_AUTH or SFMC_AUTH." };
+}
+
+function getSalesforceAccessToken(sfAuth) {
+  var tokenUrl = sfAuth.loginUrl + "/services/oauth2/token";
+  var body = "";
+  if (sfAuth.refreshToken) {
+    body =
+      "grant_type=refresh_token" +
+      "&client_id=" +
+      encodeURIComponent(sfAuth.clientId) +
+      "&client_secret=" +
+      encodeURIComponent(sfAuth.clientSecret) +
+      "&refresh_token=" +
+      encodeURIComponent(sfAuth.refreshToken);
+  } else {
+    body =
+      "grant_type=password" +
+      "&client_id=" +
+      encodeURIComponent(sfAuth.clientId) +
+      "&client_secret=" +
+      encodeURIComponent(sfAuth.clientSecret) +
+      "&username=" +
+      encodeURIComponent(sfAuth.username) +
+      "&password=" +
+      encodeURIComponent(sfAuth.password + (sfAuth.securityToken || ""));
+  }
+  var req = new Script.Util.HttpRequest(tokenUrl);
+  req.emptyContent = true;
+  req.method = "POST";
+  req.contentType = "application/x-www-form-urlencoded";
+  req.postData = body;
+  var resp = req.send();
+  var content = String(resp.content || "");
+  var parsed = {};
+  try {
+    parsed = Platform.Function.ParseJSON(content);
+  } catch (e) {
+    throw "Salesforce token parse failed: " + content;
+  }
+  if (!parsed.access_token || !parsed.instance_url) {
+    throw "Salesforce token failed: " + content;
+  }
+  return {
+    accessToken: String(parsed.access_token),
+    instanceUrl: String(parsed.instance_url).replace(/\/$/, "")
+  };
+}
+
+function httpGetJson(url, accessToken) {
+  var req = new Script.Util.HttpRequest(url);
+  req.emptyContent = true;
+  req.method = "GET";
+  req.setHeader("Authorization", "Bearer " + accessToken);
+  req.setHeader("Accept", "application/json");
+  var resp = req.send();
+  var content = String(resp.content || "");
+  try {
+    return Platform.Function.ParseJSON(content);
+  } catch (e) {
+    throw "Salesforce query parse failed: " + content;
+  }
+}
+
+function retrieveCampaignMembersViaRest(campaignId, memberStatus) {
+  var notes = [];
+  var sfAuth = getSalesforceAuthConfig();
+  if (!sfAuth.ok) {
+    return { ok: false, rows: [], notes: sfAuth.error || "No SF auth." };
+  }
+  notes.push("SF auth source=" + sfAuth.source);
+  try {
+    var tokenInfo = getSalesforceAccessToken(sfAuth);
+    var variants = campaignIdVariants(campaignId);
+    var allIds = [];
+    var seen = {};
+    var v;
+    for (v = 0; v < variants.length; v++) {
+      var soql =
+        "SELECT Id, ContactId, CampaignId, Status FROM CampaignMember WHERE CampaignId = '" +
+        soqlEscape(variants[v]) +
+        "' AND Status = '" +
+        soqlEscape(memberStatus) +
+        "' AND ContactId != null";
+      var url =
+        tokenInfo.instanceUrl +
+        "/services/data/v59.0/query?q=" +
+        encodeURIComponent(soql);
+      var page = 0;
+      while (url && page < 20) {
+        page++;
+        var parsed = httpGetJson(url, tokenInfo.accessToken);
+        var records = parsed.records || [];
+        var r;
+        for (r = 0; r < records.length; r++) {
+          var contactId = strTrim(records[r].ContactId);
+          if (!contactId || seen[asLower(contactId)]) {
+            continue;
+          }
+          seen[asLower(contactId)] = true;
+          allIds.push(contactId);
+          if (allIds.length >= MAX_ROWS_PER_BATCH) {
+            break;
+          }
+        }
+        notes.push(
+          "REST[" +
+            variants[v] +
+            "] page=" +
+            page +
+            " records=" +
+            records.length +
+            " totalIds=" +
+            allIds.length
+        );
+        if (allIds.length >= MAX_ROWS_PER_BATCH) {
+          break;
+        }
+        if (parsed.done === false && parsed.nextRecordsUrl) {
+          url = tokenInfo.instanceUrl + String(parsed.nextRecordsUrl);
+        } else {
+          url = "";
+        }
+      }
+      if (allIds.length) {
+        break;
+      }
+    }
+    if (!allIds.length) {
+      return {
+        ok: false,
+        rows: [],
+        notes: notes.join(" | ") + " | REST returned 0 ContactIds."
+      };
+    }
+    return {
+      ok: true,
+      deKey: "Salesforce.REST.CampaignMember",
+      rows: contactRowsFromIds(allIds),
+      notes: notes.join(" | ")
+    };
+  } catch (restEx) {
+    return {
+      ok: false,
+      rows: [],
+      notes: notes.join(" | ") + " | REST ERROR " + (restEx.message || String(restEx))
+    };
+  }
+}
+
+function retrieveCampaignMembersViaLocalDe(prox, campaignId, memberStatus, environment) {
+  var keys = campaignMemberDeKeys(environment);
+  var campVariants = campaignIdVariants(campaignId);
+  var notes = [];
+  var campaignFields = ["CampaignId", "campaignId"];
   var propSets = [
     ["ContactId", "CampaignId", "Status", "Id"],
-    ["ContactId", "CampaignId", "Status"],
-    ["contactId", "CampaignId", "Status", "Id"],
-    ["ContactId", "campaignId", "Status", "Id"]
+    ["ContactId", "CampaignId", "Status"]
   ];
-  var lastFilter = { rows: [], statusSummary: "", campaignSamples: "" };
   var k;
   var v;
   var f;
   var p;
-
   for (k = 0; k < keys.length; k++) {
     for (v = 0; v < campVariants.length; v++) {
       for (f = 0; f < campaignFields.length; f++) {
@@ -829,39 +1113,14 @@ function retrieveCampaignMemberRows(prox, campaignId, memberStatus, environment)
             );
             var topStatus = wsResp && wsResp.Status ? String(wsResp.Status) : "";
             if (topStatus && topStatus !== "OK") {
-              var errMsg = topStatus;
-              try {
-                if (
-                  wsResp.Results &&
-                  wsResp.Results.length &&
-                  wsResp.Results[0].StatusMessage
-                ) {
-                  errMsg = String(wsResp.Results[0].StatusMessage);
-                }
-              } catch (msgEx) {}
-              notes.push(
-                "WSProxy[" +
-                  keys[k] +
-                  "]/" +
-                  campaignFields[f] +
-                  "=" +
-                  campVariants[v] +
-                  " STATUS " +
-                  errMsg
-              );
               continue;
             }
             var rows = coerceRows(wsResp && wsResp.Results ? wsResp.Results : []);
-            var filtered = filterCampaignMemberRows(rows, camp, statusVal);
-            lastFilter = filtered;
+            var filtered = filterCampaignMemberRows(rows, campaignId, memberStatus);
             notes.push(
-              "WSProxy[" +
+              "LocalDE[" +
                 keys[k] +
-                "]/" +
-                campaignFields[f] +
-                "=" +
-                campVariants[v] +
-                " raw=" +
+                "] raw=" +
                 rows.length +
                 " matched=" +
                 filtered.rows.length
@@ -876,35 +1135,78 @@ function retrieveCampaignMemberRows(prox, campaignId, memberStatus, environment)
             }
           } catch (wsEx) {
             notes.push(
-              "WSProxy[" +
-                keys[k] +
-                "]/" +
-                campaignFields[f] +
-                " ERROR " +
-                (wsEx.message || String(wsEx))
+              "LocalDE[" + keys[k] + "] ERROR " + (wsEx.message || String(wsEx))
             );
           }
         }
       }
     }
   }
+  return { ok: false, rows: [], notes: notes.join(" | ") };
+}
 
-  var hint = "";
-  if (lastFilter.statusSummary) {
-    hint += " Statuses seen for campaign: " + lastFilter.statusSummary + ".";
-  } else if (lastFilter.campaignSamples) {
-    hint += " CampaignId samples seen: " + lastFilter.campaignSamples + ".";
-  } else {
-    hint +=
-      " No CampaignMember rows returned for this CampaignId from synced DEs. Check sync DE name/env and that Status matches exactly (case-insensitive).";
+function retrieveCampaignMemberRows(prox, campaignId, memberStatus, environment) {
+  var camp = strTrim(campaignId);
+  var statusVal = strTrim(memberStatus);
+  if (!camp) {
+    return { ok: false, error: "Missing campaignId.", rows: [], notes: "" };
+  }
+  if (!statusVal) {
+    return { ok: false, error: "Missing memberStatus.", rows: [], notes: "" };
+  }
+  var notes = [];
+  notes.push("env=" + (environment || "(blank)"));
+  notes.push("campaign=" + camp);
+  notes.push("status=" + statusVal);
+
+  var connectResult = retrieveCampaignMembersViaConnect(camp, statusVal);
+  if (connectResult.notes) {
+    notes.push(connectResult.notes);
+  }
+  if (connectResult.ok && connectResult.rows && connectResult.rows.length) {
+    return {
+      ok: true,
+      deKey: connectResult.deKey,
+      rows: connectResult.rows,
+      notes: notes.join(" | ")
+    };
+  }
+
+  var restResult = retrieveCampaignMembersViaRest(camp, statusVal);
+  if (restResult.notes) {
+    notes.push(restResult.notes);
+  }
+  if (restResult.ok && restResult.rows && restResult.rows.length) {
+    return {
+      ok: true,
+      deKey: restResult.deKey,
+      rows: restResult.rows,
+      notes: notes.join(" | ")
+    };
+  }
+
+  var localResult = retrieveCampaignMembersViaLocalDe(
+    prox,
+    camp,
+    statusVal,
+    environment
+  );
+  if (localResult.notes) {
+    notes.push(localResult.notes);
+  }
+  if (localResult.ok && localResult.rows && localResult.rows.length) {
+    return {
+      ok: true,
+      deKey: localResult.deKey,
+      rows: localResult.rows,
+      notes: notes.join(" | ")
+    };
   }
 
   return {
     ok: false,
     error:
-      "No CampaignMember rows for campaign/status." +
-      hint +
-      " Notes: " +
+      "No CampaignMember contacts found from Salesforce Connect, Salesforce REST, or local synced DEs (ENT skipped). " +
       notes.join(" | "),
     rows: [],
     notes: notes.join(" | ")
