@@ -105,7 +105,192 @@ function coerceRows(raw) {
 
 function field(row, name) {
   if (!row) return "";
-  return row[name] || row[String(name)] || "";
+  var direct = row[name] || row[String(name)] || "";
+  if (direct !== undefined && direct !== null && String(direct) !== "") {
+    return direct;
+  }
+  try {
+    var props = row.Properties;
+    if (props && typeof props.length === "number") {
+      var want = asLower(name);
+      var i;
+      for (i = 0; i < props.length; i++) {
+        var pname = props[i].Name || props[i].name;
+        if (asLower(pname) !== want) {
+          continue;
+        }
+        var pval = props[i].Value;
+        if (pval === undefined || pval === null) {
+          pval = props[i].value;
+        }
+        if (pval !== undefined && pval !== null && String(pval) !== "") {
+          return pval;
+        }
+      }
+    }
+  } catch (propEx) {}
+  return "";
+}
+
+function fieldAny(row, names) {
+  var i;
+  for (i = 0; i < names.length; i++) {
+    var val = field(row, names[i]);
+    if (asStr(val)) {
+      return val;
+    }
+  }
+  return "";
+}
+
+function parseDateMs(value) {
+  if (value === null || typeof value === "undefined" || value === "") {
+    return 0;
+  }
+  try {
+    if (value.getTime) {
+      var msObj = value.getTime();
+      if (!isNaN(msObj)) {
+        return msObj;
+      }
+    }
+  } catch (dateObjEx) {}
+  var text = asStr(value);
+  if (!text) {
+    return 0;
+  }
+  try {
+    var parsed = Date.parse(text);
+    if (!isNaN(parsed)) {
+      return parsed;
+    }
+  } catch (parseEx) {}
+  try {
+    var p = Platform.Function.ParseDate(text);
+    if (p && p.getTime) {
+      var ms = p.getTime();
+      if (!isNaN(ms)) {
+        return ms;
+      }
+    }
+  } catch (ampEx) {}
+  return 0;
+}
+
+function formatDisplayDate(value) {
+  var ms = parseDateMs(value);
+  if (!ms) {
+    return asStr(value) || "—";
+  }
+  try {
+    var d = new Date(ms);
+    var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    var month = months[d.getMonth()] || "";
+    var day = d.getDate();
+    var year = d.getFullYear();
+    var hour = d.getHours();
+    var min = d.getMinutes();
+    var ampm = hour >= 12 ? "PM" : "AM";
+    var h12 = hour % 12;
+    if (!h12) {
+      h12 = 12;
+    }
+    var minText = min < 10 ? "0" + min : String(min);
+    return month + " " + day + ", " + year + " " + h12 + ":" + minText + " " + ampm;
+  } catch (fmtEx) {
+    return asStr(value) || "—";
+  }
+}
+
+function statusClass(status) {
+  var s = asLower(status);
+  if (s === "done" || s === "success") {
+    return "is-done";
+  }
+  if (s === "failed" || s === "error") {
+    return "is-failed";
+  }
+  if (s === "processing" || s === "queued") {
+    return "is-active";
+  }
+  return "is-pending";
+}
+
+function loadRecentBatches(limit) {
+  var max = limit || 5;
+  var rows = [];
+  var i;
+  try {
+    var de = DataExtension.Init(BATCH_DE);
+    rows = coerceRows(de.Rows.Retrieve());
+  } catch (initEx) {
+    try {
+      var prox = new Script.Util.WSProxy();
+      var wsResp = prox.retrieve(
+        "DataExtensionObject[" + BATCH_DE + "]",
+        ["batchId", "journeyName", "requestedAt", "status"],
+        { Property: "batchId", SimpleOperator: "notEquals", Value: "" }
+      );
+      rows = coerceRows(wsResp && wsResp.Results ? wsResp.Results : []);
+    } catch (wsEx) {
+      return {
+        ok: false,
+        rows: [],
+        error: wsEx.message || String(wsEx)
+      };
+    }
+  }
+
+  var normalized = [];
+  for (i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    var requestedAt = fieldAny(row, ["requestedAt", "RequestedAt"]);
+    normalized.push({
+      journeyName: asStr(fieldAny(row, ["journeyName", "JourneyName"])) || "Untitled journey",
+      requestedAt: requestedAt,
+      requestedAtMs: parseDateMs(requestedAt),
+      status: asStr(fieldAny(row, ["status", "Status"])) || "Pending"
+    });
+  }
+
+  normalized.sort(function (a, b) {
+    return (b.requestedAtMs || 0) - (a.requestedAtMs || 0);
+  });
+
+  if (normalized.length > max) {
+    normalized = normalized.slice(0, max);
+  }
+  return { ok: true, rows: normalized, error: "" };
+}
+
+function buildRecentBatchesHtml(batches) {
+  if (!batches || !batches.length) {
+    return '<p class="recent-empty">No recent exit requests yet.</p>';
+  }
+  var parts = ['<ul class="recent-list">'];
+  var i;
+  for (i = 0; i < batches.length; i++) {
+    var item = batches[i];
+    parts.push(
+      '<li class="recent-item">' +
+        '<div class="recent-journey">' +
+        htmlSafe(item.journeyName) +
+        "</div>" +
+        '<div class="recent-meta">' +
+        '<span class="recent-date">' +
+        htmlSafe(formatDisplayDate(item.requestedAt)) +
+        "</span>" +
+        '<span class="recent-status ' +
+        statusClass(item.status) +
+        '">' +
+        htmlSafe(item.status) +
+        "</span>" +
+        "</div>" +
+        "</li>"
+    );
+  }
+  parts.push("</ul>");
+  return parts.join("");
 }
 
 function lookupValue(deName, returnField, lookupField, lookupValue) {
@@ -623,6 +808,20 @@ try {
   }
 }
 
+var recentBatchesHtml = "";
+try {
+  var recent = loadRecentBatches(5);
+  if (recent.ok) {
+    recentBatchesHtml = buildRecentBatchesHtml(recent.rows);
+  } else {
+    recentBatchesHtml =
+      '<p class="recent-empty">Could not load recent exits.</p>';
+  }
+} catch (recentEx) {
+  recentBatchesHtml =
+    '<p class="recent-empty">Could not load recent exits.</p>';
+}
+
 Platform.Variable.SetValue("@hubUrl", hubUrl || "#");
 Platform.Variable.SetValue("@journeyExitUrl", journeyExitUrl || "");
 Platform.Variable.SetValue("@activeNav", "journey_exit");
@@ -641,6 +840,7 @@ Platform.Variable.SetValue("@exitSourceDeName", sourceDeNameValue);
 Platform.Variable.SetValue("@exitAlertEmail", alertEmailValue);
 Platform.Variable.SetValue("@exitBatchId", createdBatchId);
 Platform.Variable.SetValue("@exitJourneysLoadError", journeysLoadError);
+Platform.Variable.SetValue("@exitRecentBatchesHtml", recentBatchesHtml);
 </script>
 <!DOCTYPE html>
 <html lang="en">
@@ -682,12 +882,113 @@ Platform.Variable.SetValue("@exitJourneysLoadError", journeysLoadError);
 .breadcrumb-link:hover { color: var(--primary-dark); text-decoration: underline; }
 .breadcrumb-separator { margin: 0 8px; color: var(--gray-400); }
 .breadcrumb-current { font-weight: 600; color: var(--gray-900); }
+.exit-workspace {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+.exit-main {
+  flex: 3;
+  min-width: 0;
+}
+.exit-side {
+  flex: 1;
+  min-width: 220px;
+  max-width: 320px;
+}
 .card {
   background: #fff;
   border: 1px solid var(--border-color);
   border-radius: 12px;
   box-shadow: var(--shadow-sm);
   padding: 28px 28px 32px;
+}
+.card-side {
+  padding: 20px;
+}
+.side-title {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.side-sub {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+.recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.recent-item {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+.recent-item:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.recent-journey {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--gray-900);
+  margin-bottom: 6px;
+  word-break: break-word;
+}
+.recent-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.recent-date {
+  font-size: 12px;
+  color: var(--gray-500);
+}
+.recent-status {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 8px;
+  border: 1px solid var(--border-color);
+  background: #f9fafb;
+  color: var(--gray-900);
+}
+.recent-status.is-done {
+  border-color: #24a148;
+  color: #0e6027;
+  background: #f0fdf4;
+}
+.recent-status.is-failed {
+  border-color: #da1e28;
+  color: #a2191f;
+  background: #fef2f2;
+}
+.recent-status.is-active {
+  border-color: #f59e0b;
+  color: #92400e;
+  background: #fffbeb;
+}
+.recent-status.is-pending {
+  border-color: #d1d5db;
+  color: #4b5563;
+}
+.recent-empty {
+  font-size: 13px;
+  color: var(--gray-500);
+  margin: 0;
+}
+@media (max-width: 980px) {
+  .exit-workspace {
+    flex-direction: column;
+  }
+  .exit-side {
+    max-width: none;
+    width: 100%;
+  }
 }
 h1 {
   font-size: 1.75rem;
@@ -792,94 +1093,108 @@ h1 {
       <span class="breadcrumb-current">Journey Exit</span>
     </nav>
 
-    <div class="card">
-      <h1>Journey Exit</h1>
-      <p class="sub">Choose the journey and audience list to remove contacts from. You will get an email when processing finishes.</p>
+    <div class="exit-workspace">
+      <div class="exit-main">
+        <div class="card">
+          <h1>Journey Exit</h1>
+          <p class="sub">Choose the journey and audience list to remove contacts from. You will get an email when processing finishes.</p>
 
-      <script runat="server">
-        function bodySafe(value) {
-          return String(value || "")
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;");
-        }
-        var loadErr = Platform.Variable.GetValue("@exitJourneysLoadError");
-        if (loadErr) {
-          Write('<div class="notice warn"><strong>Could not fully load journeys.</strong><br>' + bodySafe(loadErr) + '</div>');
-        }
-        var status = Platform.Variable.GetValue("@exitResultStatus");
-        var message = Platform.Variable.GetValue("@exitResultMessage");
-        if (status) {
-          Write('<div class="notice ' + bodySafe(status) + '"><strong>' + bodySafe(message) + '</strong></div>');
-        }
-      </script>
-
-      <form method="post" id="exitForm">
-        <input type="hidden" name="formAction" id="formAction" value="queue">
-        <input type="hidden" name="journeyName" id="journeyName" value="">
-        <input type="hidden" name="journeyKey" id="journeyKey" value="">
-        <div class="form-group">
-          <label class="form-label" for="journeyId">Journey</label>
-          <select class="form-select" id="journeyId" name="journeyId" required>
-            <script runat="server">
-              Write(Platform.Variable.GetValue("@exitJourneyOptionsHtml") || '<option value="">No journeys loaded</option>');
-            </script>
-          </select>
-          <p class="hint">Only published journeys are listed.</p>
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="sourceDeName">Audience list</label>
           <script runat="server">
-            function fieldSafe(value) {
+            function bodySafe(value) {
               return String(value || "")
                 .replace(/&/g, "&amp;")
                 .replace(/</g, "&lt;")
                 .replace(/>/g, "&gt;")
                 .replace(/"/g, "&quot;");
             }
-            Write('<input class="form-input" id="sourceDeName" name="sourceDeName" required placeholder="Enter the list name" value="' + fieldSafe(Platform.Variable.GetValue("@exitSourceDeName") || "") + '">');
+            var loadErr = Platform.Variable.GetValue("@exitJourneysLoadError");
+            if (loadErr) {
+              Write('<div class="notice warn"><strong>Could not fully load journeys.</strong><br>' + bodySafe(loadErr) + '</div>');
+            }
+            var status = Platform.Variable.GetValue("@exitResultStatus");
+            var message = Platform.Variable.GetValue("@exitResultMessage");
+            if (status) {
+              Write('<div class="notice ' + bodySafe(status) + '"><strong>' + bodySafe(message) + '</strong></div>');
+            }
           </script>
-          <p class="hint">Use the Marketing Cloud list or data extension that holds the contacts to exit. It must include a Subscriber Key field.</p>
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="alertEmail">Notification email</label>
+
+          <form method="post" id="exitForm">
+            <input type="hidden" name="formAction" id="formAction" value="queue">
+            <input type="hidden" name="journeyName" id="journeyName" value="">
+            <input type="hidden" name="journeyKey" id="journeyKey" value="">
+            <div class="form-group">
+              <label class="form-label" for="journeyId">Journey</label>
+              <select class="form-select" id="journeyId" name="journeyId" required>
+                <script runat="server">
+                  Write(Platform.Variable.GetValue("@exitJourneyOptionsHtml") || '<option value="">No journeys loaded</option>');
+                </script>
+              </select>
+              <p class="hint">Only published journeys are listed.</p>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="sourceDeName">Audience list</label>
+              <script runat="server">
+                function fieldSafe(value) {
+                  return String(value || "")
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;");
+                }
+                Write('<input class="form-input" id="sourceDeName" name="sourceDeName" required placeholder="Enter the list name" value="' + fieldSafe(Platform.Variable.GetValue("@exitSourceDeName") || "") + '">');
+              </script>
+              <p class="hint">Use the Marketing Cloud list or data extension that holds the contacts to exit. It must include a Subscriber Key field.</p>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="alertEmail">Notification email</label>
+              <script runat="server">
+                function fieldSafeEmail(value) {
+                  return String(value || "")
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;");
+                }
+                Write('<input class="form-input" id="alertEmail" name="alertEmail" type="email" required placeholder="name@example.com" value="' + fieldSafeEmail(Platform.Variable.GetValue("@exitAlertEmail") || "") + '">');
+              </script>
+              <p class="hint">We will send status updates to this address.</p>
+            </div>
+            <div class="actions">
+              <button class="btn btn-create" type="submit" id="submitBtn" onclick="return submitQueue();">Start exit</button>
+              <a class="btn btn-secondary" href="%%=v(@hubUrl)=%%">Cancel</a>
+              <script runat="server">
+                var detail = Platform.Variable.GetValue("@exitResultDetail");
+                if (detail) {
+                  Write('<button type="button" class="btn btn-secondary" id="toggleDetailBtn">Show details</button>');
+                }
+              </script>
+            </div>
+          </form>
+
           <script runat="server">
-            function fieldSafeEmail(value) {
+            function detailSafe(value) {
               return String(value || "")
                 .replace(/&/g, "&amp;")
                 .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;");
+                .replace(/>/g, "&gt;");
             }
-            Write('<input class="form-input" id="alertEmail" name="alertEmail" type="email" required placeholder="name@example.com" value="' + fieldSafeEmail(Platform.Variable.GetValue("@exitAlertEmail") || "") + '">');
-          </script>
-          <p class="hint">We will send status updates to this address.</p>
-        </div>
-        <div class="actions">
-          <button class="btn btn-create" type="submit" id="submitBtn" onclick="return submitQueue();">Start exit</button>
-          <a class="btn btn-secondary" href="%%=v(@hubUrl)=%%">Cancel</a>
-          <script runat="server">
-            var detail = Platform.Variable.GetValue("@exitResultDetail");
-            if (detail) {
-              Write('<button type="button" class="btn btn-secondary" id="toggleDetailBtn">Show details</button>');
+            var detailBody = Platform.Variable.GetValue("@exitResultDetail");
+            if (detailBody) {
+              Write('<pre class="detail" id="apiDetail">' + detailSafe(detailBody) + '</pre>');
             }
           </script>
         </div>
-      </form>
+      </div>
 
-      <script runat="server">
-        function detailSafe(value) {
-          return String(value || "")
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;");
-        }
-        var detailBody = Platform.Variable.GetValue("@exitResultDetail");
-        if (detailBody) {
-          Write('<pre class="detail" id="apiDetail">' + detailSafe(detailBody) + '</pre>');
-        }
-      </script>
+      <aside class="exit-side" aria-label="Recent exit requests">
+        <div class="card card-side">
+          <h2 class="side-title">Recent exits</h2>
+          <p class="side-sub">Last 5 requests</p>
+          <script runat="server">
+            Write(Platform.Variable.GetValue("@exitRecentBatchesHtml") || '<p class="recent-empty">No recent exit requests yet.</p>');
+          </script>
+        </div>
+      </aside>
     </div>
   </main>
 </div>
