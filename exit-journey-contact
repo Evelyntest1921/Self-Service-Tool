@@ -20,7 +20,7 @@ var envDisplayName = "";
 var envDisplayEmail = "";
 var envAvatarLetter = "";
 var automationTriggerNote = "";
-var triggerAutomationName = "";
+var environment = "";
 
 function formValue(name) {
   var value = "";
@@ -374,31 +374,41 @@ function insertBatchRow(batch) {
   }
 }
 
-function lookupTriggerExternalKey(triggerName) {
-  var name = clean(triggerName);
-  if (!name) {
+function lookupTriggerByEnv(envValue) {
+  var envKey = asLower(envValue);
+  if (!envKey) {
     return {
       ok: false,
       error:
-        "Missing automation name. Set bd_sst_page_navigation.ss_journey_exit_automation to the same name value you inserted in " +
+        "Missing environment. Set bd_sst_page_navigation.environment so we can look up " +
         TRIGGER_DE +
-        "."
+        " by env."
     };
   }
   try {
-    var externalKey = lookupValue(TRIGGER_DE, "externalKey", "name", name);
+    var externalKey = lookupValue(TRIGGER_DE, "externalKey", "env", envKey);
+    var automationName = lookupValue(TRIGGER_DE, "name", "env", envKey);
+    if (!externalKey) {
+      externalKey = lookupValue(TRIGGER_DE, "externalKey", "env", envValue);
+      automationName = lookupValue(TRIGGER_DE, "name", "env", envValue);
+    }
     if (!externalKey) {
       return {
         ok: false,
         error:
           "No " +
           TRIGGER_DE +
-          " row for name=\"" +
-          name +
-          "\". Insert name + externalKey, and match ss_journey_exit_automation."
+          " row for env=\"" +
+          envKey +
+          "\". Insert env, name, and externalKey."
       };
     }
-    return { ok: true, name: name, externalKey: externalKey };
+    return {
+      ok: true,
+      env: envKey,
+      name: automationName || "",
+      externalKey: externalKey
+    };
   } catch (lookupEx) {
     return {
       ok: false,
@@ -435,8 +445,8 @@ function resolveAutomationObjectId(prox, externalKey) {
   return key;
 }
 
-function triggerAutomationByName(triggerName) {
-  var lookup = lookupTriggerExternalKey(triggerName);
+function triggerAutomationForEnv(envValue) {
+  var lookup = lookupTriggerByEnv(envValue);
   if (!lookup.ok) {
     return lookup;
   }
@@ -460,14 +470,21 @@ function triggerAutomationByName(triggerName) {
     if (topStatus === "OK" || itemCode === "OK") {
       return {
         ok: true,
+        env: lookup.env,
         name: lookup.name,
         externalKey: lookup.externalKey,
         objectId: objectId,
-        message: "Automation started for " + lookup.name + "."
+        message:
+          "Automation started" +
+          (lookup.name ? ": " + lookup.name : "") +
+          " (env=" +
+          lookup.env +
+          ")."
       };
     }
     return {
       ok: false,
+      env: lookup.env,
       name: lookup.name,
       externalKey: lookup.externalKey,
       objectId: objectId,
@@ -482,6 +499,7 @@ function triggerAutomationByName(triggerName) {
   } catch (trigEx) {
     return {
       ok: false,
+      env: lookup.env,
       name: lookup.name,
       externalKey: lookup.externalKey,
       error: trigEx.message || String(trigEx)
@@ -491,13 +509,7 @@ function triggerAutomationByName(triggerName) {
 
 hubUrl = lookupValue("bd_sst_page_navigation", "ss_home", "type", "cloudpage") || "#";
 journeyExitUrl = lookupValue("bd_sst_page_navigation", "ss_journey_exit", "type", "cloudpage") || "";
-triggerAutomationName = lookupValue(
-  "bd_sst_page_navigation",
-  "ss_journey_exit_automation",
-  "type",
-  "cloudpage"
-);
-var environment = asLower(lookupValue("bd_sst_page_navigation", "environment", "type", "cloudpage"));
+environment = asLower(lookupValue("bd_sst_page_navigation", "environment", "type", "cloudpage"));
 if (environment === "uat") {
   envDisplayName = "UAT";
   envDisplayEmail = "UAT+admin@magmutual.com";
@@ -570,7 +582,7 @@ try {
       throw "Failed to insert bd_sst_journey_exit_batch row: " + insertResult.error;
     }
 
-    var triggerResult = triggerAutomationByName(triggerAutomationName);
+    var triggerResult = triggerAutomationForEnv(environment);
     if (triggerResult.ok) {
       resultStatus = "success";
       automationTriggerNote = triggerResult.message;
@@ -595,7 +607,8 @@ try {
       Email: alertEmailValue,
       status: "Pending",
       automationTrigger: {
-        name: triggerAutomationName || "",
+        env: environment || "",
+        name: triggerResult.name || "",
         ok: !!triggerResult.ok,
         externalKey: triggerResult.externalKey || "",
         objectId: triggerResult.objectId || "",
