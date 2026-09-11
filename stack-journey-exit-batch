@@ -354,29 +354,54 @@ function fetchPendingBatches(prox) {
   };
 }
 
-function updateBatchRow(batchId, status, message) {
+function updateBatchRow(batchId, status, message, contactsProcessed) {
   var id = strTrim(batchId);
   if (!id) {
     return { ok: false, error: "Missing batchId for update." };
   }
+  var msg = strTrim(message).substring(0, 3900);
+  var countVal =
+    contactsProcessed === null || typeof contactsProcessed === "undefined"
+      ? ""
+      : String(contactsProcessed);
   try {
-    Platform.Function.UpdateData(
-      BATCH_DE,
-      ["batchId"],
-      [id],
-      ["status", "processedAt", "message"],
-      [status, new Date(), strTrim(message).substring(0, 3900)]
-    );
-    return { ok: true };
-  } catch (upEx) {
-    try {
+    if (countVal !== "") {
       Platform.Function.UpdateData(
         BATCH_DE,
         ["batchId"],
         [id],
-        ["status", "message"],
-        [status, strTrim(message).substring(0, 3900)]
+        ["status", "processedAt", "message", "contactsProcessed"],
+        [status, new Date(), msg, countVal]
       );
+    } else {
+      Platform.Function.UpdateData(
+        BATCH_DE,
+        ["batchId"],
+        [id],
+        ["status", "processedAt", "message"],
+        [status, new Date(), msg]
+      );
+    }
+    return { ok: true };
+  } catch (upEx) {
+    try {
+      if (countVal !== "") {
+        Platform.Function.UpdateData(
+          BATCH_DE,
+          ["batchId"],
+          [id],
+          ["status", "message", "contactsProcessed"],
+          [status, msg, countVal]
+        );
+      } else {
+        Platform.Function.UpdateData(
+          BATCH_DE,
+          ["batchId"],
+          [id],
+          ["status", "message"],
+          [status, msg]
+        );
+      }
       return { ok: true };
     } catch (upEx2) {
       return {
@@ -715,7 +740,7 @@ function processBatch(prox, batch) {
     (limitHit ? ", cappedAt=" + max : "");
 
   if (!inserted && !duplicates) {
-    updateBatchRow(batchId, "Failed", summary);
+    updateBatchRow(batchId, "Failed", summary, 0);
     return label + " — FAILED " + summary;
   }
 
@@ -725,7 +750,8 @@ function processBatch(prox, batch) {
     summary +
       (limitHit
         ? " Batch marked Queued because row cap was hit; re-run or raise MAX_ROWS_PER_BATCH."
-        : "")
+        : ""),
+    inserted + duplicates
   );
   return label + " — " + (limitHit ? "QUEUED (capped) " : "DONE ") + summary;
 }
