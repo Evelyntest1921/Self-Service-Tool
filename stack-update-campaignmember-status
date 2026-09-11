@@ -1,0 +1,70 @@
+<script runat="server">
+Platform.Load("Core", "1");
+
+var CONTENT_BLOCK_KEY = "sst_sf_update_cm_status";
+var CONTENT_BLOCK_ID = "";
+var LOG_DE = "sst_de_journey_exit_log";
+var LOG_FIELD = "log";
+var LOG_MAX_LEN = 4000;
+
+var campaignId = "REPLACE_CAMPAIGN_ID";
+var fromStatus = "Sent";
+var toStatus = "Responded";
+
+function strTrim(v) {
+  if (v === null || typeof v === "undefined") {
+    return "";
+  }
+  try {
+    return (v + "").replace(/^\s+|\s+$/g, "");
+  } catch (e) {
+    return "";
+  }
+}
+
+function writeLog(text) {
+  var msg = text === null || typeof text === "undefined" ? "" : text + "";
+  if (msg.length > LOG_MAX_LEN) {
+    msg = msg.substring(0, LOG_MAX_LEN - 3) + "...";
+  }
+  try {
+    Platform.Function.InsertData(LOG_DE, [LOG_FIELD], [msg]);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
+try {
+  campaignId = strTrim(campaignId);
+  fromStatus = strTrim(fromStatus);
+  toStatus = strTrim(toStatus) || "Responded";
+
+  if (!campaignId || campaignId.indexOf("REPLACE_") === 0) {
+    Write("Set campaignId in stack-update-campaignmember-status before running.");
+    writeLog("CM status update SKIP: campaignId not set.");
+  } else {
+    Platform.Variable.SetValue("@sfCampaignId", campaignId);
+    Platform.Variable.SetValue("@sfFromStatus", fromStatus);
+    Platform.Variable.SetValue("@sfToStatus", toStatus);
+
+    var treatExpr = "";
+    if (strTrim(CONTENT_BLOCK_ID)) {
+      treatExpr =
+        '%%=ContentBlockById("' + strTrim(CONTENT_BLOCK_ID) + '")=%%';
+    } else {
+      treatExpr =
+        '%%=ContentBlockByKey("' + CONTENT_BLOCK_KEY + '")=%%';
+    }
+
+    var result = Platform.Function.TreatAsContent(treatExpr);
+    var out = strTrim(result) || "(empty TreatAsContent result)";
+    Write(out);
+    writeLog("CM status update: " + out);
+  }
+} catch (error) {
+  var msg = "CM status update ERROR: " + Stringify(error);
+  Write(msg);
+  writeLog(msg);
+}
+</script>

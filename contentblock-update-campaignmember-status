@@ -1,0 +1,54 @@
+%%[
+SET @campaignId = Trim(@sfCampaignId)
+SET @fromStatus = Trim(@sfFromStatus)
+SET @toStatus = Trim(@sfToStatus)
+SET @maxRows = 2000
+
+IF Empty(@toStatus) THEN
+  SET @toStatus = "Responded"
+ENDIF
+
+SET @updated = 0
+SET @failed = 0
+SET @skipped = 0
+SET @cnt = 0
+SET @err = ""
+
+IF Empty(@campaignId) THEN
+  SET @err = "Missing @sfCampaignId"
+ELSEIF Empty(@fromStatus) THEN
+  SET @err = "Missing @sfFromStatus"
+ELSE
+  SET @cmRows = RetrieveSalesforceObjects(
+    "CampaignMember",
+    "Id,Status,CampaignId",
+    "CampaignId", "=", @campaignId,
+    "Status", "=", @fromStatus
+  )
+  SET @cnt = RowCount(@cmRows)
+  IF @cnt > @maxRows THEN
+    SET @cnt = @maxRows
+  ENDIF
+
+  FOR @i = 1 TO @cnt DO
+    SET @cmRow = Row(@cmRows, @i)
+    SET @cmId = Trim(Field(@cmRow, "Id"))
+    IF Empty(@cmId) THEN
+      SET @skipped = Add(@skipped, 1)
+    ELSE
+      SET @ok = UpdateSingleSalesforceObject(
+        "CampaignMember",
+        @cmId,
+        "Status",
+        @toStatus
+      )
+      IF @ok == 1 THEN
+        SET @updated = Add(@updated, 1)
+      ELSE
+        SET @failed = Add(@failed, 1)
+      ENDIF
+    ENDIF
+  NEXT @i
+ENDIF
+]%%
+%%=IIF(Empty(@err), Concat("OK campaign=", @campaignId, " from=", @fromStatus, " to=", @toStatus, " found=", @cnt, " updated=", @updated, " failed=", @failed, " skipped=", @skipped), Concat("ERROR ", @err))=%%
