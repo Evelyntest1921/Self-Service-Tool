@@ -3,6 +3,7 @@ Platform.Load("core", "1");
 
 var BATCH_DE = "bd_sst_journey_exit_batch";
 var TRIGGER_DE = "sst_trigger_automation";
+var TRIGGER_TYPE = "exit_automation";
 var resultStatus = "";
 var resultMessage = "";
 var resultDetail = "";
@@ -374,38 +375,31 @@ function insertBatchRow(batch) {
   }
 }
 
-function lookupTriggerByEnv(envValue) {
-  var envKey = asLower(envValue);
-  if (!envKey) {
+function lookupTriggerByType(triggerType) {
+  var typeKey = clean(triggerType);
+  if (!typeKey) {
     return {
       ok: false,
-      error:
-        "Missing environment. Set bd_sst_page_navigation.environment so we can look up " +
-        TRIGGER_DE +
-        " by env."
+      error: "Missing trigger type for " + TRIGGER_DE + " lookup."
     };
   }
   try {
-    var externalKey = lookupValue(TRIGGER_DE, "externalKey", "env", envKey);
-    var automationName = lookupValue(TRIGGER_DE, "name", "env", envKey);
-    if (!externalKey) {
-      externalKey = lookupValue(TRIGGER_DE, "externalKey", "env", envValue);
-      automationName = lookupValue(TRIGGER_DE, "name", "env", envValue);
-    }
+    var externalKey = lookupValue(TRIGGER_DE, "externalKey", "type", typeKey);
+    var automationName = lookupValue(TRIGGER_DE, "name", "type", typeKey);
     if (!externalKey) {
       return {
         ok: false,
         error:
           "No " +
           TRIGGER_DE +
-          " row for env=\"" +
-          envKey +
-          "\". Insert env, name, and externalKey."
+          " row for type=\"" +
+          typeKey +
+          "\". Insert type, name, and externalKey."
       };
     }
     return {
       ok: true,
-      env: envKey,
+      type: typeKey,
       name: automationName || "",
       externalKey: externalKey
     };
@@ -445,8 +439,8 @@ function resolveAutomationObjectId(prox, externalKey) {
   return key;
 }
 
-function triggerAutomationForEnv(envValue) {
-  var lookup = lookupTriggerByEnv(envValue);
+function triggerAutomationByType(triggerType) {
+  var lookup = lookupTriggerByType(triggerType);
   if (!lookup.ok) {
     return lookup;
   }
@@ -470,21 +464,21 @@ function triggerAutomationForEnv(envValue) {
     if (topStatus === "OK" || itemCode === "OK") {
       return {
         ok: true,
-        env: lookup.env,
+        type: lookup.type,
         name: lookup.name,
         externalKey: lookup.externalKey,
         objectId: objectId,
         message:
           "Automation started" +
           (lookup.name ? ": " + lookup.name : "") +
-          " (env=" +
-          lookup.env +
+          " (type=" +
+          lookup.type +
           ")."
       };
     }
     return {
       ok: false,
-      env: lookup.env,
+      type: lookup.type,
       name: lookup.name,
       externalKey: lookup.externalKey,
       objectId: objectId,
@@ -499,7 +493,7 @@ function triggerAutomationForEnv(envValue) {
   } catch (trigEx) {
     return {
       ok: false,
-      env: lookup.env,
+      type: lookup.type,
       name: lookup.name,
       externalKey: lookup.externalKey,
       error: trigEx.message || String(trigEx)
@@ -582,7 +576,7 @@ try {
       throw "Failed to insert bd_sst_journey_exit_batch row: " + insertResult.error;
     }
 
-    var triggerResult = triggerAutomationForEnv(environment);
+    var triggerResult = triggerAutomationByType(TRIGGER_TYPE);
     if (triggerResult.ok) {
       resultStatus = "success";
       automationTriggerNote = triggerResult.message;
@@ -607,7 +601,7 @@ try {
       Email: alertEmailValue,
       status: "Pending",
       automationTrigger: {
-        env: environment || "",
+        type: TRIGGER_TYPE,
         name: triggerResult.name || "",
         ok: !!triggerResult.ok,
         externalKey: triggerResult.externalKey || "",
