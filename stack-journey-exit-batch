@@ -837,28 +837,29 @@ try {
   var prox = new Script.Util.WSProxy();
   var fetch = fetchPendingBatches(prox);
   var batches = fetch.rows || [];
-  resultLines.push(
-    "bd_sst_journey_exit_batch seeder — " +
-      batches.length +
-      " workable batch(es)."
-  );
-  if (fetch.notes) {
-    debugLines.push("Fetch notes: " + fetch.notes);
-  }
-  if (fetch.statusSummary) {
-    debugLines.push("Status counts: " + fetch.statusSummary);
-  }
-  if (fetch.error) {
-    debugLines.push("Retrieve errors: " + fetch.error);
-  }
+  var shouldLog = false;
 
   if (!batches.length) {
-    resultLines.push(
-        "No workable batches found. Check Fetch notes/Status counts in the log. Expected DE external key: " +
-        BATCH_DE +
-        ". Workable statuses: Pending, Failed, or blank."
+    Write(
+      "bd_sst_journey_exit_batch seeder — no data extension batches to process (campaign batches are skipped)."
     );
   } else {
+    shouldLog = true;
+    resultLines.push(
+      "bd_sst_journey_exit_batch seeder — " +
+        batches.length +
+        " data extension batch(es)."
+    );
+    if (fetch.notes) {
+      debugLines.push("Fetch notes: " + fetch.notes);
+    }
+    if (fetch.statusSummary) {
+      debugLines.push("Status counts: " + fetch.statusSummary);
+    }
+    if (fetch.error) {
+      debugLines.push("Retrieve errors: " + fetch.error);
+    }
+
     var runCount =
       batches.length > MAX_BATCHES_PER_RUN
         ? MAX_BATCHES_PER_RUN
@@ -889,19 +890,20 @@ try {
       );
       debugLines.push(processBatch(prox, batches[b]));
     }
+
+    var output = resultLines.join("\n");
+    if (debugLines.length) {
+      output += "\n\n" + debugLines.join("\n");
+    }
+    var logResult = writeExitLog(output);
+    if (!logResult.ok) {
+      output += "\n\n[sst_de_journey_exit_log insert FAILED] " + logResult.error;
+    }
+    Write(output);
   }
 } catch (runEx) {
-  resultLines.push("ERROR: " + (runEx.message || String(runEx)));
+  var errOut = "ERROR: " + (runEx.message || String(runEx));
+  writeExitLog(errOut);
+  Write(errOut);
 }
-
-var output = resultLines.join("\n");
-if (debugLines.length) {
-  output += "\n\n" + debugLines.join("\n");
-}
-
-var logResult = writeExitLog(output);
-if (!logResult.ok) {
-  output += "\n\n[sst_de_journey_exit_log insert FAILED] " + logResult.error;
-}
-Write(output);
 </script>

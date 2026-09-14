@@ -980,23 +980,22 @@ try {
   var prox = new Script.Util.WSProxy();
   var queueFetch = fetchExitQueueRows(prox);
   var queueRows = queueFetch.rows || [];
-  resultLines.push(
-    "bd_sst_journey_exit worker — " + queueRows.length + " row(s)."
-  );
-  if (queueFetch.notes) {
-    debugLines.push("Retrieve notes: " + queueFetch.notes);
-  }
-  if (queueFetch.error) {
-    debugLines.push("Retrieve errors: " + queueFetch.error);
-  }
 
   if (!queueRows.length) {
-    resultLines.push(
-      queueFetch.error
-        ? "No queued exits (retrieve failed — see notes)."
-        : "No queued exits."
+    Write(
+      "bd_sst_journey_exit worker — no Pending/Failed/Queued rows to process."
     );
   } else {
+    resultLines.push(
+      "bd_sst_journey_exit worker — " + queueRows.length + " row(s)."
+    );
+    if (queueFetch.notes) {
+      debugLines.push("Retrieve notes: " + queueFetch.notes);
+    }
+    if (queueFetch.error) {
+      debugLines.push("Retrieve errors: " + queueFetch.error);
+    }
+
     var grouped = groupQueueByJourney(queueRows);
     var keyCache = {};
     var skipped = 0;
@@ -1057,19 +1056,20 @@ try {
     for (var bf = 0; bf < batchFlushLines.length; bf++) {
       resultLines.push(batchFlushLines[bf]);
     }
+
+    var output = resultLines.join("\n");
+    if (debugLines.length) {
+      output += "\n\n" + debugLines.join("\n");
+    }
+    var logResult = writeExitLog(output);
+    if (!logResult.ok) {
+      output += "\n\n[sst_de_journey_exit_log insert FAILED] " + logResult.error;
+    }
+    Write(output);
   }
 } catch (runEx) {
-  resultLines.push("ERROR: " + (runEx.message || String(runEx)));
+  var errOut = "ERROR: " + (runEx.message || String(runEx));
+  writeExitLog(errOut);
+  Write(errOut);
 }
-
-var output = resultLines.join("\n");
-if (debugLines.length) {
-  output += "\n\n" + debugLines.join("\n");
-}
-
-var logResult = writeExitLog(output);
-if (!logResult.ok) {
-  output += "\n\n[sst_de_journey_exit_log insert FAILED] " + logResult.error;
-}
-Write(output);
 </script>
