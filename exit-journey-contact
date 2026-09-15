@@ -2,8 +2,10 @@
 Platform.Load("core", "1");
 
 var BATCH_DE = "bd_sst_journey_exit_batch";
+var EXIT_QUEUE_DE = "bd_sst_journey_exit";
 var TRIGGER_DE = "sst_trigger_automation";
 var TRIGGER_TYPE = "exit_automation";
+var MAX_CONTACTS_VIEW = 500;
 var resultStatus = "";
 var resultMessage = "";
 var resultDetail = "";
@@ -30,6 +32,14 @@ function formValue(name) {
   var value = "";
   try {
     value = Platform.Request.GetFormField(name);
+  } catch (e) {}
+  return value || "";
+}
+
+function queryValue(name) {
+  var value = "";
+  try {
+    value = Platform.Request.GetQueryStringParameter(name);
   } catch (e) {}
   return value || "";
 }
@@ -298,6 +308,7 @@ function loadRecentBatches(limit) {
         (memberStatus ? " · " + memberStatus : "");
     }
     normalized.push({
+      batchId: asStr(fieldAny(row, ["batchId", "BatchId", "BATCHID"])),
       journeyName: asStr(fieldAny(row, ["journeyName", "JourneyName"])) || "Untitled journey",
       sourceDeName: audienceLabel,
       sourceType: sourceType,
@@ -318,7 +329,187 @@ function loadRecentBatches(limit) {
   return { ok: true, rows: normalized, error: "" };
 }
 
-function buildRecentBatchesHtml(batches) {
+function lookupBatchSummary(batchId) {
+  var id = clean(batchId);
+  if (!id) {
+    return null;
+  }
+  try {
+    var rows = Platform.Function.LookupRows(BATCH_DE, "batchId", id);
+    if (rows && rows.length) {
+      var row = rows[0];
+      return {
+        batchId: id,
+        journeyName:
+          asStr(fieldAny(row, ["journeyName", "JourneyName"])) || "Untitled journey",
+        sourceDeName:
+          asStr(fieldAny(row, ["sourceDeName", "SourceDeName", "sourceDEName"])) ||
+          "—",
+        status: asStr(fieldAny(row, ["status", "Status"])) || "Pending",
+        requestedAt: fieldAny(row, ["requestedAt", "RequestedAt"])
+      };
+    }
+  } catch (lookupEx) {}
+  return {
+    batchId: id,
+    journeyName: "",
+    sourceDeName: "",
+    status: "",
+    requestedAt: ""
+  };
+}
+
+function normalizeExitContactRow(row) {
+  return {
+    journeyName: asStr(fieldAny(row, ["journeyName", "JourneyName"])),
+    updateDate: fieldAny(row, ["updateDate", "UpdateDate"]),
+    updateDateMs: parseDateMs(fieldAny(row, ["updateDate", "UpdateDate"])),
+    subscriberKey: asStr(fieldAny(row, ["subscriberKey", "SubscriberKey"])),
+    journeyId: asStr(fieldAny(row, ["journeyId", "journeyID", "JourneyId", "JourneyID"])),
+    batchID: asStr(fieldAny(row, ["batchID", "batchId", "BatchId", "BATCHID"])),
+    status: asStr(fieldAny(row, ["status", "Status"])) || "—"
+  };
+}
+
+function loadExitContactsByBatch(batchId, limit) {
+  var id = clean(batchId);
+  if (!id) {
+    return { ok: false, rows: [], total: 0, truncated: false, error: "Missing batch ID." };
+  }
+  var max = limit || MAX_CONTACTS_VIEW;
+  var rows = [];
+  var errors = [];
+  var lookupFields = ["batchID", "batchId", "BatchId"];
+  var lf;
+  for (lf = 0; lf < lookupFields.length; lf++) {
+    try {
+      var found = Platform.Function.LookupRows(EXIT_QUEUE_DE, lookupFields[lf], id);
+      if (found && found.length) {
+        rows = coerceRows(found);
+        break;
+      }
+    } catch (lkEx) {
+      errors.push("LookupRows(" + lookupFields[lf] + "): " + (lkEx.message || String(lkEx)));
+    }
+  }
+  if (!rows.length) {
+    try {
+      var prox = new Script.Util.WSProxy();
+      var props = [
+        "journeyName",
+        "updateDate",
+        "subscriberKey",
+        "journeyId",
+        "batchID",
+        "Status",
+        "status"
+      ];
+      var batchFields = ["batchID", "batchId"];
+      var bf;
+      for (bf = 0; bf < batchFields.length; bf++) {
+        try {
+          var wsResp = prox.retrieve(
+            "DataExtensionObject[" + EXIT_QUEUE_DE + "]",
+            props,
+            { Property: batchFields[bf], SimpleOperator: "equals", Value: id }
+          );
+          var wsRows = coerceRows(wsResp && wsResp.Results ? wsResp.Results : []);
+          if (wsRows.length) {
+            rows = wsRows;
+            break;
+          }
+        } catch (wsEx) {
+          errors.push("WSProxy " + batchFields[bf] + ": " + (wsEx.message || String(wsEx)));
+        }
+      }
+    } catch (proxEx) {
+      errors.push(proxEx.message || String(proxEx));
+    }
+  }
+  var normalized = [];
+  var i;
+  for (i = 0; i < rows.length; i++) {
+    normalized.push(normalizeExitContactRow(rows[i]));
+  }
+  normalized.sort(function (a, b) {
+    return (b.updateDateMs || 0) - (a.updateDateMs || 0);
+  });
+  var total = normalized.length;
+  var truncated = false;
+  if (normalized.length > max) {
+    truncated = true;
+    normalized = normalized.slice(0, max);
+  }
+  if (!total) {
+    return {
+      ok: false,
+      rows: [],
+      total: 0,
+      truncated: false,
+      error: errors.join(" | ") || "No contacts found for this batch."
+    };
+  }
+  return {
+    ok: true,
+    rows: normalized,
+    total: total,
+    truncated: truncated,
+    error: ""
+  };
+}
+
+function buildExitContactsHtml(contacts, options) {
+  if (!contacts || !contacts.length) {
+    return '<p class="recent-empty">No exit contacts found for this batch.</p>';
+  }
+  var parts = ['<div class="contacts-summary">'];
+  parts.push(
+    "<span>" + htmlSafe(String(contacts.length)) + " contact(s)</span>"
+  );
+  if (options && options.truncated) {
+    parts.push(
+      '<span class="contacts-truncated">Showing first ' +
+        htmlSafe(String(contacts.length)) +
+        " of " +
+        htmlSafe(String(options.total || contacts.length)) +
+        "</span>"
+    );
+  }
+  parts.push("</div>");
+  parts.push('<div class="contacts-table-wrap"><table class="contacts-table">');
+  parts.push(
+    "<thead><tr>" +
+      "<th>Journey</th>" +
+      "<th>Updated</th>" +
+      "<th>Subscriber key</th>" +
+      "<th>Journey ID</th>" +
+      "<th>Batch ID</th>" +
+      "<th>Status</th>" +
+      "</tr></thead><tbody>"
+  );
+  var i;
+  for (i = 0; i < contacts.length; i++) {
+    var c = contacts[i];
+    parts.push("<tr>");
+    parts.push("<td>" + htmlSafe(c.journeyName || "—") + "</td>");
+    parts.push("<td>" + htmlSafe(formatDisplayDate(c.updateDate)) + "</td>");
+    parts.push('<td class="contacts-mono">' + htmlSafe(c.subscriberKey || "—") + "</td>");
+    parts.push('<td class="contacts-mono">' + htmlSafe(c.journeyId || "—") + "</td>");
+    parts.push('<td class="contacts-mono">' + htmlSafe(c.batchID || "—") + "</td>");
+    parts.push(
+      '<td><span class="recent-status ' +
+        statusClass(c.status) +
+        '">' +
+        htmlSafe(c.status) +
+        "</span></td>"
+    );
+    parts.push("</tr>");
+  }
+  parts.push("</tbody></table></div>");
+  return parts.join("");
+}
+
+function buildRecentBatchesHtml(batches, selectedBatchId) {
   if (!batches || !batches.length) {
     return '<p class="recent-empty">No recent exit requests yet.</p>';
   }
@@ -326,8 +517,27 @@ function buildRecentBatchesHtml(batches) {
   var i;
   for (i = 0; i < batches.length; i++) {
     var item = batches[i];
+    var selected =
+      selectedBatchId && item.batchId && selectedBatchId === item.batchId
+        ? " is-selected"
+        : "";
+    var clickable = item.batchId ? " recent-item--clickable" : "";
+    var batchAttr = item.batchId
+      ? ' data-batch-id="' + htmlSafe(item.batchId) + '"'
+      : "";
+    var interactiveAttr = item.batchId
+      ? ' role="button" tabindex="0" aria-label="View exit contacts for ' +
+        htmlSafe(item.journeyName) +
+        '"'
+      : "";
     parts.push(
-      '<li class="recent-item">' +
+      '<li class="recent-item' +
+        clickable +
+        selected +
+        '"' +
+        batchAttr +
+        interactiveAttr +
+        ">" +
         '<div class="recent-journey">' +
         htmlSafe(item.journeyName) +
         "</div>" +
@@ -724,6 +934,53 @@ function resolveAutomationObjectId(prox, externalKey) {
   return key;
 }
 
+function automationStatusLabel(statusId) {
+  var map = {
+    "0": "Unknown",
+    "1": "Building",
+    "2": "Ready",
+    "3": "Running",
+    "4": "Paused",
+    "5": "Stopped",
+    "6": "Scheduled",
+    "7": "Waiting",
+    "8": "Inactive"
+  };
+  var key = asStr(statusId);
+  if (map[key]) {
+    return map[key];
+  }
+  return key ? "Status " + key : "Unknown";
+}
+
+function automationIsRunning(statusId) {
+  return asStr(statusId) === "3";
+}
+
+function getAutomationById(prox, objectId) {
+  var id = asStr(objectId);
+  if (!id) {
+    return null;
+  }
+  var resp = prox.retrieve(
+    "Automation",
+    ["ObjectID", "ProgramID", "CustomerKey", "Name", "Status", "IsActive"],
+    { Property: "ObjectID", SimpleOperator: "equals", Value: id }
+  );
+  if (resp && resp.Results && resp.Results.length > 0) {
+    return resp.Results[0];
+  }
+  resp = prox.retrieve(
+    "Automation",
+    ["ObjectID", "ProgramID", "CustomerKey", "Name", "Status", "IsActive"],
+    { Property: "ProgramID", SimpleOperator: "equals", Value: id }
+  );
+  if (resp && resp.Results && resp.Results.length > 0) {
+    return resp.Results[0];
+  }
+  return null;
+}
+
 function triggerAutomationByType(triggerType) {
   var lookup = lookupTriggerByType(triggerType);
   if (!lookup.ok) {
@@ -736,6 +993,25 @@ function triggerAutomationByType(triggerType) {
       return {
         ok: false,
         error: "Could not resolve automation ObjectID for externalKey=" + lookup.externalKey
+      };
+    }
+    var automation = getAutomationById(prox, objectId);
+    var statusId = automation ? asStr(automation.Status) : "";
+    if (automationIsRunning(statusId)) {
+      var statusLabel = automationStatusLabel(statusId);
+      return {
+        ok: true,
+        skipped: true,
+        type: lookup.type,
+        name: lookup.name,
+        externalKey: lookup.externalKey,
+        objectId: objectId,
+        status: statusLabel,
+        message:
+          "Automation already " +
+          statusLabel +
+          "; batch queued without starting a new run." +
+          (lookup.name ? " (" + lookup.name + ")" : "")
       };
     }
     var perform = prox.performItem("Program", { ObjectID: objectId }, "start", {});
@@ -892,11 +1168,19 @@ try {
     if (triggerResult.ok) {
       resultStatus = "success";
       automationTriggerNote = triggerResult.message;
-      resultMessage =
-        "Exit started. We queued your contacts and started processing. " +
-        "Notification email: " +
-        alertEmailValue +
-        ".";
+      if (triggerResult.skipped) {
+        resultMessage =
+          "Exit queued. Processing is already running; your request was added to the queue. " +
+          "Notification email: " +
+          alertEmailValue +
+          ".";
+      } else {
+        resultMessage =
+          "Exit started. We queued your contacts and started processing. " +
+          "Notification email: " +
+          alertEmailValue +
+          ".";
+      }
     } else {
       resultStatus = "warn";
       automationTriggerNote = triggerResult.error || "Automation did not start.";
@@ -919,6 +1203,8 @@ try {
         type: TRIGGER_TYPE,
         name: triggerResult.name || "",
         ok: !!triggerResult.ok,
+        skipped: !!triggerResult.skipped,
+        status: triggerResult.status || "",
         externalKey: triggerResult.externalKey || "",
         objectId: triggerResult.objectId || "",
         message: triggerResult.message || "",
@@ -938,11 +1224,46 @@ try {
   }
 }
 
+var viewBatchId = clean(queryValue("viewBatch")) || clean(formValue("viewBatch"));
+var showContactsView = !!viewBatchId;
+var exitContactsHtml = "";
+var exitContactsError = "";
+var exitViewBatchJourneyName = "";
+var exitViewBatchAudience = "";
+var exitViewBatchStatus = "";
+var exitViewBatchRequestedAt = "";
+var exitViewBatchRequestedAtDisplay = "";
+var exitBackUrl = journeyExitUrl || "#";
+
+if (viewBatchId) {
+  var batchMeta = lookupBatchSummary(viewBatchId);
+  if (batchMeta) {
+    exitViewBatchJourneyName = batchMeta.journeyName || "";
+    exitViewBatchAudience = batchMeta.sourceDeName || "";
+    exitViewBatchStatus = batchMeta.status || "";
+    exitViewBatchRequestedAt = batchMeta.requestedAt || "";
+    exitViewBatchRequestedAtDisplay = formatDisplayDate(batchMeta.requestedAt);
+  }
+  try {
+    var contactLoad = loadExitContactsByBatch(viewBatchId, MAX_CONTACTS_VIEW);
+    if (contactLoad.ok) {
+      exitContactsHtml = buildExitContactsHtml(contactLoad.rows, {
+        truncated: contactLoad.truncated,
+        total: contactLoad.total
+      });
+    } else {
+      exitContactsError = contactLoad.error || "Could not load exit contacts.";
+    }
+  } catch (contactEx) {
+    exitContactsError = asStr(contactEx && contactEx.message ? contactEx.message : contactEx);
+  }
+}
+
 var recentBatchesHtml = "";
 try {
   var recent = loadRecentBatches(5);
   if (recent.ok) {
-    recentBatchesHtml = buildRecentBatchesHtml(recent.rows);
+    recentBatchesHtml = buildRecentBatchesHtml(recent.rows, viewBatchId);
   } else {
     recentBatchesHtml =
       '<p class="recent-empty">Could not load recent exits.</p>';
@@ -974,6 +1295,16 @@ Platform.Variable.SetValue("@exitAlertEmail", alertEmailValue);
 Platform.Variable.SetValue("@exitBatchId", createdBatchId);
 Platform.Variable.SetValue("@exitJourneysLoadError", journeysLoadError);
 Platform.Variable.SetValue("@exitRecentBatchesHtml", recentBatchesHtml);
+Platform.Variable.SetValue("@exitShowContactsView", showContactsView ? "true" : "");
+Platform.Variable.SetValue("@exitViewBatchId", viewBatchId);
+Platform.Variable.SetValue("@exitContactsHtml", exitContactsHtml);
+Platform.Variable.SetValue("@exitContactsError", exitContactsError);
+Platform.Variable.SetValue("@exitViewBatchJourneyName", exitViewBatchJourneyName);
+Platform.Variable.SetValue("@exitViewBatchAudience", exitViewBatchAudience);
+Platform.Variable.SetValue("@exitViewBatchStatus", exitViewBatchStatus);
+Platform.Variable.SetValue("@exitViewBatchRequestedAt", exitViewBatchRequestedAt);
+Platform.Variable.SetValue("@exitViewBatchRequestedAtDisplay", exitViewBatchRequestedAtDisplay);
+Platform.Variable.SetValue("@exitBackUrl", exitBackUrl);
 </script>
 <!DOCTYPE html>
 <html lang="en">
@@ -1063,6 +1394,22 @@ Platform.Variable.SetValue("@exitRecentBatchesHtml", recentBatchesHtml);
 .recent-item:last-child {
   border-bottom: 0;
   padding-bottom: 0;
+}
+.recent-item--clickable {
+  cursor: pointer;
+  margin: 0 -10px;
+  padding-left: 10px;
+  padding-right: 10px;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+.recent-item--clickable:hover {
+  background: var(--bg-secondary);
+}
+.recent-item--clickable.is-selected {
+  background: #eef2ff;
+  border-left: 3px solid var(--primary-color);
+  padding-left: 7px;
 }
 .recent-journey {
   font-weight: 600;
@@ -1251,6 +1598,64 @@ h1 {
   display: none;
 }
 .detail.is-visible { display: block; }
+.contacts-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+  font-size: 14px;
+  color: var(--gray-500);
+}
+.contacts-truncated {
+  font-size: 13px;
+  color: #92400e;
+}
+.contacts-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-color);
+}
+.contacts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.contacts-table th,
+.contacts-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  text-align: left;
+  vertical-align: top;
+}
+.contacts-table th {
+  background: var(--bg-secondary);
+  font-weight: 600;
+  color: var(--gray-900);
+  white-space: nowrap;
+}
+.contacts-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.contacts-table tbody tr:hover {
+  background: #fafafa;
+}
+.contacts-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+.contacts-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  color: var(--gray-500);
+}
+.contacts-meta-label {
+  font-weight: 600;
+  color: var(--gray-900);
+}
 </style>
 </head>
 <body>
@@ -1265,6 +1670,18 @@ h1 {
 
     <div class="exit-workspace">
       <div class="exit-main">
+        <script runat="server">
+          function panelHidden(show) {
+            return show ? "" : ' style="display:none;"';
+          }
+          var showContactsPanel =
+            Platform.Variable.GetValue("@exitShowContactsView") === "true";
+          Write(
+            '<div id="exitFormPanel" class="exit-panel"' +
+              panelHidden(!showContactsPanel) +
+              ">"
+          );
+        </script>
         <div class="card">
           <h1>Journey Exit</h1>
           <p class="sub">Choose the journey and data extension to remove contacts from. You will get an email when processing finishes.</p>
@@ -1400,12 +1817,97 @@ h1 {
             }
           </script>
         </div>
+        <script runat="server">Write("</div>");</script>
+
+        <script runat="server">
+          function contactsBodySafe(value) {
+            return String(value || "")
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;");
+          }
+          var showContactsPanelInner =
+            Platform.Variable.GetValue("@exitShowContactsView") === "true";
+          Write(
+            '<div id="exitContactsPanel" class="exit-panel"' +
+              (showContactsPanelInner ? "" : ' style="display:none;"') +
+              ">"
+          );
+          Write('<div class="card">');
+          Write(
+            '<div class="actions" style="margin-top:0;margin-bottom:20px;">' +
+              '<a class="btn btn-secondary" href="' +
+              contactsBodySafe(Platform.Variable.GetValue("@exitBackUrl") || "#") +
+              '">Back to new exit</a>' +
+              "</div>"
+          );
+          Write("<h1>Exit contacts</h1>");
+          var viewJourney = Platform.Variable.GetValue("@exitViewBatchJourneyName");
+          var viewAudience = Platform.Variable.GetValue("@exitViewBatchAudience");
+          var viewStatus = Platform.Variable.GetValue("@exitViewBatchStatus");
+          var viewBatchIdDisplay = Platform.Variable.GetValue("@exitViewBatchId");
+          var viewRequested = Platform.Variable.GetValue("@exitViewBatchRequestedAtDisplay");
+          Write(
+            '<p class="sub">Contacts queued and processed for this exit batch.</p>'
+          );
+          Write('<div class="contacts-meta">');
+          if (viewJourney) {
+            Write(
+              '<div><span class="contacts-meta-label">Journey</span> ' +
+                contactsBodySafe(viewJourney) +
+                "</div>"
+            );
+          }
+          if (viewAudience) {
+            Write(
+              '<div><span class="contacts-meta-label">Audience</span> ' +
+                contactsBodySafe(viewAudience) +
+                "</div>"
+            );
+          }
+          if (viewBatchIdDisplay) {
+            Write(
+              '<div><span class="contacts-meta-label">Batch</span> <span class="contacts-mono">' +
+                contactsBodySafe(viewBatchIdDisplay) +
+                "</span></div>"
+            );
+          }
+          if (viewRequested) {
+            Write(
+              '<div><span class="contacts-meta-label">Requested</span> ' +
+                contactsBodySafe(viewRequested) +
+                "</div>"
+            );
+          }
+          if (viewStatus) {
+            Write(
+              '<div><span class="contacts-meta-label">Batch status</span> ' +
+                contactsBodySafe(viewStatus) +
+                "</div>"
+            );
+          }
+          Write("</div>");
+          var contactsErr = Platform.Variable.GetValue("@exitContactsError");
+          if (contactsErr) {
+            Write(
+              '<div class="notice error"><strong>' +
+                contactsBodySafe(contactsErr) +
+                "</strong></div>"
+            );
+          }
+          Write(
+            Platform.Variable.GetValue("@exitContactsHtml") ||
+              '<p class="recent-empty">No exit contacts found for this batch yet.</p>'
+          );
+          Write("</div></div>");
+        </script>
       </div>
 
       <aside class="exit-side" aria-label="Recent exit requests">
         <div class="card card-side">
           <h2 class="side-title">Recent exits</h2>
-          <p class="side-sub">Last 5 requests</p>
+          <p class="side-sub">Last 5 requests. Click one to view contacts.</p>
           <script runat="server">
             Write(Platform.Variable.GetValue("@exitRecentBatchesHtml") || '<p class="recent-empty">No recent exit requests yet.</p>');
           </script>
@@ -1492,6 +1994,27 @@ h1 {
       var open = detail.className.indexOf("is-visible") > -1;
       detail.className = open ? "detail" : "detail is-visible";
       toggle.textContent = open ? "Show details" : "Hide details";
+    });
+  }
+
+  var recentItems = document.querySelectorAll(".recent-item--clickable");
+  var ri;
+  for (ri = 0; ri < recentItems.length; ri++) {
+    recentItems[ri].addEventListener("click", function () {
+      var batchId = this.getAttribute("data-batch-id");
+      if (!batchId) {
+        return;
+      }
+      window.location.href =
+        window.location.pathname +
+        "?viewBatch=" +
+        encodeURIComponent(batchId);
+    });
+    recentItems[ri].addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        this.click();
+      }
     });
   }
 
