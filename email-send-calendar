@@ -394,6 +394,15 @@ function buildSendsHtml(rows, dateKey, cloudBase) {
       ' class="' +
       rowClass +
       '"' +
+      ' data-email-name="' +
+      htmlSafe(send.emailName.toLowerCase()) +
+      '"' +
+      ' data-journey-name="' +
+      htmlSafe(send.journeyName.toLowerCase()) +
+      '"' +
+      ' data-recipients="' +
+      htmlSafe(send.recipients) +
+      '"' +
       (send.isJourneySend
         ? ' tabindex="0" role="button" aria-expanded="false"'
         : "");
@@ -626,6 +635,22 @@ h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 8px; line-height: 1.25
 .sub { color: var(--text-secondary); margin-bottom: 24px; }
 .form-group { margin-bottom: 20px; }
 .form-label { display: block; font-weight: 500; margin-bottom: 8px; }
+.form-group-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+.form-group-row .form-input--date {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: 240px;
+}
+.form-group-row .form-input--search {
+  flex: 1 1 220px;
+  min-width: 180px;
+  max-width: none;
+}
 .form-input {
   width: 100%;
   max-width: 240px;
@@ -822,13 +847,23 @@ h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 8px; line-height: 1.25
           <form method="get" id="calendarForm">
             <div class="form-group">
               <label class="form-label" for="date">Date</label>
-              <script runat="server">
-                Write(
-                  '<input class="form-input" type="date" id="date" name="date" value="' +
-                    bodySafe(Platform.Variable.GetValue("@calSelectedDate") || "") +
-                    '">'
-                );
-              </script>
+              <div class="form-group-row">
+                <script runat="server">
+                  Write(
+                    '<input class="form-input form-input--date" type="date" id="date" name="date" value="' +
+                      bodySafe(Platform.Variable.GetValue("@calSelectedDate") || "") +
+                      '">'
+                  );
+                </script>
+                <input
+                  class="form-input form-input--search"
+                  type="search"
+                  id="sendSearch"
+                  placeholder="Search email or journey name"
+                  autocomplete="off"
+                  aria-label="Search email or journey name"
+                >
+              </div>
               <p class="hint">Choose a date to load sends, or pick a recent day on the right.</p>
             </div>
           </form>
@@ -838,11 +873,14 @@ h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 8px; line-height: 1.25
             var sendCount = Platform.Variable.GetValue("@calSendsCount");
             var recipientTotal = Platform.Variable.GetValue("@calRecipientsTotal");
             Write('<h2 style="font-size:1.125rem;margin:28px 0 12px;">' + bodySafe(dayLabel) + '</h2>');
-            Write('<div class="contacts-summary">');
-            Write('<span><span class="contacts-summary-label">Emails sent</span> ' + bodySafe(sendCount || "0") + '</span>');
-            Write('<span><span class="contacts-summary-label">Total recipients</span> ' + bodySafe(recipientTotal || "0") + '</span>');
+            Write('<div class="contacts-summary" id="sendsSummary">');
+            Write('<span><span class="contacts-summary-label">Emails sent</span> <span id="sendCountDisplay">' + bodySafe(sendCount || "0") + '</span></span>');
+            Write('<span><span class="contacts-summary-label">Total recipients</span> <span id="recipientTotalDisplay">' + bodySafe(recipientTotal || "0") + '</span></span>');
             Write('</div>');
+            Write('<p class="recent-empty" id="sendFilterEmpty" hidden>No sends match your search.</p>');
+            Write('<div id="sendsResults">');
             Write(Platform.Variable.GetValue("@calSendsHtml") || '<p class="recent-empty">No email sends recorded for this date.</p>');
+            Write('</div>');
           </script>
         </div>
       </div>
@@ -930,6 +968,56 @@ h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 8px; line-height: 1.25
         toggleSendExpand(this);
       }
     });
+  }
+
+  var searchInput = document.getElementById("sendSearch");
+  var sendCountDisplay = document.getElementById("sendCountDisplay");
+  var recipientTotalDisplay = document.getElementById("recipientTotalDisplay");
+  var sendFilterEmpty = document.getElementById("sendFilterEmpty");
+  var sendsSummary = document.getElementById("sendsSummary");
+  var allSendRows = document.querySelectorAll(".sends-table tbody .send-row");
+
+  function filterSends() {
+    if (!allSendRows.length) {
+      return;
+    }
+    var query = (searchInput && searchInput.value ? searchInput.value : "")
+      .replace(/^\s+|\s+$/g, "")
+      .toLowerCase();
+    var visibleCount = 0;
+    var visibleRecipients = 0;
+    var ri;
+    for (ri = 0; ri < allSendRows.length; ri++) {
+      var row = allSendRows[ri];
+      var emailName = row.getAttribute("data-email-name") || "";
+      var journeyName = row.getAttribute("data-journey-name") || "";
+      var matches =
+        !query ||
+        emailName.indexOf(query) !== -1 ||
+        journeyName.indexOf(query) !== -1;
+      row.style.display = matches ? "" : "none";
+      if (matches) {
+        visibleCount += 1;
+        visibleRecipients += parseInt(row.getAttribute("data-recipients"), 10) || 0;
+      }
+    }
+    if (sendCountDisplay) {
+      sendCountDisplay.textContent = String(visibleCount);
+    }
+    if (recipientTotalDisplay) {
+      recipientTotalDisplay.textContent = String(visibleRecipients);
+    }
+    if (sendFilterEmpty) {
+      sendFilterEmpty.hidden = !query || visibleCount > 0;
+    }
+    if (sendsSummary) {
+      sendsSummary.hidden = !!query && visibleCount === 0;
+    }
+  }
+
+  if (searchInput) {
+    searchInput.addEventListener("input", filterSends);
+    searchInput.addEventListener("search", filterSends);
   }
 })();
 </script>
