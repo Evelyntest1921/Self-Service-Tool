@@ -1656,6 +1656,52 @@ h1 {
   font-weight: 600;
   color: var(--gray-900);
 }
+.exit-form-card {
+  position: relative;
+}
+.exit-form-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background: rgba(255, 255, 255, 0.94);
+}
+.exit-form-loading.is-visible {
+  display: flex;
+}
+.exit-form-loading-inner {
+  max-width: 360px;
+  text-align: center;
+}
+.exit-form-spinner {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto 16px;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--primary-color);
+  border-radius: 50%;
+  animation: exitFormSpin 0.8s linear infinite;
+}
+@keyframes exitFormSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.exit-form-loading-title {
+  margin: 0 0 8px;
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--gray-900);
+}
+.exit-form-loading-sub {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
 </style>
 </head>
 <body>
@@ -1682,7 +1728,14 @@ h1 {
               ">"
           );
         </script>
-        <div class="card">
+        <div class="card exit-form-card">
+          <div id="exitFormLoading" class="exit-form-loading" aria-hidden="true">
+            <div class="exit-form-loading-inner">
+              <div class="exit-form-spinner" aria-hidden="true"></div>
+              <p class="exit-form-loading-title">Starting exit</p>
+              <p class="exit-form-loading-sub">Queuing contacts and starting processing. This may take a moment.</p>
+            </div>
+          </div>
           <h1>Journey Exit</h1>
           <p class="sub">Choose the journey and data extension to remove contacts from. You will get an email when processing finishes.</p>
 
@@ -1935,15 +1988,42 @@ h1 {
     select.addEventListener("change", syncJourneyMeta);
     syncJourneyMeta();
   }
+  function showExitLoading() {
+    var panel = document.getElementById("exitFormPanel");
+    var loading = document.getElementById("exitFormLoading");
+    var submitBtn = document.getElementById("submitBtn");
+    var exitForm = document.getElementById("exitForm");
+    if (loading) {
+      loading.className = "exit-form-loading is-visible";
+      loading.setAttribute("aria-hidden", "false");
+    }
+    if (panel) {
+      panel.setAttribute("aria-busy", "true");
+    }
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Starting…";
+    }
+    if (exitForm) {
+      var inputs = exitForm.querySelectorAll(
+        "input:not([type='hidden']), select, button, textarea"
+      );
+      var i;
+      for (i = 0; i < inputs.length; i++) {
+        inputs[i].disabled = true;
+      }
+    }
+  }
   window.submitQueue = function () {
     syncJourneyMeta();
     var sourceTypeEl = document.getElementById("sourceType");
     var mode = sourceTypeEl ? sourceTypeEl.value : "dataextension";
     var label = journeyName.value || "the selected journey";
+    var confirmed = false;
     if (mode === "campaign") {
       var campId = (document.getElementById("campaignId").value || "").replace(/^\s+|\s+$/g, "");
       var memberStatus = (document.getElementById("memberStatus").value || "").replace(/^\s+|\s+$/g, "");
-      return confirm(
+      confirmed = confirm(
         "Start exiting contacts for " +
           label +
           " from Campaign \"" +
@@ -1952,9 +2032,16 @@ h1 {
           memberStatus +
           "\"?"
       );
+    } else {
+      var deName = document.getElementById("sourceDeName").value || "";
+      confirmed = confirm(
+        "Start exiting contacts for " + label + " using data extension \"" + deName + "\"?"
+      );
     }
-    var deName = document.getElementById("sourceDeName").value || "";
-    return confirm("Start exiting contacts for " + label + " using data extension \"" + deName + "\"?");
+    if (confirmed) {
+      showExitLoading();
+    }
+    return confirmed;
   };
   function syncSourceUi() {
     var sourceTypeEl = document.getElementById("sourceType");
