@@ -21,11 +21,13 @@ IF RowCount(@navRows) > 0 THEN
  SET @hubUrl = Field(@navRow,"ss_home")
  SET @buildDetailUrl = Field(@navRow,"ss_edit")
 ENDIF
+SET @surveyTakeUrl = ""
 SET @surveyUrlRows = LookupRows("SST_SP_Survey_Url_DE","user","admin")
 IF RowCount(@surveyUrlRows) > 0 THEN
  SET @surveyUrlRow = Row(@surveyUrlRows,1)
  SET @surveyHomeUrl = Field(@surveyUrlRow,"dashboard")
  SET @surveyStageUrl = Field(@surveyUrlRow,"create")
+ SET @surveyTakeUrl = Trim(Field(@surveyUrlRow,"take"))
 ENDIF
 SET @builderPageLabel = "Survey"
 SET @showForm = "true"
@@ -141,6 +143,7 @@ SET @surveySaved = "false"
 SET @emailOk = "false"
 IF NOT Empty(@createRequested) AND NOT EMPTY(@surveyName) THEN
   IF Empty(@emailSubjectLine) THEN SET @emailSubjectLine = @surveyName ENDIF
+  SET @surveyId = Concat("SURV_", Format(Now(), "yyyyMMdd_HHmmss"))
   SET @surveyNameSafe = Replace(@surveyName,'"','')
   SET @surveyNameSafe = Replace(@surveyNameSafe," | ","_")
   SET @surveyNameSafe = Replace(@surveyNameSafe,"|","_")
@@ -615,6 +618,72 @@ function ensureEmailOptions(payload) {
 }
 function hasTextContent(value) {
  return value !== null && value !== undefined && String(value).replace(/\s+/g, "").length > 0;
+}
+function encodeUriComponentSafe(value) {
+ try {
+   return encodeURIComponent(String(value || ""));
+ } catch (encodeEx) {}
+ return String(value || "");
+}
+function buildEmailSurveyHref(takeBase, surveyId, surveyNameEncoded) {
+ var base = String(takeBase || "").replace(/\/$/, "");
+ return (
+   base +
+   "?id=" +
+   encodeUriComponentSafe(surveyId) +
+   "&contact=%%=v(@surveyContactId)=%%&surveyName=" +
+   surveyNameEncoded
+ );
+}
+function rewriteSurveyLinkStrings(str, href) {
+ if (typeof str !== "string" || !str) {
+   return str;
+ }
+ var out = str;
+ out = out.replace(
+   /https?:\/\/[^"'\s>]*MH1Fdf3gkpiWmvpt\?id=[^"'&\s][^"'\s]*/gi,
+   href
+ );
+ out = out.replace(
+   /https?:\/\/[^"'\s>]+\?id=SURV_[^"'&\s]+[^"'\s]*/gi,
+   href
+ );
+ return out;
+}
+function replaceSurveyLinksDeep(value, href) {
+ if (value === null || typeof value === "undefined") {
+   return value;
+ }
+ if (typeof value === "string") {
+   return rewriteSurveyLinkStrings(value, href);
+ }
+ if (typeof value.length === "number") {
+   var arr = [];
+   var ai;
+   for (ai = 0; ai < value.length; ai++) {
+     arr.push(replaceSurveyLinksDeep(value[ai], href));
+   }
+   return arr;
+ }
+ if (typeof value === "object") {
+   var out = {};
+   var key;
+   for (key in value) {
+     if (value.hasOwnProperty(key)) {
+       out[key] = replaceSurveyLinksDeep(value[key], href);
+     }
+   }
+   return out;
+ }
+ return value;
+}
+function injectSurveyLinkIntoPayload(payload, takeBase, surveyId, surveyName) {
+ if (!payload || !takeBase || !surveyId) {
+   return payload;
+ }
+ var nameEnc = encodeUriComponentSafe(surveyName || "");
+ var href = buildEmailSurveyHref(takeBase, surveyId, nameEnc);
+ return replaceSurveyLinksDeep(payload, href);
 }
 function applyTextSettings(payload, textContent) {
  ensureEmailOptions(payload);
@@ -1357,6 +1426,17 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          }
        };
        payloadDebug = truncateString(Platform.Function.Stringify(debugObj), 2500);
+       var surveyIdForEmail = Platform.Variable.GetValue("@surveyId") || "";
+       var surveyTakeUrlForEmail = Platform.Variable.GetValue("@surveyTakeUrl") || "";
+       var surveyNameForEmail = Platform.Variable.GetValue("@surveyName") || "";
+       if (surveyIdForEmail && surveyTakeUrlForEmail) {
+         payload = injectSurveyLinkIntoPayload(
+           payload,
+           surveyTakeUrlForEmail,
+           surveyIdForEmail,
+           surveyNameForEmail
+         );
+       }
        var assetUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets";
        var postReq = new Script.Util.HttpRequest(assetUrl);
        postReq.emptyContentHandling = 0;
@@ -2155,7 +2235,9 @@ if (sjEventDefId && sjSub && sjToken) {
 %%[
 IF @showForm == "false" AND @deleteRequested != "1" AND @emailOk == "true" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@newEmailId) THEN
  IF NOT EMPTY(@surveyName) THEN
-  SET @surveyId = Concat("SURV_", Format(Now(), "yyyyMMdd_HHmmss"))
+  IF EMPTY(@surveyId) THEN
+   SET @surveyId = Concat("SURV_", Format(Now(), "yyyyMMdd_HHmmss"))
+  ENDIF
   UPSERTDE(
    "SST_SP_Surveys_Master_DE", 1, "SurveyID", @surveyId,
    "SurveyName", @surveyName,
