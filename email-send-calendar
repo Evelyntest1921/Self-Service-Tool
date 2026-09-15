@@ -245,6 +245,18 @@ function formatDisplayDay(value) {
   }
 }
 
+function todayDateKey() {
+  return formatIsoDate(new Date());
+}
+
+function formatRecentDayLabel(sendDate, sendDateKey) {
+  var key = sendDateKey || normalizeDateKey(sendDate);
+  if (key === todayDateKey()) {
+    return "Today";
+  }
+  return formatDisplayDay(sendDate || sendDateKey);
+}
+
 function normalizeCalendarRow(row) {
   var sendDate = fieldAny(row, ["sendDate", "SendDate"]);
   return {
@@ -328,7 +340,7 @@ function buildSendsHtml(rows, dateKey) {
     }
   }
   filtered.sort(function (a, b) {
-    return (a.sendTimeMs || 0) - (b.sendTimeMs || 0);
+    return (b.sendTimeMs || 0) - (a.sendTimeMs || 0);
   });
   sendsCount = filtered.length;
   recipientsTotal = 0;
@@ -364,7 +376,7 @@ function buildSendsHtml(rows, dateKey) {
 
 function buildRecentDaysHtml(rows, selectedDateKey) {
   var byDate = {};
-  var order = [];
+  var todayKey = todayDateKey();
   var i;
   for (i = 0; i < rows.length; i++) {
     var item = normalizeCalendarRow(rows[i]);
@@ -380,35 +392,48 @@ function buildRecentDaysHtml(rows, selectedDateKey) {
         emailCount: 0,
         recipients: 0
       };
-      order.push(key);
     }
     byDate[key].emailCount++;
     byDate[key].recipients += parseInt(item.recipients, 10) || 0;
   }
-  order.sort(function (a, b) {
+  if (!byDate[todayKey]) {
+    byDate[todayKey] = {
+      sendDate: todayKey,
+      sendDateKey: todayKey,
+      sendDateMs: parseDateMs(todayKey),
+      emailCount: 0,
+      recipients: 0
+    };
+  }
+  var otherKeys = [];
+  for (var dateKey in byDate) {
+    if (byDate.hasOwnProperty(dateKey) && dateKey !== todayKey) {
+      otherKeys.push(dateKey);
+    }
+  }
+  otherKeys.sort(function (a, b) {
     return (byDate[b].sendDateMs || 0) - (byDate[a].sendDateMs || 0);
   });
+  var order = [todayKey].concat(otherKeys);
   if (order.length > RECENT_DAYS_LIMIT) {
     order = order.slice(0, RECENT_DAYS_LIMIT);
-  }
-  if (!order.length) {
-    return '<p class="recent-empty">No send history yet.</p>';
   }
   var parts = ['<ul class="recent-list">'];
   for (i = 0; i < order.length; i++) {
     var day = byDate[order[i]];
     var selected =
       selectedDateKey && day.sendDateKey === selectedDateKey ? " is-selected" : "";
+    var dayLabel = formatRecentDayLabel(day.sendDate, day.sendDateKey);
     parts.push(
       '<li class="recent-item recent-item--clickable' +
         selected +
         '" data-date="' +
         htmlSafe(day.sendDateKey) +
         '" role="button" tabindex="0" aria-label="View sends for ' +
-        htmlSafe(formatDisplayDay(day.sendDate || day.sendDateKey)) +
+        htmlSafe(dayLabel) +
         '">' +
         '<div class="recent-journey">' +
-        htmlSafe(formatDisplayDay(day.sendDate || day.sendDateKey)) +
+        htmlSafe(dayLabel) +
         "</div>" +
         '<div class="recent-detail">' +
         '<span class="recent-label">Emails</span> ' +
@@ -440,7 +465,7 @@ if (environment === "uat") {
 }
 
 selectedDate = parseSelectedDate(queryValue("date"));
-selectedDateDisplay = formatDisplayDay(selectedDate);
+selectedDateDisplay = formatRecentDayLabel(selectedDate, selectedDate);
 
 try {
   var calendarFetch = loadCalendarRows();
@@ -450,12 +475,12 @@ try {
   } else {
     calendarLoadError = calendarFetch.error || "Could not load send calendar.";
     sendsHtml = '<p class="recent-empty">No send data available.</p>';
-    recentDaysHtml = '<p class="recent-empty">No recent days available.</p>';
+    recentDaysHtml = buildRecentDaysHtml([], selectedDate);
   }
 } catch (loadEx) {
   calendarLoadError = asStr(loadEx && loadEx.message ? loadEx.message : loadEx);
   sendsHtml = '<p class="recent-empty">No send data available.</p>';
-  recentDaysHtml = '<p class="recent-empty">No recent days available.</p>';
+  recentDaysHtml = buildRecentDaysHtml([], selectedDate);
 }
 
 Platform.Variable.SetValue("@hubUrl", hubUrl || "#");
@@ -685,11 +710,7 @@ h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 8px; line-height: 1.25
                     '">'
                 );
               </script>
-              <p class="hint">Pick a day or choose one from recent days on the right.</p>
-            </div>
-            <div class="actions">
-              <button class="btn btn-secondary" type="submit">View sends</button>
-              <a class="btn btn-secondary" href="%%=v(@hubUrl)=%%">Cancel</a>
+              <p class="hint">Choose a date to load sends, or pick a recent day on the right.</p>
             </div>
           </form>
 
