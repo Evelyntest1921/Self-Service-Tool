@@ -1846,7 +1846,7 @@ h1 {
               <p class="hint">We will send status updates to this address.</p>
             </div>
             <div class="actions">
-              <button class="btn btn-create" type="submit" id="submitBtn" onclick="return submitQueue();">Start exit</button>
+              <button class="btn btn-create" type="submit" id="submitBtn">Start exit</button>
               <a class="btn btn-secondary" href="%%=v(@hubUrl)=%%">Cancel</a>
               <script runat="server">
                 var detail = Platform.Variable.GetValue("@exitResultDetail");
@@ -1992,7 +1992,6 @@ h1 {
     var panel = document.getElementById("exitFormPanel");
     var loading = document.getElementById("exitFormLoading");
     var submitBtn = document.getElementById("submitBtn");
-    var exitForm = document.getElementById("exitForm");
     if (loading) {
       loading.className = "exit-form-loading is-visible";
       loading.setAttribute("aria-hidden", "false");
@@ -2001,48 +2000,48 @@ h1 {
       panel.setAttribute("aria-busy", "true");
     }
     if (submitBtn) {
-      submitBtn.disabled = true;
       submitBtn.textContent = "Starting…";
     }
-    if (exitForm) {
-      var inputs = exitForm.querySelectorAll(
-        "input:not([type='hidden']), select, button, textarea"
-      );
-      var i;
-      for (i = 0; i < inputs.length; i++) {
-        inputs[i].disabled = true;
-      }
-    }
   }
-  window.submitQueue = function () {
+  function getExitConfirmMessage() {
     syncJourneyMeta();
     var sourceTypeEl = document.getElementById("sourceType");
     var mode = sourceTypeEl ? sourceTypeEl.value : "dataextension";
     var label = journeyName.value || "the selected journey";
-    var confirmed = false;
     if (mode === "campaign") {
       var campId = (document.getElementById("campaignId").value || "").replace(/^\s+|\s+$/g, "");
       var memberStatus = (document.getElementById("memberStatus").value || "").replace(/^\s+|\s+$/g, "");
-      confirmed = confirm(
+      return (
         "Start exiting contacts for " +
-          label +
-          " from Campaign \"" +
-          campId +
-          "\" with status \"" +
-          memberStatus +
-          "\"?"
-      );
-    } else {
-      var deName = document.getElementById("sourceDeName").value || "";
-      confirmed = confirm(
-        "Start exiting contacts for " + label + " using data extension \"" + deName + "\"?"
+        label +
+        " from Campaign \"" +
+        campId +
+        "\" with status \"" +
+        memberStatus +
+        "\"?"
       );
     }
-    if (confirmed) {
+    var deName = document.getElementById("sourceDeName").value || "";
+    return (
+      "Start exiting contacts for " + label + " using data extension \"" + deName + "\"?"
+    );
+  }
+  var exitForm = document.getElementById("exitForm");
+  var exitSubmitting = false;
+  if (exitForm) {
+    exitForm.addEventListener("submit", function (e) {
+      if (exitSubmitting) {
+        return;
+      }
+      e.preventDefault();
+      if (!confirm(getExitConfirmMessage())) {
+        return;
+      }
+      exitSubmitting = true;
       showExitLoading();
-    }
-    return confirmed;
-  };
+      exitForm.submit();
+    });
+  }
   function syncSourceUi() {
     var sourceTypeEl = document.getElementById("sourceType");
     var mode = sourceTypeEl ? sourceTypeEl.value : "dataextension";
