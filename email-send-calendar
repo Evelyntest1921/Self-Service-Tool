@@ -18,6 +18,7 @@ var recentDaysHtml = "";
 var calendarLoadError = "";
 var sendsCount = 0;
 var recipientsTotal = 0;
+var mcCloudUrl = "";
 
 function queryValue(name) {
   var value = "";
@@ -257,8 +258,27 @@ function formatRecentDayLabel(sendDate, sendDateKey) {
   return formatDisplayDay(sendDate || sendDateKey);
 }
 
+function buildJourneyOpenUrl(mcCloudBase, journeyId, versionNumber) {
+  var jid = clean(journeyId);
+  if (!jid) {
+    return "";
+  }
+  var base = clean(mcCloudBase) || "https://mc.s13.exacttarget.com/cloud/";
+  if (base.charAt(base.length - 1) !== "/") {
+    base += "/";
+  }
+  var ver = clean(versionNumber);
+  if (!ver) {
+    ver = "live";
+  }
+  return base + "#app/Journey%20Builder/%23" + jid + "/" + ver;
+}
+
 function normalizeCalendarRow(row) {
   var sendDate = fieldAny(row, ["sendDate", "SendDate"]);
+  var journeyId = asStr(fieldAny(row, ["journeyId", "JourneyID", "JourneyId"]));
+  var journeyName = asStr(fieldAny(row, ["journeyName", "JourneyName"]));
+  var versionNumber = asStr(fieldAny(row, ["versionNumber", "VersionNumber"]));
   return {
     calendarKey: asStr(fieldAny(row, ["calendarKey", "CalendarKey"])),
     sendDate: sendDate,
@@ -269,7 +289,11 @@ function normalizeCalendarRow(row) {
     emailSubject: asStr(fieldAny(row, ["emailSubject", "EmailSubject"])) || "—",
     sendTime: fieldAny(row, ["sendTime", "SendTime"]),
     sendTimeMs: parseDateMs(fieldAny(row, ["sendTime", "SendTime"])),
-    recipients: asStr(fieldAny(row, ["recipients", "Recipients"])) || "0"
+    recipients: asStr(fieldAny(row, ["recipients", "Recipients"])) || "0",
+    journeyId: journeyId,
+    journeyName: journeyName,
+    versionNumber: versionNumber,
+    isJourneySend: !!journeyId
   };
 }
 
@@ -283,7 +307,10 @@ function loadCalendarRows() {
     "emailName",
     "emailSubject",
     "sendTime",
-    "recipients"
+    "recipients",
+    "journeyId",
+    "journeyName",
+    "versionNumber"
   ];
   var v;
   for (v = 0; v < keyVariants.length; v++) {
@@ -330,7 +357,7 @@ function loadCalendarRows() {
   };
 }
 
-function buildSendsHtml(rows, dateKey) {
+function buildSendsHtml(rows, dateKey, cloudBase) {
   var filtered = [];
   var i;
   for (i = 0; i < rows.length; i++) {
@@ -350,7 +377,7 @@ function buildSendsHtml(rows, dateKey) {
   if (!filtered.length) {
     return '<p class="recent-empty">No email sends recorded for this date.</p>';
   }
-  var parts = ['<div class="contacts-table-wrap"><table class="contacts-table">'];
+  var parts = ['<div class="contacts-table-wrap"><table class="contacts-table sends-table">'];
   parts.push(
     "<thead><tr>" +
       "<th>Email</th>" +
@@ -362,13 +389,53 @@ function buildSendsHtml(rows, dateKey) {
   );
   for (i = 0; i < filtered.length; i++) {
     var send = filtered[i];
-    parts.push("<tr>");
+    var expandId = "send-expand-" + i;
+    var rowClass = send.isJourneySend ? "send-row send-row--journey" : "send-row";
+    var rowAttrs =
+      ' class="' +
+      rowClass +
+      '"' +
+      (send.isJourneySend
+        ? ' data-expand-id="' +
+          htmlSafe(expandId) +
+          '" tabindex="0" role="button" aria-expanded="false" aria-controls="' +
+          htmlSafe(expandId) +
+          '"'
+        : "");
+    parts.push("<tr" + rowAttrs + ">");
     parts.push("<td>" + htmlSafe(send.emailName) + "</td>");
     parts.push("<td>" + htmlSafe(send.emailSubject) + "</td>");
     parts.push("<td>" + htmlSafe(formatDisplayDate(send.sendTime)) + "</td>");
     parts.push("<td>" + htmlSafe(send.recipients) + "</td>");
     parts.push('<td class="contacts-mono">' + htmlSafe(send.jobId || "—") + "</td>");
     parts.push("</tr>");
+    if (send.isJourneySend) {
+      var journeyUrl = buildJourneyOpenUrl(
+        cloudBase,
+        send.journeyId,
+        send.versionNumber
+      );
+      parts.push(
+        '<tr class="send-expand" id="' +
+          htmlSafe(expandId) +
+          '" hidden><td colspan="5"><div class="send-expand-panel">'
+      );
+      if (send.journeyName) {
+        parts.push(
+          '<span class="send-expand-journey">' +
+            htmlSafe(send.journeyName) +
+            "</span>"
+        );
+      }
+      if (journeyUrl) {
+        parts.push(
+          '<a class="send-expand-link" href="' +
+            htmlSafe(journeyUrl) +
+            '" target="_blank" rel="noopener noreferrer">Open Journey</a>'
+        );
+      }
+      parts.push("</div></td></tr>");
+    }
   }
   parts.push("</tbody></table></div>");
   return parts.join("");
@@ -453,6 +520,9 @@ function buildRecentDaysHtml(rows, selectedDateKey) {
 hubUrl = lookupValue("bd_sst_page_navigation", "ss_home", "type", "cloudpage") || "#";
 journeyExitUrl = lookupValue("bd_sst_page_navigation", "ss_journey_exit", "type", "cloudpage") || "";
 calendarUrl = lookupValue("bd_sst_page_navigation", "ss_email_calendar", "type", "cloudpage") || "";
+mcCloudUrl =
+  lookupValue("bd_sst_page_navigation", "mc_cloud", "type", "cloudpage") ||
+  "https://mc.s13.exacttarget.com/cloud/";
 environment = asStr(lookupValue("bd_sst_page_navigation", "environment", "type", "cloudpage")).toLowerCase();
 if (environment === "uat") {
   envDisplayName = "UAT";
@@ -470,7 +540,7 @@ selectedDateDisplay = formatRecentDayLabel(selectedDate, selectedDate);
 try {
   var calendarFetch = loadCalendarRows();
   if (calendarFetch.ok) {
-    sendsHtml = buildSendsHtml(calendarFetch.rows, selectedDate);
+    sendsHtml = buildSendsHtml(calendarFetch.rows, selectedDate, mcCloudUrl);
     recentDaysHtml = buildRecentDaysHtml(calendarFetch.rows, selectedDate);
   } else {
     calendarLoadError = calendarFetch.error || "Could not load send calendar.";
@@ -626,6 +696,36 @@ h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 8px; line-height: 1.25
 }
 .contacts-table tbody tr:last-child td { border-bottom: 0; }
 .contacts-table tbody tr:hover { background: #fafafa; }
+.send-row--journey { cursor: pointer; }
+.send-row--journey.is-open { background: #eef2ff; }
+.send-expand td {
+  background: #f9fafb;
+  padding: 0;
+  border-bottom: 1px solid var(--border-color);
+}
+.send-expand-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 16px 14px;
+}
+.send-expand-journey {
+  font-size: 13px;
+  color: var(--gray-500);
+}
+.send-expand-link {
+  display: inline-flex;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--primary-color);
+  text-decoration: none;
+}
+.send-expand-link:hover {
+  color: var(--primary-dark);
+  text-decoration: underline;
+}
 .contacts-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
@@ -766,6 +866,53 @@ h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 8px; line-height: 1.25
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         this.click();
+      }
+    });
+  }
+
+  function closeSendExpands() {
+    var openRows = document.querySelectorAll(".send-row--journey.is-open");
+    var openPanels = document.querySelectorAll(".send-expand:not([hidden])");
+    var ri;
+    for (ri = 0; ri < openRows.length; ri++) {
+      openRows[ri].className = "send-row send-row--journey";
+      openRows[ri].setAttribute("aria-expanded", "false");
+    }
+    for (ri = 0; ri < openPanels.length; ri++) {
+      openPanels[ri].hidden = true;
+    }
+  }
+
+  function toggleSendExpand(row) {
+    var expandId = row.getAttribute("data-expand-id");
+    if (!expandId) {
+      return;
+    }
+    var panel = document.getElementById(expandId);
+    if (!panel) {
+      return;
+    }
+    var isOpen = !panel.hidden;
+    closeSendExpands();
+    if (!isOpen) {
+      panel.hidden = false;
+      row.className = "send-row send-row--journey is-open";
+      row.setAttribute("aria-expanded", "true");
+    }
+  }
+
+  var sendRows = document.querySelectorAll(".send-row--journey");
+  for (i = 0; i < sendRows.length; i++) {
+    sendRows[i].addEventListener("click", function (e) {
+      if (e.target.closest("a")) {
+        return;
+      }
+      toggleSendExpand(this);
+    });
+    sendRows[i].addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggleSendExpand(this);
       }
     });
   }

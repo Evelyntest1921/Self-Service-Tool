@@ -5,10 +5,17 @@ SELECT
   j.EmailName AS emailName,
   j.EmailSubject AS emailSubject,
   MIN(s.EventDate) AS sendTime,
-  COUNT(*) AS recipients
+  COUNT(*) AS recipients,
+  MAX(jy.JourneyID) AS journeyId,
+  MAX(jy.JourneyName) AS journeyName,
+  MAX(jy.VersionNumber) AS versionNumber
 FROM _Sent s
 INNER JOIN _Job j
   ON j.JobID = s.JobID
+LEFT JOIN _JourneyActivity ja
+  ON s.TriggererSendDefinitionObjectID = ja.JourneyActivityObjectID
+LEFT JOIN _Journey jy
+  ON ja.VersionID = jy.VersionID
 WHERE s.EventDate >= DATEADD(day, -90, CAST(GETDATE() AS DATE))
   AND s.EventDate < DATEADD(day, 1, CAST(GETDATE() AS DATE))
 GROUP BY
