@@ -701,6 +701,25 @@ function loadActiveJourneys(auth, token) {
   return all;
 }
 
+function buildPostedJourneyOptions(journeyId, journeyKey, journeyName) {
+  var id = clean(journeyId);
+  if (!id) {
+    return '<option value="">Select a published journey</option>';
+  }
+  return buildJourneyOptions(
+    [
+      {
+        id: id,
+        key: clean(journeyKey) || id,
+        name: clean(journeyName) || "Selected journey",
+        status: "Published",
+        version: ""
+      }
+    ],
+    id
+  );
+}
+
 function buildJourneyOptions(journeys, selectedId) {
   var parts = ['<option value="">Select a published journey</option>'];
   var i;
@@ -1089,11 +1108,6 @@ alertEmailValue = clean(formValue("alertEmail"));
 var formAction = clean(formValue("formAction"));
 
 try {
-  var auth = getAuthConfig();
-  var token = getAccessToken(auth);
-  var journeys = loadActiveJourneys(auth, token);
-  journeyOptionsHtml = buildJourneyOptions(journeys, selectedJourneyId);
-
   if (formAction == "queue") {
     if (!selectedJourneyId) {
       throw "Select a journey.";
@@ -1106,7 +1120,7 @@ try {
     }
 
     var meta = resolveJourneyMeta(
-      journeys,
+      [],
       selectedJourneyId,
       selectedJourneyName,
       selectedJourneyKey
@@ -1114,6 +1128,11 @@ try {
     selectedJourneyId = meta.id;
     selectedJourneyKey = meta.key;
     selectedJourneyName = meta.name;
+    journeyOptionsHtml = buildPostedJourneyOptions(
+      selectedJourneyId,
+      selectedJourneyKey,
+      selectedJourneyName
+    );
 
     var sourceLabel = "";
     if (sourceTypeValue === "campaign") {
@@ -1212,11 +1231,23 @@ try {
         error: triggerResult.error || ""
       }
     });
+  } else {
+    var auth = getAuthConfig();
+    var token = getAccessToken(auth);
+    var journeys = loadActiveJourneys(auth, token);
+    journeyOptionsHtml = buildJourneyOptions(journeys, selectedJourneyId);
   }
 } catch (ex) {
   if (formAction == "queue") {
     resultStatus = "error";
     resultMessage = asStr(ex && ex.message ? ex.message : ex);
+    if (selectedJourneyId && !journeyOptionsHtml) {
+      journeyOptionsHtml = buildPostedJourneyOptions(
+        selectedJourneyId,
+        selectedJourneyKey,
+        selectedJourneyName
+      );
+    }
   } else {
     journeysLoadError = asStr(ex && ex.message ? ex.message : ex);
     if (!journeyOptionsHtml) {
