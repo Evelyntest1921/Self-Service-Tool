@@ -131,24 +131,64 @@ var apiJourneyVersion = "";
 var apiActivityCount = "0";
 var loadErrorMsg = "";
 
-function strTrim(v) {
+function isWsChar(c) {
+  return c === " " || c === "\t" || c === "\n" || c === "\r";
+}
+
+function toJsString(v) {
   if (v === null || typeof v === "undefined") {
     return "";
   }
-  return String(v).replace(new RegExp("^\\s+|\\s+$", "g"), "");
+  if (typeof v === "string") {
+    return v;
+  }
+  if (typeof v === "number" || typeof v === "boolean") {
+    return v + "";
+  }
+  try {
+    var s = v + "";
+    if (s && s.indexOf("[object") !== 0) {
+      return s;
+    }
+  } catch (coerceEx) {}
+  return "";
+}
+
+function strTrim(v) {
+  var s = toJsString(v);
+  var start = 0;
+  var end = s.length;
+  while (start < end && isWsChar(s.charAt(start))) {
+    start += 1;
+  }
+  while (end > start && isWsChar(s.charAt(end - 1))) {
+    end -= 1;
+  }
+  if (start === 0 && end === s.length) {
+    return s;
+  }
+  return s.substring(start, end);
+}
+
+function strReplaceAll(s, find, repl) {
+  var text = toJsString(s);
+  if (!find || text.indexOf(find) < 0) {
+    return text;
+  }
+  return text.split(find).join(repl);
 }
 
 function htmlSafe(v) {
   var s = strTrim(v);
-  s = s.replace(new RegExp("&", "g"), "&amp;");
-  s = s.replace(new RegExp("<", "g"), "&lt;");
-  s = s.replace(new RegExp(">", "g"), "&gt;");
-  s = s.replace(new RegExp('"', "g"), "&quot;");
+  s = strReplaceAll(s, "&", "&amp;");
+  s = strReplaceAll(s, "<", "&lt;");
+  s = strReplaceAll(s, ">", "&gt;");
+  s = strReplaceAll(s, '"', "&quot;");
   return s;
 }
 
 function parseJsonSafe(text) {
-  var raw = text === null || typeof text === "undefined" ? "" : String(text);
+  var raw = toJsString(text);
   if (!raw) {
     return null;
   }
@@ -244,7 +284,7 @@ function formatActivityType(type) {
   if (t.indexOf("ENTRY") >= 0 || t === "EVENT") {
     return "Entry";
   }
-  return type;
+  return strTrim(type) || "Activity";
 }
 
 function activityDetailLine(act) {
