@@ -1,180 +1,660 @@
+%%[
+VAR @HOME_URL, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @JOURNEY_VIEW_URL, @SURVEY_STAGE_URL, @SURVEY_ANALYTICS_URL
+VAR @navRows, @navRow, @jid, @detailRows, @detailRow, @detailCount
+VAR @dispName, @dispType, @dispSurveyId, @isSurveyBuild, @buildNavContext, @buildNavActive
+VAR @surveyUrlRows, @surveyUrlRow, @pageStatus, @loadError, @isRealJourney
+VAR @authOk, @accessToken, @subdomain, @clientId, @clientSecret, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader, @tokenPattern, @accountId, @authR, @authRow
+VAR @MC_CLOUD
+VAR @journeyFlowHtml, @journeyActivitiesHtml, @journeyMetaHtml, @journeyBuilderUrl
+VAR @apiJourneyName, @apiJourneyStatus, @apiJourneyVersion, @apiActivityCount, @editSidebarHtml
+
+SET @HOME_URL = ""
+SET @BUILD_PAGE_SELF = ""
+SET @PERFORMANCE_URL = ""
+SET @JOURNEY_VIEW_URL = ""
+SET @SURVEY_STAGE_URL = ""
+SET @SURVEY_ANALYTICS_URL = ""
+SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
+IF RowCount(@navRows) > 0 THEN
+ SET @navRow = Row(@navRows,1)
+ SET @HOME_URL = Field(@navRow,"ss_home")
+ SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit")
+ SET @PERFORMANCE_URL = Field(@navRow,"ss_performance")
+ SET @JOURNEY_VIEW_URL = Field(@navRow,"ss_build_journey")
+ENDIF
+SET @surveyUrlRows = LookupRows("SST_SP_Survey_Url_DE","user","admin")
+IF RowCount(@surveyUrlRows) > 0 THEN
+ SET @surveyUrlRow = Row(@surveyUrlRows,1)
+ SET @SURVEY_STAGE_URL = Field(@surveyUrlRow,"create")
+ SET @SURVEY_ANALYTICS_URL = Field(@surveyUrlRow,"analytics")
+ENDIF
+SET @MC_CLOUD = "https://mc.s13.exacttarget.com/cloud/"
+SET @jid = Trim(RequestParameter("journeyId"))
+SET @dispName = ""
+SET @dispType = ""
+SET @dispSurveyId = ""
+SET @isSurveyBuild = "false"
+SET @buildNavContext = "false"
+SET @buildNavActive = "journey"
+SET @pageStatus = "view"
+SET @loadError = ""
+SET @isRealJourney = "false"
+SET @authOk = "false"
+SET @accessToken = ""
+SET @subdomain = ""
+SET @detailCount = 0
+SET @journeyFlowHtml = ""
+SET @journeyActivitiesHtml = ""
+SET @journeyMetaHtml = ""
+SET @journeyBuilderUrl = ""
+SET @apiJourneyName = ""
+SET @apiJourneyStatus = ""
+SET @apiJourneyVersion = ""
+SET @apiActivityCount = "0"
+
+IF Empty(@jid) THEN
+ SET @pageStatus = "nodata"
+ELSE
+ SET @buildNavContext = "true"
+ IF Substring(Lowercase(@jid),1,6) == "email:" THEN
+  SET @pageStatus = "emailonly"
+ ELSE
+  SET @isRealJourney = "true"
+  SET @detailRows = LookupRows("Bd_journey_analytics","journeyId",@jid)
+  SET @detailCount = RowCount(@detailRows)
+  IF @detailCount > 0 THEN
+   SET @detailRow = Row(@detailRows,1)
+   SET @dispName = Trim(Field(@detailRow,"journeyName"))
+   SET @dispType = Trim(Field(@detailRow,"journeyType"))
+   SET @dispSurveyId = Trim(Field(@detailRow,"surveyId"))
+   IF IndexOf(@dispType,"Survey") > 0 THEN
+    SET @isSurveyBuild = "true"
+   ENDIF
+  ENDIF
+  SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
+  IF RowCount(@authRow) > 0 THEN
+   SET @authR = Row(@authRow,1)
+   SET @clientId = Field(@authR,"clientId")
+   SET @clientSecret = Field(@authR,"clientSecret")
+   SET @subdomain = Field(@authR,"subdomain")
+   IF NOT Empty(@clientId) AND NOT Empty(@clientSecret) AND NOT Empty(@subdomain) THEN
+    SET @authUrl = Concat("https://",@subdomain,".auth.marketingcloudapis.com/v2/token")
+    SET @accountId = Trim(Field(@authR,"accountId"))
+    SET @authPayload = Concat('{"grant_type":"client_credentials","client_id":"',@clientId,'","client_secret":"',@clientSecret,'"')
+    IF NOT Empty(@accountId) THEN
+     SET @authPayload = Concat(@authPayload,',"account_id":"',@accountId,'"')
+    ENDIF
+    SET @authPayload = Concat(@authPayload,'}')
+    SET @authStatus = HTTPPost2(@authUrl,"application/json",@authPayload,false,@authResponse,@authResponseHeader)
+    IF @authStatus == 200 THEN
+     SET @tokenPattern = '"access_token":"([^"]+)"'
+     SET @accessToken = RegExMatch(@authResponse,@tokenPattern,1)
+     IF NOT Empty(@accessToken) THEN
+      SET @authOk = "true"
+     ELSE
+      SET @loadError = "Auth response missing access token."
+      SET @pageStatus = "authfail"
+     ENDIF
+    ELSE
+     SET @loadError = Concat("Auth HTTP ",@authStatus)
+     SET @pageStatus = "authfail"
+    ENDIF
+   ELSE
+    SET @loadError = "SFMC_AUTH incomplete for subdomain or credentials."
+    SET @pageStatus = "authfail"
+   ENDIF
+  ELSE
+   SET @loadError = "SFMC_AUTH has no Admin row."
+   SET @pageStatus = "authfail"
+  ENDIF
+ ENDIF
+ENDIF
+SET @editSidebarHtml = ContentBlockByName("sst_shell_edit_sidebar")
+]%%
+<script runat="server" language="javascript">
+Platform.Load("core", "1");
+
+var MC_CLOUD = "https://mc.s13.exacttarget.com/cloud/";
+var journeyFlowHtml = "";
+var journeyActivitiesHtml = "";
+var journeyMetaHtml = "";
+var journeyBuilderUrl = "";
+var apiJourneyName = "";
+var apiJourneyStatus = "";
+var apiJourneyVersion = "";
+var apiActivityCount = "0";
+var loadErrorMsg = "";
+
+function strTrim(v) {
+  if (v === null || typeof v === "undefined") {
+    return "";
+  }
+  return String(v).replace(/^\s+|\s+$/g, "");
+}
+
+function htmlSafe(v) {
+  return strTrim(v)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function journeyHttpJson(token, method, url, bodyStr) {
+  try {
+    var req = new Script.Util.HttpRequest(url);
+    req.emptyContentHandling = 0;
+    req.retries = 2;
+    req.continueOnError = true;
+    req.setHeader("Authorization", "Bearer " + token);
+    req.method = method;
+    if (bodyStr) {
+      req.contentType = "application/json";
+      req.postData = bodyStr;
+    }
+    var resp = req.send();
+    return {
+      status: resp.statusCode,
+      body: resp.content ? String(resp.content) : ""
+    };
+  } catch (httpEx) {
+    return { status: 0, body: httpEx.message || String(httpEx) };
+  }
+}
+
+function getJourneyObject(sub, token, jid) {
+  var url =
+    "https://" +
+    sub +
+    ".rest.marketingcloudapis.com/interaction/v1/interactions/" +
+    encodeURIComponent(jid) +
+    "?extras=all";
+  var resp = journeyHttpJson(token, "GET", url, null);
+  if (resp.status != 200 && resp.status != 201) {
+    var detail = resp.body ? resp.body.substring(0, 220) : "";
+    return {
+      ok: false,
+      msg: "Journey GET HTTP " + resp.status + (detail ? " - " + detail : "."),
+      obj: null
+    };
+  }
+  try {
+    return { ok: true, msg: "", obj: Platform.Function.ParseJSON(resp.body) };
+  } catch (parseEx) {
+    return { ok: false, msg: "Could not parse journey response.", obj: null };
+  }
+}
+
+function buildJourneyOpenUrl(cloudBase, journeyId, versionNumber) {
+  var jid = strTrim(journeyId);
+  if (!jid) {
+    return "";
+  }
+  var base = strTrim(cloudBase) || MC_CLOUD;
+  if (base.charAt(base.length - 1) !== "/") {
+    base += "/";
+  }
+  var ver = strTrim(versionNumber);
+  if (!ver) {
+    ver = "live";
+  }
+  return base + "#app/Journey%20Builder/%23" + jid + "/" + ver;
+}
+
+function formatActivityType(type) {
+  var t = strTrim(type).toUpperCase();
+  if (!t) {
+    return "Activity";
+  }
+  if (t === "EMAILV2" || t === "EMAIL") {
+    return "Email";
+  }
+  if (t.indexOf("WAIT") >= 0) {
+    return "Wait";
+  }
+  if (t === "REST") {
+    return "Custom";
+  }
+  if (t === "MULTISTEPBRANCH" || t === "RANDOMSPLIT") {
+    return "Split";
+  }
+  if (t.indexOf("ENTRY") >= 0 || t === "EVENT") {
+    return "Entry";
+  }
+  return type;
+}
+
+function activityDetailLine(act) {
+  if (!act) {
+    return "";
+  }
+  var type = strTrim(act.type).toUpperCase();
+  var cfg = act.configurationArguments || {};
+  if (type === "EMAILV2" || type === "EMAIL") {
+    var ts = cfg.triggeredSend || {};
+    if (ts.emailName) {
+      return strTrim(ts.emailName);
+    }
+    if (ts.emailId) {
+      return "Email ID " + strTrim(ts.emailId);
+    }
+  }
+  if (act.name && strTrim(act.name) !== strTrim(act.key)) {
+    return strTrim(act.name);
+  }
+  if (act.metaData && act.metaData.description) {
+    return strTrim(act.metaData.description);
+  }
+  return strTrim(act.key);
+}
+
+function activityDisplayName(act) {
+  if (!act) {
+    return "Untitled";
+  }
+  if (act.name) {
+    return strTrim(act.name) || "Untitled";
+  }
+  if (act.key) {
+    return strTrim(act.key);
+  }
+  return "Untitled";
+}
+
+function findEntryActivity(activities, jObj) {
+  var list = coerceActivityList(activities);
+  var entryKey = jObj.entrySourceGroupKey ? String(jObj.entrySourceGroupKey) : "";
+  var i;
+  var act;
+  if (entryKey) {
+    for (i = 0; i < list.length; i++) {
+      act = list[i];
+      if (!act) {
+        continue;
+      }
+      if (act.key === entryKey || act.id === entryKey) {
+        return act;
+      }
+    }
+  }
+  for (i = 0; i < list.length; i++) {
+    act = list[i];
+    if (!act || !act.type) {
+      continue;
+    }
+    var t = String(act.type).toUpperCase();
+    if (t === "EVENT" || t.indexOf("ENTRY") >= 0) {
+      return act;
+    }
+  }
+  return list.length ? list[0] : null;
+}
+
+function walkPrimaryPath(activities, startAct) {
+  var list = coerceActivityList(activities);
+  var byId = {};
+  var i;
+  for (i = 0; i < list.length; i++) {
+    if (list[i] && list[i].id) {
+      byId[list[i].id] = list[i];
+    }
+  }
+  var steps = [];
+  var cur = startAct;
+  var guard = 0;
+  while (cur && guard < 250) {
+    guard += 1;
+    steps.push(cur);
+    var nextId = null;
+    if (cur.outcomes && cur.outcomes.length && cur.outcomes[0]) {
+      nextId = cur.outcomes[0].next;
+    }
+    if (!nextId || !byId[nextId]) {
+      break;
+    }
+    cur = byId[nextId];
+  }
+  return steps;
+}
+
+function isConfigured(act) {
+  if (!act || !act.metaData) {
+    return "—";
+  }
+  if (act.metaData.isConfigured === true) {
+    return "Yes";
+  }
+  if (act.metaData.isConfigured === false) {
+    return "No";
+  }
+  return "—";
+}
+
+function buildFlowHtml(steps) {
+  if (!steps || !steps.length) {
+    return '<p class="recent-empty">Could not derive a primary path from journey activities.</p>';
+  }
+  var parts = ['<div class="journey-flow" role="list">'];
+  var si;
+  for (si = 0; si < steps.length; si++) {
+    var step = steps[si];
+    if (si > 0) {
+      parts.push('<div class="journey-flow-arrow" aria-hidden="true">↓</div>');
+    }
+    parts.push(
+      '<div class="journey-flow-node" role="listitem">' +
+        '<div class="journey-flow-type">' +
+        htmlSafe(formatActivityType(step.type)) +
+        "</div>" +
+        '<div class="journey-flow-name">' +
+        htmlSafe(activityDisplayName(step)) +
+        "</div>" +
+        '<div class="journey-flow-detail">' +
+        htmlSafe(activityDetailLine(step) || "—") +
+        "</div>" +
+        "</div>"
+    );
+  }
+  parts.push("</div>");
+  return parts.join("");
+}
+
+function coerceActivityList(activities) {
+  var list = [];
+  var i;
+  if (!activities) {
+    return list;
+  }
+  if (activities.length !== undefined && activities.length !== null) {
+    for (i = 0; i < activities.length; i++) {
+      if (activities[i]) {
+        list.push(activities[i]);
+      }
+    }
+  }
+  return list;
+}
+
+function buildActivitiesTableHtml(activities) {
+  var normalized = coerceActivityList(activities);
+  if (!normalized.length) {
+    return '<p class="recent-empty">No activities returned for this journey.</p>';
+  }
+  var sorted = normalized.slice();
+  sorted.sort(function (a, b) {
+    var ta = formatActivityType(a.type);
+    var tb = formatActivityType(b.type);
+    if (ta !== tb) {
+      return ta > tb ? 1 : -1;
+    }
+    return activityDisplayName(a).toLowerCase() > activityDisplayName(b).toLowerCase()
+      ? 1
+      : -1;
+  });
+  var parts = ['<div class="contacts-table-wrap"><table class="contacts-table journey-activities-table">'];
+  parts.push(
+    "<thead><tr>" +
+      "<th>#</th>" +
+      "<th>Type</th>" +
+      "<th>Name</th>" +
+      "<th>Detail</th>" +
+      "<th>Configured</th>" +
+      "<th>Key</th>" +
+      "</tr></thead><tbody>"
+  );
+  var ri;
+  for (ri = 0; ri < sorted.length; ri++) {
+    var act = sorted[ri];
+    parts.push(
+      "<tr>" +
+        "<td>" +
+        String(ri + 1) +
+        "</td>" +
+        "<td>" +
+        htmlSafe(formatActivityType(act.type)) +
+        "</td>" +
+        "<td>" +
+        htmlSafe(activityDisplayName(act)) +
+        "</td>" +
+        "<td>" +
+        htmlSafe(activityDetailLine(act) || "—") +
+        "</td>" +
+        "<td>" +
+        htmlSafe(isConfigured(act)) +
+        "</td>" +
+        '<td class="contacts-mono">' +
+        htmlSafe(strTrim(act.key) || "—") +
+        "</td>" +
+        "</tr>"
+    );
+  }
+  parts.push("</tbody></table></div>");
+  return parts.join("");
+}
+
+function buildMetaHtml(jObj, logName, builderUrl) {
+  var name = jObj.name ? String(jObj.name) : "";
+  if (!name && logName) {
+    name = logName;
+  }
+  var status = jObj.status ? String(jObj.status) : "—";
+  var version = jObj.version !== undefined && jObj.version !== null ? String(jObj.version) : "—";
+  var lastPub = jObj.lastPublishedDate ? String(jObj.lastPublishedDate) : "";
+  if (lastPub.indexOf("0001-01-01") >= 0) {
+    lastPub = "";
+  }
+  var entryKey = jObj.entrySourceGroupKey ? String(jObj.entrySourceGroupKey) : "—";
+  var parts = ['<dl class="journey-meta-dl">'];
+  parts.push("<dt>Journey name</dt><dd>" + htmlSafe(name || "—") + "</dd>");
+  parts.push("<dt>Status</dt><dd>" + htmlSafe(status) + "</dd>");
+  parts.push("<dt>Version</dt><dd>" + htmlSafe(version) + "</dd>");
+  if (lastPub) {
+    parts.push(
+      "<dt>Last published</dt><dd>" + htmlSafe(lastPub.substring(0, 19)) + "</dd>"
+    );
+  }
+  parts.push("<dt>Entry source key</dt><dd class=\"contacts-mono\">" + htmlSafe(entryKey) + "</dd>");
+  if (builderUrl) {
+    parts.push(
+      '<dt>Open in SFMC</dt><dd><a class="breadcrumb-link" href="' +
+        htmlSafe(builderUrl) +
+        '" target="_blank" rel="noopener noreferrer">Journey Builder</a></dd>'
+    );
+  }
+  parts.push("</dl>");
+  return parts.join("");
+}
+
+var pageStatus = Platform.Variable.GetValue("@pageStatus") || "";
+var authOk = Platform.Variable.GetValue("@authOk") || "";
+var accessToken = Platform.Variable.GetValue("@accessToken") || "";
+var subdomain = Platform.Variable.GetValue("@subdomain") || "";
+var jid = strTrim(Platform.Variable.GetValue("@jid") || "");
+var logName = strTrim(Platform.Variable.GetValue("@dispName") || "");
+
+try {
+  if (pageStatus === "view" && authOk === "true" && accessToken && subdomain && jid) {
+    var fetched = getJourneyObject(subdomain, accessToken, jid);
+    if (fetched.ok && fetched.obj) {
+      var jObj = fetched.obj;
+      apiJourneyName = jObj.name ? String(jObj.name) : "";
+      apiJourneyStatus = jObj.status ? String(jObj.status) : "";
+      apiJourneyVersion =
+        jObj.version !== undefined && jObj.version !== null
+          ? String(jObj.version)
+          : "";
+      var activities = coerceActivityList(jObj.activities);
+      apiActivityCount = String(activities.length);
+      journeyBuilderUrl = buildJourneyOpenUrl(MC_CLOUD, jid, apiJourneyVersion);
+      var entryAct = findEntryActivity(activities, jObj);
+      var pathSteps = entryAct ? walkPrimaryPath(activities, entryAct) : [];
+      journeyFlowHtml = buildFlowHtml(pathSteps);
+      journeyActivitiesHtml = buildActivitiesTableHtml(activities);
+      journeyMetaHtml = buildMetaHtml(jObj, logName, journeyBuilderUrl);
+    } else {
+      loadErrorMsg = fetched.msg || "Could not load journey.";
+      Platform.Variable.SetValue("@pageStatus", "apifail");
+      Platform.Variable.SetValue("@loadError", loadErrorMsg);
+    }
+  }
+} catch (loadEx) {
+  loadErrorMsg = loadEx.message || String(loadEx);
+  Platform.Variable.SetValue("@pageStatus", "apifail");
+  Platform.Variable.SetValue("@loadError", loadErrorMsg);
+}
+
+Platform.Variable.SetValue("@journeyFlowHtml", journeyFlowHtml);
+Platform.Variable.SetValue("@journeyActivitiesHtml", journeyActivitiesHtml);
+Platform.Variable.SetValue("@journeyMetaHtml", journeyMetaHtml);
+Platform.Variable.SetValue("@journeyBuilderUrl", journeyBuilderUrl);
+Platform.Variable.SetValue("@apiJourneyName", apiJourneyName);
+Platform.Variable.SetValue("@apiJourneyStatus", apiJourneyStatus);
+Platform.Variable.SetValue("@apiJourneyVersion", apiJourneyVersion);
+Platform.Variable.SetValue("@apiActivityCount", apiActivityCount);
+</script>
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Journey Builder Flow</title>
+<title>Journey • SST</title>
+<link rel="icon" href="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&amp;w=640&amp;q=75" type="image/png">
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #fff;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    min-height: 100vh;
-  }
-
-  .journey-flow {
-    display: flex;
-    align-items: center;
-    gap: 0;
-  }
-
-  .step {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    text-align: center;
-    position: relative;
-    min-width: 120px;
-  }
-
-  .step:not(:last-child)::after {
-    content: '';
-    position: absolute;
-    top: 36px;
-    left: calc(50% + 36px);
-    width: calc(100% - 36px);
-    height: 2px;
-    background: #ccc;
-    z-index: 0;
-  }
-
-  .icon-wrapper {
-    width: 72px;
-    height: 72px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: relative;
-    z-index: 1;
-    margin-bottom: 10px;
-  }
-
-  /* Einstein STO - rotated diamond */
-  .diamond {
-    width: 56px;
-    height: 56px;
-    background: linear-gradient(135deg, #0b5cab, #1a8fc4);
-    transform: rotate(45deg);
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 2px 2px 8px rgba(0,0,0,0.15);
-  }
-  .diamond .icon-inner {
-    transform: rotate(-45deg);
-    font-size: 24px;
-    color: #fff;
-  }
-
-  /* Rounded square icons */
-  .rounded-square {
-    width: 56px;
-    height: 56px;
-    border-radius: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-  }
-
-  .bg-light-blue { background: #e0f4fd; }
-  .bg-teal { background: #e0f7f5; }
-  .bg-blue { background: #e3f1fd; }
-  .bg-green { background: #e6f9e6; }
-
-  .rounded-square svg {
-    width: 28px;
-    height: 28px;
-  }
-
-  .step-label {
-    font-size: 12px;
-    color: #333;
-    max-width: 110px;
-    line-height: 1.4;
-    font-weight: 500;
-  }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+:root {
+  --primary-color: #6366f1;
+  --primary-dark: #4f46e5;
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --bg-secondary: #f9fafb;
+  --border-color: #e5e7eb;
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --radius-md: 0.5rem;
+  --radius-lg: 12px;
+  --gray-200: #e5e7eb;
+  --gray-400: #9ca3af;
+  --gray-600: #4b5563;
+  --gray-900: #111827;
+  --danger: #b91c1c;
+  --dangerbg: #fef2f2;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg-secondary);color:var(--text-primary);line-height:1.55}
+.dashboard-layout{display:flex;height:100vh;min-height:100vh;overflow:hidden}
+.maker-sidebar{width:280px;background:#fff;border-right:1px solid var(--gray-200);display:flex;flex-direction:column;padding:28px 0;flex-shrink:0;box-shadow:var(--shadow-sm);height:100vh;overflow:hidden}
+.sidebar-logo{padding:0 20px;margin-bottom:12px;border-bottom:1px solid #eee5e5;padding-bottom:10px;align-self:center}
+.sidebar-logo a{display:inline-block}
+.sidebar-logo img{height:40px}
+.nav-section{margin-bottom:8px}
+.nav-section-title{font-size:11px;font-weight:600;color:var(--gray-400);letter-spacing:0.06em;margin-bottom:8px;padding:0 32px;text-transform:uppercase}
+.sidebar-nav .nav-link{display:flex;align-items:center;gap:12px;padding:12px 32px;color:var(--gray-600);text-decoration:none;font-weight:500;font-size:14px;border-right:3px solid transparent;transition:background 0.2s ease,color 0.2s ease}
+.sidebar-nav .nav-link:hover{background:#f9fafb;color:var(--gray-900)}
+.sidebar-nav .nav-link.active,.sidebar-nav span.nav-link.active{background:linear-gradient(90deg,rgb(119 120 196 / 10%) 0%,rgb(2 3 22 / 5%) 100%);color:#000;border-right-color:#2c2c31}
+.sidebar-nav span.nav-link.active{cursor:default}
+.nav-icon{width:20px;height:20px;opacity:0.75;flex-shrink:0}
+.maker-main{flex:1;min-width:0;height:100vh;overflow:hidden;display:flex;flex-direction:column;background:var(--bg-secondary)}
+.maker-main-inner{flex:1;overflow-y:auto;padding:32px 40px 48px}
+.breadcrumb-nav{display:flex;align-items:center;flex-wrap:wrap;font-size:14px;gap:4px;margin-bottom:20px}
+.breadcrumb-link{display:inline-flex;align-items:center;color:var(--primary-color);text-decoration:none;font-weight:500;font-size:16px}
+.breadcrumb-link:hover{color:var(--primary-dark);text-decoration:underline}
+.breadcrumb-separator{margin:0 8px;color:var(--gray-400)}
+h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
+.sub{color:var(--text-secondary);max-width:44rem;margin-bottom:22px}
+.panel{background:#fff;border:1px solid var(--border-color);border-radius:var(--radius-lg);padding:26px 30px;margin-bottom:20px}
+.panel-title{font-size:1rem;font-weight:700;margin:0 0 16px 0}
+.banner{padding:14px 16px;border-radius:10px;margin-bottom:16px;font-size:14px;border:1px solid var(--border-color)}
+.banner.bad{border-color:#fecaca;background:var(--dangerbg);color:var(--danger)}
+.recent-empty{color:var(--text-secondary);font-size:14px}
+.journey-meta-dl{margin:0}
+.journey-meta-dl dt{font-size:11px;color:var(--gray-600);text-transform:uppercase;font-weight:600;letter-spacing:0.05em;margin:16px 0 4px 0}
+.journey-meta-dl dt:first-child{margin-top:0}
+.journey-meta-dl dd{font-weight:600;font-size:1rem;margin:0;padding:0;color:var(--gray-900);word-break:break-word}
+.journey-flow{display:flex;flex-direction:column;align-items:center;padding:8px 0 4px 0}
+.journey-flow-node{border:1px solid var(--border-color);border-radius:10px;background:#fff;padding:14px 18px;min-width:min(100%,320px);max-width:420px;text-align:center;box-shadow:var(--shadow-sm)}
+.journey-flow-type{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-secondary);margin-bottom:4px}
+.journey-flow-name{font-size:15px;font-weight:700;color:var(--gray-900);margin-bottom:4px}
+.journey-flow-detail{font-size:13px;color:var(--text-secondary);word-break:break-word}
+.journey-flow-arrow{color:var(--gray-400);font-size:18px;line-height:1;padding:2px 0}
+.contacts-table-wrap{overflow-x:auto;border:1px solid var(--border-color);border-radius:8px;background:#fff}
+.contacts-table{width:100%;border-collapse:collapse;font-size:14px}
+.contacts-table th,.contacts-table td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--border-color);vertical-align:top}
+.contacts-table th{font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:var(--gray-600);background:#fafafa}
+.contacts-table tbody tr:last-child td{border-bottom:none}
+.contacts-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}
+.flow-hint{font-size:13px;color:var(--text-secondary);margin:0 0 14px 0}
+@media (max-width:768px){
+.dashboard-layout{flex-direction:column;height:auto;overflow:visible}
+.maker-sidebar{width:100%;flex-direction:row;overflow-x:auto;height:auto;padding:12px 0}
+.maker-sidebar .sidebar-nav{display:flex;flex-direction:row;gap:4px;padding:8px 0;flex:1;flex-wrap:nowrap}
+.maker-sidebar .nav-section-title{display:none}
+.maker-sidebar .nav-link{white-space:nowrap;padding:8px 16px;border-right:none;border-radius:8px}
+.maker-main{height:auto;overflow:visible}
+.maker-main-inner{padding:16px}
+}
 </style>
 </head>
 <body>
-
-<div class="journey-flow">
-
-  <!-- Step 1: Einstein STO -->
-  <div class="step">
-    <div class="icon-wrapper">
-      <div class="diamond">
-        <div class="icon-inner">
-          <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="#fff" stroke-width="1.5">
-            <circle cx="12" cy="12" r="4"/>
-            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
-            <path d="M15 9l-3 3-1.5-1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </div>
-      </div>
-    </div>
-    <span class="step-label">Einstein STO - 4 Hours</span>
+<div class="dashboard-layout">
+%%[ IF NOT Empty(@editSidebarHtml) THEN ]%%
+%%=TreatAsContent(@editSidebarHtml)=%%
+%%[ ELSE ]%%
+<aside class="maker-sidebar sidebar" aria-label="Primary">
+  <div class="sidebar-logo">
+    <a href="%%=v(@HOME_URL)=%%"><img src="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&amp;w=640&amp;q=75" alt="MagMutual" style="filter: invert(1);"></a>
   </div>
-
-  <!-- Step 2: STO_STOINCL_001 (Email) -->
-  <div class="step">
-    <div class="icon-wrapper">
-      <div class="rounded-square bg-light-blue">
-        <svg viewBox="0 0 24 24" fill="none" stroke="#1a8fc4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="5" width="18" height="14" rx="2"/>
-          <path d="M3 7l9 6 9-6"/>
-        </svg>
-      </div>
-    </div>
-    <span class="step-label">STO_STOINCL_001</span>
-  </div>
-
-  <!-- Step 3: Update Campaign Member Activity -->
-  <div class="step">
-    <div class="icon-wrapper">
-      <div class="rounded-square bg-teal">
-        <svg viewBox="0 0 24 24" fill="none" stroke="#0097a7" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="11" cy="11" r="7"/>
-          <path d="M21 21l-4-4"/>
-          <circle cx="14" cy="8" r="3"/>
-          <path d="M14 11v1M13 8h2"/>
-        </svg>
-      </div>
-    </div>
-    <span class="step-label">Update Campaign Member Activity</span>
-  </div>
-
-  <!-- Step 4: Create Task Activity -->
-  <div class="step">
-    <div class="icon-wrapper">
-      <div class="rounded-square bg-blue">
-        <svg viewBox="0 0 24 24" fill="none" stroke="#1976d2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="4" y="3" width="16" height="18" rx="2"/>
-          <path d="M9 12l2 2 4-4"/>
-        </svg>
-      </div>
-    </div>
-    <span class="step-label">Create Task Activity</span>
-  </div>
-
-  <!-- Step 5: Exit Journey -->
-  <div class="step">
-    <div class="icon-wrapper">
-      <div class="rounded-square bg-green">
-        <svg viewBox="0 0 24 24" fill="none">
-          <circle cx="12" cy="12" r="8" fill="#4caf50"/>
-          <path d="M8 12.5l3 3 5-6" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </div>
-    </div>
-    <span class="step-label">Exit Journey</span>
-  </div>
-
+  <nav class="sidebar-nav">
+    <div class="nav-section"><span class="nav-section-title">MENU</span></div>
+    <a class="nav-link" href="%%=IIF(NOT Empty(@jid), Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid), @BUILD_PAGE_SELF)=%%">Manage build</a>
+    <span class="nav-link active" role="presentation">Journey</span>
+    %%[ IF NOT Empty(@PERFORMANCE_URL) AND NOT Empty(@jid) THEN ]%%
+    <a class="nav-link" href="%%=Concat(@PERFORMANCE_URL,"?journeyId=",@jid)=%%">Performance</a>
+    %%[ ENDIF ]%%
+  </nav>
+</aside>
+%%[ ENDIF ]%%
+<main class="maker-main">
+<div class="maker-main-inner">
+%%[ IF Empty(@editSidebarHtml) THEN ]%%
+<div class="banner bad">Publish Content Block <strong>sst_shell_edit_sidebar</strong> in Content Builder.</div>
+%%[ ENDIF ]%%
+%%[ IF @pageStatus == "nodata" THEN ]%%
+<h1>Journey view</h1>
+<p class="sub">Open this page from <strong>Manage build</strong> with a <strong>journeyId</strong> in the URL.</p>
+%%[ ELSEIF @pageStatus == "emailonly" THEN ]%%
+<h1>No Journey Builder canvas</h1>
+<p class="sub">This build is email-only. There is no journey to visualize.</p>
+<p class="sub"><a class="breadcrumb-link" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Back to manage build</a></p>
+%%[ ELSEIF @pageStatus == "authfail" THEN ]%%
+<h1>Could not authorize</h1>
+<div class="banner bad">%%=v(@loadError)=%%</div>
+%%[ ELSEIF @pageStatus == "apifail" THEN ]%%
+<h1>Could not load journey</h1>
+<div class="banner bad">%%=v(@loadError)=%%</div>
+<p class="sub"><a class="breadcrumb-link" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Back to manage build</a></p>
+%%[ ELSE ]%%
+<h1>%%[ IF NOT Empty(@apiJourneyName) THEN ]%%%%=v(@apiJourneyName)=%%%%[ ELSEIF NOT Empty(@dispName) THEN ]%%%%=v(@dispName)=%%%%[ ELSE ]%%Journey%%[ ENDIF ]%%</h1>
+<p class="sub">Primary path through the journey definition returned by Journey Builder (live API). Branches follow the first outcome only.</p>
+<div class="panel">%%[ IF NOT Empty(@journeyMetaHtml) THEN ]%%%%=TreatAsContent(@journeyMetaHtml)=%%%%[ ENDIF ]%%</div>
+<div class="panel">
+  <h2 class="panel-title">Flow (primary path)</h2>
+  <p class="flow-hint">%%=v(@apiActivityCount)=%% activities in definition. Use Journey Builder for the full canvas.</p>
+  %%[ IF NOT Empty(@journeyFlowHtml) THEN ]%%
+  %%=TreatAsContent(@journeyFlowHtml)=%%
+  %%[ ELSE ]%%
+  <p class="recent-empty">No flow diagram available.</p>
+  %%[ ENDIF ]%%
 </div>
-
+<div class="panel">
+  <h2 class="panel-title">All activities</h2>
+  %%[ IF NOT Empty(@journeyActivitiesHtml) THEN ]%%
+  %%=TreatAsContent(@journeyActivitiesHtml)=%%
+  %%[ ELSE ]%%
+  <p class="recent-empty">No activities available.</p>
+  %%[ ENDIF ]%%
+</div>
+%%[ ENDIF ]%%
+</div>
+</main>
+</div>
 </body>
 </html>
