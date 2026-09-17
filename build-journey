@@ -612,9 +612,31 @@ function findFlowStartActivity(activities, jObj) {
   return safeArrayGet(list, 0);
 }
 
-function buildFlowNodeHtml(act) {
+function flowPathClass(pathColor) {
+  var n = Number(pathColor);
+  if (isNaN(n) || n < 0) {
+    return "journey-path-trunk";
+  }
+  if (n > 5) {
+    n = n % 6;
+  }
+  return "journey-path-" + String(n);
+}
+
+function flowArrowHtml(pathClass) {
   return (
-    '<div class="journey-flow-node" role="listitem">' +
+    '<div class="journey-flow-arrow-h ' +
+    pathClass +
+    '" aria-hidden="true" role="presentation">→</div>'
+  );
+}
+
+function buildFlowNodeHtml(act, pathClass) {
+  var pc = pathClass || "journey-path-trunk";
+  return (
+    '<div class="journey-flow-node ' +
+    pc +
+    '" role="listitem">' +
     flowStepIconHtml(act) +
     '<div class="journey-flow-type">' +
     htmlSafe(formatActivityType(act.type)) +
@@ -629,12 +651,11 @@ function buildFlowNodeHtml(act) {
   );
 }
 
-function renderFlowSubtree(act, lookup, stack, depth) {
+function renderFlowSubtree(act, lookup, stack, depth, pathColor) {
   var html;
   var outcomes;
   var branchActs;
   var branchOutcomes;
-  var branchIdx;
   var oi;
   var outcome;
   var nextRef;
@@ -644,22 +665,33 @@ function renderFlowSubtree(act, lookup, stack, depth) {
   var ck;
   var branchLen;
   var singleChild;
+  var pathClass;
+  var branchColor;
+  var branchClass;
   if (!act || depth > 40) {
     return "";
   }
+  pathClass = flowPathClass(pathColor);
   ak = activityBranchKey(act);
   if (ak && stackHasKey(stack, ak)) {
-    return '<div class="journey-flow-merge" role="note">↔ rejoins earlier step</div>';
+    return (
+      '<div class="journey-flow-merge ' +
+      pathClass +
+      '" role="note">↔ rejoins earlier step</div>'
+    );
   }
   childStack = copyStringStack(stack);
   if (ak) {
     childStack.push(ak);
   }
-  html = buildFlowNodeHtml(act);
+  html =
+    '<div class="journey-flow-lane ' +
+    pathClass +
+    '">' +
+    buildFlowNodeHtml(act, pathClass);
   outcomes = activityOutcomesList(act);
   branchActs = [];
   branchOutcomes = [];
-  branchIdx = [];
   for (oi = 0; oi < safeArrayLength(outcomes); oi++) {
     outcome = safeArrayGet(outcomes, oi);
     nextRef = outcomeNextRef(outcome);
@@ -670,39 +702,48 @@ function renderFlowSubtree(act, lookup, stack, depth) {
     if (child) {
       branchActs.push(child);
       branchOutcomes.push(outcome);
-      branchIdx.push(oi);
     }
   }
   branchLen = safeArrayLength(branchActs);
   if (!branchLen) {
+    html += "</div>";
     return html;
   }
   if (branchLen === 1) {
-    html += '<div class="journey-flow-arrow" aria-hidden="true">↓</div>';
+    html += flowArrowHtml(pathClass);
     singleChild = safeArrayGet(branchActs, 0);
-    html += renderFlowSubtree(singleChild, lookup, childStack, depth + 1);
+    html += renderFlowSubtree(singleChild, lookup, childStack, depth + 1, pathColor);
+    html += "</div>";
     return html;
   }
-  html += '<div class="journey-flow-fork" aria-hidden="true"></div>';
-  html += '<div class="journey-flow-split" role="group">';
+  html += flowArrowHtml(pathClass);
+  html += '<div class="journey-flow-split-v" role="group">';
   for (oi = 0; oi < branchLen; oi++) {
     child = safeArrayGet(branchActs, oi);
     outcome = safeArrayGet(branchOutcomes, oi);
     ck = activityBranchKey(child);
-    html += '<div class="journey-flow-branch">';
+    if (pathColor >= 0) {
+      branchColor = (Number(pathColor) + oi) % 6;
+    } else {
+      branchColor = oi % 6;
+    }
+    branchClass = flowPathClass(branchColor);
+    html += '<div class="journey-flow-branch-row ' + branchClass + '">';
     html +=
       '<div class="journey-flow-branch-label">' +
       htmlSafe(outcomeBranchLabel(outcome, oi)) +
       "</div>";
-    html += '<div class="journey-flow-arrow" aria-hidden="true">↓</div>';
     if (ck && stackHasKey(childStack, ck)) {
-      html += '<div class="journey-flow-merge" role="note">↔ rejoins earlier step</div>';
+      html +=
+        '<div class="journey-flow-merge ' +
+        branchClass +
+        '" role="note">↔ rejoins earlier step</div>';
     } else {
-      html += renderFlowSubtree(child, lookup, childStack, depth + 1);
+      html += renderFlowSubtree(child, lookup, childStack, depth + 1, branchColor);
     }
     html += "</div>";
   }
-  html += "</div>";
+  html += "</div></div>";
   return html;
 }
 
@@ -716,11 +757,16 @@ function buildFlowGraphHtml(startAct, activities) {
   try {
     list = coerceActivityList(activities);
     lookup = buildActivityLookup(list);
-    inner = renderFlowSubtree(startAct, lookup, [], 0);
+    inner = renderFlowSubtree(startAct, lookup, [], 0, -1);
     if (!inner) {
       return '<p class="recent-empty">Could not derive a flow from journey activities.</p>';
     }
-    return '<div class="journey-flow journey-flow-graph">' + inner + "</div>";
+    return (
+      '<div class="journey-flow-scroll">' +
+      '<div class="journey-flow journey-flow-graph">' +
+      inner +
+      "</div></div>"
+    );
   } catch (flowEx) {
     return '<p class="recent-empty">Could not render flow diagram.</p>';
   }
@@ -960,20 +1006,27 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 .journey-meta-dl dt{font-size:11px;color:var(--gray-600);text-transform:uppercase;font-weight:600;letter-spacing:0.05em;margin:16px 0 4px 0}
 .journey-meta-dl dt:first-child{margin-top:0}
 .journey-meta-dl dd{font-weight:600;font-size:1rem;margin:0;padding:0;color:var(--gray-900);word-break:break-word}
-.journey-flow{display:flex;flex-direction:column;align-items:center;padding:8px 0 4px 0;width:100%}
-.journey-flow-graph{align-items:center}
-.journey-flow-split{display:flex;flex-direction:row;flex-wrap:wrap;gap:16px 24px;align-items:flex-start;justify-content:center;width:100%;max-width:960px;margin-top:4px}
-.journey-flow-branch{display:flex;flex-direction:column;align-items:center;flex:1 1 200px;min-width:180px;max-width:340px;padding:12px 10px 0;border-top:2px solid #c7d2fe;position:relative}
-.journey-flow-branch-label{font-size:11px;font-weight:600;color:#4338ca;margin:0 0 6px 0;text-align:center;line-height:1.35;max-width:100%;word-break:break-word}
-.journey-flow-fork{width:min(92%,480px);height:0;border-top:2px solid var(--gray-400);margin:6px 0 0 0;position:relative}
-.journey-flow-merge{font-size:12px;color:var(--text-secondary);padding:10px 8px;text-align:center;border:1px dashed var(--border-color);border-radius:8px;background:#fafafa;max-width:280px}
-.journey-flow-node{border:1px solid var(--border-color);border-radius:10px;background:#fff;padding:14px 18px;min-width:min(100%,320px);max-width:420px;text-align:center;box-shadow:var(--shadow-sm)}
-.journey-flow-icon-wrap{width:40px;height:40px;margin:0 auto 10px auto;display:flex;align-items:center;justify-content:center;border-radius:10px;background:#eef2ff;border:1px solid #c7d2fe;color:#4338ca}
+.journey-flow-scroll{width:100%;overflow-x:auto;overflow-y:hidden;padding:8px 4px 16px;-webkit-overflow-scrolling:touch}
+.journey-flow{display:flex;flex-direction:row;align-items:center;flex-wrap:nowrap;width:max-content;min-width:100%;padding:4px 8px}
+.journey-flow-lane{display:flex;flex-direction:row;align-items:center;flex-wrap:nowrap;flex-shrink:0}
+.journey-flow-split-v{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:14px;flex-shrink:0;padding:4px 0}
+.journey-flow-branch-row{display:flex;flex-direction:row;align-items:center;flex-wrap:nowrap;flex-shrink:0;padding:6px 0 6px 10px;border-left:4px solid var(--path-color, #64748b);border-radius:4px}
+.journey-flow-branch-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--path-color, #64748b);margin:0 10px 0 0;white-space:nowrap;flex-shrink:0;max-width:120px;line-height:1.3}
+.journey-flow-merge{font-size:11px;color:var(--text-secondary);padding:8px 10px;border:1px dashed var(--path-color, #cbd5e1);border-radius:8px;background:#fafafa;white-space:nowrap;flex-shrink:0}
+.journey-flow-node{border:2px solid var(--path-color, #cbd5e1);border-radius:10px;background:#fff;padding:12px 14px;min-width:150px;max-width:200px;width:180px;text-align:center;box-shadow:var(--shadow-sm);flex-shrink:0}
+.journey-flow-icon-wrap{width:36px;height:36px;margin:0 auto 8px auto;display:flex;align-items:center;justify-content:center;border-radius:8px;background:var(--path-bg, #f1f5f9);border:1px solid var(--path-color, #cbd5e1);color:var(--path-color, #64748b)}
 .journey-flow-svg{display:block}
-.journey-flow-type{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-secondary);margin-bottom:4px}
-.journey-flow-name{font-size:15px;font-weight:700;color:var(--gray-900);margin-bottom:4px}
-.journey-flow-detail{font-size:13px;color:var(--text-secondary);word-break:break-word}
-.journey-flow-arrow{color:var(--gray-400);font-size:18px;line-height:1;padding:2px 0}
+.journey-flow-type{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-secondary);margin-bottom:4px}
+.journey-flow-name{font-size:14px;font-weight:700;color:var(--gray-900);margin-bottom:4px;line-height:1.25}
+.journey-flow-detail{font-size:12px;color:var(--text-secondary);word-break:break-word;line-height:1.35}
+.journey-flow-arrow-h{color:var(--path-color, #94a3b8);font-size:22px;line-height:1;padding:0 6px;flex-shrink:0;font-weight:600}
+.journey-path-trunk{--path-color:#64748b;--path-bg:#f1f5f9}
+.journey-path-0{--path-color:#4f46e5;--path-bg:#eef2ff}
+.journey-path-1{--path-color:#059669;--path-bg:#ecfdf5}
+.journey-path-2{--path-color:#d97706;--path-bg:#fffbeb}
+.journey-path-3{--path-color:#db2777;--path-bg:#fdf2f8}
+.journey-path-4{--path-color:#0284c7;--path-bg:#f0f9ff}
+.journey-path-5{--path-color:#7c3aed;--path-bg:#f5f3ff}
 .contacts-table-wrap{overflow-x:auto;border:1px solid var(--border-color);border-radius:8px;background:#fff}
 .contacts-table{width:100%;border-collapse:collapse;font-size:14px}
 .contacts-table th,.contacts-table td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--border-color);vertical-align:top}
@@ -1033,7 +1086,7 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 <p class="sub"><a class="breadcrumb-link" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Back to manage build</a></p>
 %%[ ELSE ]%%
 <h1>%%[ IF NOT Empty(@apiJourneyName) THEN ]%%%%=v(@apiJourneyName)=%%%%[ ELSEIF NOT Empty(@dispName) THEN ]%%%%=v(@dispName)=%%%%[ ELSE ]%%Journey%%[ ENDIF ]%%</h1>
-<p class="sub">Flow mirrors Journey Builder outcomes: splits show as parallel branches (not exact canvas layout).</p>
+<p class="sub">Flow reads left to right; each branch keeps one color after a split. Scroll horizontally on wide journeys.</p>
 <div class="panel">%%[ IF NOT Empty(@journeyMetaHtml) THEN ]%%%%=TreatAsContent(@journeyMetaHtml)=%%%%[ ENDIF ]%%</div>
 <div class="panel">
   <h2 class="panel-title">Flow</h2>
