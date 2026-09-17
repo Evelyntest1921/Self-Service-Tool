@@ -255,7 +255,140 @@ function getJourneyObject(sub, token, jid) {
   if (!jObj) {
     return { ok: false, msg: "Could not parse journey response.", obj: null };
   }
+  var jObjNorm = cloneViaJson(jObj);
+  if (jObjNorm) {
+    jObj = jObjNorm;
+  }
   return { ok: true, msg: "", obj: jObj };
+}
+
+function cloneViaJson(obj) {
+  try {
+    if (obj === null || typeof obj === "undefined") {
+      return null;
+    }
+    var s = Platform.Function.Stringify(obj);
+    if (!s || s === "null") {
+      return null;
+    }
+    return Platform.Function.ParseJSON(s);
+  } catch (cloneEx) {
+    return null;
+  }
+}
+
+function pickQuotedFieldFromJson(text, fieldName) {
+  var raw = toJsString(text);
+  if (!raw || !fieldName) {
+    return "";
+  }
+  var needle = '"' + fieldName + '":"';
+  var p = raw.indexOf(needle);
+  if (p < 0) {
+    return "";
+  }
+  var i = p + needle.length;
+  var out = "";
+  while (i < raw.length) {
+    var ch = raw.charAt(i);
+    if (ch === "\\" && i + 1 < raw.length) {
+      out += raw.charAt(i + 1);
+      i += 2;
+      continue;
+    }
+    if (ch === '"') {
+      break;
+    }
+    out += ch;
+    i += 1;
+  }
+  return strTrim(out);
+}
+
+function debugStringify(obj, maxLen) {
+  var max = maxLen || 200;
+  try {
+    var t = Platform.Function.Stringify(obj);
+    if (!t) {
+      t = toJsString(obj);
+    }
+    if (t.length > max) {
+      return t.substring(0, max) + "...";
+    }
+    return t;
+  } catch (dbgEx) {
+    return "";
+  }
+}
+
+function getActivityMeta(act) {
+  if (!act) {
+    return {};
+  }
+  var actNorm = cloneViaJson(act) || act;
+  var meta = actNorm.metaData || actNorm.MetaData || {};
+  return cloneViaJson(meta) || meta || {};
+}
+
+function activityIconRaw(act) {
+  var meta = getActivityMeta(act);
+  var icon = metaField(meta, "icon");
+  if (!icon) {
+    icon = metaField(meta, "iconSmall");
+  }
+  if (!icon) {
+    icon = metaField(meta, "original_icon");
+  }
+  if (!icon) {
+    icon = metaField(meta, "original_iconSmall");
+  }
+  if (!icon) {
+    icon = pickJsonStringField(meta, "icon");
+  }
+  if (!icon) {
+    icon = pickJsonStringField(act, "icon");
+  }
+  return icon;
+}
+
+function pickJsonStringField(obj, fieldName) {
+  try {
+    if (!obj) {
+      return "";
+    }
+    var s = Platform.Function.Stringify(obj);
+    if (!s) {
+      return "";
+    }
+    return pickQuotedFieldFromJson(s, fieldName);
+  } catch (pickEx) {
+    return "";
+  }
+}
+
+function flowTypeInitial(act) {
+  var label = formatActivityType(act && act.type ? act.type : "");
+  if (!label) {
+    return "?";
+  }
+  return label.charAt(0).toUpperCase();
+}
+
+function buildFlowIconHtml(act, cloudBase) {
+  var src = resolveActivityIconUrl(activityIconRaw(act), cloudBase);
+  var initial = flowTypeInitial(act);
+  var inner =
+    '<span class="journey-flow-icon-fallback" aria-hidden="true">' +
+    htmlSafe(initial) +
+    "</span>";
+  if (src && src.indexOf("http") === 0) {
+    inner =
+      '<img class="journey-flow-icon" src="' +
+      htmlSafe(src) +
+      '" alt="" width="32" height="32" onerror="this.style.display=\'none\'">' +
+      inner;
+  }
+  return '<div class="journey-flow-icon-wrap">' + inner + "</div>";
 }
 
 function buildJourneyOpenUrl(cloudBase, journeyId, versionNumber) {
@@ -400,7 +533,7 @@ function isConfigured(act) {
   return "—";
 }
 
-function buildFlowHtml(steps) {
+function buildFlowHtml(steps, cloudBase) {
   if (!steps || !steps.length) {
     return '<p class="recent-empty">Could not derive a primary path from journey activities.</p>';
   }
@@ -413,6 +546,7 @@ function buildFlowHtml(steps) {
     }
     parts.push(
       '<div class="journey-flow-node" role="listitem">' +
+        buildFlowIconHtml(step, cloudBase) +
         '<div class="journey-flow-type">' +
         htmlSafe(formatActivityType(step.type)) +
         "</div>" +
@@ -629,7 +763,7 @@ function buildInspectMetaHtml(activities, cloudBase) {
     "<th>#</th><th>Type</th><th>Name</th><th>Key</th>",
     "<th>category</th><th>uiType</th>",
     "<th>icon</th><th>iconSmall</th><th>original_icon</th>",
-    "<th>Preview</th>",
+    "<th>Preview</th><th>metaData (raw)</th>",
     "</tr></thead><tbody>"
   ];
   for (i = 0; i < list.length; i++) {
@@ -637,8 +771,8 @@ function buildInspectMetaHtml(activities, cloudBase) {
     if (!act) {
       continue;
     }
-    var meta = act.metaData || {};
-    var icon = metaField(meta, "icon");
+    var meta = getActivityMeta(act);
+    var icon = activityIconRaw(act);
     var iconSmall = metaField(meta, "iconSmall");
     var originalIcon = metaField(meta, "original_icon");
     var previewSrc = resolveActivityIconUrl(icon || iconSmall || originalIcon, cloudBase);
@@ -647,8 +781,12 @@ function buildInspectMetaHtml(activities, cloudBase) {
       previewCell =
         '<img class="journey-inspect-icon" src="' +
         htmlSafe(previewSrc) +
-        '" alt="" width="28" height="28" loading="lazy">';
+        '" alt="" width="28" height="28" loading="lazy" onerror="this.style.display=\'none\'">' +
+        '<a class="breadcrumb-link" href="' +
+        htmlSafe(previewSrc) +
+        '" target="_blank" rel="noopener noreferrer">open</a>';
     }
+    var metaRaw = htmlSafe(debugStringify(meta, 160) || "—");
     parts.push(
       "<tr>" +
         "<td>" +
@@ -680,6 +818,9 @@ function buildInspectMetaHtml(activities, cloudBase) {
         "</td>" +
         "<td>" +
         previewCell +
+        "</td>" +
+        '<td class="contacts-mono">' +
+        metaRaw +
         "</td>" +
         "</tr>"
     );
@@ -713,7 +854,7 @@ try {
       journeyBuilderUrl = buildJourneyOpenUrl(MC_CLOUD, jid, apiJourneyVersion);
       var entryAct = findEntryActivity(activities, jObj);
       var pathSteps = entryAct ? walkPrimaryPath(activities, entryAct) : [];
-      journeyFlowHtml = buildFlowHtml(pathSteps);
+      journeyFlowHtml = buildFlowHtml(pathSteps, mcCloudBase);
       journeyActivitiesHtml = buildActivitiesTableHtml(activities);
       journeyMetaHtml = buildMetaHtml(jObj, logName, journeyBuilderUrl);
       if (showInspectMeta === "true") {
@@ -801,6 +942,9 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 .journey-meta-dl dd{font-weight:600;font-size:1rem;margin:0;padding:0;color:var(--gray-900);word-break:break-word}
 .journey-flow{display:flex;flex-direction:column;align-items:center;padding:8px 0 4px 0}
 .journey-flow-node{border:1px solid var(--border-color);border-radius:10px;background:#fff;padding:14px 18px;min-width:min(100%,320px);max-width:420px;text-align:center;box-shadow:var(--shadow-sm)}
+.journey-flow-icon-wrap{position:relative;width:36px;height:36px;margin:0 auto 10px auto}
+.journey-flow-icon{position:relative;z-index:1;display:block;width:36px;height:36px;object-fit:contain;border-radius:8px;border:1px solid var(--border-color);background:#fff;margin:0 auto}
+.journey-flow-icon-fallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border-radius:8px;background:#eef2ff;border:1px solid #c7d2fe;color:#4338ca;font-weight:700;font-size:15px}
 .journey-flow-type{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-secondary);margin-bottom:4px}
 .journey-flow-name{font-size:15px;font-weight:700;color:var(--gray-900);margin-bottom:4px}
 .journey-flow-detail{font-size:13px;color:var(--text-secondary);word-break:break-word}
