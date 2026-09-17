@@ -277,7 +277,12 @@ function pickFlowSvgByType(typeUpper) {
       svgEnd
     );
   }
-  if (typeUpper.indexOf("ENTRY") >= 0 || typeUpper === "EVENT") {
+  if (
+    typeUpper.indexOf("ENTRY") >= 0 ||
+    typeUpper === "EVENT" ||
+    typeUpper.indexOf("SALES") >= 0 ||
+    typeUpper.indexOf("CRM") >= 0
+  ) {
     return (
       svgStart +
       '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>' +
@@ -348,6 +353,9 @@ function formatActivityType(type) {
   if (t.indexOf("ENTRY") >= 0 || t === "EVENT") {
     return "Entry";
   }
+  if (t.indexOf("SALES") >= 0 || t.indexOf("CRM") >= 0) {
+    return "Sales Cloud";
+  }
   return strTrim(type) || "Activity";
 }
 
@@ -417,26 +425,55 @@ function findEntryActivity(activities, jObj) {
   return list.length ? list[0] : null;
 }
 
-function walkPrimaryPath(activities, startAct) {
-  var list = coerceActivityList(activities);
+function buildActivityLookup(list) {
   var byId = {};
+  var byKey = {};
   var i;
   for (i = 0; i < list.length; i++) {
-    if (list[i] && list[i].id) {
-      byId[list[i].id] = list[i];
+    if (!list[i]) {
+      continue;
+    }
+    if (list[i].id) {
+      byId[toJsString(list[i].id)] = list[i];
+    }
+    if (list[i].key) {
+      byKey[toJsString(list[i].key)] = list[i];
     }
   }
+  return { byId: byId, byKey: byKey };
+}
+
+function resolveActivityRef(nextRef, lookup) {
+  var ref = strTrim(nextRef);
+  if (!ref || !lookup) {
+    return null;
+  }
+  if (lookup.byKey[ref]) {
+    return lookup.byKey[ref];
+  }
+  if (lookup.byId[ref]) {
+    return lookup.byId[ref];
+  }
+  return null;
+}
+
+function walkPrimaryPath(activities, startAct) {
+  var list = coerceActivityList(activities);
+  var lookup = buildActivityLookup(list);
   var steps = [];
   var cur = startAct;
   var guard = 0;
   while (cur && guard < 250) {
     guard += 1;
     steps.push(cur);
-    var nextId = firstOutcomeNext(cur);
-    if (!nextId || !byId[nextId]) {
+    var nextRef = firstOutcomeNext(cur);
+    if (!nextRef) {
       break;
     }
-    cur = byId[nextId];
+    cur = resolveActivityRef(nextRef, lookup);
+    if (!cur) {
+      break;
+    }
   }
   return steps;
 }
