@@ -275,6 +275,14 @@ function todayDateKey() {
   return formatIsoDate(new Date());
 }
 
+function isDateAfterToday(dateKey) {
+  var key = clean(dateKey);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) {
+    return false;
+  }
+  return key > todayDateKey();
+}
+
 function calendarMinSendDateKey() {
   var todayMs = parseDateMs(todayDateKey());
   if (!todayMs) {
@@ -499,11 +507,16 @@ function buildSendsHtml(rows, dateKey, cloudBase) {
   return parts.join("");
 }
 
-function buildFutureSendsHtml(rows, cloudBase) {
+function buildFutureSendsHtml(rows, cloudBase, filterDateKey) {
   var filtered = [];
   var i;
+  var dateFilter = clean(filterDateKey);
   for (i = 0; i < rows.length; i++) {
-    filtered.push(normalizeCalendarRow(rows[i]));
+    var item = normalizeCalendarRow(rows[i]);
+    if (dateFilter && item.sendDateKey !== dateFilter) {
+      continue;
+    }
+    filtered.push(item);
   }
   filtered.sort(function (a, b) {
     return (a.sendTimeMs || 0) - (b.sendTimeMs || 0);
@@ -512,6 +525,9 @@ function buildFutureSendsHtml(rows, cloudBase) {
   recipientsTotal = 0;
   var nowMs = new Date().getTime();
   if (!filtered.length) {
+    if (dateFilter) {
+      return '<p class="recent-empty">No scheduled sends for this date.</p>';
+    }
     return '<p class="recent-empty">No scheduled sends found.</p>';
   }
   var parts = ['<div class="contacts-table-wrap"><table class="contacts-table sends-table sends-table--future">'];
@@ -662,8 +678,15 @@ if (environment === "uat") {
 
 selectedDate = parseSelectedDate(queryValue("date"));
 selectedDateDisplay = formatRecentDayLabel(selectedDate, selectedDate);
-if (asStr(queryValue("view")).toLowerCase() === "future") {
+var viewParam = asStr(queryValue("view")).toLowerCase();
+var futureFilterDateKey = "";
+if (isDateAfterToday(selectedDate)) {
   calendarView = "future";
+  futureFilterDateKey = selectedDate;
+} else if (viewParam === "future") {
+  calendarView = "future";
+} else {
+  calendarView = "day";
 }
 
 try {
@@ -676,7 +699,11 @@ try {
   if (calendarView === "future") {
     var futureFetch = loadFutureCalendarRows();
     if (futureFetch.ok) {
-      sendsHtml = buildFutureSendsHtml(futureFetch.rows, mcCloudUrl);
+      sendsHtml = buildFutureSendsHtml(
+        futureFetch.rows,
+        mcCloudUrl,
+        futureFilterDateKey
+      );
     } else {
       calendarLoadError =
         futureFetch.error || "Could not load scheduled sends.";
@@ -809,6 +836,12 @@ h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 8px; line-height: 1.25
   font-weight: 700;
 }
 .calendar-view-tab:hover { color: #bab8c6; text-decoration: none; }
+.calendar-view-heading--future .calendar-view-tab:not(.is-active) {
+  color: #bab8c6;
+}
+.calendar-view-heading--future .calendar-view-tab:not(.is-active):hover {
+  color: var(--primary-color);
+}
 .calendar-view-tab.is-active {
   color: var(--gray-900);
   text-decoration: none;
@@ -1050,7 +1083,7 @@ h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 8px; line-height: 1.25
             </div>
           </form>
 
-          <h2 class="calendar-view-heading">
+          <h2 class="calendar-view-heading%%[ if @calView == "future" then ]%% calendar-view-heading--future%%[ endif ]%%">
             %%[ if @calView == "future" then ]%%
             <a class="calendar-view-tab" href="%%=v(@calDayViewUrl)=%%">%%=v(@calSelectedDateDisplay)=%%</a>
             %%[ else ]%%
@@ -1118,10 +1151,12 @@ h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 8px; line-height: 1.25
   var dateInput = document.getElementById("date");
   if (dateInput) {
     dateInput.addEventListener("change", function () {
-      var form = document.getElementById("calendarForm");
-      if (form) {
-        form.submit();
+      var day = dateInput.value;
+      if (!day) {
+        return;
       }
+      window.location.href =
+        window.location.pathname + "?date=" + encodeURIComponent(day);
     });
   }
   var recentItems = document.querySelectorAll(".recent-item--clickable");
