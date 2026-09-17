@@ -20,8 +20,13 @@ INNER JOIN _JourneyActivity jaEmail
     jaEmail.ActivityExternalKey LIKE 'EMAILV2-%'
     OR jaEmail.ActivityExternalKey LIKE 'EMAIL-%'
   )
-  AND PARSENAME(REPLACE(jaWait.ActivityExternalKey, '-', '.'), 1)
-    = PARSENAME(REPLACE(jaEmail.ActivityExternalKey, '-', '.'), 1)
+  AND RIGHT(
+    jaWait.ActivityExternalKey,
+    CHARINDEX('-', REVERSE(jaWait.ActivityExternalKey)) - 1
+  ) = RIGHT(
+    jaEmail.ActivityExternalKey,
+    CHARINDEX('-', REVERSE(jaEmail.ActivityExternalKey)) - 1
+  )
 WHERE j.JourneyStatus = 'Running'
   AND TRY_CONVERT(DATETIME, jaWait.ActivityName, 107) IS NOT NULL
   AND CAST(TRY_CONVERT(DATETIME, jaWait.ActivityName, 107) AS DATE) >= CAST(GETDATE() AS DATE)
