@@ -32,7 +32,3 @@ WHERE j.JourneyStatus = 'Running'
   AND TRY_CONVERT(DATETIME, jaWait.ActivityName, 107) IS NOT NULL
   AND CAST(TRY_CONVERT(DATETIME, jaWait.ActivityName, 107) AS DATE) >= CAST(GETDATE() AS DATE)
   AND CAST(TRY_CONVERT(DATETIME, jaWait.ActivityName, 107) AS DATE) < DATEADD(day, 91, CAST(GETDATE() AS DATE))
-ORDER BY
-  sendTime ASC,
-  j.JourneyName ASC,
-  jaEmail.ActivityName ASC
