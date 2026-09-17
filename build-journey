@@ -407,8 +407,8 @@ function findEntryActivity(activities, jObj) {
   var i;
   var act;
   if (entryKey) {
-    for (i = 0; i < list.length; i++) {
-      act = list[i];
+    for (i = 0; i < safeArrayLength(list); i++) {
+      act = safeArrayGet(list, i);
       if (!act) {
         continue;
       }
@@ -417,32 +417,36 @@ function findEntryActivity(activities, jObj) {
       }
     }
   }
-  for (i = 0; i < list.length; i++) {
-    act = list[i];
+  for (i = 0; i < safeArrayLength(list); i++) {
+    act = safeArrayGet(list, i);
     if (!act || !act.type) {
       continue;
     }
-    var t = String(act.type).toUpperCase();
+    var t = toJsString(act.type).toUpperCase();
     if (t === "EVENT" || t.indexOf("ENTRY") >= 0) {
       return act;
     }
   }
-  return list.length ? list[0] : null;
+  return safeArrayGet(list, 0);
 }
 
 function buildActivityLookup(list) {
   var byId = {};
   var byKey = {};
   var i;
-  for (i = 0; i < list.length; i++) {
-    if (!list[i]) {
+  var act;
+  var len;
+  len = safeArrayLength(list);
+  for (i = 0; i < len; i++) {
+    act = safeArrayGet(list, i);
+    if (!act) {
       continue;
     }
-    if (list[i].id) {
-      byId[toJsString(list[i].id)] = list[i];
+    if (act.id) {
+      byId[toJsString(act.id)] = act;
     }
-    if (list[i].key) {
-      byKey[toJsString(list[i].key)] = list[i];
+    if (act.key) {
+      byKey[toJsString(act.key)] = act;
     }
   }
   return { byId: byId, byKey: byKey };
@@ -460,6 +464,61 @@ function resolveActivityRef(nextRef, lookup) {
     return lookup.byId[ref];
   }
   return null;
+}
+
+function safeArrayLength(arr) {
+  if (!arr) {
+    return 0;
+  }
+  try {
+    var len = Number(arr.length);
+    if (isNaN(len) || len < 0) {
+      return 0;
+    }
+    if (len > 500) {
+      return 500;
+    }
+    return len;
+  } catch (lenEx) {
+    return 0;
+  }
+}
+
+function safeArrayGet(arr, index) {
+  var idx;
+  var len;
+  if (!arr) {
+    return null;
+  }
+  idx = Number(index);
+  if (isNaN(idx) || idx < 0) {
+    return null;
+  }
+  len = safeArrayLength(arr);
+  if (idx >= len) {
+    return null;
+  }
+  try {
+    return arr[idx];
+  } catch (getEx) {
+    return null;
+  }
+}
+
+function copyStringStack(stack) {
+  var out = [];
+  var i;
+  var len;
+  if (!stack) {
+    return out;
+  }
+  len = safeArrayLength(stack);
+  for (i = 0; i < len; i++) {
+    try {
+      out.push(toJsString(safeArrayGet(stack, i)));
+    } catch (copyEx) {}
+  }
+  return out;
 }
 
 function activityOutcomesList(act) {
@@ -502,11 +561,13 @@ function activityBranchKey(act) {
 
 function stackHasKey(stack, key) {
   var i;
-  if (!key || !stack || !stack.length) {
+  var len;
+  if (!key || !stack) {
     return false;
   }
-  for (i = 0; i < stack.length; i++) {
-    if (stack[i] === key) {
+  len = safeArrayLength(stack);
+  for (i = 0; i < len; i++) {
+    if (toJsString(safeArrayGet(stack, i)) === key) {
       return true;
     }
   }
@@ -531,24 +592,24 @@ function findFlowStartActivity(activities, jObj) {
     return entry;
   }
   hasIncoming = {};
-  for (i = 0; i < list.length; i++) {
-    act = list[i];
+  for (i = 0; i < safeArrayLength(list); i++) {
+    act = safeArrayGet(list, i);
     outcomes = activityOutcomesList(act);
-    for (oi = 0; oi < outcomes.length; oi++) {
-      nextRef = outcomeNextRef(outcomes[oi]);
+    for (oi = 0; oi < safeArrayLength(outcomes); oi++) {
+      nextRef = outcomeNextRef(safeArrayGet(outcomes, oi));
       if (nextRef) {
         hasIncoming[nextRef] = true;
       }
     }
   }
-  for (i = 0; i < list.length; i++) {
-    act = list[i];
+  for (i = 0; i < safeArrayLength(list); i++) {
+    act = safeArrayGet(list, i);
     k = activityBranchKey(act);
     if (k && !hasIncoming[k]) {
       return act;
     }
   }
-  return list[0];
+  return safeArrayGet(list, 0);
 }
 
 function buildFlowNodeHtml(act) {
@@ -569,16 +630,20 @@ function buildFlowNodeHtml(act) {
 }
 
 function renderFlowSubtree(act, lookup, stack, depth) {
-  var parts;
+  var html;
   var outcomes;
-  var branches;
+  var branchActs;
+  var branchOutcomes;
+  var branchIdx;
   var oi;
+  var outcome;
   var nextRef;
   var child;
   var ak;
-  var b;
   var childStack;
   var ck;
+  var branchLen;
+  var singleChild;
   if (!act || depth > 40) {
     return "";
   }
@@ -586,67 +651,79 @@ function renderFlowSubtree(act, lookup, stack, depth) {
   if (ak && stackHasKey(stack, ak)) {
     return '<div class="journey-flow-merge" role="note">↔ rejoins earlier step</div>';
   }
-  childStack = stack ? stack.slice() : [];
+  childStack = copyStringStack(stack);
   if (ak) {
     childStack.push(ak);
   }
-  parts = [buildFlowNodeHtml(act)];
+  html = buildFlowNodeHtml(act);
   outcomes = activityOutcomesList(act);
-  branches = [];
-  for (oi = 0; oi < outcomes.length; oi++) {
-    nextRef = outcomeNextRef(outcomes[oi]);
+  branchActs = [];
+  branchOutcomes = [];
+  branchIdx = [];
+  for (oi = 0; oi < safeArrayLength(outcomes); oi++) {
+    outcome = safeArrayGet(outcomes, oi);
+    nextRef = outcomeNextRef(outcome);
     if (!nextRef) {
       continue;
     }
     child = resolveActivityRef(nextRef, lookup);
     if (child) {
-      branches.push({ outcome: outcomes[oi], act: child, index: oi });
+      branchActs.push(child);
+      branchOutcomes.push(outcome);
+      branchIdx.push(oi);
     }
   }
-  if (!branches.length) {
-    return parts.join("");
+  branchLen = safeArrayLength(branchActs);
+  if (!branchLen) {
+    return html;
   }
-  if (branches.length === 1) {
-    parts.push('<div class="journey-flow-arrow" aria-hidden="true">↓</div>');
-    parts.push(renderFlowSubtree(branches[0].act, lookup, childStack, depth + 1));
-    return parts.join("");
+  if (branchLen === 1) {
+    html += '<div class="journey-flow-arrow" aria-hidden="true">↓</div>';
+    singleChild = safeArrayGet(branchActs, 0);
+    html += renderFlowSubtree(singleChild, lookup, childStack, depth + 1);
+    return html;
   }
-  parts.push('<div class="journey-flow-fork" aria-hidden="true"></div>');
-  parts.push('<div class="journey-flow-split" role="group">');
-  for (oi = 0; oi < branches.length; oi++) {
-    b = branches[oi];
-    ck = activityBranchKey(b.act);
-    parts.push('<div class="journey-flow-branch">');
-    parts.push(
+  html += '<div class="journey-flow-fork" aria-hidden="true"></div>';
+  html += '<div class="journey-flow-split" role="group">';
+  for (oi = 0; oi < branchLen; oi++) {
+    child = safeArrayGet(branchActs, oi);
+    outcome = safeArrayGet(branchOutcomes, oi);
+    ck = activityBranchKey(child);
+    html += '<div class="journey-flow-branch">';
+    html +=
       '<div class="journey-flow-branch-label">' +
-        htmlSafe(outcomeBranchLabel(b.outcome, b.index)) +
-        "</div>"
-    );
-    parts.push('<div class="journey-flow-arrow" aria-hidden="true">↓</div>');
+      htmlSafe(outcomeBranchLabel(outcome, oi)) +
+      "</div>";
+    html += '<div class="journey-flow-arrow" aria-hidden="true">↓</div>';
     if (ck && stackHasKey(childStack, ck)) {
-      parts.push('<div class="journey-flow-merge" role="note">↔ rejoins earlier step</div>');
+      html += '<div class="journey-flow-merge" role="note">↔ rejoins earlier step</div>';
     } else {
-      parts.push(renderFlowSubtree(b.act, lookup, childStack, depth + 1));
+      html += renderFlowSubtree(child, lookup, childStack, depth + 1);
     }
-    parts.push("</div>");
+    html += "</div>";
   }
-  parts.push("</div>");
-  return parts.join("");
+  html += "</div>";
+  return html;
 }
 
 function buildFlowGraphHtml(startAct, activities) {
   var list;
   var lookup;
+  var inner;
   if (!startAct) {
     return '<p class="recent-empty">Could not derive a flow from journey activities.</p>';
   }
-  list = coerceActivityList(activities);
-  lookup = buildActivityLookup(list);
-  return (
-    '<div class="journey-flow journey-flow-graph">' +
-    renderFlowSubtree(startAct, lookup, [], 0) +
-    "</div>"
-  );
+  try {
+    list = coerceActivityList(activities);
+    lookup = buildActivityLookup(list);
+    inner = renderFlowSubtree(startAct, lookup, [], 0);
+    if (!inner) {
+      return '<p class="recent-empty">Could not derive a flow from journey activities.</p>';
+    }
+    return '<div class="journey-flow journey-flow-graph">' + inner + "</div>";
+  } catch (flowEx) {
+    return '<p class="recent-empty">Could not render flow diagram.</p>';
+  }
 }
 
 function isConfigured(act) {
@@ -670,28 +747,13 @@ function coerceActivityList(activities) {
   if (!activities) {
     return list;
   }
-  try {
-    if (activities.length !== undefined && activities.length !== null) {
-      len = Number(activities.length);
-      if (isNaN(len) || len < 0) {
-        len = 0;
-      }
-      if (len > 500) {
-        len = 500;
-      }
-      for (i = 0; i < len; i++) {
-        try {
-          item = activities[i];
-          if (item) {
-            list.push(item);
-          }
-        } catch (idxEx) {}
-      }
-      if (list.length) {
-        return list;
-      }
+  len = safeArrayLength(activities);
+  for (i = 0; i < len; i++) {
+    item = safeArrayGet(activities, i);
+    if (item) {
+      list.push(item);
     }
-  } catch (lenEx) {}
+  }
   return list;
 }
 
@@ -702,19 +764,21 @@ function buildActivitiesTableHtml(activities) {
     return '<p class="recent-empty">No activities returned for this journey.</p>';
   }
   var sorted = [];
-  for (i = 0; i < normalized.length; i++) {
-    sorted.push(normalized[i]);
+  for (i = 0; i < safeArrayLength(normalized); i++) {
+    sorted.push(safeArrayGet(normalized, i));
   }
-  sorted.sort(function (a, b) {
-    var ta = formatActivityType(a.type);
-    var tb = formatActivityType(b.type);
-    if (ta !== tb) {
-      return ta > tb ? 1 : -1;
-    }
-    return activityDisplayName(a).toLowerCase() > activityDisplayName(b).toLowerCase()
-      ? 1
-      : -1;
-  });
+  try {
+    sorted.sort(function (a, b) {
+      var ta = formatActivityType(a.type);
+      var tb = formatActivityType(b.type);
+      if (ta !== tb) {
+        return ta > tb ? 1 : -1;
+      }
+      var na = activityDisplayName(a);
+      var nb = activityDisplayName(b);
+      return na > nb ? 1 : -1;
+    });
+  } catch (sortEx) {}
   var parts = ['<div class="contacts-table-wrap"><table class="contacts-table journey-activities-table">'];
   parts.push(
     "<thead><tr>" +
@@ -727,8 +791,11 @@ function buildActivitiesTableHtml(activities) {
       "</tr></thead><tbody>"
   );
   var ri;
-  for (ri = 0; ri < sorted.length; ri++) {
-    var act = sorted[ri];
+  for (ri = 0; ri < safeArrayLength(sorted); ri++) {
+    var act = safeArrayGet(sorted, ri);
+    if (!act) {
+      continue;
+    }
     parts.push(
       "<tr>" +
         "<td>" +
