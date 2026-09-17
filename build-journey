@@ -266,7 +266,9 @@ function pickFlowSvgByType(typeUpper) {
   if (
     typeUpper === "MULTISTEPBRANCH" ||
     typeUpper === "RANDOMSPLIT" ||
-    typeUpper.indexOf("SPLIT") >= 0
+    typeUpper.indexOf("SPLIT") >= 0 ||
+    typeUpper.indexOf("CRITERIA") >= 0 ||
+    typeUpper.indexOf("DECISION") >= 0
   ) {
     return (
       svgStart +
@@ -349,6 +351,9 @@ function formatActivityType(type) {
   }
   if (t === "MULTISTEPBRANCH" || t === "RANDOMSPLIT") {
     return "Split";
+  }
+  if (t.indexOf("CRITERIA") >= 0 || t.indexOf("DECISION") >= 0) {
+    return "Decision";
   }
   if (t.indexOf("ENTRY") >= 0 || t === "EVENT") {
     return "Entry";
@@ -457,25 +462,191 @@ function resolveActivityRef(nextRef, lookup) {
   return null;
 }
 
-function walkPrimaryPath(activities, startAct) {
-  var list = coerceActivityList(activities);
-  var lookup = buildActivityLookup(list);
-  var steps = [];
-  var cur = startAct;
-  var guard = 0;
-  while (cur && guard < 250) {
-    guard += 1;
-    steps.push(cur);
-    var nextRef = firstOutcomeNext(cur);
-    if (!nextRef) {
-      break;
-    }
-    cur = resolveActivityRef(nextRef, lookup);
-    if (!cur) {
-      break;
+function activityOutcomesList(act) {
+  if (!act || !act.outcomes) {
+    return [];
+  }
+  return coerceActivityList(act.outcomes);
+}
+
+function outcomeNextRef(outcome) {
+  if (!outcome || outcome.next === undefined || outcome.next === null) {
+    return "";
+  }
+  return strTrim(outcome.next);
+}
+
+function outcomeBranchLabel(outcome, index) {
+  var md = outcome && outcome.metaData ? outcome.metaData : {};
+  if (md.name) {
+    return strTrim(md.name);
+  }
+  if (md.label) {
+    return strTrim(md.label);
+  }
+  return "Path " + String(index + 1);
+}
+
+function activityBranchKey(act) {
+  if (!act) {
+    return "";
+  }
+  if (act.key) {
+    return toJsString(act.key);
+  }
+  if (act.id) {
+    return toJsString(act.id);
+  }
+  return "";
+}
+
+function stackHasKey(stack, key) {
+  var i;
+  if (!key || !stack || !stack.length) {
+    return false;
+  }
+  for (i = 0; i < stack.length; i++) {
+    if (stack[i] === key) {
+      return true;
     }
   }
-  return steps;
+  return false;
+}
+
+function findFlowStartActivity(activities, jObj) {
+  var list = coerceActivityList(activities);
+  var entry;
+  var hasIncoming;
+  var i;
+  var oi;
+  var act;
+  var outcomes;
+  var nextRef;
+  var k;
+  if (!list.length) {
+    return null;
+  }
+  entry = findEntryActivity(activities, jObj);
+  if (entry) {
+    return entry;
+  }
+  hasIncoming = {};
+  for (i = 0; i < list.length; i++) {
+    act = list[i];
+    outcomes = activityOutcomesList(act);
+    for (oi = 0; oi < outcomes.length; oi++) {
+      nextRef = outcomeNextRef(outcomes[oi]);
+      if (nextRef) {
+        hasIncoming[nextRef] = true;
+      }
+    }
+  }
+  for (i = 0; i < list.length; i++) {
+    act = list[i];
+    k = activityBranchKey(act);
+    if (k && !hasIncoming[k]) {
+      return act;
+    }
+  }
+  return list[0];
+}
+
+function buildFlowNodeHtml(act) {
+  return (
+    '<div class="journey-flow-node" role="listitem">' +
+    flowStepIconHtml(act) +
+    '<div class="journey-flow-type">' +
+    htmlSafe(formatActivityType(act.type)) +
+    "</div>" +
+    '<div class="journey-flow-name">' +
+    htmlSafe(activityDisplayName(act)) +
+    "</div>" +
+    '<div class="journey-flow-detail">' +
+    htmlSafe(activityDetailLine(act) || "—") +
+    "</div>" +
+    "</div>"
+  );
+}
+
+function renderFlowSubtree(act, lookup, stack, depth) {
+  var parts;
+  var outcomes;
+  var branches;
+  var oi;
+  var nextRef;
+  var child;
+  var ak;
+  var b;
+  var childStack;
+  var ck;
+  if (!act || depth > 40) {
+    return "";
+  }
+  ak = activityBranchKey(act);
+  if (ak && stackHasKey(stack, ak)) {
+    return '<div class="journey-flow-merge" role="note">↔ rejoins earlier step</div>';
+  }
+  childStack = stack ? stack.slice() : [];
+  if (ak) {
+    childStack.push(ak);
+  }
+  parts = [buildFlowNodeHtml(act)];
+  outcomes = activityOutcomesList(act);
+  branches = [];
+  for (oi = 0; oi < outcomes.length; oi++) {
+    nextRef = outcomeNextRef(outcomes[oi]);
+    if (!nextRef) {
+      continue;
+    }
+    child = resolveActivityRef(nextRef, lookup);
+    if (child) {
+      branches.push({ outcome: outcomes[oi], act: child, index: oi });
+    }
+  }
+  if (!branches.length) {
+    return parts.join("");
+  }
+  if (branches.length === 1) {
+    parts.push('<div class="journey-flow-arrow" aria-hidden="true">↓</div>');
+    parts.push(renderFlowSubtree(branches[0].act, lookup, childStack, depth + 1));
+    return parts.join("");
+  }
+  parts.push('<div class="journey-flow-fork" aria-hidden="true"></div>');
+  parts.push('<div class="journey-flow-split" role="group">');
+  for (oi = 0; oi < branches.length; oi++) {
+    b = branches[oi];
+    ck = activityBranchKey(b.act);
+    parts.push('<div class="journey-flow-branch">');
+    parts.push(
+      '<div class="journey-flow-branch-label">' +
+        htmlSafe(outcomeBranchLabel(b.outcome, b.index)) +
+        "</div>"
+    );
+    parts.push('<div class="journey-flow-arrow" aria-hidden="true">↓</div>');
+    if (ck && stackHasKey(childStack, ck)) {
+      parts.push('<div class="journey-flow-merge" role="note">↔ rejoins earlier step</div>');
+    } else {
+      parts.push(renderFlowSubtree(b.act, lookup, childStack, depth + 1));
+    }
+    parts.push("</div>");
+  }
+  parts.push("</div>");
+  return parts.join("");
+}
+
+function buildFlowGraphHtml(startAct, activities) {
+  var list;
+  var lookup;
+  if (!startAct) {
+    return '<p class="recent-empty">Could not derive a flow from journey activities.</p>';
+  }
+  list = coerceActivityList(activities);
+  lookup = buildActivityLookup(list);
+  return (
+    '<div class="journey-flow journey-flow-graph">' +
+    renderFlowSubtree(startAct, lookup, [], 0) +
+    "</div>"
+  );
 }
 
 function isConfigured(act) {
@@ -489,36 +660,6 @@ function isConfigured(act) {
     return "No";
   }
   return "—";
-}
-
-function buildFlowHtml(steps) {
-  if (!steps || !steps.length) {
-    return '<p class="recent-empty">Could not derive a primary path from journey activities.</p>';
-  }
-  var parts = ['<div class="journey-flow" role="list">'];
-  var si;
-  for (si = 0; si < steps.length; si++) {
-    var step = steps[si];
-    if (si > 0) {
-      parts.push('<div class="journey-flow-arrow" aria-hidden="true">↓</div>');
-    }
-    parts.push(
-      '<div class="journey-flow-node" role="listitem">' +
-        flowStepIconHtml(step) +
-        '<div class="journey-flow-type">' +
-        htmlSafe(formatActivityType(step.type)) +
-        "</div>" +
-        '<div class="journey-flow-name">' +
-        htmlSafe(activityDisplayName(step)) +
-        "</div>" +
-        '<div class="journey-flow-detail">' +
-        htmlSafe(activityDetailLine(step) || "—") +
-        "</div>" +
-        "</div>"
-    );
-  }
-  parts.push("</div>");
-  return parts.join("");
 }
 
 function coerceActivityList(activities) {
@@ -552,23 +693,6 @@ function coerceActivityList(activities) {
     }
   } catch (lenEx) {}
   return list;
-}
-
-function firstOutcomeNext(act) {
-  var outcomes;
-  var first;
-  if (!act || !act.outcomes) {
-    return null;
-  }
-  outcomes = coerceActivityList(act.outcomes);
-  if (!outcomes.length) {
-    return null;
-  }
-  first = outcomes[0];
-  if (!first || first.next === undefined || first.next === null || first.next === "") {
-    return null;
-  }
-  return String(first.next);
 }
 
 function buildActivitiesTableHtml(activities) {
@@ -686,9 +810,8 @@ try {
       var activities = coerceActivityList(jObj.activities);
       apiActivityCount = String(activities.length);
       journeyBuilderUrl = buildJourneyOpenUrl(MC_CLOUD, jid, apiJourneyVersion);
-      var entryAct = findEntryActivity(activities, jObj);
-      var pathSteps = entryAct ? walkPrimaryPath(activities, entryAct) : [];
-      journeyFlowHtml = buildFlowHtml(pathSteps);
+      var startAct = findFlowStartActivity(activities, jObj);
+      journeyFlowHtml = buildFlowGraphHtml(startAct, activities);
       journeyActivitiesHtml = buildActivitiesTableHtml(activities);
       journeyMetaHtml = buildMetaHtml(jObj, logName, journeyBuilderUrl);
     } else {
@@ -770,7 +893,13 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 .journey-meta-dl dt{font-size:11px;color:var(--gray-600);text-transform:uppercase;font-weight:600;letter-spacing:0.05em;margin:16px 0 4px 0}
 .journey-meta-dl dt:first-child{margin-top:0}
 .journey-meta-dl dd{font-weight:600;font-size:1rem;margin:0;padding:0;color:var(--gray-900);word-break:break-word}
-.journey-flow{display:flex;flex-direction:column;align-items:center;padding:8px 0 4px 0}
+.journey-flow{display:flex;flex-direction:column;align-items:center;padding:8px 0 4px 0;width:100%}
+.journey-flow-graph{align-items:center}
+.journey-flow-split{display:flex;flex-direction:row;flex-wrap:wrap;gap:16px 24px;align-items:flex-start;justify-content:center;width:100%;max-width:960px;margin-top:4px}
+.journey-flow-branch{display:flex;flex-direction:column;align-items:center;flex:1 1 200px;min-width:180px;max-width:340px;padding:12px 10px 0;border-top:2px solid #c7d2fe;position:relative}
+.journey-flow-branch-label{font-size:11px;font-weight:600;color:#4338ca;margin:0 0 6px 0;text-align:center;line-height:1.35;max-width:100%;word-break:break-word}
+.journey-flow-fork{width:min(92%,480px);height:0;border-top:2px solid var(--gray-400);margin:6px 0 0 0;position:relative}
+.journey-flow-merge{font-size:12px;color:var(--text-secondary);padding:10px 8px;text-align:center;border:1px dashed var(--border-color);border-radius:8px;background:#fafafa;max-width:280px}
 .journey-flow-node{border:1px solid var(--border-color);border-radius:10px;background:#fff;padding:14px 18px;min-width:min(100%,320px);max-width:420px;text-align:center;box-shadow:var(--shadow-sm)}
 .journey-flow-icon-wrap{width:40px;height:40px;margin:0 auto 10px auto;display:flex;align-items:center;justify-content:center;border-radius:10px;background:#eef2ff;border:1px solid #c7d2fe;color:#4338ca}
 .journey-flow-svg{display:block}
@@ -837,10 +966,10 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 <p class="sub"><a class="breadcrumb-link" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Back to manage build</a></p>
 %%[ ELSE ]%%
 <h1>%%[ IF NOT Empty(@apiJourneyName) THEN ]%%%%=v(@apiJourneyName)=%%%%[ ELSEIF NOT Empty(@dispName) THEN ]%%%%=v(@dispName)=%%%%[ ELSE ]%%Journey%%[ ENDIF ]%%</h1>
-<p class="sub">Primary path through the journey definition returned by Journey Builder (live API). Branches follow the first outcome only.</p>
+<p class="sub">Flow mirrors Journey Builder outcomes: splits show as parallel branches (not exact canvas layout).</p>
 <div class="panel">%%[ IF NOT Empty(@journeyMetaHtml) THEN ]%%%%=TreatAsContent(@journeyMetaHtml)=%%%%[ ENDIF ]%%</div>
 <div class="panel">
-  <h2 class="panel-title">Flow (primary path)</h2>
+  <h2 class="panel-title">Flow</h2>
   <p class="flow-hint">%%=v(@apiActivityCount)=%% activities in definition. Use Journey Builder for the full canvas.</p>
   %%[ IF NOT Empty(@journeyFlowHtml) THEN ]%%
   %%=TreatAsContent(@journeyFlowHtml)=%%
