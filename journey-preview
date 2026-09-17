@@ -87,8 +87,15 @@ ELSE
     SET @authPayload = Concat(@authPayload,'}')
     SET @authStatus = HTTPPost2(@authUrl,"application/json",@authPayload,false,@authResponse,@authResponseHeader)
     IF @authStatus == 200 THEN
-     SET @tokenPattern = '"access_token":"([^"]+)"'
-     SET @accessToken = RegExMatch(@authResponse,@tokenPattern,1)
+     SET @accessToken = ""
+     SET @tokPos = IndexOf(@authResponse, '"access_token":"')
+     IF @tokPos > 0 THEN
+      SET @tokRest = Substring(@authResponse, Add(@tokPos, 16), 800)
+      SET @tokEndPos = IndexOf(@tokRest, '"')
+      IF @tokEndPos > 1 THEN
+       SET @accessToken = Substring(@tokRest, 1, Subtract(@tokEndPos, 1))
+      ENDIF
+     ENDIF
      IF NOT Empty(@accessToken) THEN
       SET @authOk = "true"
      ELSE
@@ -109,7 +116,6 @@ ELSE
   ENDIF
  ENDIF
 ENDIF
-SET @editSidebarHtml = ContentBlockByName("sst_shell_edit_sidebar")
 ]%%
 <script runat="server" language="javascript">
 Platform.Load("core", "1");
@@ -305,10 +311,7 @@ function walkPrimaryPath(activities, startAct) {
   while (cur && guard < 250) {
     guard += 1;
     steps.push(cur);
-    var nextId = null;
-    if (cur.outcomes && cur.outcomes.length && cur.outcomes[0]) {
-      nextId = cur.outcomes[0].next;
-    }
+    var nextId = firstOutcomeNext(cur);
     if (!nextId || !byId[nextId]) {
       break;
     }
@@ -362,25 +365,77 @@ function buildFlowHtml(steps) {
 function coerceActivityList(activities) {
   var list = [];
   var i;
+  var len;
+  var item;
   if (!activities) {
     return list;
   }
-  if (activities.length !== undefined && activities.length !== null) {
-    for (i = 0; i < activities.length; i++) {
-      if (activities[i]) {
-        list.push(activities[i]);
+  try {
+    if (activities.length !== undefined && activities.length !== null) {
+      len = Number(activities.length);
+      if (isNaN(len) || len < 0) {
+        len = 0;
+      }
+      if (len > 500) {
+        len = 500;
+      }
+      for (i = 0; i < len; i++) {
+        try {
+          item = activities[i];
+          if (item) {
+            list.push(item);
+          }
+        } catch (idxEx) {}
+      }
+      if (list.length) {
+        return list;
       }
     }
-  }
+  } catch (lenEx) {}
+  try {
+    for (i in activities) {
+      if (!activities.hasOwnProperty(i)) {
+        continue;
+      }
+      if (i === "length") {
+        continue;
+      }
+      item = activities[i];
+      if (item && typeof item === "object") {
+        list.push(item);
+      }
+    }
+  } catch (enumEx) {}
   return list;
+}
+
+function firstOutcomeNext(act) {
+  var outcomes;
+  var first;
+  if (!act || !act.outcomes) {
+    return null;
+  }
+  outcomes = coerceActivityList(act.outcomes);
+  if (!outcomes.length) {
+    return null;
+  }
+  first = outcomes[0];
+  if (!first || first.next === undefined || first.next === null || first.next === "") {
+    return null;
+  }
+  return String(first.next);
 }
 
 function buildActivitiesTableHtml(activities) {
   var normalized = coerceActivityList(activities);
+  var i;
   if (!normalized.length) {
     return '<p class="recent-empty">No activities returned for this journey.</p>';
   }
-  var sorted = normalized.slice();
+  var sorted = [];
+  for (i = 0; i < normalized.length; i++) {
+    sorted.push(normalized[i]);
+  }
   sorted.sort(function (a, b) {
     var ta = formatActivityType(a.type);
     var tb = formatActivityType(b.type);
@@ -594,6 +649,7 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 </style>
 </head>
 <body>
+%%[ SET @editSidebarHtml = ContentBlockByName("sst_shell_edit_sidebar") ]%%
 <div class="dashboard-layout">
 %%[ IF NOT Empty(@editSidebarHtml) THEN ]%%
 %%=TreatAsContent(@editSidebarHtml)=%%
