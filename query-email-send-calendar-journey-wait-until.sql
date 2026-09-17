@@ -1,18 +1,14 @@
 SELECT
   CONVERT(VARCHAR(36), j.JourneyID) + '|' + CONVERT(VARCHAR(10), j.VersionNumber) + '|' + jaEmail.ActivityExternalKey AS calendarKey,
   CAST(TRY_CONVERT(DATETIME, jaWait.ActivityName, 107) AS DATE) AS sendDate,
-  TRY_CONVERT(DATETIME, jaWait.ActivityName, 107) AS sendTime,
+  '' AS jobId,
   jaEmail.ActivityName AS emailName,
-  CAST(NULL AS VARCHAR(500)) AS emailSubject,
-  CAST(0 AS INT) AS recipients,
+  '' AS emailSubject,
+  TRY_CONVERT(DATETIME, jaWait.ActivityName, 107) AS sendTime,
+  0 AS recipients,
   j.JourneyID AS journeyId,
   j.JourneyName AS journeyName,
-  j.VersionNumber AS versionNumber,
-  jaWait.ActivityName AS waitDateText,
-  jaWait.ActivityExternalKey AS waitActivityKey,
-  jaEmail.ActivityExternalKey AS emailActivityKey,
-  jaEmail.JourneyActivityObjectID AS journeyActivityObjectId,
-  'journey_wait_until' AS sendSource
+  j.VersionNumber AS versionNumber
 FROM _Journey j
 INNER JOIN _JourneyActivity jaWait
   ON jaWait.VersionID = j.VersionID
@@ -28,6 +24,8 @@ INNER JOIN _JourneyActivity jaEmail
     = PARSENAME(REPLACE(jaEmail.ActivityExternalKey, '-', '.'), 1)
 WHERE j.JourneyStatus = 'Running'
   AND TRY_CONVERT(DATETIME, jaWait.ActivityName, 107) IS NOT NULL
+  AND CAST(TRY_CONVERT(DATETIME, jaWait.ActivityName, 107) AS DATE) >= CAST(GETDATE() AS DATE)
+  AND CAST(TRY_CONVERT(DATETIME, jaWait.ActivityName, 107) AS DATE) < DATEADD(day, 91, CAST(GETDATE() AS DATE))
 ORDER BY
   sendTime ASC,
   j.JourneyName ASC,
