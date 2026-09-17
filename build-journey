@@ -5,6 +5,8 @@ VAR @dispName, @dispType, @dispSurveyId, @isSurveyBuild, @buildNavContext, @buil
 VAR @surveyUrlRows, @surveyUrlRow, @pageStatus, @loadError, @isRealJourney
 VAR @authOk, @accessToken, @subdomain, @clientId, @clientSecret, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader, @tokenPattern, @accountId, @authR, @authRow
 VAR @MC_CLOUD
+VAR @journeyFlowHtml, @journeyActivitiesHtml, @journeyMetaHtml, @journeyBuilderUrl
+VAR @apiJourneyName, @apiJourneyStatus, @apiJourneyVersion, @apiActivityCount
 
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
@@ -41,6 +43,14 @@ SET @authOk = "false"
 SET @accessToken = ""
 SET @subdomain = ""
 SET @detailCount = 0
+SET @journeyFlowHtml = ""
+SET @journeyActivitiesHtml = ""
+SET @journeyMetaHtml = ""
+SET @journeyBuilderUrl = ""
+SET @apiJourneyName = ""
+SET @apiJourneyStatus = ""
+SET @apiJourneyVersion = ""
+SET @apiActivityCount = "0"
 
 IF Empty(@jid) THEN
  SET @pageStatus = "nodata"
@@ -100,7 +110,7 @@ ELSE
  ENDIF
 ENDIF
 ]%%
-<script runat="server">
+<script runat="server" language="javascript">
 Platform.Load("core", "1");
 
 var MC_CLOUD = "https://mc.s13.exacttarget.com/cloud/";
@@ -251,12 +261,13 @@ function activityDisplayName(act) {
 }
 
 function findEntryActivity(activities, jObj) {
+  var list = coerceActivityList(activities);
   var entryKey = jObj.entrySourceGroupKey ? String(jObj.entrySourceGroupKey) : "";
   var i;
   var act;
   if (entryKey) {
-    for (i = 0; i < activities.length; i++) {
-      act = activities[i];
+    for (i = 0; i < list.length; i++) {
+      act = list[i];
       if (!act) {
         continue;
       }
@@ -265,8 +276,8 @@ function findEntryActivity(activities, jObj) {
       }
     }
   }
-  for (i = 0; i < activities.length; i++) {
-    act = activities[i];
+  for (i = 0; i < list.length; i++) {
+    act = list[i];
     if (!act || !act.type) {
       continue;
     }
@@ -275,15 +286,16 @@ function findEntryActivity(activities, jObj) {
       return act;
     }
   }
-  return activities.length ? activities[0] : null;
+  return list.length ? list[0] : null;
 }
 
 function walkPrimaryPath(activities, startAct) {
+  var list = coerceActivityList(activities);
   var byId = {};
   var i;
-  for (i = 0; i < activities.length; i++) {
-    if (activities[i] && activities[i].id) {
-      byId[activities[i].id] = activities[i];
+  for (i = 0; i < list.length; i++) {
+    if (list[i] && list[i].id) {
+      byId[list[i].id] = list[i];
     }
   }
   var steps = [];
@@ -346,11 +358,28 @@ function buildFlowHtml(steps) {
   return parts.join("");
 }
 
+function coerceActivityList(activities) {
+  var list = [];
+  var i;
+  if (!activities) {
+    return list;
+  }
+  if (activities.length !== undefined && activities.length !== null) {
+    for (i = 0; i < activities.length; i++) {
+      if (activities[i]) {
+        list.push(activities[i]);
+      }
+    }
+  }
+  return list;
+}
+
 function buildActivitiesTableHtml(activities) {
-  if (!activities || !activities.length) {
+  var normalized = coerceActivityList(activities);
+  if (!normalized.length) {
     return '<p class="recent-empty">No activities returned for this journey.</p>';
   }
-  var sorted = activities.slice();
+  var sorted = normalized.slice();
   sorted.sort(function (a, b) {
     var ta = formatActivityType(a.type);
     var tb = formatActivityType(b.type);
@@ -442,8 +471,8 @@ var subdomain = Platform.Variable.GetValue("@subdomain") || "";
 var jid = strTrim(Platform.Variable.GetValue("@jid") || "");
 var logName = strTrim(Platform.Variable.GetValue("@dispName") || "");
 
-if (pageStatus === "view" && authOk === "true" && accessToken && subdomain && jid) {
-  try {
+try {
+  if (pageStatus === "view" && authOk === "true" && accessToken && subdomain && jid) {
     var fetched = getJourneyObject(subdomain, accessToken, jid);
     if (fetched.ok && fetched.obj) {
       var jObj = fetched.obj;
@@ -453,7 +482,7 @@ if (pageStatus === "view" && authOk === "true" && accessToken && subdomain && ji
         jObj.version !== undefined && jObj.version !== null
           ? String(jObj.version)
           : "";
-      var activities = jObj.activities ? jObj.activities : [];
+      var activities = coerceActivityList(jObj.activities);
       apiActivityCount = String(activities.length);
       journeyBuilderUrl = buildJourneyOpenUrl(MC_CLOUD, jid, apiJourneyVersion);
       var entryAct = findEntryActivity(activities, jObj);
@@ -466,11 +495,11 @@ if (pageStatus === "view" && authOk === "true" && accessToken && subdomain && ji
       Platform.Variable.SetValue("@pageStatus", "apifail");
       Platform.Variable.SetValue("@loadError", loadErrorMsg);
     }
-  } catch (loadEx) {
-    loadErrorMsg = loadEx.message || String(loadEx);
-    Platform.Variable.SetValue("@pageStatus", "apifail");
-    Platform.Variable.SetValue("@loadError", loadErrorMsg);
   }
+} catch (loadEx) {
+  loadErrorMsg = loadEx.message || String(loadEx);
+  Platform.Variable.SetValue("@pageStatus", "apifail");
+  Platform.Variable.SetValue("@loadError", loadErrorMsg);
 }
 
 Platform.Variable.SetValue("@journeyFlowHtml", journeyFlowHtml);
@@ -621,29 +650,23 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 %%[ ELSE ]%%
 <h1>%%=IIF(NOT Empty(@apiJourneyName), @apiJourneyName, IIF(NOT Empty(@dispName), @dispName, "Journey"))=%%</h1>
 <p class="sub">Primary path through the journey definition returned by Journey Builder (live API). Branches follow the first outcome only.</p>
-<div class="panel">
-  <script runat="server">
-    Write(Platform.Variable.GetValue("@journeyMetaHtml") || "");
-  </script>
-</div>
+<div class="panel">%%[ IF NOT Empty(@journeyMetaHtml) THEN ]%%%%=TreatAsContent(@journeyMetaHtml)=%%%%[ ENDIF ]%%</div>
 <div class="panel">
   <h2 class="panel-title">Flow (primary path)</h2>
   <p class="flow-hint">%%=v(@apiActivityCount)=%% activities in definition. Use Journey Builder for the full canvas.</p>
-  <script runat="server">
-    Write(
-      Platform.Variable.GetValue("@journeyFlowHtml") ||
-        '<p class="recent-empty">No flow diagram available.</p>'
-    );
-  </script>
+  %%[ IF NOT Empty(@journeyFlowHtml) THEN ]%%
+  %%=TreatAsContent(@journeyFlowHtml)=%%
+  %%[ ELSE ]%%
+  <p class="recent-empty">No flow diagram available.</p>
+  %%[ ENDIF ]%%
 </div>
 <div class="panel">
   <h2 class="panel-title">All activities</h2>
-  <script runat="server">
-    Write(
-      Platform.Variable.GetValue("@journeyActivitiesHtml") ||
-        '<p class="recent-empty">No activities available.</p>'
-    );
-  </script>
+  %%[ IF NOT Empty(@journeyActivitiesHtml) THEN ]%%
+  %%=TreatAsContent(@journeyActivitiesHtml)=%%
+  %%[ ELSE ]%%
+  <p class="recent-empty">No activities available.</p>
+  %%[ ENDIF ]%%
 </div>
 %%[ ENDIF ]%%
 </div>
