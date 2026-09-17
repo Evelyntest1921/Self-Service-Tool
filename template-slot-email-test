@@ -1,0 +1,584 @@
+%%[
+VAR @createRequested, @sourceTemplateId, @bodyText, @emailName, @subjectLine
+VAR @authOk, @accessToken, @subdomain, @clientId, @clientSecret, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader, @accountId, @authRow, @authR
+VAR @logText, @newEmailId, @showForm, @hubUrl, @navRows, @navRow
+
+SET @createRequested = Trim(RequestParameter("create"))
+SET @sourceTemplateId = Trim(RequestParameter("sourceTemplateId"))
+SET @bodyText = Trim(RequestParameter("bodyText"))
+SET @emailName = Trim(RequestParameter("emailName"))
+SET @subjectLine = Trim(RequestParameter("subjectLine"))
+SET @logText = ""
+SET @newEmailId = ""
+SET @showForm = "true"
+SET @authOk = "false"
+SET @accessToken = ""
+SET @subdomain = ""
+
+IF Empty(@sourceTemplateId) THEN
+ SET @sourceTemplateId = "56657"
+ENDIF
+IF Empty(@subjectLine) THEN
+ SET @subjectLine = "Slot body test"
+ENDIF
+
+SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
+IF RowCount(@navRows) > 0 THEN
+ SET @navRow = Row(@navRows,1)
+ SET @hubUrl = Field(@navRow,"ss_home")
+ENDIF
+
+IF @createRequested == "1" THEN
+ SET @showForm = "false"
+ IF Empty(@emailName) THEN
+  SET @logText = "FAILED: Enter an email name."
+ ELSEIF Empty(@bodyText) THEN
+  SET @logText = "FAILED: Enter body text."
+ ELSE
+  SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
+  IF RowCount(@authRow) > 0 THEN
+   SET @authR = Row(@authRow,1)
+   SET @clientId = Field(@authR,"clientId")
+   SET @clientSecret = Field(@authR,"clientSecret")
+   SET @subdomain = Field(@authR,"subdomain")
+   IF NOT Empty(@clientId) AND NOT Empty(@clientSecret) AND NOT Empty(@subdomain) THEN
+    SET @authUrl = Concat("https://",@subdomain,".auth.marketingcloudapis.com/v2/token")
+    SET @accountId = Trim(Field(@authR,"accountId"))
+    SET @authPayload = Concat('{"grant_type":"client_credentials","client_id":"',@clientId,'","client_secret":"',@clientSecret,'"')
+    IF NOT Empty(@accountId) THEN
+     SET @authPayload = Concat(@authPayload,',"account_id":"',@accountId,'"')
+    ENDIF
+    SET @authPayload = Concat(@authPayload,'}')
+    SET @authStatus = HTTPPost2(@authUrl,"application/json",@authPayload,false,@authResponse,@authResponseHeader)
+    IF @authStatus == 200 THEN
+     SET @accessToken = ""
+     SET @tokPos = IndexOf(@authResponse, '"access_token":"')
+     IF @tokPos > 0 THEN
+      SET @tokRest = Substring(@authResponse, Add(@tokPos, 16), 800)
+      SET @tokEndPos = IndexOf(@tokRest, '"')
+      IF @tokEndPos > 1 THEN
+       SET @accessToken = Substring(@tokRest, 1, Subtract(@tokEndPos, 1))
+      ENDIF
+     ENDIF
+     IF NOT Empty(@accessToken) THEN
+      SET @authOk = "true"
+     ELSE
+      SET @logText = "FAILED: Auth response missing access token."
+     ENDIF
+    ELSE
+     SET @logText = Concat("FAILED: Auth HTTP ",@authStatus," — ",@authResponse)
+    ENDIF
+   ELSE
+    SET @logText = "FAILED: SFMC_AUTH incomplete (clientId, clientSecret, subdomain)."
+   ENDIF
+  ELSE
+   SET @logText = "FAILED: No SFMC_AUTH row for User=Admin."
+  ENDIF
+ ENDIF
+ENDIF
+]%%
+<script runat="server">
+Platform.Load("core", "1");
+
+var SLOT_KEY = "1s336usuarz";
+var logLines = [];
+
+function addLog(line) {
+  logLines.push(String(line || ""));
+}
+
+function cloneObject(obj) {
+  if (!obj || typeof obj !== "object") {
+    return null;
+  }
+  try {
+    var json = Platform.Function.Stringify(obj);
+    return json ? Platform.Function.ParseJSON(json) : null;
+  } catch (cloneEx) {
+    addLog("cloneObject error: " + (cloneEx.message || String(cloneEx)));
+    return null;
+  }
+}
+
+function objectKeys(obj) {
+  var keys = [];
+  var key;
+  if (!obj || typeof obj !== "object") {
+    return keys;
+  }
+  try {
+    for (key in obj) {
+      try {
+        if (obj[key] !== undefined) {
+          keys.push(String(key));
+        }
+      } catch (keyEx) {}
+    }
+  } catch (loopEx) {}
+  return keys;
+}
+
+function truncateStr(value, maxLen) {
+  var str = value === null || value === undefined ? "" : String(value);
+  var max = maxLen || 1200;
+  if (str.length <= max) {
+    return str;
+  }
+  return str.substring(0, max) + "...[truncated]";
+}
+
+function htmlEscapePlain(value) {
+  var s = value === null || value === undefined ? "" : String(value);
+  var parts;
+  parts = s.split("&");
+  s = parts.join("&amp;");
+  parts = s.split("<");
+  s = parts.join("&lt;");
+  parts = s.split(">");
+  s = parts.join("&gt;");
+  parts = s.split('"');
+  s = parts.join("&quot;");
+  return s;
+}
+
+function wrapBodyHtml(text) {
+  return (
+    '<p style="margin:0 0 12px 0;font-size:14px;font-family:Arial,helvetica,sans-serif;line-height:18px;color:#000000;">' +
+    htmlEscapePlain(text) +
+    "</p>"
+  );
+}
+
+function fetchAssetById(assetId, subdomainValue, accessTokenValue) {
+  var result = { ok: false, statusCode: 0, responseText: "", asset: null };
+  var parsedId = parseInt(assetId, 10);
+  if (isNaN(parsedId) || !subdomainValue || !accessTokenValue) {
+    return result;
+  }
+  try {
+    var assetUrl =
+      "https://" +
+      subdomainValue +
+      ".rest.marketingcloudapis.com/asset/v1/content/assets/" +
+      parsedId;
+    var req = new Script.Util.HttpRequest(assetUrl);
+    req.emptyContentHandling = 0;
+    req.retries = 2;
+    req.continueOnError = true;
+    req.setHeader("Authorization", "Bearer " + accessTokenValue);
+    req.method = "GET";
+    req.contentType = "application/json";
+    var resp = req.send();
+    result.statusCode = resp.statusCode;
+    result.responseText = resp.content ? String(resp.content) : "";
+    if ((resp.statusCode == 200 || resp.statusCode == 201) && result.responseText) {
+      result.asset = Platform.Function.ParseJSON(result.responseText);
+      result.ok = true;
+    }
+  } catch (fetchEx) {
+    result.responseText = fetchEx.message || String(fetchEx);
+  }
+  return result;
+}
+
+function buildTemplateReference(source, fallbackContent, fallbackSlots) {
+  if (!source || typeof source !== "object") {
+    return null;
+  }
+  var ref = { assetType: { id: 4 } };
+  var sourceId = parseInt(source.id, 10);
+  if (!isNaN(sourceId)) {
+    ref.id = sourceId;
+  }
+  if (source.assetType && source.assetType.id) {
+    ref.assetType.id = parseInt(source.assetType.id, 10);
+  }
+  if (source.assetType && source.assetType.name) {
+    ref.assetType.name = source.assetType.name;
+  }
+  ref.content = source.content || fallbackContent || "";
+  ref.slots =
+    source.slots && typeof source.slots === "object"
+      ? cloneObject(source.slots)
+      : cloneObject(fallbackSlots || {});
+  return ref;
+}
+
+function buildCloned207Payload(
+  sourceAsset,
+  targetName,
+  subjectlineContent,
+  preheaderContent,
+  sourceTemplate,
+  resolvedTemplateAsset,
+  sourceSlots
+) {
+  var templateSource = resolvedTemplateAsset || sourceTemplate;
+  var templateContent = templateSource && templateSource.content ? templateSource.content : "";
+  var templateSlots =
+    templateSource && templateSource.slots && typeof templateSource.slots === "object"
+      ? cloneObject(templateSource.slots)
+      : {};
+  var sourceHtmlContent =
+    sourceAsset && sourceAsset.views && sourceAsset.views.html && sourceAsset.views.html.content
+      ? sourceAsset.views.html.content
+      : sourceAsset.content || templateContent;
+  var emailSlots = sourceSlots && typeof sourceSlots === "object" ? cloneObject(sourceSlots) : {};
+  var payload = {
+    name: targetName,
+    assetType: { id: 207, name: "htmlemail" },
+    channels:
+      sourceAsset.channels && typeof sourceAsset.channels === "object"
+        ? cloneObject(sourceAsset.channels)
+        : { email: true, web: false },
+    views: {
+      subjectline: { content: subjectlineContent || "Slot body test" },
+      preheader: { content: preheaderContent || "" },
+      html: {
+        content: sourceHtmlContent,
+        slots: emailSlots,
+        template: {
+          id: parseInt(sourceTemplate.id, 10),
+          assetType: { id: 4, name: "template" },
+          content: templateContent,
+          slots: templateSlots
+        }
+      },
+      text: { content: "" }
+    },
+    data: { email: { options: { characterEncoding: "utf-8" } } }
+  };
+  if (sourceAsset.category && sourceAsset.category.id) {
+    payload.category = { id: sourceAsset.category.id };
+  }
+  return payload;
+}
+
+function findBlockKeyInSlot(slots, slotKey) {
+  var slot;
+  var keys;
+  if (!slots || !slotKey) {
+    return "";
+  }
+  slot = slots[slotKey];
+  if (!slot || !slot.blocks || typeof slot.blocks !== "object") {
+    return "";
+  }
+  keys = objectKeys(slot.blocks);
+  if (!keys.length) {
+    return "";
+  }
+  return keys[0];
+}
+
+function applyBodyToSlot(payload, slotKey, blockKey, bodyHtml) {
+  var htmlView;
+  var slots;
+  var slot;
+  if (!payload.views) {
+    payload.views = {};
+  }
+  if (!payload.views.html) {
+    payload.views.html = {};
+  }
+  htmlView = payload.views.html;
+  if (!htmlView.slots || typeof htmlView.slots !== "object") {
+    htmlView.slots = {};
+  }
+  slots = htmlView.slots;
+  if (!slots[slotKey] || typeof slots[slotKey] !== "object") {
+    slots[slotKey] = { content: "", blocks: {} };
+  }
+  slot = slots[slotKey];
+  if (!slot.blocks || typeof slot.blocks !== "object") {
+    slot.blocks = {};
+  }
+  if (!slot.blocks[blockKey] || typeof slot.blocks[blockKey] !== "object") {
+    slot.blocks[blockKey] = {
+      assetType: { id: 196, name: "textblock" }
+    };
+  }
+  slot.blocks[blockKey].content = bodyHtml;
+  if (!slot.content) {
+    slot.content =
+      '<div data-type="block" data-key="' + blockKey + '"></div>';
+  }
+}
+
+function buildPayloadFromSource(template, emailName, subjectLine) {
+  var sourceViews = template.views || {};
+  var htmlView = sourceViews.html || {};
+  var subjectlineContent =
+    subjectLine ||
+    (sourceViews.subjectline && sourceViews.subjectline.content
+      ? sourceViews.subjectline.content
+      : "Slot body test");
+  var preheaderContent =
+    sourceViews.preheader && sourceViews.preheader.content ? sourceViews.preheader.content : "";
+  var htmlContent = htmlView.content || template.content || "";
+  var htmlSlots =
+    htmlView.slots && typeof htmlView.slots === "object"
+      ? htmlView.slots
+      : template.slots && typeof template.slots === "object"
+        ? template.slots
+        : {};
+  var sourceTemplate =
+    htmlView.template && typeof htmlView.template === "object" ? htmlView.template : null;
+  var assetTypeId =
+    template.assetType && template.assetType.id ? parseInt(template.assetType.id, 10) : 207;
+  var payload = null;
+  var resolvedTemplateAsset = null;
+  var fetchedTemplate;
+
+  addLog("Source assetType.id: " + assetTypeId);
+  addLog("HTML slot keys on source: " + objectKeys(htmlSlots).join(", "));
+
+  if (assetTypeId === 4) {
+    var templateRef = buildTemplateReference(
+      template,
+      template.content || htmlContent,
+      template.slots || htmlSlots
+    );
+    var templateSlots =
+      template.slots && typeof template.slots === "object"
+        ? cloneObject(template.slots)
+        : cloneObject(htmlSlots || {});
+    payload = {
+      name: emailName,
+      assetType: { name: "htmlemail", id: 207 },
+      channels:
+        template.channels && typeof template.channels === "object"
+          ? cloneObject(template.channels)
+          : { email: true, web: false },
+      views: {
+        subjectline: { content: subjectlineContent },
+        preheader: { content: preheaderContent },
+        html: {
+          template: templateRef,
+          content: template.content || htmlContent || "",
+          slots: templateSlots || {}
+        },
+        text: { content: "" }
+      },
+      data: { email: { options: { characterEncoding: "utf-8" } } }
+    };
+    if (template.category && template.category.id) {
+      payload.category = { id: template.category.id };
+    }
+  } else if (assetTypeId === 207) {
+    if (!sourceTemplate) {
+      addLog("FAILED: Source is 207 but views.html.template is missing.");
+      return null;
+    }
+    fetchedTemplate = fetchAssetById(
+      sourceTemplate.id,
+      Platform.Variable.GetValue("@subdomain"),
+      Platform.Variable.GetValue("@accessToken")
+    );
+    addLog(
+      "Nested template GET id " +
+        sourceTemplate.id +
+        " HTTP " +
+        fetchedTemplate.statusCode
+    );
+    if (!fetchedTemplate.ok || !fetchedTemplate.asset) {
+      addLog("FAILED: Could not fetch nested template asset.");
+      addLog(truncateStr(fetchedTemplate.responseText, 800));
+      return null;
+    }
+    resolvedTemplateAsset = fetchedTemplate.asset;
+    payload = buildCloned207Payload(
+      template,
+      emailName,
+      subjectlineContent,
+      preheaderContent,
+      sourceTemplate,
+      resolvedTemplateAsset,
+      htmlSlots
+    );
+  } else {
+    addLog("FAILED: Unsupported source asset type " + assetTypeId + ".");
+    return null;
+  }
+  return payload;
+}
+
+var createRequested = Platform.Variable.GetValue("@createRequested") || "";
+var authOk = Platform.Variable.GetValue("@authOk") || "";
+var accessToken = Platform.Variable.GetValue("@accessToken") || "";
+var subdomain = Platform.Variable.GetValue("@subdomain") || "";
+var sourceTemplateId = Platform.Variable.GetValue("@sourceTemplateId") || "56657";
+var bodyText = Platform.Variable.GetValue("@bodyText") || "";
+var emailName = Platform.Variable.GetValue("@emailName") || "";
+var subjectLine = Platform.Variable.GetValue("@subjectLine") || "";
+var newEmailId = "";
+var existingLog = Platform.Variable.GetValue("@logText") || "";
+
+if (existingLog) {
+  addLog(existingLog);
+}
+
+if (createRequested === "1" && authOk === "true" && accessToken && subdomain) {
+  addLog("Step 1 OK — OAuth token acquired.");
+  addLog("Source template asset ID: " + sourceTemplateId);
+  addLog("Target slot key: " + SLOT_KEY);
+  addLog("Body text length: " + String(bodyText).length);
+
+  try {
+    var sourceFetch = fetchAssetById(sourceTemplateId, subdomain, accessToken);
+    addLog("GET source HTTP " + sourceFetch.statusCode);
+    if (!sourceFetch.ok || !sourceFetch.asset) {
+      addLog("FAILED: Could not GET source asset.");
+      addLog(truncateStr(sourceFetch.responseText, 1000));
+    } else {
+      var template = sourceFetch.asset;
+      addLog("Source name: " + (template.name ? String(template.name) : "—"));
+      var payload = buildPayloadFromSource(template, emailName, subjectLine);
+      if (payload && payload.views && payload.views.html && payload.views.html.slots) {
+        var slotsForBlock = payload.views.html.slots;
+        var blockKey = findBlockKeyInSlot(slotsForBlock, SLOT_KEY);
+        addLog("Slot " + SLOT_KEY + " block keys: " + objectKeys(slotsForBlock[SLOT_KEY] ? slotsForBlock[SLOT_KEY].blocks || {} : {}).join(", "));
+        if (!blockKey) {
+          addLog(
+            "WARN: No block under slot " +
+              SLOT_KEY +
+              ". Using block key 'bodyblock1' and creating placeholder."
+          );
+          blockKey = "bodyblock1";
+        } else {
+          addLog("Using block key: " + blockKey);
+        }
+        var bodyHtml = wrapBodyHtml(bodyText);
+        applyBodyToSlot(payload, SLOT_KEY, blockKey, bodyHtml);
+        addLog("Injected HTML length: " + String(bodyHtml).length);
+
+        var postUrl =
+          "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets";
+        var postReq = new Script.Util.HttpRequest(postUrl);
+        postReq.emptyContentHandling = 0;
+        postReq.retries = 2;
+        postReq.continueOnError = true;
+        postReq.setHeader("Authorization", "Bearer " + accessToken);
+        postReq.method = "POST";
+        postReq.contentType = "application/json";
+        postReq.postData = Platform.Function.Stringify(payload);
+        addLog("POST create email…");
+        var postResp = postReq.send();
+        var postStatus = postResp.statusCode;
+        var postBody = postResp.content ? String(postResp.content) : "";
+        addLog("POST HTTP " + postStatus);
+        if (postStatus == 200 || postStatus == 201) {
+          try {
+            var created = Platform.Function.ParseJSON(postBody);
+            if (created && created.id) {
+              newEmailId = String(created.id);
+              addLog("SUCCESS: New email asset ID " + newEmailId);
+            } else {
+              addLog("WARN: POST OK but id missing in response.");
+              addLog(truncateStr(postBody, 1000));
+            }
+          } catch (parseCreatedEx) {
+            addLog("WARN: POST OK but response parse failed.");
+            addLog(truncateStr(postBody, 1000));
+          }
+        } else {
+          addLog("FAILED: Create email asset.");
+          addLog(truncateStr(postBody, 1500));
+        }
+      } else if (!payload) {
+        addLog("FAILED: Payload not built.");
+      } else {
+        addLog("FAILED: Payload missing views.html.slots.");
+      }
+    }
+  } catch (runEx) {
+    addLog("FAILED: " + (runEx.message || String(runEx)));
+  }
+} else if (createRequested === "1" && authOk !== "true") {
+  if (!existingLog) {
+    addLog("FAILED: Auth not completed.");
+  }
+}
+
+Platform.Variable.SetValue("@logText", logLines.join("\n"));
+Platform.Variable.SetValue("@newEmailId", newEmailId);
+</script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Template slot email test • SST</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+:root {
+  --primary: #6366f1;
+  --text: #111827;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --bg: #f9fafb;
+  --ok: #065f46;
+  --okbg: #ecfdf5;
+  --bad: #991b1b;
+  --badbg: #fef2f2;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Inter,sans-serif;background:var(--bg);color:var(--text);line-height:1.55;padding:32px 24px 48px}
+.wrap{max-width:720px;margin:0 auto}
+h1{font-size:1.5rem;margin-bottom:8px}
+.sub{color:var(--muted);font-size:14px;margin-bottom:24px}
+.panel{background:#fff;border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:20px}
+label{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
+input[type=text],textarea{width:100%;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font:inherit;margin-bottom:16px}
+textarea{min-height:120px;resize:vertical}
+.hint{font-size:12px;color:var(--muted);margin:-10px 0 16px 0}
+.btn{display:inline-block;background:var(--primary);color:#fff;border:none;border-radius:8px;padding:12px 20px;font-weight:600;font-size:14px;cursor:pointer;text-decoration:none}
+.btn-secondary{background:#fff;color:var(--text);border:1px solid var(--border);margin-left:8px}
+.log{font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.5;background:#0f172a;color:#e2e8f0;padding:16px;border-radius:8px;white-space:pre-wrap;word-break:break-word;max-height:420px;overflow:auto}
+.banner{padding:12px 14px;border-radius:8px;font-size:14px;margin-bottom:16px;border:1px solid var(--border)}
+.banner.ok{border-color:#a7f3d0;background:var(--okbg);color:var(--ok)}
+.banner.bad{border-color:#fecaca;background:var(--badbg);color:var(--bad)}
+a{color:var(--primary)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Template body slot test</h1>
+<p class="sub">Creates a new 207 email from a source template/seed and fills slot <strong>1s336usuarz</strong> with your text. Check the log below for errors.</p>
+%%[ IF @showForm == "true" THEN ]%%
+<div class="panel">
+<form method="post" action="">
+<input type="hidden" name="create" value="1">
+<label for="sourceTemplateId">Source template / seed asset ID</label>
+<input type="text" id="sourceTemplateId" name="sourceTemplateId" value="%%=v(@sourceTemplateId)=%%">
+<p class="hint">Default 56657. Use your template or seed email asset ID from Content Builder.</p>
+<label for="emailName">New email name</label>
+<input type="text" id="emailName" name="emailName" value="%%=v(@emailName)=%%" placeholder="test_slot_body_2026">
+<label for="subjectLine">Subject line</label>
+<input type="text" id="subjectLine" name="subjectLine" value="%%=v(@subjectLine)=%%">
+<label for="bodyText">Body text (slot content)</label>
+<textarea id="bodyText" name="bodyText" placeholder="Enter the body copy to inject…">%%=v(@bodyText)=%%</textarea>
+<button type="submit" class="btn">Create email</button>
+</form>
+</div>
+%%[ ELSE ]%%
+%%[ IF NOT Empty(@newEmailId) THEN ]%%
+<div class="banner ok">Created email asset ID <strong>%%=v(@newEmailId)=%%</strong>. Open it in Content Builder to preview.</div>
+%%[ ELSEIF IndexOf(@logText,"SUCCESS:") == 0 OR IndexOf(@logText,"SUCCESS:") > 0 THEN ]%%
+<div class="banner ok">Request finished — see log.</div>
+%%[ ELSE ]%%
+<div class="banner bad">Create failed — see log.</div>
+%%[ ENDIF ]%%
+<p><a class="btn btn-secondary" href="%%=RequestParameter('PAGEURL')=%%">Create another</a>
+%%[ IF NOT Empty(@hubUrl) THEN ]%%
+<a class="btn btn-secondary" href="%%=v(@hubUrl)=%%">Home</a>
+%%[ ENDIF ]%%
+</p>
+<div class="panel">
+<h2 style="font-size:1rem;margin-bottom:12px">Log</h2>
+<pre class="log">%%=v(@logText)=%%</pre>
+</div>
+%%[ ENDIF ]%%
+</div>
+</body>
+</html>
