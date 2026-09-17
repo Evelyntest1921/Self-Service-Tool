@@ -143,6 +143,121 @@ function createAsset(auth, token, payload) {
 
 var TEMPLATE_BODY_SLOT_KEY = "1s336usuarz";
 var DEFAULT_TEMPLATE_SOURCE_ID = "56657";
+var QUICK_SEND_EMAIL_FOLDER_NAME = "SST Quick Send Emails";
+var DEFAULT_QUICK_SEND_PARENT_CATEGORY_ID = 58374;
+
+function parsePositiveInt(value) {
+  var parsed = parseInt(String(value || ""), 10);
+  if (isNaN(parsed) || parsed <= 0) {
+    return 0;
+  }
+  return parsed;
+}
+
+function getQuickSendEmailParentCategoryId() {
+  var fromDe = lookupValue("SFMC_TEMPLATES", "Quick_Send_Email_Parent_Category_ID", "User", "Admin");
+  var parsed = parsePositiveInt(fromDe);
+  if (parsed) {
+    return parsed;
+  }
+  return DEFAULT_QUICK_SEND_PARENT_CATEGORY_ID;
+}
+
+function fetchContentCategories(auth, token, querySuffix) {
+  var url =
+    "https://" +
+    auth.subdomain +
+    ".rest.marketingcloudapis.com/asset/v1/content/categories" +
+    (querySuffix || "");
+  var req = new Script.Util.HttpRequest(url);
+  req.emptyContentHandling = 0;
+  req.retries = 2;
+  req.continueOnError = true;
+  req.setHeader("Authorization", "Bearer " + token);
+  req.method = "GET";
+  req.contentType = "application/json";
+  var resp = req.send();
+  var body = String(resp.content || "");
+  if (resp.statusCode != 200 && resp.statusCode != 201) {
+    throw "Category list HTTP " + resp.statusCode + ": " + truncateMessage(body, 600);
+  }
+  return fromJson(body);
+}
+
+function findCategoryIdByNameUnderParent(auth, token, folderName, parentId) {
+  var targetName = String(folderName || "").toLowerCase();
+  var page = 1;
+  var pageSize = 200;
+  var parsedParent = parsePositiveInt(parentId);
+  if (!targetName || !parsedParent) {
+    return 0;
+  }
+  while (page <= 25) {
+    var suffix =
+      "?$page=" +
+      page +
+      "&$pagesize=" +
+      pageSize +
+      "&$filter=parentId%20eq%20" +
+      parsedParent;
+    var list = fetchContentCategories(auth, token, suffix);
+    var items = list && list.items ? list.items : [];
+    var i;
+    for (i = 0; i < items.length; i++) {
+      var item = items[i];
+      if (item && String(item.name || "").toLowerCase() === targetName) {
+        return parsePositiveInt(item.id);
+      }
+    }
+    if (!items.length || items.length < pageSize) {
+      break;
+    }
+    page += 1;
+  }
+  return 0;
+}
+
+function createContentCategory(auth, token, name, parentId) {
+  var req = new Script.Util.HttpRequest(
+    "https://" + auth.subdomain + ".rest.marketingcloudapis.com/asset/v1/content/categories"
+  );
+  req.emptyContentHandling = 0;
+  req.retries = 2;
+  req.continueOnError = true;
+  req.contentType = "application/json";
+  req.setHeader("Authorization", "Bearer " + token);
+  req.method = "POST";
+  req.postData = asJson({
+    Name: name,
+    ParentId: parsePositiveInt(parentId)
+  });
+  var resp = req.send();
+  var body = String(resp.content || "");
+  if (resp.statusCode != 200 && resp.statusCode != 201) {
+    throw "Category create HTTP " + resp.statusCode + ": " + truncateMessage(body, 600);
+  }
+  var parsed = fromJson(body);
+  return parsePositiveInt(parsed.id);
+}
+
+function resolveQuickSendEmailCategoryId(auth, token) {
+  var fromDe = lookupValue("SFMC_TEMPLATES", "Quick_Send_Email_Category_ID", "User", "Admin");
+  var configured = parsePositiveInt(fromDe);
+  if (configured) {
+    return configured;
+  }
+  var parentId = getQuickSendEmailParentCategoryId();
+  var existingId = findCategoryIdByNameUnderParent(
+    auth,
+    token,
+    QUICK_SEND_EMAIL_FOLDER_NAME,
+    parentId
+  );
+  if (existingId) {
+    return existingId;
+  }
+  return createContentCategory(auth, token, QUICK_SEND_EMAIL_FOLDER_NAME, parentId);
+}
 
 function cloneObject(obj) {
   if (!obj || typeof obj !== "object") {
@@ -444,6 +559,7 @@ function createEmailFromTemplate(auth, token, options) {
   var preheader = options.preheader;
   var bodyHtml = options.bodyHtml;
   var customerKey = options.customerKey;
+  var categoryId = parsePositiveInt(options.categoryId);
   var sourceFetch = fetchAssetById(sourceTemplateId, auth.subdomain, token);
   if (!sourceFetch.ok || !sourceFetch.asset) {
     throw (
@@ -474,6 +590,9 @@ function createEmailFromTemplate(auth, token, options) {
   applyBodyToSlot(payload, TEMPLATE_BODY_SLOT_KEY, blockKey, bodyHtml);
   if (customerKey) {
     payload.customerKey = customerKey;
+  }
+  if (categoryId) {
+    payload.category = { id: categoryId };
   }
   return createAsset(auth, token, payload);
 }
@@ -625,6 +744,7 @@ if (formValue("createEmail") == "1") {
     var auth = getAuthConfig();
     var token = getAccessToken(auth);
     var sourceTemplateId = getTemplateSourceAssetId();
+    var quickSendCategoryId = resolveQuickSendEmailCategoryId(auth, token);
     var bodyHtml = textBodyParagraph(introBody);
     var created = createEmailFromTemplate(auth, token, {
       sourceTemplateId: sourceTemplateId,
@@ -632,13 +752,18 @@ if (formValue("createEmail") == "1") {
       subject: subject,
       preheader: preheader,
       bodyHtml: bodyHtml,
-      customerKey: createdCustomerKey
+      customerKey: createdCustomerKey,
+      categoryId: quickSendCategoryId
     });
     createdAssetId = String(created.id || "");
     resultStatus = "success";
     resultMessage =
       "Quick Send email created from Content Builder template (source asset " +
       sourceTemplateId +
+      ", folder \"" +
+      QUICK_SEND_EMAIL_FOLDER_NAME +
+      "\" category " +
+      quickSendCategoryId +
       ").";
   } catch (ex) {
     resultStatus = "error";
