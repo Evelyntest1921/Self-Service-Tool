@@ -1,0 +1,144 @@
+%%[
+IF Empty(@buildNavActive) THEN SET @buildNavActive = "manage" ENDIF
+IF Empty(@jid) THEN SET @jid = "" ENDIF
+IF Empty(@isSurveyBuild) THEN SET @isSurveyBuild = "false" ENDIF
+IF Empty(@buildNavContext) THEN SET @buildNavContext = "false" ENDIF
+IF Empty(@mode) THEN SET @mode = "" ENDIF
+IF Empty(@dispSurveyId) AND NOT Empty(@surveyId) THEN SET @dispSurveyId = @surveyId ENDIF
+IF Empty(@HOME_URL) AND NOT Empty(@hubUrl) THEN SET @HOME_URL = @hubUrl ENDIF
+
+SET @editNavRows = LookupRows("bd_sst_page_navigation", "type", "cloudpage")
+IF RowCount(@editNavRows) > 0 THEN
+  SET @editNavRow = Row(@editNavRows, 1)
+  IF Empty(@HOME_URL) THEN SET @HOME_URL = Field(@editNavRow, "ss_home") ENDIF
+  IF Empty(@BUILD_PAGE_SELF) THEN SET @BUILD_PAGE_SELF = Field(@editNavRow, "ss_edit") ENDIF
+  IF Empty(@PERFORMANCE_URL) THEN SET @PERFORMANCE_URL = Field(@editNavRow, "ss_performance") ENDIF
+  IF Empty(@JOURNEY_VIEW_URL) THEN SET @JOURNEY_VIEW_URL = Field(@editNavRow, "ss_build_journey") ENDIF
+ENDIF
+IF Empty(@SURVEY_STAGE_URL) OR Empty(@SURVEY_ANALYTICS_URL) THEN
+  SET @editSurveyUrlRows = LookupRows("SST_SP_Survey_Url_DE", "user", "admin")
+  IF RowCount(@editSurveyUrlRows) > 0 THEN
+    SET @editSurveyUrlRow = Row(@editSurveyUrlRows, 1)
+    IF Empty(@SURVEY_STAGE_URL) THEN SET @SURVEY_STAGE_URL = Field(@editSurveyUrlRow, "create") ENDIF
+    IF Empty(@SURVEY_ANALYTICS_URL) THEN SET @SURVEY_ANALYTICS_URL = Field(@editSurveyUrlRow, "analytics") ENDIF
+  ENDIF
+ENDIF
+IF Empty(@HOME_URL) THEN SET @HOME_URL = "#" ENDIF
+
+SET @editShowManage = "false"
+IF @buildNavActive != "edit-survey" THEN
+  SET @editShowManage = "true"
+ELSEIF @buildNavContext == "true" AND @mode == "edit" THEN
+  SET @editShowManage = "true"
+ENDIF
+
+SET @editNavManageActive = ""
+SET @editNavSurveyEditActive = ""
+SET @editNavSurveyResultsActive = ""
+SET @editNavJourneyActive = ""
+SET @editNavPerformanceActive = ""
+IF @buildNavActive == "manage" THEN SET @editNavManageActive = " active" ENDIF
+IF @buildNavActive == "edit-survey" THEN SET @editNavSurveyEditActive = " active" ENDIF
+IF @buildNavActive == "analytics" THEN SET @editNavSurveyResultsActive = " active" ENDIF
+IF @buildNavActive == "journey" THEN SET @editNavJourneyActive = " active" ENDIF
+IF @buildNavActive == "performance" THEN SET @editNavPerformanceActive = " active" ENDIF
+]%%
+<style>
+.maker-sidebar{width:280px;background:#fff;border-right:1px solid #e5e7eb;display:flex;flex-direction:column;padding:28px 0;flex-shrink:0;box-shadow:0 1px 2px 0 rgba(0,0,0,0.05);height:100vh;overflow:hidden}
+.maker-sidebar .sidebar-logo{padding:0 20px;margin-bottom:12px;border-bottom:1px solid #eee5e5;padding-bottom:10px;align-self:center}
+.maker-sidebar .sidebar-logo a{display:inline-block}
+.maker-sidebar .sidebar-logo img{height:40px}
+.maker-sidebar .nav-section{margin-bottom:8px}
+.maker-sidebar .nav-section-title{font-size:11px;font-weight:600;color:#9ca3af;letter-spacing:0.06em;margin-bottom:8px;padding:0 32px;text-transform:uppercase}
+.maker-sidebar .sidebar-nav .nav-link{display:flex;align-items:center;gap:12px;padding:12px 32px;color:#4b5563;text-decoration:none;font-weight:500;font-size:14px;border-right:3px solid transparent;transition:background 0.2s ease,color 0.2s ease}
+.maker-sidebar .sidebar-nav .nav-link:hover{background:#f9fafb;color:#111827}
+.maker-sidebar .sidebar-nav .nav-link.active,.maker-sidebar .sidebar-nav span.nav-link.active{background:linear-gradient(90deg,rgb(119 120 196 / 10%) 0%,rgb(2 3 22 / 5%) 100%);color:#000;border-right-color:#2c2c31}
+.maker-sidebar .sidebar-nav span.nav-link.active{cursor:default}
+.maker-sidebar .nav-icon{width:20px;height:20px;opacity:0.75;flex-shrink:0}
+@media (max-width:768px){
+.maker-sidebar{width:100%;flex-direction:row;overflow-x:auto;align-items:center;min-height:0;padding:12px 0;height:auto}
+.maker-sidebar .sidebar-logo{margin-bottom:0;flex-shrink:0;padding-right:16px}
+.maker-sidebar .sidebar-nav{display:flex;flex-direction:row;gap:4px;padding:8px 0;flex:1;flex-wrap:nowrap}
+.maker-sidebar .nav-section-title{display:none}
+.maker-sidebar .sidebar-nav .nav-link{white-space:nowrap;padding:8px 16px;border-right:none;border-radius:8px}
+}
+</style>
+<aside class="maker-sidebar sidebar" aria-label="Primary">
+  <div class="sidebar-logo">
+    <a href="%%=v(@HOME_URL)=%%"><img src="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&amp;w=640&amp;q=75" alt="MagMutual" style="filter: invert(1);"></a>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-section"><span class="nav-section-title">MENU</span></div>
+    %%[ IF @editShowManage == "true" THEN ]%%
+    %%[ IF @buildNavActive == "manage" THEN ]%%
+    <span class="nav-link active" role="presentation">
+      <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17h2v-5H3v5zm8 5h2V6h-2v16zM13 9h8V7h-8v2zM3 5v4h14V5H3zm8 14h10v-2H11v2zM13 17h8v-2h-8v2z"/></svg>
+      Manage build
+    </span>
+    %%[ ELSE ]%%
+    <a class="nav-link" href="%%=IIF(NOT Empty(@jid), Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid), @BUILD_PAGE_SELF)=%%">
+      <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17h2v-5H3v5zm8 5h2V6h-2v16zM13 9h8V7h-8v2zM3 5v4h14V5H3zm8 14h10v-2H11v2zM13 17h8v-2h-8v2z"/></svg>
+      Manage build
+    </a>
+    %%[ ENDIF ]%%
+    %%[ ENDIF ]%%
+    %%[ IF @isSurveyBuild == "true" AND NOT Empty(@dispSurveyId) AND @dispSurveyId != "N/A" AND NOT Empty(@SURVEY_STAGE_URL) THEN ]%%
+    %%[ IF @buildNavActive == "edit-survey" THEN ]%%
+    <span class="nav-link active" role="presentation">
+      <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.003 1.003 0 0 0 0-1.42l-2.34-2.34a1.003 1.003 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z"/></svg>
+      Edit Survey
+    </span>
+    %%[ ELSE ]%%
+    <a class="nav-link" href="%%=Concat(@SURVEY_STAGE_URL,"?mode=edit&surveyid=",@dispSurveyId,IIF(NOT Empty(@jid),Concat("&journeyId=",@jid),""))=%%">
+      <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.003 1.003 0 0 0 0-1.42l-2.34-2.34a1.003 1.003 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z"/></svg>
+      Edit Survey
+    </a>
+    %%[ ENDIF ]%%
+    %%[ ENDIF ]%%
+    %%[ IF @isSurveyBuild == "true" AND NOT Empty(@dispSurveyId) AND @dispSurveyId != "N/A" AND NOT Empty(@SURVEY_ANALYTICS_URL) THEN ]%%
+    %%[ IF @buildNavActive == "analytics" THEN ]%%
+    <span class="nav-link active" role="presentation">
+      <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/></svg>
+      Results
+    </span>
+    %%[ ELSE ]%%
+    <a class="nav-link" href="%%=Concat(@SURVEY_ANALYTICS_URL,"?surveyid=",@dispSurveyId,IIF(NOT Empty(@jid),Concat("&journeyId=",@jid),""))=%%">
+      <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/></svg>
+      Results
+    </a>
+    %%[ ENDIF ]%%
+    %%[ ENDIF ]%%
+    %%[ IF NOT Empty(@JOURNEY_VIEW_URL) AND NOT Empty(@jid) AND Substring(Lowercase(@jid),1,6) != "email:" THEN ]%%
+    %%[ IF @buildNavActive == "journey" THEN ]%%
+    <span class="nav-link active" role="presentation">
+      <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M4 6h16M4 12h10M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        <circle cx="18" cy="12" r="2" fill="currentColor"/>
+      </svg>
+      Journey
+    </span>
+    %%[ ELSE ]%%
+    <a class="nav-link" href="%%=Concat(@JOURNEY_VIEW_URL,"?journeyId=",@jid)=%%">
+      <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M4 6h16M4 12h10M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        <circle cx="18" cy="12" r="2" fill="currentColor"/>
+      </svg>
+      Journey
+    </a>
+    %%[ ENDIF ]%%
+    %%[ ENDIF ]%%
+    %%[ IF NOT Empty(@PERFORMANCE_URL) AND NOT Empty(@jid) THEN ]%%
+    %%[ IF @buildNavActive == "performance" THEN ]%%
+    <span class="nav-link active" role="presentation">
+      <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 11H7v6h2v-6zm4 0h-2v6h2v-6zm4 0h-2v6h2v-6zM5 20h14V4H5v16zm14 2H5c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v16c0 1.1-.9 2-2 2z"/></svg>
+      Performance
+    </span>
+    %%[ ELSE ]%%
+    <a class="nav-link" href="%%=Concat(@PERFORMANCE_URL,"?journeyId=",@jid)=%%">
+      <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 11H7v6h2v-6zm4 0h-2v6h2v-6zm4 0h-2v6h2v-6zM5 20h14V4H5v16zm14 2H5c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v16c0 1.1-.9 2-2 2z"/></svg>
+      Performance
+    </a>
+    %%[ ENDIF ]%%
+    %%[ ENDIF ]%%
+  </nav>
+</aside>
