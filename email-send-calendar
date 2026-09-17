@@ -2,7 +2,9 @@
 Platform.Load("core", "1");
 
 var CALENDAR_DE = "bd_sst_email_send_calendar";
+var CALENDAR_FUTURE_DE = "bd_sst_email_send_calendar_future";
 var RECENT_DAYS_LIMIT = 5;
+var calendarView = "day";
 
 var hubUrl = "";
 var journeyExitUrl = "";
@@ -314,11 +316,13 @@ function normalizeCalendarRow(row) {
   };
 }
 
-function loadCalendarRows() {
+function loadCalendarRowsFromDe(deName, minSendDateKey) {
   var errors = [];
-  var minSendDateKey = calendarMinSendDateKey();
-  var rowFilter = buildCalendarRowsFilter(minSendDateKey);
-  var keyVariants = [CALENDAR_DE, String(CALENDAR_DE).toLowerCase()];
+  var rowFilter = null;
+  if (minSendDateKey) {
+    rowFilter = buildCalendarRowsFilter(minSendDateKey);
+  }
+  var keyVariants = [deName, String(deName).toLowerCase()];
   var props = [
     "calendarKey",
     "sendDate",
@@ -335,10 +339,10 @@ function loadCalendarRows() {
   for (v = 0; v < keyVariants.length; v++) {
     try {
       var de = DataExtension.Init(keyVariants[v]);
-      var rows = coerceRows(de.Rows.Retrieve(rowFilter));
-      if (rows.length) {
-        return { ok: true, rows: rows, error: "" };
-      }
+      var rows = coerceRows(
+        rowFilter ? de.Rows.Retrieve(rowFilter) : de.Rows.Retrieve()
+      );
+      return { ok: true, rows: rows, error: "" };
     } catch (deEx) {
       errors.push(
         "DataExtension.Init(" + keyVariants[v] + "): " + (deEx.message || String(deEx))
@@ -355,9 +359,7 @@ function loadCalendarRows() {
           rowFilter
         );
         var wsRows = coerceRows(wsResp && wsResp.Results ? wsResp.Results : []);
-        if (wsRows.length) {
-          return { ok: true, rows: wsRows, error: "" };
-        }
+        return { ok: true, rows: wsRows, error: "" };
       } catch (wsEx) {
         errors.push(
           "WSProxy " + keyVariants[v] + ": " + (wsEx.message || String(wsEx))
@@ -372,8 +374,18 @@ function loadCalendarRows() {
     rows: [],
     error:
       errors.join(" | ") ||
-      "Could not read " + CALENDAR_DE + ". Create the DE and schedule query-email-send-calendar.sql."
+      "Could not read " +
+      deName +
+      ". Create the DE and schedule the send calendar query automation."
   };
+}
+
+function loadCalendarRows() {
+  return loadCalendarRowsFromDe(CALENDAR_DE, calendarMinSendDateKey());
+}
+
+function loadFutureCalendarRows() {
+  return loadCalendarRowsFromDe(CALENDAR_FUTURE_DE, todayDateKey());
 }
 
 function buildJourneyCell(send, cloudBase) {
@@ -444,6 +456,72 @@ function buildSendsHtml(rows, dateKey, cloudBase) {
         "</td>" +
         "<td>" +
         htmlSafe(send.emailSubject) +
+        "</td>" +
+        "<td>" +
+        buildJourneyCell(send, cloudBase) +
+        "</td>" +
+        "<td>" +
+        htmlSafe(formatDisplayDate(send.sendTime)) +
+        "</td>" +
+        "<td>" +
+        htmlSafe(send.recipients) +
+        "</td>" +
+        '<td class="contacts-mono">' +
+        htmlSafe(send.jobId || "—") +
+        "</td>" +
+        "</tr>"
+    );
+  }
+  parts.push("</tbody></table></div>");
+  return parts.join("");
+}
+
+function buildFutureSendsHtml(rows, cloudBase) {
+  var filtered = [];
+  var i;
+  for (i = 0; i < rows.length; i++) {
+    filtered.push(normalizeCalendarRow(rows[i]));
+  }
+  filtered.sort(function (a, b) {
+    return (a.sendTimeMs || 0) - (b.sendTimeMs || 0);
+  });
+  sendsCount = filtered.length;
+  recipientsTotal = 0;
+  for (i = 0; i < filtered.length; i++) {
+    recipientsTotal += parseInt(filtered[i].recipients, 10) || 0;
+  }
+  if (!filtered.length) {
+    return '<p class="recent-empty">No scheduled sends found.</p>';
+  }
+  var parts = ['<div class="contacts-table-wrap"><table class="contacts-table sends-table">'];
+  parts.push(
+    "<thead><tr>" +
+      "<th>Email</th>" +
+      "<th>Subject</th>" +
+      "<th>Journey</th>" +
+      "<th>Send time</th>" +
+      "<th>Recipients</th>" +
+      "<th>Job ID</th>" +
+      "</tr></thead><tbody>"
+  );
+  for (i = 0; i < filtered.length; i++) {
+    var send = filtered[i];
+    parts.push(
+      '<tr class="send-row"' +
+        ' data-email-name="' +
+        htmlSafe(send.emailName.toLowerCase()) +
+        '"' +
+        ' data-journey-name="' +
+        htmlSafe(send.journeyName.toLowerCase()) +
+        '"' +
+        ' data-recipients="' +
+        htmlSafe(send.recipients) +
+        '">' +
+        "<td>" +
+        htmlSafe(send.emailName) +
+        "</td>" +
+        "<td>" +
+        htmlSafe(send.emailSubject || "—") +
         "</td>" +
         "<td>" +
         buildJourneyCell(send, cloudBase) +
@@ -561,16 +639,31 @@ if (environment === "uat") {
 
 selectedDate = parseSelectedDate(queryValue("date"));
 selectedDateDisplay = formatRecentDayLabel(selectedDate, selectedDate);
+if (asStr(queryValue("view")).toLowerCase() === "future") {
+  calendarView = "future";
+}
 
 try {
   var calendarFetch = loadCalendarRows();
   if (calendarFetch.ok) {
-    sendsHtml = buildSendsHtml(calendarFetch.rows, selectedDate, mcCloudUrl);
     recentDaysHtml = buildRecentDaysHtml(calendarFetch.rows, selectedDate);
+  } else {
+    recentDaysHtml = buildRecentDaysHtml([], selectedDate);
+  }
+  if (calendarView === "future") {
+    var futureFetch = loadFutureCalendarRows();
+    if (futureFetch.ok) {
+      sendsHtml = buildFutureSendsHtml(futureFetch.rows, mcCloudUrl);
+    } else {
+      calendarLoadError =
+        futureFetch.error || "Could not load scheduled sends.";
+      sendsHtml = '<p class="recent-empty">No scheduled sends available.</p>';
+    }
+  } else if (calendarFetch.ok) {
+    sendsHtml = buildSendsHtml(calendarFetch.rows, selectedDate, mcCloudUrl);
   } else {
     calendarLoadError = calendarFetch.error || "Could not load send calendar.";
     sendsHtml = '<p class="recent-empty">No send data available.</p>';
-    recentDaysHtml = buildRecentDaysHtml([], selectedDate);
   }
 } catch (loadEx) {
   calendarLoadError = asStr(loadEx && loadEx.message ? loadEx.message : loadEx);
@@ -587,6 +680,9 @@ Platform.Variable.SetValue("@envDisplayEmail", envDisplayEmail);
 Platform.Variable.SetValue("@envAvatarLetter", envAvatarLetter);
 Platform.Variable.SetValue("@calSelectedDate", selectedDate);
 Platform.Variable.SetValue("@calSelectedDateDisplay", selectedDateDisplay);
+Platform.Variable.SetValue("@calView", calendarView);
+Platform.Variable.SetValue("@calDayViewUrl", "?date=" + selectedDate);
+Platform.Variable.SetValue("@calFutureViewUrl", "?view=future");
 Platform.Variable.SetValue("@calSendsHtml", sendsHtml);
 Platform.Variable.SetValue("@calRecentDaysHtml", recentDaysHtml);
 Platform.Variable.SetValue("@calLoadError", calendarLoadError);
@@ -667,6 +763,32 @@ h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 8px; line-height: 1.25
   color: var(--gray-900);
 }
 .sub { color: var(--text-secondary); margin-bottom: 24px; }
+.calendar-view-heading {
+  font-size: 1.125rem;
+  font-weight: 700;
+  margin: 28px 0 12px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.calendar-view-tab {
+  color: var(--primary-color);
+  text-decoration: none;
+  font-weight: 700;
+}
+.calendar-view-tab:hover { color: var(--primary-dark); text-decoration: underline; }
+.calendar-view-tab.is-active {
+  color: var(--gray-900);
+  text-decoration: none;
+  cursor: default;
+}
+.calendar-view-tab.is-active:hover { color: var(--gray-900); text-decoration: none; }
+.calendar-view-sep {
+  color: var(--gray-400);
+  font-weight: 400;
+  user-select: none;
+}
 .form-group { margin-bottom: 20px; }
 .form-label { display: block; font-weight: 500; margin-bottom: 8px; }
 .form-group-row {
@@ -888,7 +1010,19 @@ h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 8px; line-height: 1.25
             </div>
           </form>
 
-          <h2 style="font-size:1.125rem;margin:28px 0 12px;">%%=v(@calSelectedDateDisplay)=%%</h2>
+          <h2 class="calendar-view-heading">
+            %%[ if @calView == "future" then ]%%
+            <a class="calendar-view-tab" href="%%=v(@calDayViewUrl)=%%">%%=v(@calSelectedDateDisplay)=%%</a>
+            %%[ else ]%%
+            <span class="calendar-view-tab is-active">%%=v(@calSelectedDateDisplay)=%%</span>
+            %%[ endif ]%%
+            <span class="calendar-view-sep" aria-hidden="true">|</span>
+            %%[ if @calView == "future" then ]%%
+            <span class="calendar-view-tab is-active">Future</span>
+            %%[ else ]%%
+            <a class="calendar-view-tab" href="%%=v(@calFutureViewUrl)=%%">Future</a>
+            %%[ endif ]%%
+          </h2>
           <div class="contacts-summary" id="sendsSummary">
             <span>
               <span class="contacts-summary-label">

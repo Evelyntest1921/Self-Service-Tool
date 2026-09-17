@@ -1,3 +1,4 @@
+-- Target DE: bd_sst_email_send_calendar_future (overwrite via automation)
 SELECT
   CONVERT(VARCHAR(36), j.JourneyID) + '|' + CONVERT(VARCHAR(10), j.VersionNumber) + '|' + jaEmail.ActivityExternalKey AS calendarKey,
   CAST(TRY_CONVERT(DATETIME, jaWait.ActivityName, 107) AS DATE) AS sendDate,
