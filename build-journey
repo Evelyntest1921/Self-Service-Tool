@@ -5,8 +5,9 @@ VAR @dispName, @dispType, @dispSurveyId, @isSurveyBuild, @buildNavContext, @buil
 VAR @surveyUrlRows, @surveyUrlRow, @pageStatus, @loadError, @isRealJourney
 VAR @authOk, @accessToken, @subdomain, @clientId, @clientSecret, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader, @tokenPattern, @accountId, @authR, @authRow
 VAR @MC_CLOUD
-VAR @journeyFlowHtml, @journeyActivitiesHtml, @journeyMetaHtml, @journeyBuilderUrl
+VAR @journeyFlowHtml, @journeyActivitiesHtml, @journeyMetaHtml, @journeyBuilderUrl, @journeyInspectMetaHtml
 VAR @apiJourneyName, @apiJourneyStatus, @apiJourneyVersion, @apiActivityCount, @editSidebarHtml
+VAR @inspectMeta, @showInspectMeta
 
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
@@ -30,6 +31,13 @@ IF RowCount(@surveyUrlRows) > 0 THEN
 ENDIF
 SET @MC_CLOUD = "https://mc.s13.exacttarget.com/cloud/"
 SET @jid = Trim(RequestParameter("journeyId"))
+SET @inspectMeta = Trim(RequestParameter("inspectMeta"))
+SET @showInspectMeta = "false"
+IF NOT Empty(@inspectMeta) THEN
+ IF Lowercase(@inspectMeta) == "1" OR Lowercase(@inspectMeta) == "true" OR Lowercase(@inspectMeta) == "yes" THEN
+  SET @showInspectMeta = "true"
+ ENDIF
+ENDIF
 SET @dispName = ""
 SET @dispType = ""
 SET @dispSurveyId = ""
@@ -47,6 +55,7 @@ SET @journeyFlowHtml = ""
 SET @journeyActivitiesHtml = ""
 SET @journeyMetaHtml = ""
 SET @journeyBuilderUrl = ""
+SET @journeyInspectMetaHtml = ""
 SET @apiJourneyName = ""
 SET @apiJourneyStatus = ""
 SET @apiJourneyVersion = ""
@@ -130,6 +139,7 @@ var apiJourneyStatus = "";
 var apiJourneyVersion = "";
 var apiActivityCount = "0";
 var loadErrorMsg = "";
+var journeyInspectMetaHtml = "";
 
 function isWsChar(c) {
   return c === " " || c === "\t" || c === "\n" || c === "\r";
@@ -563,12 +573,129 @@ function buildMetaHtml(jObj, logName, builderUrl) {
   return parts.join("");
 }
 
+function metaField(meta, key) {
+  if (!meta) {
+    return "";
+  }
+  try {
+    var v = meta[key];
+    if (v === null || typeof v === "undefined") {
+      return "";
+    }
+    return strTrim(v);
+  } catch (metaEx) {
+    return "";
+  }
+}
+
+function mcOriginFromCloudUrl(cloudUrl) {
+  var s = strTrim(cloudUrl);
+  var proto = s.indexOf("://");
+  if (proto < 0) {
+    return "https://mc.s13.exacttarget.com";
+  }
+  var rest = s.substring(proto + 3);
+  var slash = rest.indexOf("/");
+  if (slash >= 0) {
+    return s.substring(0, proto + 3 + slash);
+  }
+  return s;
+}
+
+function resolveActivityIconUrl(rawIcon, cloudBase) {
+  var u = strTrim(rawIcon);
+  if (!u) {
+    return "";
+  }
+  if (u.indexOf("https://") === 0 || u.indexOf("http://") === 0) {
+    return u;
+  }
+  if (u.charAt(0) === "/") {
+    return mcOriginFromCloudUrl(cloudBase) + u;
+  }
+  return u;
+}
+
+function buildInspectMetaHtml(activities, cloudBase) {
+  var list = coerceActivityList(activities);
+  var i;
+  if (!list.length) {
+    return '<p class="recent-empty">No activities to inspect.</p>';
+  }
+  var parts = [
+    '<p class="inspect-meta-note">Temporary debug: remove <code>inspectMeta=1</code> from the URL when done. Relative icon paths are resolved against MC origin from navigation cloud URL.</p>',
+    '<div class="contacts-table-wrap"><table class="contacts-table journey-inspect-meta-table">',
+    "<thead><tr>",
+    "<th>#</th><th>Type</th><th>Name</th><th>Key</th>",
+    "<th>category</th><th>uiType</th>",
+    "<th>icon</th><th>iconSmall</th><th>original_icon</th>",
+    "<th>Preview</th>",
+    "</tr></thead><tbody>"
+  ];
+  for (i = 0; i < list.length; i++) {
+    var act = list[i];
+    if (!act) {
+      continue;
+    }
+    var meta = act.metaData || {};
+    var icon = metaField(meta, "icon");
+    var iconSmall = metaField(meta, "iconSmall");
+    var originalIcon = metaField(meta, "original_icon");
+    var previewSrc = resolveActivityIconUrl(icon || iconSmall || originalIcon, cloudBase);
+    var previewCell = "—";
+    if (previewSrc && previewSrc.indexOf("http") === 0) {
+      previewCell =
+        '<img class="journey-inspect-icon" src="' +
+        htmlSafe(previewSrc) +
+        '" alt="" width="28" height="28" loading="lazy">';
+    }
+    parts.push(
+      "<tr>" +
+        "<td>" +
+        String(i + 1) +
+        "</td>" +
+        "<td>" +
+        htmlSafe(act.type || "—") +
+        "</td>" +
+        "<td>" +
+        htmlSafe(activityDisplayName(act)) +
+        "</td>" +
+        '<td class="contacts-mono">' +
+        htmlSafe(strTrim(act.key) || "—") +
+        "</td>" +
+        "<td>" +
+        htmlSafe(metaField(meta, "category") || "—") +
+        "</td>" +
+        "<td>" +
+        htmlSafe(metaField(meta, "uiType") || "—") +
+        "</td>" +
+        '<td class="contacts-mono">' +
+        htmlSafe(icon || "—") +
+        "</td>" +
+        '<td class="contacts-mono">' +
+        htmlSafe(iconSmall || "—") +
+        "</td>" +
+        '<td class="contacts-mono">' +
+        htmlSafe(originalIcon || "—") +
+        "</td>" +
+        "<td>" +
+        previewCell +
+        "</td>" +
+        "</tr>"
+    );
+  }
+  parts.push("</tbody></table></div>");
+  return parts.join("");
+}
+
 var pageStatus = Platform.Variable.GetValue("@pageStatus") || "";
 var authOk = Platform.Variable.GetValue("@authOk") || "";
 var accessToken = Platform.Variable.GetValue("@accessToken") || "";
 var subdomain = Platform.Variable.GetValue("@subdomain") || "";
 var jid = strTrim(Platform.Variable.GetValue("@jid") || "");
 var logName = strTrim(Platform.Variable.GetValue("@dispName") || "");
+var showInspectMeta = strTrim(Platform.Variable.GetValue("@showInspectMeta") || "");
+var mcCloudBase = strTrim(Platform.Variable.GetValue("@MC_CLOUD") || MC_CLOUD);
 
 try {
   if (pageStatus === "view" && authOk === "true" && accessToken && subdomain && jid) {
@@ -589,6 +716,9 @@ try {
       journeyFlowHtml = buildFlowHtml(pathSteps);
       journeyActivitiesHtml = buildActivitiesTableHtml(activities);
       journeyMetaHtml = buildMetaHtml(jObj, logName, journeyBuilderUrl);
+      if (showInspectMeta === "true") {
+        journeyInspectMetaHtml = buildInspectMetaHtml(activities, mcCloudBase);
+      }
     } else {
       loadErrorMsg = fetched.msg || "Could not load journey.";
       Platform.Variable.SetValue("@pageStatus", "apifail");
@@ -610,6 +740,7 @@ Platform.Variable.SetValue("@apiJourneyName", apiJourneyName);
 Platform.Variable.SetValue("@apiJourneyStatus", apiJourneyStatus);
 Platform.Variable.SetValue("@apiJourneyVersion", apiJourneyVersion);
 Platform.Variable.SetValue("@apiActivityCount", apiActivityCount);
+Platform.Variable.SetValue("@journeyInspectMetaHtml", journeyInspectMetaHtml);
 </script>
 <!DOCTYPE html>
 <html lang="en">
@@ -681,6 +812,11 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 .contacts-table tbody tr:last-child td{border-bottom:none}
 .contacts-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}
 .flow-hint{font-size:13px;color:var(--text-secondary);margin:0 0 14px 0}
+.inspect-meta-banner{border-color:#fde68a;background:#fffbeb;color:#92400e}
+.inspect-meta-note{font-size:13px;color:var(--text-secondary);margin:0 0 14px 0;line-height:1.5}
+.inspect-meta-note code{font-size:12px;background:#f3f4f6;padding:2px 6px;border-radius:4px}
+.journey-inspect-icon{display:block;object-fit:contain;border:1px solid var(--border-color);border-radius:6px;background:#fff}
+.journey-inspect-meta-table .contacts-mono{max-width:220px}
 @media (max-width:768px){
 .dashboard-layout{flex-direction:column;height:auto;overflow:visible}
 .maker-sidebar{width:100%;flex-direction:row;overflow-x:auto;height:auto;padding:12px 0}
@@ -734,6 +870,17 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 %%[ ELSE ]%%
 <h1>%%[ IF NOT Empty(@apiJourneyName) THEN ]%%%%=v(@apiJourneyName)=%%%%[ ELSEIF NOT Empty(@dispName) THEN ]%%%%=v(@dispName)=%%%%[ ELSE ]%%Journey%%[ ENDIF ]%%</h1>
 <p class="sub">Primary path through the journey definition returned by Journey Builder (live API). Branches follow the first outcome only.</p>
+%%[ IF @showInspectMeta == "true" THEN ]%%
+<div class="banner inspect-meta-banner"><strong>Activity metaData inspect</strong> — temporary debug mode (<code>inspectMeta=1</code>).</div>
+<div class="panel">
+  <h2 class="panel-title">Inspect activity icons (API metaData)</h2>
+  %%[ IF NOT Empty(@journeyInspectMetaHtml) THEN ]%%
+  %%=TreatAsContent(@journeyInspectMetaHtml)=%%
+  %%[ ELSE ]%%
+  <p class="recent-empty">Journey not loaded yet or no activities returned.</p>
+  %%[ ENDIF ]%%
+</div>
+%%[ ENDIF ]%%
 <div class="panel">%%[ IF NOT Empty(@journeyMetaHtml) THEN ]%%%%=TreatAsContent(@journeyMetaHtml)=%%%%[ ENDIF ]%%</div>
 <div class="panel">
   <h2 class="panel-title">Flow (primary path)</h2>
