@@ -135,15 +135,32 @@ function strTrim(v) {
   if (v === null || typeof v === "undefined") {
     return "";
   }
-  return String(v).replace(/^\s+|\s+$/g, "");
+  return String(v).replace(new RegExp("^\\s+|\\s+$", "g"), "");
 }
 
 function htmlSafe(v) {
-  return strTrim(v)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+  var s = strTrim(v);
+  s = s.replace(new RegExp("&", "g"), "&amp;");
+  s = s.replace(new RegExp("<", "g"), "&lt;");
+  s = s.replace(new RegExp(">", "g"), "&gt;");
+  s = s.replace(new RegExp('"', "g"), "&quot;");
+  return s;
+}
+
+function parseJsonSafe(text) {
+  var raw = text === null || typeof text === "undefined" ? "" : String(text);
+  if (!raw) {
+    return null;
+  }
+  try {
+    return Platform.Function.ParseJSON(raw);
+  } catch (parseEx1) {}
+  try {
+    if (typeof Script.Util.JSON !== "undefined" && Script.Util.JSON.parse) {
+      return Script.Util.JSON.parse(raw);
+    }
+  } catch (parseEx2) {}
+  return null;
 }
 
 function journeyHttpJson(token, method, url, bodyStr) {
@@ -184,11 +201,11 @@ function getJourneyObject(sub, token, jid) {
       obj: null
     };
   }
-  try {
-    return { ok: true, msg: "", obj: Platform.Function.ParseJSON(resp.body) };
-  } catch (parseEx) {
+  var jObj = parseJsonSafe(resp.body);
+  if (!jObj) {
     return { ok: false, msg: "Could not parse journey response.", obj: null };
   }
+  return { ok: true, msg: "", obj: jObj };
 }
 
 function buildJourneyOpenUrl(cloudBase, journeyId, versionNumber) {
@@ -392,20 +409,6 @@ function coerceActivityList(activities) {
       }
     }
   } catch (lenEx) {}
-  try {
-    for (i in activities) {
-      if (!activities.hasOwnProperty(i)) {
-        continue;
-      }
-      if (i === "length") {
-        continue;
-      }
-      item = activities[i];
-      if (item && typeof item === "object") {
-        list.push(item);
-      }
-    }
-  } catch (enumEx) {}
   return list;
 }
 
@@ -553,7 +556,8 @@ try {
     }
   }
 } catch (loadEx) {
-  loadErrorMsg = loadEx.message || String(loadEx);
+  loadErrorMsg =
+    "Could not load journey object: " + (loadEx.message || String(loadEx));
   Platform.Variable.SetValue("@pageStatus", "apifail");
   Platform.Variable.SetValue("@loadError", loadErrorMsg);
 }
