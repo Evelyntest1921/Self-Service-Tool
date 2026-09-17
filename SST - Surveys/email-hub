@@ -61,21 +61,6 @@ function guidKey() {
   return String(Platform.Function.GUID()).replace(/-/g, "");
 }
 
-function ampBlock(lines) {
-  var pct = String.fromCharCode(37, 37);
-  return pct + "[" + lines.join("\n") + "]" + pct;
-}
-
-function ampValue(value) {
-  var pct = String.fromCharCode(37, 37);
-  return pct + "=" + value + "=" + pct;
-}
-
-function ampToken(value) {
-  var pct = String.fromCharCode(37, 37);
-  return pct + value + pct;
-}
-
 function field(row, name) {
   if (!row) return "";
   return row[name] || row[String(name)] || "";
@@ -154,6 +139,343 @@ function createAsset(auth, token, payload) {
     throw "Asset create HTTP " + resp.statusCode + ": " + body;
   }
   return fromJson(body);
+}
+
+var TEMPLATE_BODY_SLOT_KEY = "1s336usuarz";
+var DEFAULT_TEMPLATE_SOURCE_ID = "56657";
+
+function cloneObject(obj) {
+  if (!obj || typeof obj !== "object") {
+    return null;
+  }
+  try {
+    return fromJson(asJson(obj));
+  } catch (cloneEx) {
+    return null;
+  }
+}
+
+function objectKeys(obj) {
+  var keys = [];
+  var key;
+  if (!obj || typeof obj !== "object") {
+    return keys;
+  }
+  try {
+    for (key in obj) {
+      try {
+        if (obj[key] !== undefined) {
+          keys.push(String(key));
+        }
+      } catch (keyEx) {}
+    }
+  } catch (loopEx) {}
+  return keys;
+}
+
+function truncateMessage(value, maxLen) {
+  var str = String(value || "");
+  var max = maxLen || 900;
+  if (str.length <= max) {
+    return str;
+  }
+  return str.substring(0, max) + "...[truncated]";
+}
+
+function fetchAssetById(assetId, subdomainValue, accessTokenValue) {
+  var result = { ok: false, statusCode: 0, responseText: "", asset: null };
+  var parsedId = parseInt(assetId, 10);
+  if (isNaN(parsedId) || !subdomainValue || !accessTokenValue) {
+    return result;
+  }
+  try {
+    var assetUrl =
+      "https://" +
+      subdomainValue +
+      ".rest.marketingcloudapis.com/asset/v1/content/assets/" +
+      parsedId;
+    var req = new Script.Util.HttpRequest(assetUrl);
+    req.emptyContentHandling = 0;
+    req.retries = 2;
+    req.continueOnError = true;
+    req.setHeader("Authorization", "Bearer " + accessTokenValue);
+    req.method = "GET";
+    req.contentType = "application/json";
+    var resp = req.send();
+    result.statusCode = resp.statusCode;
+    result.responseText = String(resp.content || "");
+    if ((resp.statusCode == 200 || resp.statusCode == 201) && result.responseText) {
+      result.asset = fromJson(result.responseText);
+      result.ok = true;
+    }
+  } catch (fetchEx) {
+    result.responseText = fetchEx.message || String(fetchEx);
+  }
+  return result;
+}
+
+function getTemplateSourceAssetId() {
+  var override = clean(formValue("sourceTemplateId"));
+  if (override) {
+    return override;
+  }
+  var fromDe = lookupValue("SFMC_TEMPLATES", "LG_BG_Header_Email_BD_Template", "User", "Admin");
+  if (!fromDe) {
+    fromDe = lookupValue("SFMC_TEMPLATES", "SM_BG_Header_Email_BD_Template", "User", "Admin");
+  }
+  if (fromDe) {
+    return fromDe;
+  }
+  return DEFAULT_TEMPLATE_SOURCE_ID;
+}
+
+function buildTemplateReference(source, fallbackContent, fallbackSlots) {
+  if (!source || typeof source !== "object") {
+    return null;
+  }
+  var ref = { assetType: { id: 4 } };
+  var sourceId = parseInt(source.id, 10);
+  if (!isNaN(sourceId)) {
+    ref.id = sourceId;
+  }
+  if (source.assetType && source.assetType.id) {
+    ref.assetType.id = parseInt(source.assetType.id, 10);
+  }
+  if (source.assetType && source.assetType.name) {
+    ref.assetType.name = source.assetType.name;
+  }
+  ref.content = source.content || fallbackContent || "";
+  ref.slots =
+    source.slots && typeof source.slots === "object"
+      ? cloneObject(source.slots)
+      : cloneObject(fallbackSlots || {});
+  return ref;
+}
+
+function buildCloned207Payload(
+  sourceAsset,
+  targetName,
+  subjectlineContent,
+  preheaderContent,
+  sourceTemplate,
+  resolvedTemplateAsset,
+  sourceSlots
+) {
+  var templateSource = resolvedTemplateAsset || sourceTemplate;
+  var templateContent = templateSource && templateSource.content ? templateSource.content : "";
+  var templateSlots =
+    templateSource && templateSource.slots && typeof templateSource.slots === "object"
+      ? cloneObject(templateSource.slots)
+      : {};
+  var sourceHtmlContent =
+    sourceAsset && sourceAsset.views && sourceAsset.views.html && sourceAsset.views.html.content
+      ? sourceAsset.views.html.content
+      : sourceAsset.content || templateContent;
+  var emailSlots = sourceSlots && typeof sourceSlots === "object" ? cloneObject(sourceSlots) : {};
+  var payload = {
+    name: targetName,
+    assetType: { id: 207, name: "htmlemail" },
+    channels:
+      sourceAsset.channels && typeof sourceAsset.channels === "object"
+        ? cloneObject(sourceAsset.channels)
+        : { email: true, web: false },
+    views: {
+      subjectline: { content: subjectlineContent || "Recommended Learning Center resources" },
+      preheader: { content: preheaderContent || "" },
+      html: {
+        content: sourceHtmlContent,
+        slots: emailSlots,
+        template: {
+          id: parseInt(sourceTemplate.id, 10),
+          assetType: { id: 4, name: "template" },
+          content: templateContent,
+          slots: templateSlots
+        }
+      },
+      text: { content: "" }
+    },
+    data: { email: { options: { characterEncoding: "utf-8" } } }
+  };
+  if (sourceAsset.category && sourceAsset.category.id) {
+    payload.category = { id: sourceAsset.category.id };
+  }
+  return payload;
+}
+
+function findBlockKeyInSlot(slots, slotKey) {
+  var slot;
+  var keys;
+  if (!slots || !slotKey) {
+    return "";
+  }
+  slot = slots[slotKey];
+  if (!slot || !slot.blocks || typeof slot.blocks !== "object") {
+    return "";
+  }
+  keys = objectKeys(slot.blocks);
+  if (!keys.length) {
+    return "";
+  }
+  return keys[0];
+}
+
+function applyBodyToSlot(payload, slotKey, blockKey, bodyHtml) {
+  var htmlView;
+  var slots;
+  var slot;
+  if (!payload.views) {
+    payload.views = {};
+  }
+  if (!payload.views.html) {
+    payload.views.html = {};
+  }
+  htmlView = payload.views.html;
+  if (!htmlView.slots || typeof htmlView.slots !== "object") {
+    htmlView.slots = {};
+  }
+  slots = htmlView.slots;
+  if (!slots[slotKey] || typeof slots[slotKey] !== "object") {
+    slots[slotKey] = { content: "", blocks: {} };
+  }
+  slot = slots[slotKey];
+  if (!slot.blocks || typeof slot.blocks !== "object") {
+    slot.blocks = {};
+  }
+  if (!slot.blocks[blockKey] || typeof slot.blocks[blockKey] !== "object") {
+    slot.blocks[blockKey] = {
+      assetType: { id: 196, name: "textblock" }
+    };
+  }
+  slot.blocks[blockKey].content = bodyHtml;
+  if (!slot.content) {
+    slot.content = '<div data-type="block" data-key="' + blockKey + '"></div>';
+  }
+}
+
+function buildPayloadFromSource(template, emailName, subjectLine, preheaderLine, subdomainValue, accessTokenValue) {
+  var sourceViews = template.views || {};
+  var htmlView = sourceViews.html || {};
+  var subjectlineContent =
+    subjectLine ||
+    (sourceViews.subjectline && sourceViews.subjectline.content
+      ? sourceViews.subjectline.content
+      : "Recommended Learning Center resources");
+  var preheaderContent =
+    preheaderLine ||
+    (sourceViews.preheader && sourceViews.preheader.content ? sourceViews.preheader.content : "");
+  var htmlContent = htmlView.content || template.content || "";
+  var htmlSlots =
+    htmlView.slots && typeof htmlView.slots === "object"
+      ? htmlView.slots
+      : template.slots && typeof template.slots === "object"
+        ? template.slots
+        : {};
+  var sourceTemplate =
+    htmlView.template && typeof htmlView.template === "object" ? htmlView.template : null;
+  var assetTypeId =
+    template.assetType && template.assetType.id ? parseInt(template.assetType.id, 10) : 207;
+  var payload = null;
+  var fetchedTemplate;
+
+  if (assetTypeId === 4) {
+    var templateRef = buildTemplateReference(
+      template,
+      template.content || htmlContent,
+      template.slots || htmlSlots
+    );
+    var templateSlots =
+      template.slots && typeof template.slots === "object"
+        ? cloneObject(template.slots)
+        : cloneObject(htmlSlots || {});
+    payload = {
+      name: emailName,
+      assetType: { name: "htmlemail", id: 207 },
+      channels:
+        template.channels && typeof template.channels === "object"
+          ? cloneObject(template.channels)
+          : { email: true, web: false },
+      views: {
+        subjectline: { content: subjectlineContent },
+        preheader: { content: preheaderContent },
+        html: {
+          template: templateRef,
+          content: template.content || htmlContent || "",
+          slots: templateSlots || {}
+        },
+        text: { content: "" }
+      },
+      data: { email: { options: { characterEncoding: "utf-8" } } }
+    };
+    if (template.category && template.category.id) {
+      payload.category = { id: template.category.id };
+    }
+  } else if (assetTypeId === 207) {
+    if (!sourceTemplate) {
+      throw "Template source is 207 but views.html.template is missing.";
+    }
+    fetchedTemplate = fetchAssetById(sourceTemplate.id, subdomainValue, accessTokenValue);
+    if (!fetchedTemplate.ok || !fetchedTemplate.asset) {
+      throw (
+        "Nested template GET failed HTTP " +
+        fetchedTemplate.statusCode +
+        ": " +
+        truncateMessage(fetchedTemplate.responseText, 600)
+      );
+    }
+    payload = buildCloned207Payload(
+      template,
+      emailName,
+      subjectlineContent,
+      preheaderContent,
+      sourceTemplate,
+      fetchedTemplate.asset,
+      htmlSlots
+    );
+  } else {
+    throw "Unsupported template source asset type " + assetTypeId + ".";
+  }
+  return payload;
+}
+
+function createEmailFromTemplate(auth, token, options) {
+  var sourceTemplateId = options.sourceTemplateId;
+  var emailName = options.emailName;
+  var subject = options.subject;
+  var preheader = options.preheader;
+  var bodyHtml = options.bodyHtml;
+  var customerKey = options.customerKey;
+  var sourceFetch = fetchAssetById(sourceTemplateId, auth.subdomain, token);
+  if (!sourceFetch.ok || !sourceFetch.asset) {
+    throw (
+      "GET template source " +
+      sourceTemplateId +
+      " failed HTTP " +
+      sourceFetch.statusCode +
+      ": " +
+      truncateMessage(sourceFetch.responseText, 600)
+    );
+  }
+  var payload = buildPayloadFromSource(
+    sourceFetch.asset,
+    emailName,
+    subject,
+    preheader,
+    auth.subdomain,
+    token
+  );
+  if (!payload || !payload.views || !payload.views.html) {
+    throw "Could not build email payload from template source.";
+  }
+  var slots = payload.views.html.slots || {};
+  var blockKey = findBlockKeyInSlot(slots, TEMPLATE_BODY_SLOT_KEY);
+  if (!blockKey) {
+    blockKey = "bodyblock1";
+  }
+  applyBodyToSlot(payload, TEMPLATE_BODY_SLOT_KEY, blockKey, bodyHtml);
+  if (customerKey) {
+    payload.customerKey = customerKey;
+  }
+  return createAsset(auth, token, payload);
 }
 
 function previewTables(environment) {
@@ -281,144 +603,6 @@ function buildPreviewData(contactId, environment) {
   };
 }
 
-function quickSendEmailHtml(introBody) {
-  var personalizationAmp = ampBlock([
-    "SET @subscriberKey = _subscriberKey",
-    "SET @senderId = \"\"",
-    "IF EMPTY(@subscriberKey) THEN",
-    "  SET @subscriberKey = emailaddr",
-    "ENDIF",
-    "IF IndexOf(@subscriberKey,\"@\") > 0 THEN",
-    "  SET @contactRows = LookupRows(\"ent.Contact_Salesforce_1\",\"Email\",@subscriberKey)",
-    "ELSE",
-    "  SET @contactRows = LookupRows(\"ent.Contact_Salesforce_1\",\"Id\",@subscriberKey)",
-    "ENDIF",
-    "IF RowCount(@contactRows) > 0 THEN",
-    "  SET @contactRow = Row(@contactRows,1)",
-    "  SET @contactFirstName = Field(@contactRow,\"FirstName\")",
-    "  SET @contactLastName = Field(@contactRow,\"LastName\")",
-    "  SET @contactSalutation = Field(@contactRow,\"Salutation\")",
-    "  SET @contactAccountId = Field(@contactRow,\"AccountId\")",
-    "  SET @contactOwnerId = Field(@contactRow,\"OwnerId\")",
-    "ELSE",
-    "  IF IndexOf(@subscriberKey,\"@\") > 0 THEN",
-    "    SET @sfRows = RetrieveSalesforceObjects(\"Contact\",\"FirstName,LastName,Salutation,AccountId,OwnerId\",\"Email\",\"=\",@subscriberKey)",
-    "  ELSE",
-    "    SET @sfRows = RetrieveSalesforceObjects(\"Contact\",\"FirstName,LastName,Salutation,AccountId,OwnerId\",\"Id\",\"=\",@subscriberKey)",
-    "  ENDIF",
-    "  IF RowCount(@sfRows) > 0 THEN",
-    "    SET @sfRow = Row(@sfRows,1)",
-    "    SET @contactFirstName = Field(@sfRow,\"FirstName\")",
-    "    SET @contactLastName = Field(@sfRow,\"LastName\")",
-    "    SET @contactSalutation = Field(@sfRow,\"Salutation\")",
-    "    SET @contactAccountId = Field(@sfRow,\"AccountId\")",
-    "    SET @contactOwnerId = Field(@sfRow,\"OwnerId\")",
-    "  ENDIF",
-    "ENDIF",
-    "IF NOT EMPTY(@contactSalutation) AND NOT EMPTY(@contactLastName) THEN",
-    "  SET @fullGreeting = Concat(\"Hello \",@contactSalutation,\" \",@contactLastName,\",\")",
-    "ELSEIF NOT EMPTY(@contactFirstName) THEN",
-    "  SET @fullGreeting = Concat(\"Hello \",@contactFirstName,\",\")",
-    "ELSEIF NOT EMPTY(@contactLastName) THEN",
-    "  SET @fullGreeting = Concat(\"Hello Mr./Mrs. \",@contactLastName,\",\")",
-    "ELSE",
-    "  SET @fullGreeting = \"Hello,\"",
-    "ENDIF",
-    "SET @accountOwnerId = @contactOwnerId",
-    "IF EMPTY(@accountOwnerId) AND NOT EMPTY(@contactAccountId) THEN",
-    "  SET @accountRows = LookupRows(\"ent.Account_Salesforce_1\",\"Id\",@contactAccountId)",
-    "  IF RowCount(@accountRows) > 0 THEN",
-    "    SET @accountRow = Row(@accountRows,1)",
-    "    SET @accountOwnerId = Field(@accountRow,\"OwnerId\")",
-    "  ENDIF",
-    "ENDIF",
-    "IF EMPTY(@accountOwnerId) AND NOT EMPTY(@contactAccountId) THEN",
-    "  SET @sfAccountRows = RetrieveSalesforceObjects(\"Account\",\"OwnerId\",\"Id\",\"=\",@contactAccountId)",
-    "  IF RowCount(@sfAccountRows) > 0 THEN",
-    "    SET @sfAccountRow = Row(@sfAccountRows,1)",
-    "    SET @accountOwnerId = Field(@sfAccountRow,\"OwnerId\")",
-    "  ENDIF",
-    "ENDIF",
-    "SET @sendfromName = \"MagMutual\"",
-    "SET @sendFromEmail = \"info@magmutual.com\"",
-    "SET @senderTitle = \"\"",
-    "SET @signaturePhone = \"(800) 282-4882\"",
-    "SET @senderLicense = \"\"",
-    "SET @senderSalesLicenseNumber = \"\"",
-    "SET @senderAppointmentLink = \"\"",
-    "IF NOT EMPTY(@accountOwnerId) THEN",
-    "  SET @userRows = LookupRows(\"ent.User_Salesforce_1\",\"Id\",@accountOwnerId)",
-    "  IF RowCount(@userRows) > 0 THEN",
-    "    SET @userRow = Row(@userRows,1)",
-    "    SET @sendfromName = Field(@userRow,\"Name\")",
-    "    SET @sendFromEmail = Field(@userRow,\"Email\")",
-    "    SET @senderTitle = Field(@userRow,\"Title\")",
-    "    SET @signaturePhone = Field(@userRow,\"Phone\")",
-    "    SET @senderSalesLicenseNumber = Field(@userRow,\"Sales_License_Number__c\")",
-    "    SET @senderAppointmentLink = Field(@userRow,\"Appointment_Link__c\")",
-    "  ELSE",
-    "    SET @sfUserRows = RetrieveSalesforceObjects(\"User\",\"Name,Email,Title,Phone,Sales_License_Number__c,Appointment_Link__c\",\"Id\",\"=\",@accountOwnerId)",
-    "    IF RowCount(@sfUserRows) > 0 THEN",
-    "      SET @sfUserRow = Row(@sfUserRows,1)",
-    "      SET @sendfromName = Field(@sfUserRow,\"Name\")",
-    "      SET @sendFromEmail = Field(@sfUserRow,\"Email\")",
-    "      SET @senderTitle = Field(@sfUserRow,\"Title\")",
-    "      SET @signaturePhone = Field(@sfUserRow,\"Phone\")",
-    "      SET @senderSalesLicenseNumber = Field(@sfUserRow,\"Sales_License_Number__c\")",
-    "      SET @senderAppointmentLink = Field(@sfUserRow,\"Appointment_Link__c\")",
-    "    ENDIF",
-    "  ENDIF",
-    "ENDIF",
-    "IF EMPTY(@sendfromName) THEN",
-    "  SET @sendfromName = \"MagMutual\"",
-    "ENDIF",
-    "IF EMPTY(@sendFromEmail) THEN",
-    "  SET @sendFromEmail = \"info@magmutual.com\"",
-    "ENDIF",
-    "IF EMPTY(@signaturePhone) THEN",
-    "  SET @signaturePhone = \"(800) 282-4882\"",
-    "ENDIF",
-    "IF NOT EMPTY(@senderSalesLicenseNumber) THEN",
-    "  SET @senderLicense = Concat(\"License #: \",@senderSalesLicenseNumber,\"<br>\")",
-    "ENDIF",
-    "IF IndexOf(@sendfromName,\" \") > 0 THEN",
-    "  SET @senderFirstName = Substring(@sendfromName,1,Subtract(IndexOf(@sendfromName,\" \"),1))",
-    "ELSE",
-    "  SET @senderFirstName = @sendfromName",
-    "ENDIF",
-    "SET @signature = Concat('<p style=\"font-family:IBM Plex Sans,Arial,Helvetica,sans-serif;font-size:14px;color:#161616;line-height:20px;margin:20px 0 0;\">',IIF(NOT EMPTY(@senderAppointmentLink),Concat('<a href=\"https://cloud.go.magmutual.com/go-redirect-to-uat-link?url=',@senderAppointmentLink,'\" target=\"_blank\" style=\"text-decoration:underline;\">Book time to meet with me</a><br><br>'),''),'Best regards,<br><br>','<span style=\"font-style:italic;font-family:serif;font-size:20px;\">',@senderFirstName,'</span><br>',IIF(NOT EMPTY(@senderTitle),Concat(@senderTitle,'<br>'),''),@sendfromName,'<br>',@sendFromEmail,'<br>',@signaturePhone,'<br>',@senderLicense,' MagMutual Insurance</p><br><br>')"
-  ]);
-  var fullGreeting = ampValue("v(@fullGreeting)");
-  var signatureOutput = ampValue("v(@signature)");
-  var trackingPixel = ampValue("ContentBlockByKey(\"DM_opens_tracking_pixel_DEV\")");
-  var unsubscribeUrl = ampValue("RedirectTo(CloudPagesURL(2962, 'subscriberKey', _subscriberKey))");
-  var footerAddress = [
-    ampToken("Member_Busname") + " " + ampToken("Member_Addr") + "<br>",
-    ampToken("Member_City") + ", " + ampToken("Member_State") + ", " + ampToken("Member_PostalCode")
-  ].join("");
-  return [
-    "<div style=\"display:none;\">" + personalizationAmp + "</div>",
-    "<table role=\"presentation\" width=\"100%\" border=\"0\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#ffffff;\">",
-    "<tr><td height=\"30\" style=\"height:30px;line-height:30px;font-size:30px;\">&nbsp;</td></tr>",
-    "<tr><td align=\"center\">",
-    "<table role=\"presentation\" width=\"600\" border=\"0\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#ffffff;max-width:100%;\">",
-    "<tr><td style=\"font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;padding:0 20px;\">",
-    "<p style=\"margin:0 0 18px;\">" + fullGreeting + "</p>",
-    textBodyParagraph(introBody),
-    signatureOutput,
-    "</td></tr>",
-    "<tr><td style=\"display:none;\">" + trackingPixel + "</td></tr>",
-    "<tr><td height=\"30\" style=\"height:30px;line-height:30px;font-size:30px;\">&nbsp;</td></tr>",
-    "<tr><td align=\"center\" style=\"font-family:Arial,Helvetica,sans-serif;font-size:9px;line-height:12px;color:#808080;\"><a alias=\"Unsubscribe\" href=\"" + unsubscribeUrl + "\" style=\"color:#808080;text-decoration:underline;\">Unsubscribe</a></td></tr>",
-    "<tr><td align=\"center\" style=\"font-family:Arial,Helvetica,sans-serif;font-size:9px;line-height:12px;color:#808080;padding-top:8px;\">" + footerAddress + "</td></tr>",
-    "<tr><td height=\"30\" style=\"height:30px;line-height:30px;font-size:30px;\">&nbsp;</td></tr>",
-    "</table>",
-    "</td></tr>",
-    "</table>",
-    "<custom name=\"opencounter\" type=\"tracking\" /><custom name=\"usermatch\" type=\"tracking\" />"
-  ].join("");
-}
-
 if (formValue("createEmail") == "1") {
   try {
     var emailName = clean(formValue("emailName"));
@@ -438,46 +622,24 @@ if (formValue("createEmail") == "1") {
       introBody = "Thank you for your recent visit to our Learning Center. We hope you found our educational resources helpful in your practice of medicine. Based on your specialty, we thought you might be interested in more of our content.\n\nWith our upgraded Learning Center, you can access educational content, including an extensive library offering CME credits, and manage your learning activities more effectively. We are committed to being your trusted partner for professional development and risk management advice.";
     }
     createdCustomerKey = "sst-" + guidKey();
-    var htmlContent = quickSendEmailHtml(introBody);
-    var payload = {
-      name: emailName,
-      customerKey: createdCustomerKey,
-      assetType: {
-        id: 208,
-        name: "htmlemail"
-      },
-      channels: {
-        email: true,
-        web: false
-      },
-      views: {
-        html: {
-          content: htmlContent
-        },
-        text: {
-          content: introBody
-        },
-        subjectline: {
-          content: subject
-        },
-        preheader: {
-          content: preheader
-        }
-      },
-      data: {
-        email: {
-          options: {
-            characterEncoding: "utf-8"
-          }
-        }
-      }
-    };
     var auth = getAuthConfig();
     var token = getAccessToken(auth);
-    var created = createAsset(auth, token, payload);
+    var sourceTemplateId = getTemplateSourceAssetId();
+    var bodyHtml = textBodyParagraph(introBody);
+    var created = createEmailFromTemplate(auth, token, {
+      sourceTemplateId: sourceTemplateId,
+      emailName: emailName,
+      subject: subject,
+      preheader: preheader,
+      bodyHtml: bodyHtml,
+      customerKey: createdCustomerKey
+    });
     createdAssetId = String(created.id || "");
     resultStatus = "success";
-    resultMessage = "Quick Send Content Builder email created.";
+    resultMessage =
+      "Quick Send email created from Content Builder template (source asset " +
+      sourceTemplateId +
+      ").";
   } catch (ex) {
     resultStatus = "error";
     resultMessage = String(ex);
@@ -836,7 +998,7 @@ Platform.Variable.SetValue("@quickSendEmailPreviewDataJson", asJson(previewData)
       </div>
       <div class="card">
         <h1>SST Quick Send Email</h1>
-        <p>Create and preview a Learning Center quick-send email based on the quick-send reference template.</p>
+        <p>Create a Learning Center quick-send email by cloning the header template and injecting your body into the template body slot. Preview below is approximate; greeting, signature, and footer come from the template at send time.</p>
         <script runat="server">
           function bodyHtmlSafe(value) {
             return String(value || "")
