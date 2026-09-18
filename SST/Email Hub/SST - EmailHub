@@ -6,8 +6,6 @@ var resultMessage = "";
 var createdAssetId = "";
 var createdCustomerKey = "";
 var hubUrl = "";
-var surveyStageUrl = "";
-var surveyAnalyticsUrl = "";
 
 function formValue(name) {
   var value = "";
@@ -46,24 +44,9 @@ function htmlSafe(value) {
     .replace(/"/g, "&quot;");
 }
 
-function urlSafe(value) {
-  try {
-    return encodeURIComponent(String(value || ""));
-  } catch (e) {}
-  return String(value || "");
-}
-
-function takeSurveyUrl(surveyId, contactValue) {
-  var url = "https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=" + urlSafe(surveyId || "SURV_20260612_102301");
-  if (contactValue) {
-    url += "&contact=" + contactValue;
-  }
-  return url;
-}
-
 function textBodyParagraph(value) {
   var safeValue = htmlSafe(value).replace(/\r\n|\r|\n/g, "<br>");
-  return "<p style=\"margin:0 0 20px;\">" + safeValue + "</p>";
+  return "<p style=\"margin:0 0 18px;\">" + safeValue + "</p>";
 }
 
 function asJson(value) {
@@ -76,21 +59,6 @@ function fromJson(value) {
 
 function guidKey() {
   return String(Platform.Function.GUID()).replace(/-/g, "");
-}
-
-function ampBlock(lines) {
-  var pct = String.fromCharCode(37, 37);
-  return pct + "[" + lines.join("\n") + "]" + pct;
-}
-
-function ampValue(value) {
-  var pct = String.fromCharCode(37, 37);
-  return pct + "=" + value + "=" + pct;
-}
-
-function ampToken(value) {
-  var pct = String.fromCharCode(37, 37);
-  return pct + value + pct;
 }
 
 function field(row, name) {
@@ -106,8 +74,343 @@ function lookupValue(deName, returnField, lookupField, lookupValue) {
 }
 
 hubUrl = lookupValue("bd_sst_page_navigation", "ss_home", "type", "cloudpage");
-surveyStageUrl = lookupValue("SST_SP_Survey_Url_DE", "create", "user", "admin");
-surveyAnalyticsUrl = lookupValue("SST_SP_Survey_Url_DE", "analytics", "user", "admin");
+
+var QUICK_SEND_SOURCE_TEMPLATE_ID = "56657";
+var QUICK_SEND_BODY_SLOT_KEY = "1s336usuarz";
+
+function cloneObject(obj) {
+  if (!obj || typeof obj !== "object") {
+    return null;
+  }
+  try {
+    var json = Platform.Function.Stringify(obj);
+    return json ? Platform.Function.ParseJSON(json) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function objectKeys(obj) {
+  var keys = [];
+  var key;
+  if (!obj || typeof obj !== "object") {
+    return keys;
+  }
+  try {
+    for (key in obj) {
+      try {
+        if (obj[key] !== undefined) {
+          keys.push(String(key));
+        }
+      } catch (keyEx) {}
+    }
+  } catch (loopEx) {}
+  return keys;
+}
+
+function wrapBodyHtmlForSlot(text) {
+  var lines = String(text || "").split(/\r\n|\r|\n/);
+  var html = "";
+  var i;
+  for (i = 0; i < lines.length; i++) {
+    if (lines[i] === "" && i === lines.length - 1) {
+      continue;
+    }
+    html += textBodyParagraph(lines[i]);
+  }
+  if (!html) {
+    html = textBodyParagraph("");
+  }
+  return html;
+}
+
+function fetchAssetById(assetId, subdomainValue, accessTokenValue) {
+  var result = { ok: false, statusCode: 0, responseText: "", asset: null };
+  var parsedId = parseInt(assetId, 10);
+  if (isNaN(parsedId) || !subdomainValue || !accessTokenValue) {
+    return result;
+  }
+  try {
+    var assetUrl =
+      "https://" +
+      subdomainValue +
+      ".rest.marketingcloudapis.com/asset/v1/content/assets/" +
+      parsedId;
+    var req = new Script.Util.HttpRequest(assetUrl);
+    req.emptyContentHandling = 0;
+    req.retries = 2;
+    req.continueOnError = true;
+    req.setHeader("Authorization", "Bearer " + accessTokenValue);
+    req.method = "GET";
+    req.contentType = "application/json";
+    var resp = req.send();
+    result.statusCode = resp.statusCode;
+    result.responseText = resp.content ? String(resp.content) : "";
+    if ((resp.statusCode == 200 || resp.statusCode == 201) && result.responseText) {
+      result.asset = Platform.Function.ParseJSON(result.responseText);
+      result.ok = true;
+    }
+  } catch (fetchEx) {
+    result.responseText = fetchEx.message || String(fetchEx);
+  }
+  return result;
+}
+
+function buildTemplateReference(source, fallbackContent, fallbackSlots) {
+  if (!source || typeof source !== "object") {
+    return null;
+  }
+  var ref = { assetType: { id: 4 } };
+  var sourceId = parseInt(source.id, 10);
+  if (!isNaN(sourceId)) {
+    ref.id = sourceId;
+  }
+  if (source.assetType && source.assetType.id) {
+    ref.assetType.id = parseInt(source.assetType.id, 10);
+  }
+  if (source.assetType && source.assetType.name) {
+    ref.assetType.name = source.assetType.name;
+  }
+  ref.content = source.content || fallbackContent || "";
+  ref.slots =
+    source.slots && typeof source.slots === "object"
+      ? cloneObject(source.slots)
+      : cloneObject(fallbackSlots || {});
+  return ref;
+}
+
+function buildCloned207Payload(
+  sourceAsset,
+  targetName,
+  subjectlineContent,
+  preheaderContent,
+  sourceTemplate,
+  resolvedTemplateAsset,
+  sourceSlots
+) {
+  var templateSource = resolvedTemplateAsset || sourceTemplate;
+  var templateContent = templateSource && templateSource.content ? templateSource.content : "";
+  var templateSlots =
+    templateSource && templateSource.slots && typeof templateSource.slots === "object"
+      ? cloneObject(templateSource.slots)
+      : {};
+  var sourceHtmlContent =
+    sourceAsset && sourceAsset.views && sourceAsset.views.html && sourceAsset.views.html.content
+      ? sourceAsset.views.html.content
+      : sourceAsset.content || templateContent;
+  var emailSlots = sourceSlots && typeof sourceSlots === "object" ? cloneObject(sourceSlots) : {};
+  var payload = {
+    name: targetName,
+    assetType: { id: 207, name: "htmlemail" },
+    channels:
+      sourceAsset.channels && typeof sourceAsset.channels === "object"
+        ? cloneObject(sourceAsset.channels)
+        : { email: true, web: false },
+    views: {
+      subjectline: { content: subjectlineContent || "" },
+      preheader: { content: preheaderContent || "" },
+      html: {
+        content: sourceHtmlContent,
+        slots: emailSlots,
+        template: {
+          id: parseInt(sourceTemplate.id, 10),
+          assetType: { id: 4, name: "template" },
+          content: templateContent,
+          slots: templateSlots
+        }
+      },
+      text: { content: "" }
+    },
+    data: { email: { options: { characterEncoding: "utf-8" } } }
+  };
+  if (sourceAsset.category && sourceAsset.category.id) {
+    payload.category = { id: sourceAsset.category.id };
+  }
+  return payload;
+}
+
+function findBlockKeyInSlot(slots, slotKey) {
+  var slot;
+  var keys;
+  if (!slots || !slotKey) {
+    return "";
+  }
+  slot = slots[slotKey];
+  if (!slot || !slot.blocks || typeof slot.blocks !== "object") {
+    return "";
+  }
+  keys = objectKeys(slot.blocks);
+  if (!keys.length) {
+    return "";
+  }
+  return keys[0];
+}
+
+function applyBodyToSlot(payload, slotKey, blockKey, bodyHtml) {
+  var htmlView;
+  var slots;
+  var slot;
+  if (!payload.views) {
+    payload.views = {};
+  }
+  if (!payload.views.html) {
+    payload.views.html = {};
+  }
+  htmlView = payload.views.html;
+  if (!htmlView.slots || typeof htmlView.slots !== "object") {
+    htmlView.slots = {};
+  }
+  slots = htmlView.slots;
+  if (!slots[slotKey] || typeof slots[slotKey] !== "object") {
+    slots[slotKey] = { content: "", blocks: {} };
+  }
+  slot = slots[slotKey];
+  if (!slot.blocks || typeof slot.blocks !== "object") {
+    slot.blocks = {};
+  }
+  if (!slot.blocks[blockKey] || typeof slot.blocks[blockKey] !== "object") {
+    slot.blocks[blockKey] = {
+      assetType: { id: 196, name: "textblock" }
+    };
+  }
+  slot.blocks[blockKey].content = bodyHtml;
+  if (!slot.content) {
+    slot.content = '<div data-type="block" data-key="' + blockKey + '"></div>';
+  }
+}
+
+function buildPayloadFromSource(template, emailName, subjectLine, preheaderLine, authContext) {
+  var sourceViews = template.views || {};
+  var htmlView = sourceViews.html || {};
+  var subjectlineContent =
+    subjectLine ||
+    (sourceViews.subjectline && sourceViews.subjectline.content
+      ? sourceViews.subjectline.content
+      : "");
+  var preheaderContent =
+    preheaderLine !== undefined && preheaderLine !== null && String(preheaderLine).length
+      ? String(preheaderLine)
+      : sourceViews.preheader && sourceViews.preheader.content
+        ? sourceViews.preheader.content
+        : "";
+  var htmlContent = htmlView.content || template.content || "";
+  var htmlSlots =
+    htmlView.slots && typeof htmlView.slots === "object"
+      ? htmlView.slots
+      : template.slots && typeof template.slots === "object"
+        ? template.slots
+        : {};
+  var sourceTemplate =
+    htmlView.template && typeof htmlView.template === "object" ? htmlView.template : null;
+  var assetTypeId =
+    template.assetType && template.assetType.id ? parseInt(template.assetType.id, 10) : 207;
+  var payload = null;
+  var resolvedTemplateAsset = null;
+  var fetchedTemplate;
+  var templateRef;
+  var templateSlots;
+
+  if (assetTypeId === 4) {
+    templateRef = buildTemplateReference(
+      template,
+      template.content || htmlContent,
+      template.slots || htmlSlots
+    );
+    templateSlots =
+      template.slots && typeof template.slots === "object"
+        ? cloneObject(template.slots)
+        : cloneObject(htmlSlots || {});
+    payload = {
+      name: emailName,
+      assetType: { name: "htmlemail", id: 207 },
+      channels:
+        template.channels && typeof template.channels === "object"
+          ? cloneObject(template.channels)
+          : { email: true, web: false },
+      views: {
+        subjectline: { content: subjectlineContent },
+        preheader: { content: preheaderContent },
+        html: {
+          template: templateRef,
+          content: template.content || htmlContent || "",
+          slots: templateSlots || {}
+        },
+        text: { content: "" }
+      },
+      data: { email: { options: { characterEncoding: "utf-8" } } }
+    };
+    if (template.category && template.category.id) {
+      payload.category = { id: template.category.id };
+    }
+  } else if (assetTypeId === 207) {
+    if (!sourceTemplate) {
+      throw "Source email is type 207 but views.html.template is missing.";
+    }
+    fetchedTemplate = fetchAssetById(
+      sourceTemplate.id,
+      authContext.subdomain,
+      authContext.accessToken
+    );
+    if (!fetchedTemplate.ok || !fetchedTemplate.asset) {
+      throw (
+        "Could not fetch nested template " +
+        sourceTemplate.id +
+        " (HTTP " +
+        fetchedTemplate.statusCode +
+        ")."
+      );
+    }
+    resolvedTemplateAsset = fetchedTemplate.asset;
+    payload = buildCloned207Payload(
+      template,
+      emailName,
+      subjectlineContent,
+      preheaderContent,
+      sourceTemplate,
+      resolvedTemplateAsset,
+      htmlSlots
+    );
+  } else {
+    throw "Unsupported source asset type " + assetTypeId + ". Use template (4) or seed email (207).";
+  }
+  return payload;
+}
+
+function createEmailFromTemplate207(auth, token, options) {
+  var sourceTemplateId = clean(options.sourceTemplateId) || QUICK_SEND_SOURCE_TEMPLATE_ID;
+  var sourceFetch = fetchAssetById(sourceTemplateId, auth.subdomain, token);
+  if (!sourceFetch.ok || !sourceFetch.asset) {
+    throw (
+      "Could not load source template " +
+      sourceTemplateId +
+      " (HTTP " +
+      sourceFetch.statusCode +
+      ")."
+    );
+  }
+  var payload = buildPayloadFromSource(
+    sourceFetch.asset,
+    options.emailName,
+    options.subject,
+    options.preheader,
+    { subdomain: auth.subdomain, accessToken: token }
+  );
+  if (!payload || !payload.views || !payload.views.html) {
+    throw "Email payload could not be built from template.";
+  }
+  var slotsForBlock = payload.views.html.slots;
+  if (!slotsForBlock || typeof slotsForBlock !== "object") {
+    throw "Email payload is missing views.html.slots.";
+  }
+  var blockKey = findBlockKeyInSlot(slotsForBlock, QUICK_SEND_BODY_SLOT_KEY) || "bodyblock1";
+  applyBodyToSlot(
+    payload,
+    QUICK_SEND_BODY_SLOT_KEY,
+    blockKey,
+    wrapBodyHtmlForSlot(options.bodyText)
+  );
+  return createAsset(auth, token, payload);
+}
 
 function getAuthConfig() {
   var rows = Platform.Function.LookupRows("SFMC_AUTH", "User", "Admin");
@@ -171,39 +474,6 @@ function createAsset(auth, token, payload) {
   var body = String(resp.content || "");
   if (resp.statusCode != 200 && resp.statusCode != 201) {
     throw "Asset create HTTP " + resp.statusCode + ": " + body;
-  }
-  return fromJson(body);
-}
-
-function getAsset(auth, token, assetId) {
-  var req = new Script.Util.HttpRequest("https://" + auth.subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + assetId);
-  req.emptyContentHandling = 0;
-  req.retries = 2;
-  req.continueOnError = true;
-  req.contentType = "application/json";
-  req.setHeader("Authorization", "Bearer " + token);
-  req.method = "GET";
-  var resp = req.send();
-  var body = String(resp.content || "");
-  if (resp.statusCode != 200) {
-    throw "Asset fetch HTTP " + resp.statusCode + ": " + body;
-  }
-  return fromJson(body);
-}
-
-function updateAsset(auth, token, assetId, payload) {
-  var req = new Script.Util.HttpRequest("https://" + auth.subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + assetId);
-  req.emptyContentHandling = 0;
-  req.retries = 2;
-  req.continueOnError = true;
-  req.contentType = "application/json";
-  req.setHeader("Authorization", "Bearer " + token);
-  req.method = "PATCH";
-  req.postData = asJson(payload);
-  var resp = req.send();
-  var body = String(resp.content || "");
-  if (resp.statusCode != 200 && resp.statusCode != 201) {
-    throw "Asset update HTTP " + resp.statusCode + ": " + body;
   }
   return fromJson(body);
 }
@@ -333,309 +603,40 @@ function buildPreviewData(contactId, environment) {
   };
 }
 
-function minimalEmailHtml(headline, textBody, surveyId) {
-  var personalizationAmp = ampBlock([
-    "SET @surveyContactId = AttributeValue(\"CampaignMember:Common:Id\")",
-    "IF EMPTY(@surveyContactId) THEN",
-    "  SET @surveyContactId = AttributeValue(\"ContactId\")",
-    "ENDIF",
-    "IF EMPTY(@surveyContactId) THEN",
-    "  SET @surveyContactId = _subscriberKey",
-    "ENDIF",
-    "SET @subscriberKey = _subscriberKey",
-    "IF EMPTY(@subscriberKey) THEN",
-    "  SET @subscriberKey = emailaddr",
-    "ENDIF",
-    "SET @firstName = AttributeValue(\"CampaignMember:Common:FirstName\")",
-    "IF EMPTY(@firstName) THEN",
-    "  SET @firstName = AttributeValue(\"FirstName\")",
-    "ENDIF",
-    "SET @lastName = AttributeValue(\"CampaignMember:Common:LastName\")",
-    "IF EMPTY(@lastName) THEN",
-    "  SET @lastName = AttributeValue(\"LastName\")",
-    "ENDIF",
-    "SET @salutation = AttributeValue(\"CampaignMember:Common:Salutation\")",
-    "IF EMPTY(@salutation) THEN",
-    "  SET @salutation = AttributeValue(\"Salutation\")",
-    "ENDIF",
-    "SET @contactAccountId = AttributeValue(\"CampaignMember:Account:Id\")",
-    "SET @contactRowsFound = \"false\"",
-    "IF NOT EMPTY(@surveyContactId) THEN",
-    "  SET @contactRows = LookupRows(\"ent.Contact_Salesforce_1\",\"Id\",@surveyContactId)",
-    "  IF RowCount(@contactRows) > 0 THEN",
-    "    SET @contactRowsFound = \"true\"",
-    "  ENDIF",
-    "ENDIF",
-    "IF @contactRowsFound != \"true\" AND IndexOf(@subscriberKey,\"@\") > 0 THEN",
-    "  SET @contactRows = LookupRows(\"ent.Contact_Salesforce_1\",\"Email\",@subscriberKey)",
-    "  IF RowCount(@contactRows) > 0 THEN",
-    "    SET @contactRowsFound = \"true\"",
-    "  ENDIF",
-    "ENDIF",
-    "IF @contactRowsFound != \"true\" AND NOT EMPTY(@subscriberKey) THEN",
-    "  SET @contactRows = LookupRows(\"ent.Contact_Salesforce_1\",\"Id\",@subscriberKey)",
-    "  IF RowCount(@contactRows) > 0 THEN",
-    "    SET @contactRowsFound = \"true\"",
-    "  ENDIF",
-    "ENDIF",
-    "IF @contactRowsFound == \"true\" THEN",
-    "  SET @contactRow = Row(@contactRows,1)",
-    "  IF EMPTY(@surveyContactId) OR IndexOf(@surveyContactId,\"@\") > 0 THEN",
-    "    SET @surveyContactId = Field(@contactRow,\"Id\")",
-    "  ENDIF",
-    "  IF EMPTY(@firstName) THEN",
-    "    SET @firstName = Field(@contactRow,\"FirstName\")",
-    "  ENDIF",
-    "  IF EMPTY(@lastName) THEN",
-    "    SET @lastName = Field(@contactRow,\"LastName\")",
-    "  ENDIF",
-    "  IF EMPTY(@salutation) THEN",
-    "    SET @salutation = Field(@contactRow,\"Salutation\")",
-    "  ENDIF",
-    "  IF EMPTY(@contactAccountId) THEN",
-    "    SET @contactAccountId = Field(@contactRow,\"AccountId\")",
-    "  ENDIF",
-    "ENDIF",
-    "IF NOT EMPTY(@salutation) AND NOT EMPTY(@lastName) THEN",
-    "  SET @fullGreeting = Concat(\"Hello \", @salutation, \" \", @lastName, \",\")",
-    "ELSEIF NOT EMPTY(@firstName) THEN",
-    "  SET @fullGreeting = Concat(\"Hello \", @firstName, \",\")",
-    "ELSEIF NOT EMPTY(@lastName) THEN",
-    "  SET @fullGreeting = Concat(\"Hello Mr./Mrs. \", @lastName, \",\")",
-    "ELSE",
-    "  SET @fullGreeting = \"Hello,\"",
-    "ENDIF",
-    "SET @ownerId = AttributeValue(\"CampaignMember:Account:OwnerId\")",
-    "IF EMPTY(@ownerId) THEN",
-    "  SET @ownerId = AttributeValue(\"CampaignMember:Account_Owner__c\")",
-    "ENDIF",
-    "IF EMPTY(@ownerId) THEN",
-    "  SET @ownerId = AttributeValue(\"OwnerId\")",
-    "ENDIF",
-    "IF EMPTY(@ownerId) AND NOT EMPTY(@contactAccountId) THEN",
-    "  SET @accountRows = LookupRows(\"ent.Account_Salesforce_1\",\"Id\",@contactAccountId)",
-    "  IF RowCount(@accountRows) > 0 THEN",
-    "    SET @accountRow = Row(@accountRows,1)",
-    "    SET @ownerId = Field(@accountRow,\"OwnerId\")",
-    "  ENDIF",
-    "ENDIF",
-    "IF EMPTY(@ownerId) AND NOT EMPTY(@contactAccountId) THEN",
-    "  SET @sfAccountRows = RetrieveSalesforceObjects(\"Account\",\"OwnerId\",\"Id\",\"=\",@contactAccountId)",
-    "  IF RowCount(@sfAccountRows) > 0 THEN",
-    "    SET @sfAccountRow = Row(@sfAccountRows,1)",
-    "    SET @ownerId = Field(@sfAccountRow,\"OwnerId\")",
-    "  ENDIF",
-    "ENDIF",
-    "SET @sendfromName = \"MagMutual\"",
-    "SET @sendFromEmail = \"info@magmutual.com\"",
-    "SET @senderTitle = \"\"",
-    "SET @signaturePhone = \"(800) 282-4882\"",
-    "SET @senderSalesLicenseNumber = \"\"",
-    "SET @senderAppointmentLink = \"\"",
-    "SET @senderLicense = \"\"",
-    "SET @senderFound = \"false\"",
-    "IF NOT EMPTY(@ownerId) THEN",
-    "  SET @userRows = LookupRows(\"ent.User_Salesforce_1\",\"Id\",@ownerId)",
-    "  IF RowCount(@userRows) > 0 THEN",
-    "    SET @userRow = Row(@userRows,1)",
-    "    SET @senderFound = \"true\"",
-    "    SET @sendfromName = Field(@userRow,\"Name\")",
-    "    SET @sendFromEmail = Field(@userRow,\"Email\")",
-    "    SET @senderTitle = Field(@userRow,\"Title\")",
-    "    SET @signaturePhone = Field(@userRow,\"Phone\")",
-    "    SET @senderSalesLicenseNumber = Field(@userRow,\"Sales_License_Number__c\")",
-    "    SET @senderAppointmentLink = Field(@userRow,\"Appointment_Link__c\")",
-    "  ENDIF",
-    "  IF @senderFound != \"true\" THEN",
-    "    SET @sfUserRows = RetrieveSalesforceObjects(\"User\",\"Name,Email,Title,Phone,Sales_License_Number__c,Appointment_Link__c\",\"Id\",\"=\",@ownerId)",
-    "    IF RowCount(@sfUserRows) > 0 THEN",
-    "      SET @sfUserRow = Row(@sfUserRows,1)",
-    "      SET @sendfromName = Field(@sfUserRow,\"Name\")",
-    "      SET @sendFromEmail = Field(@sfUserRow,\"Email\")",
-    "      SET @senderTitle = Field(@sfUserRow,\"Title\")",
-    "      SET @signaturePhone = Field(@sfUserRow,\"Phone\")",
-    "      SET @senderSalesLicenseNumber = Field(@sfUserRow,\"Sales_License_Number__c\")",
-    "      SET @senderAppointmentLink = Field(@sfUserRow,\"Appointment_Link__c\")",
-    "    ENDIF",
-    "  ENDIF",
-    "ENDIF",
-    "IF EMPTY(@sendfromName) THEN",
-    "  SET @sendfromName = \"MagMutual\"",
-    "ENDIF",
-    "IF EMPTY(@sendFromEmail) THEN",
-    "  SET @sendFromEmail = \"info@magmutual.com\"",
-    "ENDIF",
-    "IF EMPTY(@signaturePhone) THEN",
-    "  SET @signaturePhone = \"(800) 282-4882\"",
-    "ENDIF",
-    "IF NOT EMPTY(@senderSalesLicenseNumber) THEN",
-    "  SET @senderLicense = Concat(\"License #: \",@senderSalesLicenseNumber,\"<br>\")",
-    "ENDIF",
-    "IF IndexOf(@sendfromName,\" \") > 0 THEN",
-    "  SET @senderFirstName = Substring(@sendfromName,1,Subtract(IndexOf(@sendfromName,\" \"),1))",
-    "ELSE",
-    "  SET @senderFirstName = @sendfromName",
-    "ENDIF",
-    "SET @signature = Concat('<p style=\"margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">',IIF(NOT EMPTY(@senderAppointmentLink),Concat('<a href=\"https://cloud.go.magmutual.com/go-redirect-to-uat-link?url=',@senderAppointmentLink,'\" target=\"_blank\" style=\"text-decoration:underline;\">Book time to meet with me</a><br><br>'),''),'Best regards,<br>','<span style=\"font-style:italic;font-family:serif;font-size:20px;\">',@senderFirstName,'</span><br>',IIF(NOT EMPTY(@senderTitle),Concat(@senderTitle,'<br>'),''),@sendfromName,'<br>',@sendFromEmail,'<br>',@signaturePhone,'<br>',@senderLicense,' MagMutual Insurance','</p>')"
-  ]);
-  var surveyContactId = ampValue("v(@surveyContactId)");
-  var surveyUrl = takeSurveyUrl(surveyId, surveyContactId);
-  var fullGreeting = ampValue("v(@fullGreeting)");
-  var signatureOutput = ampValue("v(@signature)");
-  var footerBlock = ampValue("ContentBlockByKey(\"Email_Footer_2407\")");
-  var memberAddressBlock = [
-    "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;\">",
-    "<tr><td align=\"center\" style=\"padding:0 30px 30px;font-family:Arial,Helvetica,sans-serif;font-size:9px;line-height:12px;color:#808080;\">",
-    ampToken("Member_Busname") + " " + ampToken("Member_Addr") + "<br>",
-    ampToken("Member_City") + ", " + ampToken("Member_State") + ", " + ampToken("Member_PostalCode"),
-    "</td></tr>",
-    "</table>"
-  ].join("");
-  var trackingTags = [
-    "<custom name=\"opencounter\" type=\"tracking\" />",
-    "<custom name=\"usermatch\" type=\"tracking\" />"
-  ].join("");
-  return [
-    "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#eaeaea;margin:0;padding:0;\">",
-    "<tr><td align=\"center\">",
-    "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#393939;\">",
-    "<tr><td style=\"padding:30px;\"><a href=\"https://magmutual.com/\" target=\"_blank\"><img src=\"https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/MM_PrimaryLogo_Reversed.png\" alt=\"MagMutual\" width=\"200\" border=\"0\" style=\"display:block;\"></a></td></tr>",
-    "<tr><td style=\"padding:20px 45px 30px;font-family:Arial,Helvetica,sans-serif;color:#ffffff;\"><h1 style=\"font-size:32px;line-height:36px;margin:0;color:#ffffff;\">" + htmlSafe(headline) + "</h1></td></tr>",
-    "</table>",
-    "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;\">",
-    "<tr><td style=\"padding:30px;font-family:Arial,Helvetica,sans-serif;color:#161616;font-size:14px;line-height:20px;\">",
-    "<div style=\"display:none;\">" + personalizationAmp + "</div>",
-    "<p style=\"margin:0 0 20px;\">" + fullGreeting + "</p>",
-    textBodyParagraph(textBody),
-    "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr><td bgcolor=\"#0060F5\" style=\"background:#0060F5;\"><a href=\"" + htmlSafe(surveyUrl) + "\" target=\"_blank\" style=\"display:block;padding:10px 99px 10px 10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;text-decoration:none;\">Take Survey</a></td></tr></table>",
-    "<p style=\"margin:20px 0 0;\">If you have any questions or run into any issues, don't hesitate to reach out.</p>",
-    "<p style=\"margin:20px 0 0;\">Thank you for sharing your thoughts &mdash; we truly value your feedback!</p>",
-    signatureOutput,
-    "</td></tr>",
-    "</table>",
-    footerBlock,
-    memberAddressBlock,
-    "</td></tr>",
-    "</table>",
-    trackingTags
-  ].join("");
-}
-
-var loadedAsset = null;
-var loadedAssetId = "";
-var loadedEmailName = "";
-var loadedSubject = "";
-var loadedPreheader = "";
-var loadedHeadline = "";
-var loadedTextBody = "";
-var loadedSurveyId = "";
-
-function extractBetween(str, before, after) {
-  var start = str.indexOf(before);
-  if (start < 0) return "";
-  start += before.length;
-  var end = str.indexOf(after, start);
-  if (end < 0) return "";
-  return str.substring(start, end);
-}
-
-if (formValue("loadEmail") == "1") {
-  try {
-    var loadId = clean(formValue("loadAssetId"));
-    if (!loadId) throw "Please enter an Asset ID to load.";
-    var auth = getAuthConfig();
-    var token = getAccessToken(auth);
-    loadedAsset = getAsset(auth, token, loadId);
-    loadedAssetId = String(loadedAsset.id || "");
-    loadedEmailName = clean(loadedAsset.name);
-    var views = loadedAsset.views || {};
-    loadedSubject = clean((views.subjectline || {}).content);
-    loadedPreheader = clean((views.preheader || {}).content);
-    var htmlContent = String((views.html || {}).content || "");
-    loadedHeadline = extractBetween(htmlContent, "color:#ffffff;\">", "</h1>");
-    loadedTextBody = extractBetween(htmlContent, "<p style=\"margin:0 0 20px;\">", "</p>");
-    var surveyMatch = extractBetween(htmlContent, "MH1Fdf3gkpiWmvpt?id=", "&");
-    if (!surveyMatch) surveyMatch = extractBetween(htmlContent, "MH1Fdf3gkpiWmvpt?id=", "\"");
-    try { loadedSurveyId = decodeURIComponent(surveyMatch); } catch (e) { loadedSurveyId = surveyMatch; }
-    resultStatus = "success";
-    resultMessage = "Email loaded: " + loadedEmailName + " (ID: " + loadedAssetId + ")";
-    createdAssetId = loadedAssetId;
-  } catch (ex) {
-    resultStatus = "error";
-    resultMessage = String(ex);
-  }
-}
-
 if (formValue("createEmail") == "1") {
   try {
     var emailName = clean(formValue("emailName"));
     if (!emailName) {
-      emailName = "SST Survey Email " + guidKey().substring(0, 8);
+      emailName = "SST Quick Send Email " + guidKey().substring(0, 8);
     }
     var subject = clean(formValue("subject"));
     if (!subject) {
-      subject = "Got 2 minutes? Tell us what you think";
+      subject = "Recommended Learning Center resources";
     }
     var preheader = clean(formValue("preheader"));
     if (!preheader) {
-      preheader = "We would appreciate a few minutes of your time.";
+      preheader = "Helpful educational resources selected for your practice.";
     }
-    var headline = clean(formValue("headline"));
-    if (!headline) {
-      headline = "Got 2 minutes? Tell us what you think";
+    var introBody = clean(formValue("introBody"));
+    if (!introBody) {
+      throw "Enter body copy before creating the email.";
     }
-    var surveyId = clean(formValue("surveyId"));
-    if (!surveyId) {
-      surveyId = "SURV_20260612_102301";
-    }
-    var textBody = clean(formValue("textBody"));
-    if (!textBody) {
-      textBody = "We're always looking for ways to improve, and your input makes a big difference.";
-    }
-    var existingAssetId = clean(formValue("existingAssetId"));
-    var surveyUrl = takeSurveyUrl(surveyId, "");
-    var payload = {
-      name: emailName,
-      views: {
-        html: {
-          content: minimalEmailHtml(headline, textBody, surveyId)
-        },
-        text: {
-          content: textBody + "\n\nTake Survey: " + surveyUrl
-        },
-        subjectline: {
-          content: subject
-        },
-        preheader: {
-          content: preheader
-        }
-      },
-      data: {
-        email: {
-          options: {
-            characterEncoding: "utf-8"
-          }
-        }
-      }
-    };
+    var sourceTemplateId =
+      clean(formValue("sourceTemplateId")) || QUICK_SEND_SOURCE_TEMPLATE_ID;
     var auth = getAuthConfig();
     var token = getAccessToken(auth);
-    if (existingAssetId) {
-      var updated = updateAsset(auth, token, existingAssetId, payload);
-      createdAssetId = String(updated.id || existingAssetId);
-      createdCustomerKey = String(updated.customerKey || "");
-      resultStatus = "success";
-      resultMessage = "Email updated in Content Builder.";
-    } else {
-      createdCustomerKey = "sst-" + guidKey();
-      payload.customerKey = createdCustomerKey;
-      payload.assetType = { id: 208, name: "htmlemail" };
-      payload.channels = { email: true, web: false };
-      var created = createAsset(auth, token, payload);
-      createdAssetId = String(created.id || "");
-      resultStatus = "success";
-      resultMessage = "Minimal Content Builder email created.";
-    }
+    var created = createEmailFromTemplate207(auth, token, {
+      sourceTemplateId: sourceTemplateId,
+      emailName: emailName,
+      subject: subject,
+      preheader: preheader,
+      bodyText: introBody
+    });
+    createdAssetId = String(created.id || "");
+    createdCustomerKey = String(created.customerKey || created.key || "");
+    resultStatus = "success";
+    resultMessage =
+      "Quick Send email created from template (207). Open in Content Builder to send.";
   } catch (ex) {
     resultStatus = "error";
     resultMessage = String(ex);
@@ -647,165 +648,115 @@ var navigationEnvironment = clean(lookupValue("bd_sst_page_navigation", "environ
 var previewEnvironment = navigationEnvironment == "uat" ? "uat" : "prod";
 var previewData = buildPreviewData(previewContactId, previewEnvironment);
 
-Platform.Variable.SetValue("@emailHubResultStatus", resultStatus);
-Platform.Variable.SetValue("@emailHubResultMessage", resultMessage);
-Platform.Variable.SetValue("@emailHubAssetId", createdAssetId);
-Platform.Variable.SetValue("@emailHubCustomerKey", createdCustomerKey);
-Platform.Variable.SetValue("@emailHubHubUrl", hubUrl);
-Platform.Variable.SetValue("@emailHubSurveyStageUrl", surveyStageUrl);
-Platform.Variable.SetValue("@emailHubSurveyAnalyticsUrl", surveyAnalyticsUrl);
-Platform.Variable.SetValue("@emailHubPreviewContactId", previewContactId);
-Platform.Variable.SetValue("@emailHubPreviewDataJson", asJson(previewData));
-Platform.Variable.SetValue("@emailHubLoadedAssetId", loadedAssetId);
-Platform.Variable.SetValue("@emailHubLoadedEmailName", loadedEmailName);
-Platform.Variable.SetValue("@emailHubLoadedSubject", loadedSubject);
-Platform.Variable.SetValue("@emailHubLoadedPreheader", loadedPreheader);
-Platform.Variable.SetValue("@emailHubLoadedHeadline", loadedHeadline);
-Platform.Variable.SetValue("@emailHubLoadedTextBody", loadedTextBody);
-Platform.Variable.SetValue("@emailHubLoadedSurveyId", loadedSurveyId);
+Platform.Variable.SetValue("@quickSendEmailResultStatus", resultStatus);
+Platform.Variable.SetValue("@quickSendEmailResultMessage", resultMessage);
+Platform.Variable.SetValue("@quickSendEmailAssetId", createdAssetId);
+Platform.Variable.SetValue("@quickSendEmailCustomerKey", createdCustomerKey);
+Platform.Variable.SetValue("@quickSendEmailHubUrl", hubUrl);
+Platform.Variable.SetValue("@quickSendEmailPreviewContactId", previewContactId);
+Platform.Variable.SetValue("@quickSendEmailPreviewDataJson", asJson(previewData));
 </script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
   :root {
     --primary-color: #6366f1;
     --primary-dark: #4f46e5;
-    --gray-50: #f9fafb;
     --gray-100: #f3f4f6;
     --gray-200: #e5e7eb;
-    --gray-400: #9ca3af;
     --gray-500: #6b7280;
-    --gray-600: #4b5563;
     --gray-700: #374151;
     --gray-900: #111827;
-    --bg-secondary: #f9fafb;
     --bg-primary: #ffffff;
+    --bg-secondary: #f9fafb;
     --border-color: #e5e7eb;
-    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
     --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
     --radius-md: 0.5rem;
     --text-primary: #111827;
     --text-secondary: #6b7280;
-    --text-muted: #9ca3af;
   }
   * {
     box-sizing: border-box;
-    margin: 0;
-    padding: 0;
   }
   body {
     background: var(--bg-secondary);
     color: var(--text-primary);
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    line-height: 1.6;
+    margin: 0;
   }
   .dashboard-layout {
     display: flex;
-    height: 100vh;
     min-height: 100vh;
-    overflow: hidden;
   }
   .maker-sidebar {
     background: #ffffff;
     border-right: 1px solid var(--gray-200);
-    box-shadow: var(--shadow-sm);
-    display: flex;
-    flex-direction: column;
-    flex-shrink: 0;
-    height: 100vh;
-    overflow: hidden;
-    padding: 28px 0;
-    width: 280px;
+    flex: 0 0 260px;
+    min-height: 100vh;
   }
   .sidebar-logo {
-    align-self: center;
-    border-bottom: 1px solid #eee5e5;
-    margin-bottom: 12px;
-    padding: 0 20px 10px;
-  }
-  .sidebar-logo a {
-    display: inline-block;
+    align-items: center;
+    display: flex;
+    height: 80px;
+    padding: 0 24px;
   }
   .sidebar-logo img {
     filter: invert(1);
     height: 40px;
+    width: auto;
   }
-  .nav-section {
-    margin-bottom: 8px;
+  .sidebar-nav {
+    padding: 8px 16px 24px;
   }
   .nav-section-title {
     color: var(--gray-500);
     display: block;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    margin-bottom: 8px;
-    padding: 0 32px;
-    text-transform: uppercase;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    margin: 18px 8px 8px;
   }
-  .sidebar-nav .nav-link {
+  .nav-link {
     align-items: center;
-    border-right: 3px solid transparent;
-    color: var(--gray-600);
+    border-radius: var(--radius-md);
+    color: var(--gray-700);
     display: flex;
     font-size: 14px;
-    font-weight: 500;
+    font-weight: 600;
     gap: 12px;
-    padding: 12px 32px;
-    text-decoration: none;
-    transition: background 0.2s ease, color 0.2s ease;
+    padding: 10px 12px;
   }
-  .sidebar-nav .nav-link:hover {
-    background: var(--gray-50);
+  .nav-link.active {
+    background: var(--gray-100);
     color: var(--gray-900);
   }
-  .sidebar-nav .nav-link.active {
-    background: linear-gradient(90deg, rgb(119 120 196 / 10%) 0%, rgb(2 3 22 / 5%) 100%);
-    border-right-color: #2c2c31;
-    color: #000000;
-  }
   .nav-icon {
-    height: 20px;
-    opacity: 0.75;
-    width: 20px;
+    flex: 0 0 auto;
   }
   .main-content {
-    background: var(--bg-secondary);
     flex: 1;
     height: 100vh;
-    min-width: 0;
-    overflow-y: auto;
+    overflow: auto;
     padding: 25px 40px 48px;
   }
   .page {
     width: 100%;
   }
   .breadcrumb-section {
-    padding: 4px 0 20px;
+    margin-bottom: 24px;
   }
   .breadcrumb-nav {
     align-items: center;
+    color: var(--text-secondary);
     display: flex;
-    flex-wrap: wrap;
     font-size: 14px;
-    gap: 4px;
+    gap: 8px;
   }
   .breadcrumb-link {
     align-items: center;
     color: var(--primary-color);
     display: inline-flex;
-    font-size: 16px;
     font-weight: 500;
     text-decoration: none;
-  }
-  .breadcrumb-link:hover {
-    color: var(--primary-dark);
-    text-decoration: underline;
-  }
-  .breadcrumb-separator {
-    color: var(--gray-400);
-    font-weight: 400;
-    margin: 0 8px;
-    user-select: none;
   }
   .breadcrumb-current {
     color: var(--gray-900);
@@ -865,23 +816,6 @@ Platform.Variable.SetValue("@emailHubLoadedSurveyId", loadedSurveyId);
     padding: 12px 24px;
     transition: all 0.2s ease;
   }
-  .btn-primary {
-    background: var(--primary-color);
-    color: #ffffff;
-  }
-  .btn-primary:hover {
-    background: var(--primary-dark);
-    box-shadow: var(--shadow-md);
-    transform: translateY(-1px);
-  }
-  .btn-secondary {
-    background: var(--gray-100);
-    border: 1px solid var(--border-color);
-    color: var(--text-primary);
-  }
-  .btn-secondary:hover {
-    background: var(--gray-200);
-  }
   .btn-create {
     background: #000000;
     border-radius: 0;
@@ -906,19 +840,11 @@ Platform.Variable.SetValue("@emailHubLoadedSurveyId", loadedSurveyId);
     border-color: #da1e28;
     color: #a2191f;
   }
-  .small {
-    color: #525252;
-    font-size: 13px;
-    line-height: 18px;
-  }
   .hub-grid {
     align-items: start;
     display: grid;
     gap: 24px;
     grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
-  }
-  #emailHubForm {
-    min-width: 0;
   }
   .preview-contact-panel {
     background: #ffffff;
@@ -934,12 +860,9 @@ Platform.Variable.SetValue("@emailHubLoadedSurveyId", loadedSurveyId);
     display: flex;
     gap: 12px;
   }
-  #refreshPreviewData {
-    border-radius: 0;
-  }
   .preview-panel {
     border: 1px solid var(--border-color);
-    background: #f4f4f4;
+    background: #ffffff;
     min-height: calc(100vh - 220px);
   }
   .preview-header {
@@ -1016,7 +939,6 @@ Platform.Variable.SetValue("@emailHubLoadedSurveyId", loadedSurveyId);
     .maker-sidebar {
       border-bottom: 1px solid var(--gray-200);
       border-right: 0;
-      height: auto;
       min-height: 0;
       width: 100%;
     }
@@ -1043,13 +965,13 @@ Platform.Variable.SetValue("@emailHubLoadedSurveyId", loadedSurveyId);
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;");
         }
-        var navHubUrl = Platform.Variable.GetValue("@emailHubHubUrl") || "#";
+        var navHubUrl = Platform.Variable.GetValue("@quickSendEmailHubUrl") || "#";
         Write('<a href="' + navSafe(navHubUrl) + '"><img src="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" alt="MagMutual"></a>');
       </script>
     </div>
     <nav class="sidebar-nav">
       <div class="nav-section"><span class="nav-section-title">MENU</span></div>
-      <span class="nav-link active" role="presentation"><svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z"/></svg>Email Hub</span>
+      <span class="nav-link active" role="presentation"><svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 17h2v-5H3v5zm8 5h2V6h-2v16zM13 9h8V7h-8v2zM3 5v4h14V5H3zm8 14h10v-2H11v2zM13 17h8v-2h-8v2z"/></svg>Quick Send Email</span>
     </nav>
   </aside>
   <main class="main-content">
@@ -1057,148 +979,102 @@ Platform.Variable.SetValue("@emailHubLoadedSurveyId", loadedSurveyId);
       <div class="breadcrumb-section">
         <nav class="breadcrumb-nav" aria-label="Breadcrumb">
           <script runat="server">
-            function navSafe(value) {
+            function crumbSafe(value) {
               return String(value || "#")
                 .replace(/&/g, "&amp;")
                 .replace(/</g, "&lt;")
                 .replace(/>/g, "&gt;")
                 .replace(/"/g, "&quot;");
             }
-            var crumbHubUrl = Platform.Variable.GetValue("@emailHubHubUrl") || "#";
-            Write('<a href="' + navSafe(crumbHubUrl) + '" class="breadcrumb-link"><svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>Back</a>');
+            var crumbHubUrl = Platform.Variable.GetValue("@quickSendEmailHubUrl") || "#";
+            Write('<a href="' + crumbSafe(crumbHubUrl) + '" class="breadcrumb-link"><svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>Back</a>');
           </script>
           <span class="breadcrumb-separator" aria-hidden="true">/</span>
-          <span class="breadcrumb-current">Email Hub</span>
+          <span class="breadcrumb-current">Quick Send Email</span>
         </nav>
       </div>
       <div class="card">
-        <h1>SST Email Hub</h1>
-        <p>Create and preview the survey email layout. Set the Survey ID to control the Take Survey CTA.</p>
-    <script runat="server">
-      function bodyHtmlSafe(value) {
-        return String(value || "")
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;");
-      }
-      var bodyResultStatus = Platform.Variable.GetValue("@emailHubResultStatus");
-      var bodyResultMessage = Platform.Variable.GetValue("@emailHubResultMessage");
-      var bodyAssetId = Platform.Variable.GetValue("@emailHubAssetId");
-      var bodyCustomerKey = Platform.Variable.GetValue("@emailHubCustomerKey");
-      if (bodyResultStatus) {
-        Write('<div class="notice ' + bodyHtmlSafe(bodyResultStatus) + '"><strong>' + bodyHtmlSafe(bodyResultMessage) + '</strong>');
-        if (bodyAssetId) {
-          Write('<br>Asset ID: ' + bodyHtmlSafe(bodyAssetId));
-        }
-        if (bodyCustomerKey) {
-          Write('<br>Customer Key: ' + bodyHtmlSafe(bodyCustomerKey));
-        }
-        Write('</div>');
-      }
-    </script>
-    <div class="hub-grid">
-      <div>
-        <form method="post" id="loadEmailForm" style="margin-bottom:16px;display:flex;gap:8px;align-items:flex-end;">
-          <input type="hidden" name="loadEmail" value="1">
-          <div class="form-group" style="margin:0;flex:1;">
-            <label class="form-label" for="loadAssetId">Load existing email by Asset ID</label>
-            <input class="form-input" id="loadAssetId" name="loadAssetId" placeholder="e.g. 123456">
-          </div>
-          <button class="btn btn-secondary" type="submit" style="white-space:nowrap;">Load</button>
-        </form>
-        <form method="post" id="emailHubForm">
-          <input type="hidden" name="createEmail" value="1">
-          <script runat="server">
-            var hiddenAssetId = Platform.Variable.GetValue("@emailHubLoadedAssetId") || "";
-            if (hiddenAssetId) {
-              Write('<input type="hidden" name="existingAssetId" id="existingAssetId" value="' + hiddenAssetId + '">');
-              Write('<p class="small" style="margin-bottom:14px;padding:8px 12px;background:#f0f4ff;border:1px solid #c7d2fe;">Editing Asset ID: <strong>' + hiddenAssetId + '</strong> &mdash; submitting will update this email.</p>');
+        <h1>SST Quick Send Email</h1>
+        <p>Preview copy here, then create a Content Builder email from the Learning Center template (name, subject, preheader, and body slot).</p>
+        <script runat="server">
+          function bodyHtmlSafe(value) {
+            return String(value || "")
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;");
+          }
+          var bodyResultStatus = Platform.Variable.GetValue("@quickSendEmailResultStatus");
+          var bodyResultMessage = Platform.Variable.GetValue("@quickSendEmailResultMessage");
+          var bodyAssetId = Platform.Variable.GetValue("@quickSendEmailAssetId");
+          var bodyCustomerKey = Platform.Variable.GetValue("@quickSendEmailCustomerKey");
+          if (bodyResultStatus) {
+            Write('<div class="notice ' + bodyHtmlSafe(bodyResultStatus) + '"><strong>' + bodyHtmlSafe(bodyResultMessage) + '</strong>');
+            if (bodyAssetId) {
+              Write('<br>Asset ID: ' + bodyHtmlSafe(bodyAssetId));
             }
-          </script>
-          <div class="form-group">
-            <label class="form-label" for="emailName">Email Name</label>
-            <script runat="server">
-              function fv(varName, fallback) {
-                var v = Platform.Variable.GetValue(varName);
-                return String(v && v != "undefined" ? v : fallback || "")
-                  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-              }
-              Write('<input class="form-input" id="emailName" name="emailName" value="' + fv("@emailHubLoadedEmailName", "SST Survey Email") + '">');
-            </script>
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="subject">Subject</label>
-            <script runat="server">
-              Write('<input class="form-input" id="subject" name="subject" value="' + fv("@emailHubLoadedSubject", "Got 2 minutes? Tell us what you think") + '">');
-            </script>
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="preheader">Preheader</label>
-            <script runat="server">
-              Write('<input class="form-input" id="preheader" name="preheader" value="' + fv("@emailHubLoadedPreheader", "We would appreciate a few minutes of your time.") + '">');
-            </script>
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="surveyId">Survey ID</label>
-            <script runat="server">
-              Write('<input class="form-input" id="surveyId" name="surveyId" value="' + fv("@emailHubLoadedSurveyId", "SURV_20260612_102301") + '">');
-            </script>
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="headline">Headline</label>
-            <script runat="server">
-              Write('<input class="form-input" id="headline" name="headline" value="' + fv("@emailHubLoadedHeadline", "Got 2 minutes? Tell us what you think") + '">');
-            </script>
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="textBody">Text Body</label>
-            <script runat="server">
-              var tbVal = Platform.Variable.GetValue("@emailHubLoadedTextBody");
-              var tbSafe = String(tbVal && tbVal != "undefined" ? tbVal : "We're always looking for ways to improve, and your input makes a big difference.")
-                .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-              Write('<textarea class="form-textarea" id="textBody" name="textBody">' + tbSafe + '</textarea>');
-            </script>
-          </div>
-          <script runat="server">
-            var submitLabel = Platform.Variable.GetValue("@emailHubLoadedAssetId") ? "Update" : "Create";
-            Write('<button class="btn btn-create" type="submit">' + submitLabel + '</button>');
-          </script>
-        </form>
-      </div>
-      <section class="preview-panel" aria-label="Email preview">
-        <div class="preview-header">
-          <button class="preview-avatar" id="previewContactToggle" type="button" aria-expanded="false" aria-controls="previewContactPanel">M</button>
-          <div class="preview-message-meta">
-            <div class="preview-message-copy">
-              <strong id="previewSubject">Got 2 minutes? Tell us what you think</strong>
-              <span id="previewPreheader">We would appreciate a few minutes of your time.</span>
+            if (bodyCustomerKey) {
+              Write('<br>Customer Key: ' + bodyHtmlSafe(bodyCustomerKey));
+            }
+            Write('</div>');
+          }
+        </script>
+        <div class="hub-grid">
+          <form method="post" id="quickSendEmailForm">
+            <input type="hidden" name="createEmail" value="1">
+            <div class="form-group">
+              <label class="form-label" for="emailName">Email Name</label>
+              <input class="form-input" id="emailName" name="emailName" value="SST Quick Send Learning Center Email">
             </div>
-            <div class="preview-date" id="previewDate"></div>
-          </div>
+            <div class="form-group">
+              <label class="form-label" for="subject">Subject</label>
+              <input class="form-input" id="subject" name="subject" value="Recommended Learning Center resources">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="preheader">Preheader</label>
+              <input class="form-input" id="preheader" name="preheader" value="Helpful educational resources selected for your practice.">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="introBody">Body</label>
+              <textarea class="form-textarea" id="introBody" name="introBody">Thank you for your recent visit to our Learning Center. We hope you found our educational resources helpful in your practice of medicine. Based on your specialty, we thought you might be interested in more of our content.
+
+With our upgraded Learning Center, you can access educational content, including an extensive library offering CME credits, and manage your learning activities more effectively. We are committed to being your trusted partner for professional development and risk management advice.</textarea>
+            </div>
+            <button class="btn btn-create" type="submit">Create</button>
+          </form>
+          <section class="preview-panel" aria-label="Email preview">
+            <div class="preview-header">
+              <button class="preview-avatar" id="previewContactToggle" type="button" aria-expanded="false" aria-controls="previewContactPanel">M</button>
+              <div class="preview-message-meta">
+                <div class="preview-message-copy">
+                  <strong id="previewSubject">Recommended Learning Center resources</strong>
+                  <span id="previewPreheader">Helpful educational resources selected for your practice.</span>
+                </div>
+                <div class="preview-date" id="previewDate"></div>
+              </div>
+            </div>
+            <div class="preview-contact-panel" id="previewContactPanel">
+              <div class="form-group">
+                <label class="form-label" for="previewContactId">Preview Contact ID</label>
+                <script runat="server">
+                  function previewFormSafe(value) {
+                    return String(value || "")
+                      .replace(/&/g, "&amp;")
+                      .replace(/</g, "&lt;")
+                      .replace(/>/g, "&gt;")
+                      .replace(/"/g, "&quot;");
+                  }
+                  Write('<input class="form-input" id="previewContactId" name="previewContactId" value="' + previewFormSafe(Platform.Variable.GetValue("@quickSendEmailPreviewContactId") || "0033l000037NLyuAAG") + '">');
+                </script>
+              </div>
+              <div class="preview-contact-actions">
+                <button class="btn btn-create" id="refreshPreviewData" type="button">Refresh Preview</button>
+              </div>
+            </div>
+            <iframe class="preview-frame" id="emailPreviewFrame" title="Email preview"></iframe>
+          </section>
         </div>
-        <div class="preview-contact-panel" id="previewContactPanel">
-          <div class="form-group">
-            <label class="form-label" for="previewContactId">Preview Contact ID</label>
-            <script runat="server">
-              function previewFormSafe(value) {
-                return String(value || "")
-                  .replace(/&/g, "&amp;")
-                  .replace(/</g, "&lt;")
-                  .replace(/>/g, "&gt;")
-                  .replace(/"/g, "&quot;");
-              }
-              Write('<input class="form-input" id="previewContactId" name="previewContactId" value="' + previewFormSafe(Platform.Variable.GetValue("@emailHubPreviewContactId") || "0033l000037NLyuAAG") + '">');
-            </script>
-          </div>
-          <div class="preview-contact-actions">
-            <button class="btn btn-secondary" id="refreshPreviewData" type="button">Refresh Preview</button>
-          </div>
-        </div>
-        <iframe class="preview-frame" id="emailPreviewFrame" title="Email preview"></iframe>
-      </section>
-    </div>
-  </div>
+      </div>
     </div>
   </main>
 </div>
@@ -1210,7 +1086,7 @@ Platform.Variable.SetValue("@emailHubLoadedSurveyId", loadedSurveyId);
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
   }
-  Write('<textarea id="previewDataJson" hidden>' + previewJsonSafe(Platform.Variable.GetValue("@emailHubPreviewDataJson") || "{}") + '</textarea>');
+  Write('<textarea id="previewDataJson" hidden>' + previewJsonSafe(Platform.Variable.GetValue("@quickSendEmailPreviewDataJson") || "{}") + '</textarea>');
 </script>
 <script>
   (function () {
@@ -1232,40 +1108,27 @@ Platform.Variable.SetValue("@emailHubLoadedSurveyId", loadedSurveyId);
       return escapeHtml(value).replace(/\r\n|\r|\n/g, "<br>");
     }
     function previewHtml() {
-      var headline = escapeHtml(el("headline").value || "Got 2 minutes? Tell us what you think");
+      var introBody = textToHtml(el("introBody").value);
       var greeting = escapeHtml(previewData.fullGreeting || "Hello,");
-      var signatureHtml = previewData.signatureHtml || "<p style=\"margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">Best regards,<br><span style=\"font-style:italic;font-family:serif;font-size:20px;\">MagMutual</span><br>MagMutual Insurance</p>";
-      var surveyId = encodeURIComponent(el("surveyId").value || "SURV_20260612_102301");
-      var surveyContactId = encodeURIComponent(previewData.contactId || el("previewContactId").value || "");
-      var surveyUrl = "https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=" + surveyId + "&contact=" + surveyContactId;
-      var textBody = textToHtml(el("textBody").value);
+      var signatureHtml = previewData.signatureHtml || "<p style=\"margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">Best regards,<br><br><span style=\"font-style:italic;font-family:serif;font-size:20px;\">MagMutual</span><br>MagMutual Insurance</p>";
       return [
-        "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#eaeaea;margin:0;padding:0;\">",
-        "<tr><td align=\"center\">",
-        "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#393939;max-width:100%;\">",
-        "<tr><td style=\"padding:30px;\"><a href=\"https://magmutual.com/\" target=\"_blank\"><img src=\"https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/MM_PrimaryLogo_Reversed.png\" alt=\"MagMutual\" width=\"200\" border=\"0\" style=\"display:block;\"></a></td></tr>",
-        "<tr><td style=\"padding:20px 45px 30px;font-family:Arial,Helvetica,sans-serif;color:#ffffff;\"><h1 style=\"font-size:32px;line-height:36px;margin:0;color:#ffffff;\">" + headline + "</h1></td></tr>",
-        "</table>",
+        "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;margin:0;padding:30px 0;\">",
+        "<tr><td align=\"left\">",
         "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;max-width:100%;\">",
-        "<tr><td style=\"padding:30px;font-family:Arial,Helvetica,sans-serif;color:#161616;font-size:14px;line-height:20px;\">",
-        "<p style=\"margin:0 0 20px;\">" + greeting + "</p>",
-        "<p style=\"margin:0 0 20px;\">" + textBody + "</p>",
-        "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr><td bgcolor=\"#0060F5\" style=\"background:#0060F5;\"><a href=\"" + surveyUrl + "\" target=\"_blank\" style=\"display:block;padding:10px 99px 10px 10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;text-decoration:none;\">Take Survey</a></td></tr></table>",
-        "<p style=\"margin:20px 0 0;\">If you have any questions or run into any issues, don't hesitate to reach out.</p>",
-        "<p style=\"margin:20px 0 0;\">Thank you for sharing your thoughts &mdash; we truly value your feedback!</p>",
+        "<tr><td style=\"font-family:Arial,Helvetica,sans-serif;color:#161616;font-size:14px;line-height:20px;padding:0 20px;\">",
+        "<p style=\"margin:0 0 18px;\">" + greeting + "</p>",
+        "<p style=\"margin:0 0 18px;\">" + introBody + "</p>",
         signatureHtml,
         "</td></tr>",
-        "</table>",
-        "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;max-width:100%;\">",
-        "<tr><td align=\"center\" style=\"padding:0 30px 30px;font-family:Arial,Helvetica,sans-serif;font-size:9px;line-height:12px;color:#808080;\"><u>Unsubscribe</u> | <u>Manage Preferences</u> <br> MagMutual Insurance Company 3550 Peachtree Road Suite 500 <br> Atlanta, GA, 30326</td></tr>",
+        "<tr><td align=\"left\" style=\"padding:30px 20px 0;font-family:Arial,Helvetica,sans-serif;font-size:9px;line-height:12px;color:#808080;\"><u></u><br></td></tr>",
         "</table>",
         "</td></tr>",
         "</table>"
       ].join("");
     }
     function updatePreview() {
-      el("previewSubject").textContent = el("subject").value || "Got 2 minutes? Tell us what you think";
-      el("previewPreheader").textContent = el("preheader").value || "We would appreciate a few minutes of your time.";
+      el("previewSubject").textContent = el("subject").value || "Recommended Learning Center resources";
+      el("previewPreheader").textContent = el("preheader").value || "Helpful educational resources selected for your practice.";
       el("previewDate").textContent = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
       el("emailPreviewFrame").srcdoc = previewHtml();
     }
@@ -1282,7 +1145,7 @@ Platform.Variable.SetValue("@emailHubLoadedSurveyId", loadedSurveyId);
       panel.className = isOpen ? "preview-contact-panel" : "preview-contact-panel open";
       toggle.setAttribute("aria-expanded", isOpen ? "false" : "true");
     }
-    ["subject", "preheader", "surveyId", "headline", "textBody"].forEach(function (id) {
+    ["subject", "preheader", "introBody"].forEach(function (id) {
       el(id).addEventListener("input", updatePreview);
     });
     el("previewContactToggle").addEventListener("click", togglePreviewContact);
