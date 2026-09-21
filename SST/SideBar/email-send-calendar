@@ -4,6 +4,7 @@ Platform.Load("core", "1");
 var CALENDAR_DE = "bd_sst_email_send_calendar";
 var CALENDAR_FUTURE_DE = "bd_sst_email_send_calendar_future";
 var RECENT_DAYS_LIMIT = 5;
+var PAST_DAYS_LIMIT = 90;
 var calendarView = "day";
 
 var hubUrl = "";
@@ -292,11 +293,28 @@ function calendarMinSendDateKey() {
   return formatIsoDate(new Date(minMs));
 }
 
+function calendarQueryMinDateKey() {
+  var todayMs = parseDateMs(todayDateKey());
+  if (!todayMs) {
+    return todayDateKey();
+  }
+  var minMs = todayMs - PAST_DAYS_LIMIT * 86400000;
+  return formatIsoDate(new Date(minMs));
+}
+
 function buildCalendarRowsFilter(minSendDateKey) {
   return {
     Property: "sendDate",
     SimpleOperator: "greaterThanOrEqual",
     Value: minSendDateKey
+  };
+}
+
+function buildExactDateFilter(dateKey) {
+  return {
+    Property: "sendDate",
+    SimpleOperator: "equals",
+    Value: clean(dateKey)
   };
 }
 
@@ -354,10 +372,12 @@ function normalizeCalendarRow(row) {
   };
 }
 
-function loadCalendarRowsFromDe(deName, minSendDateKey) {
+function loadCalendarRowsFromDe(deName, minSendDateKey, exactDateKey) {
   var errors = [];
   var rowFilter = null;
-  if (minSendDateKey) {
+  if (exactDateKey) {
+    rowFilter = buildExactDateFilter(exactDateKey);
+  } else if (minSendDateKey) {
     rowFilter = buildCalendarRowsFilter(minSendDateKey);
   }
   var keyVariants = [deName, String(deName).toLowerCase()];
@@ -733,7 +753,17 @@ try {
       sendsHtml = '<p class="recent-empty">No scheduled sends available.</p>';
     }
   } else if (calendarFetch.ok) {
-    sendsHtml = buildSendsHtml(calendarFetch.rows, selectedDate, mcCloudUrl);
+    var sendRows = calendarFetch.rows;
+    if (selectedDate && selectedDate < calendarMinSendDateKey()) {
+      var dayFetch = loadCalendarRowsFromDe(CALENDAR_DE, "", selectedDate);
+      if (dayFetch.ok) {
+        sendRows = dayFetch.rows;
+      } else {
+        calendarLoadError = dayFetch.error || "Could not load sends for this date.";
+        sendRows = [];
+      }
+    }
+    sendsHtml = buildSendsHtml(sendRows, selectedDate, mcCloudUrl);
   } else {
     calendarLoadError = calendarFetch.error || "Could not load send calendar.";
     sendsHtml = '<p class="recent-empty">No send data available.</p>';
@@ -751,6 +781,7 @@ Platform.Variable.SetValue("@activeNav", "email_calendar");
 Platform.Variable.SetValue("@envDisplayName", envDisplayName);
 Platform.Variable.SetValue("@envDisplayEmail", envDisplayEmail);
 Platform.Variable.SetValue("@envAvatarLetter", envAvatarLetter);
+Platform.Variable.SetValue("@calDateMin", calendarQueryMinDateKey());
 Platform.Variable.SetValue("@calSelectedDate", selectedDate);
 Platform.Variable.SetValue("@calSelectedDateDisplay", selectedDateDisplay);
 Platform.Variable.SetValue("@calView", calendarView);
@@ -1091,6 +1122,7 @@ h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 8px; line-height: 1.25
                   type="date"
                   id="date"
                   name="date"
+                  min="%%=v(@calDateMin)=%%"
                   value="%%=v(@calSelectedDate)=%%"
                 >
                 <input
@@ -1102,7 +1134,7 @@ h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 8px; line-height: 1.25
                   aria-label="Search email or journey name"
                 >
               </div>
-              <p class="hint">Choose a date to load sends, or pick a recent day on the right.</p>
+              <p class="hint">Choose any date from the last 90 days, or pick a recent day on the right.</p>
             </div>
           </form>
 

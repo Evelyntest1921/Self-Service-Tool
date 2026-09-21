@@ -1,6 +1,7 @@
 %%[
 SET @createRequested = RequestParameter("create")
 SET @journeyName = Trim(RequestParameter("journeyName"))
+SET @entryDataExtension = Trim(RequestParameter("entryDataExtension"))
 SET @hubUrl = ""
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
@@ -15,6 +16,8 @@ ENDIF
 SET @resultText = ""
 SET @journeyId = ""
 SET @journeyKey = ""
+SET @entryDeName = ""
+SET @entryDeKey = ""
 SET @authOk = "false"
 IF @showForm != "true" THEN
  IF Empty(@journeyName) THEN
@@ -77,58 +80,211 @@ function firstMatch(text, pattern) {
   }
 }
 
+function firstDeRow(results) {
+  if (!results) {
+    return null;
+  }
+  if (typeof results.length === "number") {
+    return results.length > 0 ? results[0] : null;
+  }
+  if (results.ObjectID || results.CustomerKey || results.Name) {
+    return results;
+  }
+  return null;
+}
+
+function retrieveDe(prox, propertyName, propertyValue) {
+  var resp = prox.retrieve(
+    "DataExtension",
+    ["ObjectID", "CustomerKey", "Name", "IsSendable"],
+    {
+      Property: propertyName,
+      SimpleOperator: "equals",
+      Value: propertyValue
+    }
+  );
+  return firstDeRow(resp && resp.Results ? resp.Results : null);
+}
+
+function resolveDataExtension(prox, rawValue) {
+  var value = asStr(rawValue);
+  if (!value) {
+    return null;
+  }
+  var row = retrieveDe(prox, "CustomerKey", value);
+  if (!row) {
+    row = retrieveDe(prox, "Name", value);
+  }
+  if (!row) {
+    return null;
+  }
+  var sendable = asStr(row.IsSendable).toLowerCase();
+  return {
+    objectId: asStr(row.ObjectID),
+    customerKey: asStr(row.CustomerKey),
+    name: asStr(row.Name) || value,
+    isSendable: sendable !== "false" && sendable !== "0"
+  };
+}
+
+function postJson(url, token, payload) {
+  var req = new Script.Util.HttpRequest(url);
+  req.emptyContentHandling = 0;
+  req.continueOnError = true;
+  req.setHeader("Authorization", "Bearer " + token);
+  req.method = "POST";
+  req.contentType = "application/json";
+  req.postData = Platform.Function.Stringify(payload);
+  var resp = req.send();
+  return {
+    status: resp.statusCode,
+    body: resp.content ? String(resp.content) : ""
+  };
+}
+
+function createDeEntryEvent(token, subdomain, journeyName, deMeta) {
+  var eventKey = "DEAudience-" + Platform.Function.GUID();
+  var eventUrl =
+    "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions";
+  var eventResp = postJson(eventUrl, token, {
+    name: journeyName + " entry",
+    description: "",
+    type: "EmailAudience",
+    mode: "Production",
+    eventDefinitionKey: eventKey,
+    dataExtensionId: deMeta.objectId,
+    dataExtensionName: deMeta.name,
+    isVisibleInPicker: false
+  });
+  if (eventResp.status != 200 && eventResp.status != 201) {
+    return {
+      ok: false,
+      message:
+        "Could not attach the data extension: HTTP " +
+        eventResp.status +
+        " - " +
+        eventResp.body
+    };
+  }
+  var eventDefId = firstMatch(eventResp.body, /"id"\s*:\s*"?([^",}\s]+)"?/);
+  if (!eventDefId) {
+    return {
+      ok: false,
+      message: "Could not attach the data extension: no entry ID was returned."
+    };
+  }
+  return {
+    ok: true,
+    eventDefId: eventDefId,
+    eventKey: eventKey,
+    trigger: {
+      key: "TRIGGER",
+      name: "TRIGGER",
+      description: "",
+      type: "EmailAudience",
+      outcomes: [],
+      arguments: {},
+      configurationArguments: {},
+      metaData: {
+        eventDefinitionId: eventDefId,
+        eventDefinitionKey: eventKey,
+        chainType: "None",
+        configurationRequired: false,
+        iconUrl: "/images/icon-data-extension.svg",
+        title: "Data Extension",
+        entrySourceGroupConfigUrl: "jb:///data/entry/audience/entrysourcegroupconfig.json"
+      }
+    }
+  };
+}
+
 var authOk = asStr(Variable.GetValue("authOk"));
 var accessToken = asStr(Variable.GetValue("accessToken"));
 var subdomain = asStr(Variable.GetValue("subdomain"));
 var journeyName = asStr(Variable.GetValue("journeyName"));
 var journeyKey = asStr(Variable.GetValue("journeyKey"));
+var entryDataExtension = asStr(Variable.GetValue("entryDataExtension"));
 var resultText = asStr(Variable.GetValue("resultText"));
 var journeyId = "";
+var entryDeName = "";
+var entryDeKey = "";
 
 if (authOk == "true" && accessToken && subdomain && journeyName && journeyKey) {
   try {
-    var journeyUrl =
-      "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/interactions";
-    var journeyPayload = Platform.Function.Stringify({
-      name: journeyName,
-      key: journeyKey,
-      description: "",
-      version: 1,
-      workflowApiVersion: 1.0,
-      definitionType: "Multistep",
-      entryMode: "OnceAndDone",
-      channel: "",
-      activities: [],
-      notifiers: [],
-      goals: [],
-      exits: [],
-      triggers: [],
-      metaData: {
-        disableEndWait: true
+    var triggers = [];
+    if (entryDataExtension) {
+      var prox = new Script.Util.WSProxy();
+      var deMeta = resolveDataExtension(prox, entryDataExtension);
+      if (!deMeta || !deMeta.objectId) {
+        resultText =
+          "Could not find a data extension named or keyed \"" +
+          entryDataExtension +
+          "\".";
+      } else if (!deMeta.isSendable) {
+        resultText =
+          "Could not use \"" +
+          deMeta.name +
+          "\". That data extension is not sendable.";
+      } else {
+        var eventResult = createDeEntryEvent(
+          accessToken,
+          subdomain,
+          journeyName,
+          deMeta
+        );
+        if (!eventResult.ok) {
+          resultText = eventResult.message;
+        } else {
+          triggers.push(eventResult.trigger);
+          entryDeName = deMeta.name;
+          entryDeKey = deMeta.customerKey || deMeta.objectId;
+        }
       }
-    });
-    var postReq = new Script.Util.HttpRequest(journeyUrl);
-    postReq.emptyContentHandling = 0;
-    postReq.continueOnError = true;
-    postReq.setHeader("Authorization", "Bearer " + accessToken);
-    postReq.method = "POST";
-    postReq.contentType = "application/json";
-    postReq.postData = journeyPayload;
-    var postResp = postReq.send();
-    var journeyStatus = postResp.statusCode;
-    var journeyResponse = postResp.content ? String(postResp.content) : "";
-    if (journeyStatus == 200 || journeyStatus == 201) {
-      journeyId = firstMatch(journeyResponse, /"id"\s*:\s*"?([^",}\s]+)"?/);
-      resultText = "Journey created as a draft with no emails or steps.";
-      if (journeyId) {
-        resultText = resultText + " Journey ID: " + journeyId + ".";
+    }
+    var canCreateJourney =
+      resultText.indexOf("Could not") !== 0 &&
+      (!entryDataExtension || triggers.length > 0);
+    if (canCreateJourney) {
+      var journeyUrl =
+        "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/interactions";
+      var journeyResp = postJson(journeyUrl, accessToken, {
+        name: journeyName,
+        key: journeyKey,
+        description: "",
+        version: 1,
+        workflowApiVersion: 1.0,
+        definitionType: "Multistep",
+        entryMode: "OnceAndDone",
+        channel: "",
+        activities: [],
+        notifiers: [],
+        goals: [],
+        exits: [],
+        triggers: triggers,
+        metaData: {
+          disableEndWait: true
+        }
+      });
+      if (journeyResp.status == 200 || journeyResp.status == 201) {
+        journeyId = firstMatch(journeyResp.body, /"id"\s*:\s*"?([^",}\s]+)"?/);
+        if (entryDeName) {
+          resultText =
+            "Journey created as a draft using " +
+            entryDeName +
+            " as the entry source.";
+        } else {
+          resultText = "Journey created as a draft with no emails or steps.";
+        }
+        if (journeyId) {
+          resultText = resultText + " Journey ID: " + journeyId + ".";
+        }
+      } else {
+        resultText =
+          "Could not create the journey: HTTP " +
+          journeyResp.status +
+          " - " +
+          journeyResp.body;
       }
-    } else {
-      resultText =
-        "Could not create the journey: HTTP " +
-        journeyStatus +
-        " - " +
-        journeyResponse;
     }
   } catch (createEx) {
     resultText = "Could not create the journey: " + (createEx.message || String(createEx));
@@ -136,6 +292,8 @@ if (authOk == "true" && accessToken && subdomain && journeyName && journeyKey) {
 }
 
 Platform.Variable.SetValue("@journeyId", journeyId);
+Platform.Variable.SetValue("@entryDeName", entryDeName);
+Platform.Variable.SetValue("@entryDeKey", entryDeKey);
 Platform.Variable.SetValue("@resultText", resultText);
 </script>
 %%[
@@ -144,6 +302,8 @@ IF IndexOf(@resultText,"Could not") > 0 OR IndexOf(@resultText,"Missing") > 0 OR
  SET @createFailed = "1"
 ENDIF
 IF @showForm == "false" AND @createFailed != "1" AND NOT Empty(@journeyId) THEN
+ SET @analyticsDeName = IIF(NOT Empty(@entryDeName), @entryDeName, "N/A")
+ SET @analyticsDeId = IIF(NOT Empty(@entryDeKey), @entryDeKey, "N/A")
  UpsertDE(
   "Bd_journey_analytics",
   1,
@@ -152,8 +312,8 @@ IF @showForm == "false" AND @createFailed != "1" AND NOT Empty(@journeyId) THEN
   "journeyType", "Create empty journey",
   "emailName", "N/A",
   "emailId", "N/A",
-  "deName", "N/A",
-  "deId", "N/A",
+  "deName", Substring(@analyticsDeName,1,200),
+  "deId", Substring(@analyticsDeId,1,50),
   "updateDate", Now()
  )
 ENDIF
@@ -491,7 +651,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
        <h1 class="maker-page-title">Create empty journey</h1>
      </div>
    </div>
-   <p class="maker-page-subtitle">Name the journey and we will create a blank draft. You can add emails and steps later in Journey Builder.</p>
+   <p class="maker-page-subtitle">Name the journey. Leave the data extension blank for a blank draft, or add one to use it as the entry source.</p>
    <div class="maker-form-shell">
   <form method="post" action="">
     <div class="question-card">
@@ -501,6 +661,13 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
       </div>
       <div class="form-group">
         <input type="text" class="textarea-control" name="journeyName" value="%%=v(@journeyName)=%%" placeholder="e.g. Q3 renewal path" required maxlength="80">
+      </div>
+      <div class="question-header" style="margin-top: 24px;">
+        <div class="question-number">2</div>
+        <div class="question-text">Data extension (optional)</div>
+      </div>
+      <div class="form-group">
+        <input type="text" class="textarea-control" name="entryDataExtension" value="%%=v(@entryDataExtension)=%%" placeholder="Name or key of an existing sendable data extension" maxlength="200">
       </div>
       <div class="submit-section">
         <input type="hidden" name="create" value="1">
@@ -529,7 +696,11 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 %%[ IF @createFailed == "1" THEN ]%%
 Review the note below, then try again with a different name if needed.
 %%[ ELSE ]%%
+%%[ IF NOT Empty(@entryDeName) THEN ]%%
+Your journey is ready and uses this data extension as the entry source. Add emails or other steps in Journey Builder.
+%%[ ELSE ]%%
 Your blank journey is ready. Open it in Journey Builder to add an entry source, emails, or other steps.
+%%[ ENDIF ]%%
 %%[ ENDIF ]%%
    </p>
    <div class="maker-form-shell">
@@ -537,6 +708,8 @@ Your blank journey is ready. Open it in Journey Builder to add an entry source, 
        <dl class="maker-result-dl">
          <dt>Journey name</dt>
          <dd>%%=IIF(NOT Empty(@journeyName), @journeyName, "—")=%%</dd>
+         <dt>Data extension</dt>
+         <dd>%%=IIF(NOT Empty(@entryDeName), @entryDeName, "None")=%%</dd>
          <dt>Journey ID</dt>
          <dd>%%=IIF(NOT Empty(@journeyId), @journeyId, "—")=%%</dd>
        </dl>
