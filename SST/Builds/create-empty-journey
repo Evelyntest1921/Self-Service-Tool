@@ -1,0 +1,591 @@
+%%[
+SET @createRequested = RequestParameter("create")
+SET @journeyName = Trim(RequestParameter("journeyName"))
+SET @hubUrl = ""
+SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
+IF RowCount(@navRows) > 0 THEN
+ SET @navRow = Row(@navRows,1)
+ SET @hubUrl = Field(@navRow,"ss_home")
+ENDIF
+SET @builderPageLabel = "Create empty journey"
+SET @showForm = "true"
+IF NOT Empty(@createRequested) THEN
+ SET @showForm = "false"
+ENDIF
+SET @resultText = ""
+SET @journeyId = ""
+SET @journeyKey = ""
+SET @authOk = "false"
+IF @showForm != "true" THEN
+ IF Empty(@journeyName) THEN
+  SET @resultText = "Enter a name for the journey."
+ ELSE
+  SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
+  SET @rowCount = RowCount(@authRow)
+  IF @rowCount > 0 THEN
+   SET @row = Row(@authRow,1)
+   SET @clientId = Field(@row,"clientId")
+   SET @clientSecret = Field(@row,"clientSecret")
+   SET @subdomain = Field(@row,"subdomain")
+   IF NOT Empty(@clientId) AND NOT Empty(@clientSecret) AND NOT Empty(@subdomain) THEN
+    SET @authUrl = Concat("https://",@subdomain,".auth.marketingcloudapis.com/v2/token")
+    SET @accountId = Trim(Field(@row,"accountId"))
+    SET @authPayload = Concat('{"grant_type":"client_credentials","client_id":"',@clientId,'","client_secret":"',@clientSecret,'"')
+    IF NOT Empty(@accountId) THEN
+     SET @authPayload = Concat(@authPayload,',"account_id":"',@accountId,'"')
+    ENDIF
+    SET @authPayload = Concat(@authPayload,'}')
+    SET @authStatus = HTTPPost2(@authUrl,"application/json",@authPayload,false,@authResponse,@authResponseHeader)
+    IF @authStatus == 200 THEN
+     SET @tokenPattern = '"access_token":"([^"]+)"'
+     SET @accessToken = RegExMatch(@authResponse,@tokenPattern,1)
+     IF NOT Empty(@accessToken) THEN
+      SET @resultText = "Signed in. Creating a blank journey."
+      SET @authOk = "true"
+      SET @journeyKey = GUID()
+     ELSE
+      SET @resultText = "Could not sign in: no access token."
+     ENDIF
+    ELSE
+     SET @resultText = Concat("Could not sign in: HTTP ",@authStatus," - ",@authResponse)
+    ENDIF
+   ELSE
+    SET @resultText = "Missing API credentials in SFMC_AUTH."
+   ENDIF
+  ELSE
+   SET @resultText = "No SFMC_AUTH row for User=Admin."
+  ENDIF
+ ENDIF
+ENDIF
+]%%
+<script runat="server">
+Platform.Load("core","1");
+
+function asStr(value) {
+  if (value === null || typeof value === "undefined") {
+    return "";
+  }
+  return String(value).replace(/^\s+|\s+$/g, "");
+}
+
+function firstMatch(text, pattern) {
+  try {
+    var match = String(text || "").match(pattern);
+    return match && match[1] ? match[1] : "";
+  } catch (matchEx) {
+    return "";
+  }
+}
+
+var authOk = asStr(Variable.GetValue("authOk"));
+var accessToken = asStr(Variable.GetValue("accessToken"));
+var subdomain = asStr(Variable.GetValue("subdomain"));
+var journeyName = asStr(Variable.GetValue("journeyName"));
+var journeyKey = asStr(Variable.GetValue("journeyKey"));
+var resultText = asStr(Variable.GetValue("resultText"));
+var journeyId = "";
+
+if (authOk == "true" && accessToken && subdomain && journeyName && journeyKey) {
+  try {
+    var journeyUrl =
+      "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/interactions";
+    var journeyPayload = Platform.Function.Stringify({
+      name: journeyName,
+      key: journeyKey,
+      description: "",
+      version: 1,
+      workflowApiVersion: 1.0,
+      definitionType: "Multistep",
+      entryMode: "OnceAndDone",
+      channel: "",
+      activities: [],
+      notifiers: [],
+      goals: [],
+      exits: [],
+      triggers: [],
+      metaData: {
+        disableEndWait: true
+      }
+    });
+    var postReq = new Script.Util.HttpRequest(journeyUrl);
+    postReq.emptyContentHandling = 0;
+    postReq.continueOnError = true;
+    postReq.setHeader("Authorization", "Bearer " + accessToken);
+    postReq.method = "POST";
+    postReq.contentType = "application/json";
+    postReq.postData = journeyPayload;
+    var postResp = postReq.send();
+    var journeyStatus = postResp.statusCode;
+    var journeyResponse = postResp.content ? String(postResp.content) : "";
+    if (journeyStatus == 200 || journeyStatus == 201) {
+      journeyId = firstMatch(journeyResponse, /"id"\s*:\s*"?([^",}\s]+)"?/);
+      resultText = "Journey created as a draft with no emails or steps.";
+      if (journeyId) {
+        resultText = resultText + " Journey ID: " + journeyId + ".";
+      }
+    } else {
+      resultText =
+        "Could not create the journey: HTTP " +
+        journeyStatus +
+        " - " +
+        journeyResponse;
+    }
+  } catch (createEx) {
+    resultText = "Could not create the journey: " + (createEx.message || String(createEx));
+  }
+}
+
+Platform.Variable.SetValue("@journeyId", journeyId);
+Platform.Variable.SetValue("@resultText", resultText);
+</script>
+%%[
+SET @createFailed = "0"
+IF IndexOf(@resultText,"Could not") > 0 OR IndexOf(@resultText,"Missing") > 0 OR IndexOf(@resultText,"No SFMC_AUTH") > 0 OR IndexOf(@resultText,"Enter a name") > 0 THEN
+ SET @createFailed = "1"
+ENDIF
+IF @showForm == "false" AND @createFailed != "1" AND NOT Empty(@journeyId) THEN
+ UpsertDE(
+  "Bd_journey_analytics",
+  1,
+  "journeyId", Substring(@journeyId,1,250),
+  "journeyName", Substring(@journeyName,1,50),
+  "journeyType", "Create empty journey",
+  "emailName", "N/A",
+  "emailId", "N/A",
+  "deName", "N/A",
+  "deId", "N/A",
+  "updateDate", Now()
+ )
+ENDIF
+]%%
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>%%=v(@builderPageLabel)=%% • Journey Maker</title>
+<link rel="icon" href="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&amp;w=640&amp;q=75" type="image/png">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+:root {
+--primary-color: #6366f1;
+--primary-dark: #4f46e5;
+--text-primary: #111827;
+--text-secondary: #6b7280;
+--bg-primary: #ffffff;
+--bg-secondary: #f9fafb;
+--border-color: #e5e7eb;
+--shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+--radius-md: 0.5rem;
+--gray-200: #e5e7eb;
+--gray-400: #9ca3af;
+--gray-500: #6b7280;
+--gray-600: #4b5563;
+--gray-900: #111827;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg-secondary); color: var(--text-primary); line-height: 1.6; margin: 0; }
+.dashboard-layout { display: flex; height: 100vh; min-height: 100vh; overflow: hidden; }
+.maker-sidebar {
+ width: 280px;
+ background: #fff;
+ border-right: 1px solid var(--gray-200);
+ display: flex;
+ flex-direction: column;
+ padding: 28px 0;
+ flex-shrink: 0;
+ box-shadow: var(--shadow-sm);
+ height: 100vh;
+ overflow: hidden;
+}
+.sidebar-logo {
+ padding: 0 20px;
+ margin-bottom: 12px;
+ border-bottom: 1px solid #eee5e5;
+ padding-bottom: 10px;
+ align-self: center;
+}
+.sidebar-logo a { display: inline-block; }
+.sidebar-logo img { height: 40px; }
+.nav-section { margin-bottom: 8px; }
+.nav-section-title {
+ font-size: 11px;
+ font-weight: 600;
+ color: var(--gray-400);
+ letter-spacing: 0.06em;
+ margin-bottom: 8px;
+ padding: 0 32px;
+ text-transform: uppercase;
+}
+.sidebar-nav .nav-link {
+ display: flex;
+ align-items: center;
+ gap: 12px;
+ padding: 12px 32px;
+ color: var(--gray-600);
+ text-decoration: none;
+ font-weight: 500;
+ font-size: 14px;
+ border-right: 3px solid transparent;
+}
+.sidebar-nav .nav-link.active {
+ background: linear-gradient(90deg, rgb(119 120 196 / 10%) 0%, rgb(2 3 22 / 5%) 100%);
+ color: #000000;
+ border-right-color: #2c2c31;
+}
+.sidebar-nav span.nav-link.active { cursor: default; }
+.nav-icon { width: 20px; height: 20px; opacity: 0.75; }
+.maker-main {
+ flex: 1;
+ min-width: 0;
+ height: 100vh;
+ overflow: hidden;
+ display: flex;
+ flex-direction: column;
+ background: var(--bg-secondary);
+}
+.maker-main-inner {
+ flex: 1;
+ overflow-y: auto;
+ padding: 32px 40px 48px;
+}
+.maker-main-footer {
+ flex-shrink: 0;
+ display: flex;
+ align-items: center;
+ justify-content: space-between;
+ gap: 16px;
+ padding: 14px 40px;
+ border-top: 1px solid var(--border-color);
+ background: #fff;
+ font-size: 13px;
+ color: var(--text-secondary);
+}
+.breadcrumb-section { padding: 4px 0 20px; }
+.breadcrumb-nav {
+ display: flex;
+ align-items: center;
+ flex-wrap: wrap;
+ font-size: 14px;
+ gap: 4px;
+}
+.breadcrumb-link {
+ display: inline-flex;
+ align-items: center;
+ color: var(--primary-color);
+ text-decoration: none;
+ font-weight: 500;
+ font-size: 16px;
+}
+.breadcrumb-link:hover { color: var(--primary-dark); text-decoration: underline; }
+.breadcrumb-separator { margin: 0 8px; color: var(--gray-400); }
+.breadcrumb-current { font-weight: 600; color: var(--gray-900); }
+.maker-page-heading {
+ display: flex;
+ align-items: flex-start;
+ gap: 14px;
+ margin-bottom: 10px;
+}
+.maker-page-heading-icon {
+ flex-shrink: 0;
+ width: 44px;
+ height: 44px;
+ border-radius: 12px;
+ background: #f3f4f6;
+ border: 1px solid var(--border-color);
+ display: flex;
+ align-items: center;
+ justify-content: center;
+ color: var(--gray-900);
+}
+.maker-page-heading-icon svg { width: 26px; height: 26px; }
+.maker-page-title { font-size: 1.75rem; font-weight: 700; margin-bottom: 0; color: var(--gray-900); line-height: 1.25; }
+.maker-page-subtitle { font-size: 1rem; color: var(--text-secondary); max-width: 640px; margin-bottom: 20px; }
+.maker-form-shell {
+ background: #fff;
+ border: 1px solid var(--border-color);
+ border-radius: 12px;
+ box-shadow: var(--shadow-sm);
+}
+.maker-result-inner { padding: 28px 32px 32px; }
+.maker-page-heading-icon.maker-result-status.is-success {
+ background: #ecfdf5;
+ border-color: #a7f3d0;
+ color: #065f46;
+}
+.maker-page-heading-icon.maker-result-status.is-error {
+ background: #fef2f2;
+ border-color: #fecaca;
+ color: #991b1b;
+}
+.maker-result-dl { margin: 0; padding: 0; }
+.maker-result-dl dt {
+ font-size: 11px;
+ font-weight: 600;
+ text-transform: uppercase;
+ letter-spacing: 0.06em;
+ color: var(--gray-500);
+ margin: 0 0 4px 0;
+}
+.maker-result-dl dd {
+ font-size: 1rem;
+ font-weight: 500;
+ color: var(--gray-900);
+ margin: 0 0 20px 0;
+ line-height: 1.45;
+ word-break: break-word;
+}
+.maker-result-actions {
+ display: flex;
+ flex-wrap: wrap;
+ gap: 10px;
+ margin-top: 8px;
+ padding-top: 24px;
+ border-top: 1px solid var(--border-color);
+}
+.maker-result-actions--tight { padding-top: 0; border-top: none; margin-top: 0; }
+.maker-btn {
+ display: inline-flex;
+ align-items: center;
+ justify-content: center;
+ gap: 8px;
+ padding: 10px 18px;
+ font-size: 14px;
+ font-weight: 600;
+ border-radius: var(--radius-md);
+ text-decoration: none;
+ border: 1px solid transparent;
+ cursor: pointer;
+ font-family: inherit;
+}
+.maker-btn--secondary {
+ background: #fff;
+ color: var(--gray-900);
+ border-color: var(--border-color);
+}
+.maker-btn--secondary:hover { background: var(--bg-secondary); border-color: var(--gray-400); }
+.maker-btn--ghost {
+ background: var(--bg-secondary);
+ color: var(--gray-600);
+ border-color: var(--border-color);
+}
+.maker-btn--ghost:hover { color: var(--gray-900); border-color: var(--gray-400); }
+.maker-result-log-wrap { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border-color); }
+.maker-result-log {
+ margin-top: 12px;
+ padding: 14px 16px;
+ background: #1e1e1e;
+ color: #d4d4d4;
+ font-size: 0.8125rem;
+ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+ white-space: pre-wrap;
+ word-break: break-word;
+ border-radius: var(--radius-md);
+ max-height: 280px;
+ overflow-y: auto;
+ display: none;
+}
+.maker-result-log.is-visible { display: block; }
+.question-card { padding: 24px; }
+.question-header {
+ display: flex;
+ align-items: center;
+ margin-bottom: 20px;
+}
+.question-number {
+ color: black;
+ width: 42px;
+ height: 42px;
+ border-radius: 50%;
+ display: flex;
+ align-items: center;
+ justify-content: center;
+ font-size: 24px;
+ font-weight: 600;
+ margin-right: 16px;
+ flex-shrink: 0;
+ border: 1px solid #0000001a;
+}
+.question-text { font-size: 1.125rem; font-weight: 600; color: var(--text-primary); }
+.form-group { margin-bottom: 16px; }
+.textarea-control {
+ width: 100%;
+ padding: 12px 16px;
+ border: 1px solid var(--border-color);
+ font-size: 1rem;
+ background: var(--bg-primary);
+ font-family: inherit;
+}
+.textarea-control:focus {
+ outline: none;
+ border-color: var(--primary-color);
+ box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+.submit-section { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border-color); }
+.submit-button {
+ background: #0e0e1d;
+ color: white;
+ border: none;
+ padding: 16px 32px;
+ font-size: 1rem;
+ font-weight: 600;
+ cursor: pointer;
+}
+.submit-button:disabled { opacity: 0.6; cursor: not-allowed; }
+.spinner {
+ border: 2px solid rgba(255,255,255,0.3);
+ border-top: 2px solid white;
+ border-radius: 50%;
+ width: 20px;
+ height: 20px;
+ animation: spin 1s linear infinite;
+ display: inline-block;
+ margin-left: 8px;
+ vertical-align: middle;
+}
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+@media (max-width: 768px) {
+ .dashboard-layout { flex-direction: column; height: auto; overflow: visible; }
+ .maker-sidebar { width: 100%; height: auto; }
+ .maker-main { height: auto; overflow: visible; }
+ .maker-main-inner { overflow: visible; padding: 16px; }
+}
+</style>
+</head>
+<body>
+<div class="dashboard-layout">
+ <aside class="maker-sidebar sidebar" aria-label="Primary">
+   <div class="sidebar-logo">
+     <a href="%%=v(@hubUrl)=%%"><img src="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" alt="MagMutual" style="filter: invert(1);"></a>
+   </div>
+   <nav class="sidebar-nav">
+     <div class="nav-section"><span class="nav-section-title">MENU</span></div>
+     <span class="nav-link active" role="presentation">
+       <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/></svg>
+       %%=v(@builderPageLabel)=%%
+     </span>
+   </nav>
+ </aside>
+ <main class="maker-main">
+   <div class="maker-main-inner">
+   <div class="breadcrumb-section">
+     <nav class="breadcrumb-nav" aria-label="Breadcrumb">
+       <a href="%%=v(@hubUrl)=%%" class="breadcrumb-link">
+         <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+         Back
+       </a>
+       <span class="breadcrumb-separator" aria-hidden="true">/</span>
+%%[ IF @showForm == "true" THEN ]%%
+       <span class="breadcrumb-current">%%=v(@builderPageLabel)=%%</span>
+%%[ ELSE ]%%
+       <span class="breadcrumb-current">%%=Concat(@builderPageLabel," • Result")=%%</span>
+%%[ ENDIF ]%%
+     </nav>
+   </div>
+%%[ IF @showForm == "true" THEN ]%%
+   <div class="maker-page-heading">
+     <div class="maker-page-heading-icon" aria-hidden="true">
+       <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/></svg>
+     </div>
+     <div class="maker-page-heading-text">
+       <h1 class="maker-page-title">Create empty journey</h1>
+     </div>
+   </div>
+   <p class="maker-page-subtitle">Name the journey and we will create a blank draft. You can add emails and steps later in Journey Builder.</p>
+   <div class="maker-form-shell">
+  <form method="post" action="">
+    <div class="question-card">
+      <div class="question-header">
+        <div class="question-number">1</div>
+        <div class="question-text">Journey name</div>
+      </div>
+      <div class="form-group">
+        <input type="text" class="textarea-control" name="journeyName" value="%%=v(@journeyName)=%%" placeholder="e.g. Q3 renewal path" required maxlength="80">
+      </div>
+      <div class="submit-section">
+        <input type="hidden" name="create" value="1">
+        <button type="submit" class="submit-button" id="submitBtn">
+          <span id="btnText"> Create empty journey </span>
+          <span id="btnSpinner" class="spinner" style="display:none"></span>
+        </button>
+      </div>
+    </div>
+  </form>
+   </div>
+%%[ ELSE ]%%
+   <div class="maker-page-heading">
+     <div class="maker-page-heading-icon maker-result-status %%[ IF @createFailed == "1" THEN ]%%is-error%%[ ELSE ]%%is-success%%[ ENDIF ]%%" aria-hidden="true">
+%%[ IF @createFailed == "1" THEN ]%%
+       <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>
+%%[ ELSE ]%%
+       <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+%%[ ENDIF ]%%
+     </div>
+     <div class="maker-page-heading-text">
+       <h1 class="maker-page-title">%%=IIF(@createFailed == "1","Could not create journey","Journey created")=%%</h1>
+     </div>
+   </div>
+   <p class="maker-page-subtitle">
+%%[ IF @createFailed == "1" THEN ]%%
+Review the note below, then try again with a different name if needed.
+%%[ ELSE ]%%
+Your blank journey is ready. Open it in Journey Builder to add an entry source, emails, or other steps.
+%%[ ENDIF ]%%
+   </p>
+   <div class="maker-form-shell">
+     <div class="maker-result-inner">
+       <dl class="maker-result-dl">
+         <dt>Journey name</dt>
+         <dd>%%=IIF(NOT Empty(@journeyName), @journeyName, "—")=%%</dd>
+         <dt>Journey ID</dt>
+         <dd>%%=IIF(NOT Empty(@journeyId), @journeyId, "—")=%%</dd>
+       </dl>
+       <div class="maker-result-actions">
+%%[ IF @createFailed != "1" AND NOT Empty(@journeyId) THEN ]%%
+         <a href="https://mc.s13.exacttarget.com/cloud/#app/Journey%20Builder/%23%%=v(@journeyId)=%%/1" target="_blank" rel="noopener noreferrer" class="maker-btn maker-btn--secondary">Open Journey Builder</a>
+%%[ ENDIF ]%%
+       </div>
+       <div class="maker-result-log-wrap">
+         <button type="button" class="maker-btn maker-btn--ghost" id="showLogBtn">Show log</button>
+         <pre class="maker-result-log" id="apiLog">%%=v(@resultText)=%%</pre>
+       </div>
+       <div class="maker-result-actions maker-result-actions--tight">
+         <form method="post" action="" style="margin:0">
+           <button type="submit" class="maker-btn maker-btn--secondary">Back to builder</button>
+         </form>
+       </div>
+     </div>
+   </div>
+%%[ ENDIF ]%%
+   </div>
+   <footer class="maker-main-footer">
+     <span>Self Service</span>
+     <span>© 2026 All rights reserved | MagMutual</span>
+   </footer>
+ </main>
+</div>
+<script>
+(function(){
+var form = document.querySelector('form[method="post"]');
+if (form && form.querySelector('#submitBtn')) {
+  var btn = document.getElementById('submitBtn');
+  var btnText = document.getElementById('btnText');
+  var btnSpinner = document.getElementById('btnSpinner');
+  form.addEventListener('submit', function() {
+    btn.disabled = true;
+    if (btnText) btnText.textContent = 'Creating...';
+    if (btnSpinner) btnSpinner.style.display = 'inline-block';
+  });
+}
+var showLogBtn = document.getElementById('showLogBtn');
+var apiLog = document.getElementById('apiLog');
+if (showLogBtn && apiLog) {
+  showLogBtn.onclick = function() {
+    apiLog.classList.toggle('is-visible');
+    showLogBtn.textContent = apiLog.classList.contains('is-visible') ? 'Hide log' : 'Show log';
+  };
+}
+})();
+</script>
+</body>
+</html>
