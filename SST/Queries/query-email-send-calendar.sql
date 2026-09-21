@@ -8,7 +8,8 @@ SELECT
   COUNT(*) AS recipients,
   MAX(jy.JourneyID) AS journeyId,
   MAX(jy.JourneyName) AS journeyName,
-  MAX(jy.VersionNumber) AS versionNumber
+  MAX(jy.VersionNumber) AS versionNumber,
+  MAX(s.emailPreview) AS emailPreview
 FROM _Sent s
 INNER JOIN _Job j
   ON j.JobID = s.JobID

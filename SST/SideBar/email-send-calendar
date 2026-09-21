@@ -308,6 +308,11 @@ function formatRecentDayLabel(sendDate, sendDateKey) {
   return formatDisplayDay(sendDate || sendDateKey);
 }
 
+function isHttpUrl(value) {
+  var url = clean(value).toLowerCase();
+  return url.indexOf("http://") === 0 || url.indexOf("https://") === 0;
+}
+
 function buildJourneyOpenUrl(mcCloudBase, journeyId, versionNumber) {
   var jid = clean(journeyId);
   if (!jid) {
@@ -329,6 +334,7 @@ function normalizeCalendarRow(row) {
   var journeyId = asStr(fieldAny(row, ["journeyId", "JourneyID", "JourneyId"]));
   var journeyName = asStr(fieldAny(row, ["journeyName", "JourneyName"]));
   var versionNumber = asStr(fieldAny(row, ["versionNumber", "VersionNumber"]));
+  var emailPreview = asStr(fieldAny(row, ["emailPreview", "EmailPreview"]));
   return {
     calendarKey: asStr(fieldAny(row, ["calendarKey", "CalendarKey"])),
     sendDate: sendDate,
@@ -337,6 +343,7 @@ function normalizeCalendarRow(row) {
     jobId: asStr(fieldAny(row, ["jobId", "JobID", "JobId"])),
     emailName: asStr(fieldAny(row, ["emailName", "EmailName"])) || "Untitled email",
     emailSubject: asStr(fieldAny(row, ["emailSubject", "EmailSubject"])) || "—",
+    emailPreview: emailPreview,
     sendTime: fieldAny(row, ["sendTime", "SendTime"]),
     sendTimeMs: parseDateMs(fieldAny(row, ["sendTime", "SendTime"])),
     recipients: asStr(fieldAny(row, ["recipients", "Recipients"])) || "0",
@@ -364,7 +371,8 @@ function loadCalendarRowsFromDe(deName, minSendDateKey) {
     "recipients",
     "journeyId",
     "journeyName",
-    "versionNumber"
+    "versionNumber",
+    "emailPreview"
   ];
   var v;
   for (v = 0; v < keyVariants.length; v++) {
@@ -417,6 +425,21 @@ function loadCalendarRows() {
 
 function loadFutureCalendarRows() {
   return loadCalendarRowsFromDe(CALENDAR_FUTURE_DE, todayDateKey());
+}
+
+function buildEmailCell(send) {
+  var emailName = clean(send.emailName) || "Untitled email";
+  var previewUrl = clean(send.emailPreview);
+  if (!previewUrl || !isHttpUrl(previewUrl)) {
+    return htmlSafe(emailName);
+  }
+  return (
+    '<a class="send-journey-link" href="' +
+    htmlSafe(previewUrl) +
+    '" target="_blank" rel="noopener noreferrer">' +
+    htmlSafe(emailName) +
+    "</a>"
+  );
 }
 
 function buildJourneyCell(send, cloudBase) {
@@ -483,7 +506,7 @@ function buildSendsHtml(rows, dateKey, cloudBase) {
         htmlSafe(send.recipients) +
         '">' +
         "<td>" +
-        htmlSafe(send.emailName) +
+        buildEmailCell(send) +
         "</td>" +
         "<td>" +
         htmlSafe(send.emailSubject) +
@@ -557,7 +580,7 @@ function buildFutureSendsHtml(rows, cloudBase, filterDateKey) {
         htmlSafe(String(send.sendTimeMs || 0)) +
         '">' +
         "<td>" +
-        htmlSafe(send.emailName) +
+        buildEmailCell(send) +
         "</td>" +
         "<td>" +
         htmlSafe(send.emailSubject || "—") +
@@ -1043,7 +1066,7 @@ h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 8px; line-height: 1.25
             </svg>
             %%[ endif ]%%
           </div>
-          <p class="sub">Emails that went out on the selected day. You can open the journey that sent the email by clicking on the journey in the list below.</p>
+          <p class="sub">Emails that went out on the selected day. Click an email name to open its preview when a link is available, or click the journey name to open that journey.</p>
 
           <script runat="server">
             function bodySafe(value) {
