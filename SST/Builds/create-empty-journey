@@ -175,9 +175,39 @@ function applyNoScheduleMeta(meta) {
   if (!meta.criteriaDescription) {
     meta.criteriaDescription = "";
   }
-  delete meta.scheduleFlowMode;
-  delete meta.runOnceScheduleMode;
+  meta.scheduleFlowMode = null;
+  meta.runOnceScheduleMode = null;
+  delete meta.automationData;
   return meta;
+}
+
+function clearAudienceEntrySchedule(obj) {
+  if (!obj || typeof obj !== "object") {
+    return obj;
+  }
+  obj.metaData = applyNoScheduleMeta(obj.metaData);
+  if (obj.schedule) {
+    delete obj.schedule;
+  }
+  if (obj.arguments && typeof obj.arguments === "object") {
+    obj.arguments.useHighWatermark = false;
+    delete obj.arguments.automationId;
+    delete obj.arguments.AutomationId;
+  }
+  delete obj.automationId;
+  return obj;
+}
+
+function clearDeTriggerSchedule(trig) {
+  if (!trig || typeof trig !== "object") {
+    return trig;
+  }
+  trig.metaData = applyNoScheduleMeta(trig.metaData || {});
+  trig.configurationArguments = trig.configurationArguments || {};
+  trig.configurationArguments.scheduleFlowMode = null;
+  trig.configurationArguments.runOnceScheduleMode = null;
+  delete trig.configurationArguments.schedule;
+  return trig;
 }
 
 function syncDeEntryNoSchedule(token, subdomain, journeyId, eventDefId) {
@@ -193,14 +223,7 @@ function syncDeEntryNoSchedule(token, subdomain, journeyId, eventDefId) {
   if (getEvent.status == 200 || getEvent.status == 201) {
     var eventObj = parseJsonSafe(getEvent.body);
     if (eventObj) {
-      eventObj.metaData = applyNoScheduleMeta(eventObj.metaData);
-      if (eventObj.schedule) {
-        delete eventObj.schedule;
-      }
-      if (eventObj.arguments && typeof eventObj.arguments === "object") {
-        eventObj.arguments.useHighWatermark = false;
-      }
-      requestJson(eventUrl, token, "PUT", eventObj);
+      requestJson(eventUrl, token, "PUT", clearAudienceEntrySchedule(eventObj));
     }
   }
   var journeyUrl =
@@ -217,9 +240,7 @@ function syncDeEntryNoSchedule(token, subdomain, journeyId, eventDefId) {
     return;
   }
   journeyObj.metaData = applyNoScheduleMeta(journeyObj.metaData || {});
-  journeyObj.triggers[0].metaData = applyNoScheduleMeta(
-    journeyObj.triggers[0].metaData || {}
-  );
+  journeyObj.triggers[0] = clearDeTriggerSchedule(journeyObj.triggers[0]);
   var versionNum = journeyObj.version || 1;
   requestJson(
     journeyUrl + "?versionNumber=" + encodeURIComponent(String(versionNum)),
@@ -252,7 +273,9 @@ function createDeEntryEvent(token, subdomain, journeyName, deMeta) {
     configurationArguments: {},
     metaData: {
       criteriaDescription: "",
-      scheduleState: "No Schedule"
+      scheduleState: "No Schedule",
+      scheduleFlowMode: null,
+      runOnceScheduleMode: null
     }
   });
   if (eventResp.status != 200 && eventResp.status != 201) {
@@ -293,7 +316,9 @@ function createDeEntryEvent(token, subdomain, journeyName, deMeta) {
         iconUrl: "/images/icon-data-extension.svg",
         title: "Data Extension",
         entrySourceGroupConfigUrl: "jb:///data/entry/audience/entrysourcegroupconfig.json",
-        scheduleState: "No Schedule"
+        scheduleState: "No Schedule",
+        scheduleFlowMode: null,
+        runOnceScheduleMode: null
       }
     }
   };
