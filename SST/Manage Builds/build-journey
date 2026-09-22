@@ -443,6 +443,103 @@ function activityDetailLine(act) {
   return strTrim(act.key);
 }
 
+function lookupSenderProfile(profileId) {
+  if (!profileId) {
+    return null;
+  }
+  try {
+    var prox = new Script.Util.WSProxy();
+    var props = ["Name", "FromName", "FromAddress", "CustomerKey", "ObjectID"];
+    var byKey = prox.retrieve("SenderProfile", props, {
+      Property: "CustomerKey",
+      SimpleOperator: "equals",
+      Value: String(profileId)
+    });
+    if (byKey && byKey.Results && byKey.Results.length > 0) {
+      return byKey.Results[0];
+    }
+    var byObj = prox.retrieve("SenderProfile", props, {
+      Property: "ObjectID",
+      SimpleOperator: "equals",
+      Value: String(profileId)
+    });
+    if (byObj && byObj.Results && byObj.Results.length > 0) {
+      return byObj.Results[0];
+    }
+  } catch (spErr) {}
+  return null;
+}
+
+function formatSenderProfileDisplay(spRow, profileId) {
+  if (spRow) {
+    var spName = strTrim(spRow.Name || "");
+    var spFrom = strTrim(spRow.FromName || "");
+    var spAddr = strTrim(spRow.FromAddress || "");
+    if (spFrom && spAddr) {
+      return spFrom + " <" + spAddr + ">";
+    }
+    if (spAddr) {
+      return spAddr;
+    }
+    if (spFrom) {
+      return spFrom;
+    }
+    if (spName) {
+      return spName;
+    }
+  }
+  if (profileId) {
+    return "Sender profile " + profileId;
+  }
+  return "";
+}
+
+function buildSenderProfileLookupCache(activities) {
+  var cache = {};
+  var ids = {};
+  var normalized = coerceActivityList(activities);
+  var i;
+  for (i = 0; i < safeArrayLength(normalized); i++) {
+    var act = safeArrayGet(normalized, i);
+    if (!act) {
+      continue;
+    }
+    var type = strTrim(act.type).toUpperCase();
+    if (type !== "EMAILV2" && type !== "EMAIL") {
+      continue;
+    }
+    var ts =
+      (act.configurationArguments && act.configurationArguments.triggeredSend) || {};
+    var pid = strTrim(ts.senderProfileId);
+    if (pid) {
+      ids[pid] = true;
+    }
+  }
+  for (var idKey in ids) {
+    if (ids.hasOwnProperty(idKey)) {
+      cache[idKey] = formatSenderProfileDisplay(lookupSenderProfile(idKey), idKey);
+    }
+  }
+  return cache;
+}
+
+function emailActivitySenderProfile(act, senderCache) {
+  var type = strTrim(act && act.type ? act.type : "").toUpperCase();
+  if (type !== "EMAILV2" && type !== "EMAIL") {
+    return "—";
+  }
+  var ts =
+    (act.configurationArguments && act.configurationArguments.triggeredSend) || {};
+  var pid = strTrim(ts.senderProfileId);
+  if (!pid) {
+    return "—";
+  }
+  if (senderCache && senderCache[pid]) {
+    return senderCache[pid];
+  }
+  return formatSenderProfileDisplay(lookupSenderProfile(pid), pid) || "—";
+}
+
 function activityDisplayName(act) {
   if (!act) {
     return "Untitled";
@@ -858,11 +955,14 @@ function coerceActivityList(activities) {
   return list;
 }
 
-function buildActivitiesTableHtml(activities) {
+function buildActivitiesTableHtml(activities, senderCache) {
   var normalized = coerceActivityList(activities);
   var i;
   if (!normalized.length) {
     return '<p class="recent-empty">No activities returned for this journey.</p>';
+  }
+  if (!senderCache) {
+    senderCache = buildSenderProfileLookupCache(normalized);
   }
   var sorted = [];
   for (i = 0; i < safeArrayLength(normalized); i++) {
@@ -887,6 +987,7 @@ function buildActivitiesTableHtml(activities) {
       "<th>Type</th>" +
       "<th>Name</th>" +
       "<th>Detail</th>" +
+      "<th>Sender profile</th>" +
       "<th>Configured</th>" +
       "<th>Key</th>" +
       "</tr></thead><tbody>"
@@ -910,6 +1011,9 @@ function buildActivitiesTableHtml(activities) {
         "</td>" +
         "<td>" +
         htmlSafe(activityDetailLine(act) || "—") +
+        "</td>" +
+        "<td>" +
+        htmlSafe(emailActivitySenderProfile(act, senderCache)) +
         "</td>" +
         "<td>" +
         htmlSafe(isConfigured(act)) +
@@ -1621,10 +1725,11 @@ try {
           : "";
       var activities = coerceActivityList(jObj.activities);
       apiActivityCount = String(activities.length);
+      var senderProfileCache = buildSenderProfileLookupCache(activities);
       journeyBuilderUrl = buildJourneyOpenUrl(MC_CLOUD, jid, apiJourneyVersion);
       var startAct = findFlowStartActivity(activities, jObj);
       journeyFlowHtml = buildFlowGraphHtml(startAct, activities);
-      journeyActivitiesHtml = buildActivitiesTableHtml(activities);
+      journeyActivitiesHtml = buildActivitiesTableHtml(activities, senderProfileCache);
       var entrySourceLabel = resolveEntrySourceLabel(jObj, activities, null);
 
       var deEntry = findDeAudienceEntry(jObj);
