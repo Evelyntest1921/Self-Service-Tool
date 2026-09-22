@@ -147,18 +147,40 @@ function pad2(num) {
   return n < 10 ? "0" + n : String(n);
 }
 
-function defaultScheduleStartDateTime() {
-  var d = new Date();
-  d.setDate(d.getDate() + 1);
-  d.setHours(0, 0, 0, 0);
+function formatScheduleDateTimeFromDate(d) {
   return (
     d.getFullYear() +
     "-" +
     pad2(d.getMonth() + 1) +
     "-" +
     pad2(d.getDate()) +
-    "T00:00:00"
+    "T" +
+    pad2(d.getHours()) +
+    ":" +
+    pad2(d.getMinutes()) +
+    ":00"
   );
+}
+
+function parseScheduleStartParts(iso) {
+  var m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+  if (!m) {
+    return null;
+  }
+  return {
+    y: parseInt(m[1], 10),
+    mo: parseInt(m[2], 10) - 1,
+    d: parseInt(m[3], 10),
+    h: parseInt(m[4], 10),
+    mi: parseInt(m[5], 10)
+  };
+}
+
+function defaultScheduleStartDateTime() {
+  var d = new Date();
+  d.setDate(d.getDate() + 2);
+  d.setHours(9, 0, 0, 0);
+  return formatScheduleDateTimeFromDate(d);
 }
 
 function normalizeScheduleStart(raw) {
@@ -170,6 +192,75 @@ function normalizeScheduleStart(raw) {
     return value.length >= 19 ? value.substring(0, 19) : value.substring(0, 16) + ":00";
   }
   return defaultScheduleStartDateTime();
+}
+
+function ensureFutureScheduleStart(raw) {
+  var normalized = normalizeScheduleStart(raw);
+  var p = parseScheduleStartParts(normalized);
+  if (!p) {
+    return defaultScheduleStartDateTime();
+  }
+  var startDate = new Date(p.y, p.mo, p.d, p.h, p.mi, 0, 0);
+  var minStart = new Date();
+  minStart.setTime(minStart.getTime() + 2 * 60 * 60 * 1000);
+  if (startDate.getTime() <= minStart.getTime()) {
+    return defaultScheduleStartDateTime();
+  }
+  return normalized;
+}
+
+function buildEndDateTimeOneYearAfter(startIso) {
+  var p = parseScheduleStartParts(startIso);
+  if (!p) {
+    return startIso;
+  }
+  return formatScheduleDateTimeFromDate(
+    new Date(p.y + 1, p.mo, p.d, p.h, p.mi, 0, 0)
+  );
+}
+
+function buildRecurringSchedule(scheduleFrequency, scheduleStart) {
+  var startDateTime = ensureFutureScheduleStart(scheduleStart);
+  var parts = parseScheduleStartParts(startDateTime);
+  var freq = asStr(scheduleFrequency).toLowerCase();
+  var schedule = {
+    startDateTime: startDateTime,
+    endDateTime: buildEndDateTimeOneYearAfter(startDateTime),
+    endType: "EndDate",
+    timeZone: "Central Standard Time",
+    interval: 1
+  };
+  if (freq === "weekly" && parts) {
+    var weekdayIndex = new Date(parts.y, parts.mo, parts.d).getDay();
+    var dayKeys = [
+      "sunday",
+      "monday",
+      "tuesday",
+      "wednesday",
+      "thursday",
+      "friday",
+      "saturday"
+    ];
+    var byDayName = [
+      "Sunday",
+      "Monday",
+      "Tuesday",
+      "Wednesday",
+      "Thursday",
+      "Friday",
+      "Saturday"
+    ];
+    schedule.frequency = "Weekly";
+    schedule.recurrencePattern = "ByDay";
+    schedule.scheduledDayOfWeek = byDayName[weekdayIndex];
+    for (var i = 0; i < dayKeys.length; i++) {
+      schedule[dayKeys[i]] = i === weekdayIndex;
+    }
+  } else {
+    schedule.frequency = "Daily";
+    schedule.recurrencePattern = "Interval";
+  }
+  return schedule;
 }
 
 function buildDeEntryEventPayload(
@@ -195,17 +286,8 @@ function buildDeEntryEventPayload(
   };
   var type = asStr(scheduleType).toLowerCase();
   if (type === "recurring") {
-    var freq = asStr(scheduleFrequency).toLowerCase();
     payload.metaData.scheduleFlowMode = "Recurring";
-    payload.schedule = {
-      startDateTime: normalizeScheduleStart(scheduleStart),
-      endType: "Occurrences",
-      occurrences: 52,
-      frequency: freq === "weekly" ? "Weekly" : "Daily",
-      recurrencePattern: "Interval",
-      interval: 1,
-      timeZone: "Central Standard Time"
-    };
+    payload.schedule = buildRecurringSchedule(scheduleFrequency, scheduleStart);
   } else {
     payload.metaData.scheduleFlowMode = "Run Once";
   }
@@ -869,7 +951,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
             </select>
           </div>
           <div class="form-group">
-            <label for="entryScheduleStart">First run (local)</label>
+            <label for="entryScheduleStart">First run (local, must be in the future)</label>
             <input type="datetime-local" class="textarea-control" name="entryScheduleStart" id="entryScheduleStart" value="%%=v(@entryScheduleStart)=%%">
           </div>
         </div>
@@ -966,6 +1048,26 @@ function syncEntryScheduleUi() {
   }
   if (recurringFields) {
     recurringFields.classList.toggle('is-visible', !!hasDe && recurringSelected);
+  }
+  var startInput = document.getElementById('entryScheduleStart');
+  if (startInput) {
+    var minDate = new Date();
+    minDate.setDate(minDate.getDate() + 2);
+    minDate.setHours(9, 0, 0, 0);
+    function padLocal(n) {
+      return n < 10 ? '0' + n : String(n);
+    }
+    var minLocal =
+      minDate.getFullYear() +
+      '-' +
+      padLocal(minDate.getMonth() + 1) +
+      '-' +
+      padLocal(minDate.getDate()) +
+      'T09:00';
+    startInput.min = minLocal;
+    if (!startInput.value) {
+      startInput.value = minLocal;
+    }
   }
 }
 if (deInput) {
