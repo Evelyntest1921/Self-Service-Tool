@@ -2,6 +2,18 @@
 SET @createRequested = RequestParameter("create")
 SET @journeyName = Trim(RequestParameter("journeyName"))
 SET @entryDataExtension = Trim(RequestParameter("entryDataExtension"))
+SET @entryScheduleType = Trim(RequestParameter("entryScheduleType"))
+SET @entryScheduleFrequency = Trim(RequestParameter("entryScheduleFrequency"))
+SET @entryScheduleStart = Trim(RequestParameter("entryScheduleStart"))
+IF Empty(@entryScheduleType) THEN
+ SET @entryScheduleType = "runOnce"
+ENDIF
+IF @entryScheduleType != "runOnce" AND @entryScheduleType != "recurring" THEN
+ SET @entryScheduleType = "runOnce"
+ENDIF
+IF Empty(@entryScheduleFrequency) THEN
+ SET @entryScheduleFrequency = "daily"
+ENDIF
 SET @hubUrl = ""
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
@@ -127,6 +139,79 @@ function resolveDataExtension(prox, rawValue) {
   };
 }
 
+function pad2(num) {
+  var n = parseInt(num, 10);
+  if (isNaN(n)) {
+    return "00";
+  }
+  return n < 10 ? "0" + n : String(n);
+}
+
+function defaultScheduleStartDateTime() {
+  var d = new Date();
+  d.setDate(d.getDate() + 1);
+  d.setHours(0, 0, 0, 0);
+  return (
+    d.getFullYear() +
+    "-" +
+    pad2(d.getMonth() + 1) +
+    "-" +
+    pad2(d.getDate()) +
+    "T00:00:00"
+  );
+}
+
+function normalizeScheduleStart(raw) {
+  var value = asStr(raw);
+  if (!value) {
+    return defaultScheduleStartDateTime();
+  }
+  if (value.indexOf("T") > 0) {
+    return value.length >= 19 ? value.substring(0, 19) : value.substring(0, 16) + ":00";
+  }
+  return defaultScheduleStartDateTime();
+}
+
+function buildDeEntryEventPayload(
+  deMeta,
+  journeyName,
+  eventKey,
+  scheduleType,
+  scheduleFrequency,
+  scheduleStart
+) {
+  var payload = {
+    name: journeyName + " entry",
+    description: "",
+    type: "EmailAudience",
+    mode: "Production",
+    eventDefinitionKey: eventKey,
+    dataExtensionId: deMeta.objectId,
+    dataExtensionName: deMeta.name,
+    isVisibleInPicker: false,
+    metaData: {
+      criteriaDescription: ""
+    }
+  };
+  var type = asStr(scheduleType).toLowerCase();
+  if (type === "recurring") {
+    var freq = asStr(scheduleFrequency).toLowerCase();
+    payload.metaData.scheduleFlowMode = "Recurring";
+    payload.schedule = {
+      startDateTime: normalizeScheduleStart(scheduleStart),
+      endType: "Occurrences",
+      occurrences: 52,
+      frequency: freq === "weekly" ? "Weekly" : "Daily",
+      recurrencePattern: "Interval",
+      interval: 1,
+      timeZone: "Central Standard Time"
+    };
+  } else {
+    payload.metaData.scheduleFlowMode = "Run Once";
+  }
+  return payload;
+}
+
 function postJson(url, token, payload) {
   var req = new Script.Util.HttpRequest(url);
   req.emptyContentHandling = 0;
@@ -142,20 +227,30 @@ function postJson(url, token, payload) {
   };
 }
 
-function createDeEntryEvent(token, subdomain, journeyName, deMeta) {
+function createDeEntryEvent(
+  token,
+  subdomain,
+  journeyName,
+  deMeta,
+  scheduleType,
+  scheduleFrequency,
+  scheduleStart
+) {
   var eventKey = "DEAudience-" + Platform.Function.GUID();
   var eventUrl =
     "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions";
-  var eventResp = postJson(eventUrl, token, {
-    name: journeyName + " entry",
-    description: "",
-    type: "EmailAudience",
-    mode: "Production",
-    eventDefinitionKey: eventKey,
-    dataExtensionId: deMeta.objectId,
-    dataExtensionName: deMeta.name,
-    isVisibleInPicker: false
-  });
+  var eventResp = postJson(
+    eventUrl,
+    token,
+    buildDeEntryEventPayload(
+      deMeta,
+      journeyName,
+      eventKey,
+      scheduleType,
+      scheduleFrequency,
+      scheduleStart
+    )
+  );
   if (eventResp.status != 200 && eventResp.status != 201) {
     return {
       ok: false,
@@ -205,7 +300,11 @@ var subdomain = asStr(Variable.GetValue("subdomain"));
 var journeyName = asStr(Variable.GetValue("journeyName"));
 var journeyKey = asStr(Variable.GetValue("journeyKey"));
 var entryDataExtension = asStr(Variable.GetValue("entryDataExtension"));
+var entryScheduleType = asStr(Variable.GetValue("entryScheduleType")) || "runOnce";
+var entryScheduleFrequency = asStr(Variable.GetValue("entryScheduleFrequency")) || "daily";
+var entryScheduleStart = asStr(Variable.GetValue("entryScheduleStart"));
 var resultText = asStr(Variable.GetValue("resultText"));
+var entryScheduleLabel = "";
 var journeyId = "";
 var entryDeName = "";
 var entryDeKey = "";
@@ -227,11 +326,16 @@ if (authOk == "true" && accessToken && subdomain && journeyName && journeyKey) {
           deMeta.name +
           "\". That data extension is not sendable.";
       } else {
+        entryScheduleLabel =
+          entryScheduleType === "recurring" ? "Recurring" : "Run once";
         var eventResult = createDeEntryEvent(
           accessToken,
           subdomain,
           journeyName,
-          deMeta
+          deMeta,
+          entryScheduleType,
+          entryScheduleFrequency,
+          entryScheduleStart
         );
         if (!eventResult.ok) {
           resultText = eventResult.message;
@@ -275,7 +379,8 @@ if (authOk == "true" && accessToken && subdomain && journeyName && journeyKey) {
         ) {
           deEventKey = String(triggers[0].metaData.eventDefinitionKey);
         }
-        journeyPayload.metaData.scheduleState = "No Schedule";
+        journeyPayload.metaData.scheduleState =
+          entryScheduleType === "recurring" ? "Scheduled" : "No Schedule";
         journeyPayload.metaData.dataSource = "ContactsModel";
         if (deEventKey) {
           journeyPayload.defaults = {
@@ -320,6 +425,7 @@ if (authOk == "true" && accessToken && subdomain && journeyName && journeyKey) {
 Platform.Variable.SetValue("@journeyId", journeyId);
 Platform.Variable.SetValue("@entryDeName", entryDeName);
 Platform.Variable.SetValue("@entryDeKey", entryDeKey);
+Platform.Variable.SetValue("@entryScheduleLabel", entryScheduleLabel);
 Platform.Variable.SetValue("@resultText", resultText);
 </script>
 %%[
@@ -607,6 +713,43 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
  border-color: var(--primary-color);
  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
 }
+.schedule-section { display: none; margin-top: 8px; }
+.schedule-section.is-visible { display: block; }
+.schedule-radio-group { display: flex; flex-direction: column; gap: 10px; }
+.schedule-radio-option {
+ display: flex;
+ align-items: flex-start;
+ gap: 10px;
+ padding: 12px 14px;
+ border: 1px solid var(--border-color);
+ border-radius: var(--radius-md);
+ cursor: pointer;
+}
+.schedule-radio-option:has(input:checked) {
+ border-color: var(--primary-color);
+ background: rgba(99, 102, 241, 0.06);
+}
+.schedule-radio-option input { margin-top: 3px; }
+.schedule-radio-copy { display: flex; flex-direction: column; gap: 2px; }
+.schedule-radio-title { font-weight: 600; color: var(--text-primary); font-size: 0.9375rem; }
+.schedule-radio-hint { font-size: 0.8125rem; color: var(--text-secondary); }
+.recurring-fields {
+ display: none;
+ margin-top: 12px;
+ padding: 16px;
+ background: var(--bg-secondary);
+ border-radius: var(--radius-md);
+ border: 1px solid var(--border-color);
+}
+.recurring-fields.is-visible { display: block; }
+.recurring-fields label {
+ display: block;
+ font-size: 0.8125rem;
+ font-weight: 600;
+ color: var(--text-secondary);
+ margin-bottom: 6px;
+}
+.recurring-fields .form-group:last-child { margin-bottom: 0; }
 .submit-section { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border-color); }
 .submit-button {
  background: #0e0e1d;
@@ -693,7 +836,43 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
         <div class="question-text">Data extension (optional)</div>
       </div>
       <div class="form-group">
-        <input type="text" class="textarea-control" name="entryDataExtension" value="%%=v(@entryDataExtension)=%%" placeholder="Name or key of an existing sendable data extension" maxlength="200">
+        <input type="text" class="textarea-control" name="entryDataExtension" id="entryDataExtension" value="%%=v(@entryDataExtension)=%%" placeholder="Name or key of an existing sendable data extension" maxlength="200">
+      </div>
+      <div id="entryScheduleSection" class="schedule-section">
+        <div class="question-header" style="margin-top: 24px;">
+          <div class="question-number">3</div>
+          <div class="question-text">Entry schedule type</div>
+        </div>
+        <p class="schedule-radio-hint" style="margin: 0 0 12px 58px;">Applies when a data extension is the entry source. Choose the schedule mode; finish timing in Journey Builder.</p>
+        <div class="schedule-radio-group" style="margin-left: 58px;">
+          <label class="schedule-radio-option">
+            <input type="radio" name="entryScheduleType" value="runOnce" %%[ IF @entryScheduleType != "recurring" THEN ]%%checked%%[ ENDIF ]%%>
+            <span class="schedule-radio-copy">
+              <span class="schedule-radio-title">Run once</span>
+              <span class="schedule-radio-hint">One-time entry schedule. Set On activation or a specific start in Journey Builder.</span>
+            </span>
+          </label>
+          <label class="schedule-radio-option">
+            <input type="radio" name="entryScheduleType" value="recurring" %%[ IF @entryScheduleType == "recurring" THEN ]%%checked%%[ ENDIF ]%%>
+            <span class="schedule-radio-copy">
+              <span class="schedule-radio-title">Recurring</span>
+              <span class="schedule-radio-hint">Repeating evaluation of the data extension (daily or weekly starter schedule).</span>
+            </span>
+          </label>
+        </div>
+        <div id="recurringScheduleFields" class="recurring-fields">
+          <div class="form-group">
+            <label for="entryScheduleFrequency">Frequency</label>
+            <select class="textarea-control" name="entryScheduleFrequency" id="entryScheduleFrequency">
+              <option value="daily" %%[ IF @entryScheduleFrequency != "weekly" THEN ]%%selected%%[ ENDIF ]%%>Daily</option>
+              <option value="weekly" %%[ IF @entryScheduleFrequency == "weekly" THEN ]%%selected%%[ ENDIF ]%%>Weekly</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="entryScheduleStart">First run (local)</label>
+            <input type="datetime-local" class="textarea-control" name="entryScheduleStart" id="entryScheduleStart" value="%%=v(@entryScheduleStart)=%%">
+          </div>
+        </div>
       </div>
       <div class="submit-section">
         <input type="hidden" name="create" value="1">
@@ -736,6 +915,10 @@ Your blank journey is ready. Open it in Journey Builder to add an entry source, 
          <dd>%%=IIF(NOT Empty(@journeyName), @journeyName, "—")=%%</dd>
          <dt>Data extension</dt>
          <dd>%%=IIF(NOT Empty(@entryDeName), @entryDeName, "None")=%%</dd>
+%%[ IF NOT Empty(@entryDeName) AND NOT Empty(@entryScheduleLabel) THEN ]%%
+         <dt>Entry schedule type</dt>
+         <dd>%%=v(@entryScheduleLabel)=%%</dd>
+%%[ ENDIF ]%%
          <dt>Journey ID</dt>
          <dd>%%=IIF(NOT Empty(@journeyId), @journeyId, "—")=%%</dd>
        </dl>
@@ -765,6 +948,34 @@ Your blank journey is ready. Open it in Journey Builder to add an entry source, 
 </div>
 <script>
 (function(){
+var deInput = document.getElementById('entryDataExtension');
+var scheduleSection = document.getElementById('entryScheduleSection');
+var recurringFields = document.getElementById('recurringScheduleFields');
+var scheduleRadios = document.querySelectorAll('input[name="entryScheduleType"]');
+function syncEntryScheduleUi() {
+  var hasDe = deInput && String(deInput.value || '').replace(/^\s+|\s+$/g, '').length > 0;
+  if (scheduleSection) {
+    scheduleSection.classList.toggle('is-visible', !!hasDe);
+  }
+  var recurringSelected = false;
+  for (var i = 0; i < scheduleRadios.length; i++) {
+    if (scheduleRadios[i].checked && scheduleRadios[i].value === 'recurring') {
+      recurringSelected = true;
+      break;
+    }
+  }
+  if (recurringFields) {
+    recurringFields.classList.toggle('is-visible', !!hasDe && recurringSelected);
+  }
+}
+if (deInput) {
+  deInput.addEventListener('input', syncEntryScheduleUi);
+  deInput.addEventListener('change', syncEntryScheduleUi);
+}
+for (var r = 0; r < scheduleRadios.length; r++) {
+  scheduleRadios[r].addEventListener('change', syncEntryScheduleUi);
+}
+syncEntryScheduleUi();
 var form = document.querySelector('form[method="post"]');
 if (form && form.querySelector('#submitBtn')) {
   var btn = document.getElementById('submitBtn');
