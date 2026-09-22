@@ -320,7 +320,16 @@ IF @postedJid != @jid THEN
   SET @pageStatus = "tamper"
   SET @resultText = "Journey identifier did not match."
 ELSE
-  DeleteData(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
+]%%
+<script runat="server">
+Platform.Load("core", "1");
+var logDeKey = String(Platform.Variable.GetValue("@DETAIL_EXTERNAL_KEY_DE") || "Bd_journey_analytics");
+var logJid = String(Platform.Variable.GetValue("@jid") || "").replace(/^\s+|\s+$/g, "");
+if (logJid) {
+  Platform.Function.DeleteData(logDeKey, ["journeyId"], [logJid]);
+}
+</script>
+%%[
   SET @detailRowsAfter = LookupRows(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
   IF RowCount(@detailRowsAfter) == 0 THEN
     SET @pageStatus = "removed_log"
@@ -2829,9 +2838,17 @@ ENDIF
 IF (@willRemoveBuildLog == "true") AND (@isSurveyBuild == "true") THEN
 SET @surveyPurgeId = @dispSurveyId
 IF NOT Empty(@surveyPurgeId) AND @surveyPurgeId != "N/A" THEN
-DeleteData("SST_SP_Survey_Responses_DE", "SurveyID", @surveyPurgeId)
-DeleteData("SST_SP_Survey_Questions_DE", "SurveyID", @surveyPurgeId)
-DeleteData("SST_SP_Surveys_Master_DE", "SurveyID", @surveyPurgeId)
+]%%
+<script runat="server">
+Platform.Load("core", "1");
+var surveyId = String(Platform.Variable.GetValue("@surveyPurgeId") || "").replace(/^\s+|\s+$/g, "");
+if (surveyId && surveyId.toUpperCase() !== "N/A") {
+  Platform.Function.DeleteData("SST_SP_Survey_Responses_DE", ["SurveyID"], [surveyId]);
+  Platform.Function.DeleteData("SST_SP_Survey_Questions_DE", ["SurveyID"], [surveyId]);
+  Platform.Function.DeleteData("SST_SP_Surveys_Master_DE", ["SurveyID"], [surveyId]);
+}
+</script>
+%%[
 SET @surveyDeleteLog = Concat("[Survey ", @surveyPurgeId, "] DeleteData issued for responses, questions, and master.")
 ELSE
 SET @surveyDeleteLog = "[Survey] SKIP - no surveyId on build log."
@@ -2847,12 +2864,30 @@ ENDIF
 
 
 IF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk == "true") THEN
-DeleteData(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
+]%%
+<script runat="server">
+Platform.Load("core", "1");
+var analyticsDeKey = String(Platform.Variable.GetValue("@DETAIL_EXTERNAL_KEY_DE") || "Bd_journey_analytics");
+var analyticsJid = String(Platform.Variable.GetValue("@jid") || "").replace(/^\s+|\s+$/g, "");
+if (analyticsJid) {
+  Platform.Function.DeleteData(analyticsDeKey, ["journeyId"], [analyticsJid]);
+}
+</script>
+%%[
 Redirect(Concat(@HOME_URL,"?buildPurged=1"))
 ELSEIF (@attemptPurgeBuild == "true") AND (@authOk == "true") AND (@purgeEmailOk != "true") THEN
 SET @pageStatus = "purge_partial"
 ELSEIF (@attemptDeleteAsset == "true") AND (@authOk == "true") AND (IndexOf(IIF(NOT Empty(@step3bResult), @step3bResult, ""),"OK - Email deleted") > 0) THEN
-DeleteData(@DETAIL_EXTERNAL_KEY_DE,"journeyId",@jid)
+]%%
+<script runat="server">
+Platform.Load("core", "1");
+var analyticsDeKey2 = String(Platform.Variable.GetValue("@DETAIL_EXTERNAL_KEY_DE") || "Bd_journey_analytics");
+var analyticsJid2 = String(Platform.Variable.GetValue("@jid") || "").replace(/^\s+|\s+$/g, "");
+if (analyticsJid2) {
+  Platform.Function.DeleteData(analyticsDeKey2, ["journeyId"], [analyticsJid2]);
+}
+</script>
+%%[
 Redirect(Concat(@HOME_URL,"?emailDeleted=1"))
 ENDIF
 IF @pageStatus == "purge_partial" THEN
