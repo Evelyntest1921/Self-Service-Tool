@@ -923,7 +923,7 @@ function buildActivitiesTableHtml(activities) {
   return parts.join("");
 }
 
-function buildMetaHtml(jObj, logName, builderUrl) {
+function buildMetaHtml(jObj, logName, builderUrl, entrySourceLabel) {
   var name = jObj.name ? String(jObj.name) : "";
   if (!name && logName) {
     name = logName;
@@ -934,7 +934,10 @@ function buildMetaHtml(jObj, logName, builderUrl) {
   if (lastPub.indexOf("0001-01-01") >= 0) {
     lastPub = "";
   }
-  var entryKey = jObj.entrySourceGroupKey ? String(jObj.entrySourceGroupKey) : "—";
+  var entryDisplay = strTrim(entrySourceLabel);
+  if (!entryDisplay) {
+    entryDisplay = "—";
+  }
   var parts = ['<dl class="journey-meta-dl">'];
   parts.push("<dt>Journey name</dt><dd>" + htmlSafe(name || "—") + "</dd>");
   parts.push("<dt>Status</dt><dd>" + htmlSafe(status) + "</dd>");
@@ -944,7 +947,7 @@ function buildMetaHtml(jObj, logName, builderUrl) {
       "<dt>Last published</dt><dd>" + htmlSafe(lastPub.substring(0, 19)) + "</dd>"
     );
   }
-  parts.push("<dt>Entry source key</dt><dd class=\"contacts-mono\">" + htmlSafe(entryKey) + "</dd>");
+  parts.push("<dt>Entry source</dt><dd>" + htmlSafe(entryDisplay) + "</dd>");
   if (builderUrl) {
     parts.push(
       '<dt>Open in SFMC</dt><dd class="journey-meta-action"><a class="btn-sst-black" href="' +
@@ -1213,6 +1216,63 @@ function findDeAudienceEntry(jObj) {
   return null;
 }
 
+function resolveEntrySourceLabel(jObj, activities, eventDefObj) {
+  if (eventDefObj) {
+    var deFromEvent = strTrim(eventDefObj.dataExtensionName);
+    if (deFromEvent) {
+      return deFromEvent;
+    }
+  }
+  var triggers = jObj.triggers;
+  var i;
+  if (triggers && triggers.length) {
+    for (i = 0; i < triggers.length; i++) {
+      var tr = triggers[i];
+      if (!tr) {
+        continue;
+      }
+      var meta = tr.metaData || {};
+      var fromMeta =
+        strTrim(meta.dataExtensionName) ||
+        strTrim(meta.entrySourceName) ||
+        strTrim(meta.audienceName) ||
+        strTrim(meta.eventDefinitionName);
+      if (fromMeta) {
+        return fromMeta;
+      }
+      var trName = strTrim(tr.name);
+      if (trName && trName.toUpperCase() !== "TRIGGER") {
+        return trName;
+      }
+    }
+  }
+  var entryAct = findEntryActivity(activities, jObj);
+  if (entryAct) {
+    if (entryAct.metaData) {
+      var fromActMeta =
+        strTrim(entryAct.metaData.dataExtensionName) ||
+        strTrim(entryAct.metaData.entrySourceName) ||
+        strTrim(entryAct.metaData.audienceName);
+      if (fromActMeta) {
+        return fromActMeta;
+      }
+    }
+    var actLabel = activityDisplayName(entryAct);
+    if (
+      actLabel &&
+      actLabel !== "Untitled" &&
+      actLabel.toUpperCase() !== "ENTRY" &&
+      actLabel.toUpperCase() !== "TRIGGER"
+    ) {
+      return actLabel;
+    }
+  }
+  if (jObj.dataSource && jObj.dataSource.name) {
+    return strTrim(jObj.dataSource.name);
+  }
+  return "";
+}
+
 function getEventDefinition(sub, token, eventDefId) {
   var url =
     "https://" +
@@ -1416,19 +1476,27 @@ try {
       var startAct = findFlowStartActivity(activities, jObj);
       journeyFlowHtml = buildFlowGraphHtml(startAct, activities);
       journeyActivitiesHtml = buildActivitiesTableHtml(activities);
-      journeyMetaHtml = buildMetaHtml(jObj, logName, journeyBuilderUrl);
+      var entrySourceLabel = resolveEntrySourceLabel(jObj, activities, null);
 
       var deEntry = findDeAudienceEntry(jObj);
+      var evFetched = { ok: false, obj: null, msg: "" };
       if (deEntry && deEntry.eventDefId) {
         Platform.Variable.SetValue("@schedulePanelVisible", "true");
         Platform.Variable.SetValue("@scheduleEventDefId", deEntry.eventDefId);
-        var saveSchedule =
-          Platform.Variable.GetValue("@saveScheduleRequested") === "1";
-        var evFetched = getEventDefinition(
+        evFetched = getEventDefinition(
           subdomain,
           accessToken,
           deEntry.eventDefId
         );
+        if (evFetched.ok && evFetched.obj) {
+          entrySourceLabel = resolveEntrySourceLabel(
+            jObj,
+            activities,
+            evFetched.obj
+          );
+        }
+        var saveSchedule =
+          Platform.Variable.GetValue("@saveScheduleRequested") === "1";
         if (saveSchedule && !evFetched.ok) {
           Platform.Variable.SetValue(
             "@scheduleSaveMsg",
@@ -1491,6 +1559,12 @@ try {
           syncScheduleFormFromEvent(evFetched.obj);
         }
       }
+      journeyMetaHtml = buildMetaHtml(
+        jObj,
+        logName,
+        journeyBuilderUrl,
+        entrySourceLabel
+      );
     } else {
       loadErrorMsg = fetched.msg || "Could not load journey.";
       Platform.Variable.SetValue("@pageStatus", "apifail");
