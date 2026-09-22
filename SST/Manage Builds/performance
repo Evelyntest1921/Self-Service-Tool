@@ -1,9 +1,8 @@
 %%[
 VAR @HOME_URL, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @JOURNEY_VIEW_URL, @SURVEY_STAGE_URL, @SURVEY_ANALYTICS_URL, @navRows, @navRow, @BU, @configError, @dashboardRows, @firstRow, @jid
 VAR @detailRows, @detailRow, @dispSurveyId, @isSurveyBuild, @buildNavContext, @buildNavActive, @surveyUrlRows, @surveyUrlRow
-VAR @emailPreviewUrl, @articlePreviewUrl, @automationId, @syncAutomationId, @homeUrl, @switchEnvironment
-VAR @contactIdToAdd, @triggerAutomationId, @triggerAutomationStatus, @triggerAutomationResult
-VAR @syncAutomationIdVar, @syncAutomationStatus, @syncAutomationResult, @unregisteredOpenedCount, @engagementTrimmed
+VAR @emailPreviewUrl, @articlePreviewUrl, @automationId, @homeUrl, @switchEnvironment
+VAR @contactIdToAdd, @unregisteredOpenedCount, @engagementTrimmed
 VAR @email, @contactId, @primarySpecialty, @state, @jobId, @accountName, @firstName, @lastName, @designation, @role
 VAR @mobile, @auth0UserId, @openDate, @campaignType, @emailName, @contactUrl, @viewEmailUrl, @responseEntry
 VAR @clickCount, @botOrHuman
@@ -71,7 +70,6 @@ IF RowCount(@dashboardRows) > 0 THEN
   SET @emailPreviewUrl = IIF(NOT Empty(Field(@firstRow, "Email_Preview_Code")), Field(@firstRow, "Email_Preview_Code"), "")
   SET @articlePreviewUrl = IIF(NOT Empty(Field(@firstRow, "Article_Preview_Code")), Field(@firstRow, "Article_Preview_Code"), "")
   SET @automationId = IIF(NOT Empty(Field(@firstRow, "Automation_GUID")), Field(@firstRow, "Automation_GUID"), "")
-  SET @syncAutomationId = IIF(NOT Empty(Field(@firstRow, "SyncAutomationId")), Field(@firstRow, "SyncAutomationId"), "")
   SET @homeUrl = IIF(NOT Empty(Field(@firstRow, "Home_URL")), Field(@firstRow, "Home_URL"), "")
   SET @switchEnvironment = IIF(NOT Empty(Field(@firstRow, "EnvironmentSwitchUrl")), Field(@firstRow, "EnvironmentSwitchUrl"), "")
   
@@ -90,14 +88,6 @@ IF RequestParameter("do") == "addContact" AND NOT Empty(RequestParameter("contac
   SET @contactIdToAdd = RequestParameter("contactId")
   Redirect(Concat(@articlePreviewUrl, "?subscriberKey=", @contactIdToAdd))
 ENDIF
-
-SET @triggerAutomationId = @automationId
-SET @triggerAutomationStatus = ""
-SET @triggerAutomationResult = ""
-
-SET @syncAutomationIdVar = @syncAutomationId
-SET @syncAutomationStatus = ""
-SET @syncAutomationResult = ""
 
 VAR @analyticsData, @totalRecords, @openedCount, @bouncedCount, @didNotOpenCount, @clickedCount, @dateData, @openedDateData, @clickedDateData, @unsubscribedDateData, @unregisteredOpenedDateData, @openedData, @bouncedData,
 @didNotOpenData, @clickedData, @openedUnique, @openedCounts, @bouncedUnique, @bouncedCounts, @didNotOpenUnique, @didNotOpenCounts,
@@ -674,68 +664,6 @@ NEXT @s
 ENDIF
 SET @editSidebarHtml = ContentBlockByName("sst_shell_edit_sidebar")
 ]%%
-
-<script runat="server">
-Platform.Load("core", "1");
-
-var action = String(Request.GetFormField("do") || Request.GetQueryStringParameter("do") || "");
-var confirm = String(Request.GetFormField("confirm") || Request.GetQueryStringParameter("confirm") || "");
-var automationId = String(Variable.GetValue("@triggerAutomationId") || "");
-
-if (action === "triggerAutomation" && confirm === "1") {
-  try {
-    if (!automationId) {
-      Variable.SetValue("@triggerAutomationStatus", "FAILED");
-      Variable.SetValue("@triggerAutomationResult", "FAILED: missing automation id.");
-    } else {
-      var prox = new Script.Util.WSProxy();
-      var perform = prox.performItem("Program", { ObjectID: automationId }, "start", {});
-      var topStatus = perform && perform.Status ? String(perform.Status) : "";
-      var itemCode = perform && perform.Results && perform.Results.length > 0 && perform.Results[0].StatusCode ? String(perform.Results[0].StatusCode) : "";
-      var itemMsg = perform && perform.Results && perform.Results.length > 0 && perform.Results[0].StatusMessage ? String(perform.Results[0].StatusMessage) : "";
-
-      if (topStatus === "OK" || itemCode === "OK") {
-        Variable.SetValue("@triggerAutomationStatus", "OK");
-        Variable.SetValue("@triggerAutomationResult", "Success: automation has been successfully triggered. ID " + automationId + ".");
-      } else {
-        Variable.SetValue("@triggerAutomationStatus", "FAILED");
-        Variable.SetValue("@triggerAutomationResult", "FAILED: SOAP start rejected. topStatus=" + topStatus + " itemCode=" + itemCode + " itemMsg=" + itemMsg);
-      }
-    }
-  } catch (e) {
-    Variable.SetValue("@triggerAutomationStatus", "FAILED");
-    Variable.SetValue("@triggerAutomationResult", "FAILED: " + (e && e.message ? e.message : String(e)));
-  }
-}
-
-var syncAutomationId = String(Variable.GetValue("@syncAutomationIdVar") || "");
-
-if (action === "syncAutomation" && confirm === "1") {
-  try {
-    if (!syncAutomationId) {
-      Variable.SetValue("@syncAutomationStatus", "FAILED");
-      Variable.SetValue("@syncAutomationResult", "FAILED: missing sync automation id.");
-    } else {
-      var proxSync = new Script.Util.WSProxy();
-      var performSync = proxSync.performItem("Program", { ObjectID: syncAutomationId }, "start", {});
-      var topStatusSync = performSync && performSync.Status ? String(performSync.Status) : "";
-      var itemCodeSync = performSync && performSync.Results && performSync.Results.length > 0 && performSync.Results[0].StatusCode ? String(performSync.Results[0].StatusCode) : "";
-      var itemMsgSync = performSync && performSync.Results && performSync.Results.length > 0 && performSync.Results[0].StatusMessage ? String(performSync.Results[0].StatusMessage) : "";
-
-      if (topStatusSync === "OK" || itemCodeSync === "OK") {
-        Variable.SetValue("@syncAutomationStatus", "OK");
-        Variable.SetValue("@syncAutomationResult", "Success: sync automation has been successfully triggered. ID " + syncAutomationId + ".");
-      } else {
-        Variable.SetValue("@syncAutomationStatus", "FAILED");
-        Variable.SetValue("@syncAutomationResult", "FAILED: SOAP start rejected. topStatus=" + topStatusSync + " itemCode=" + itemCodeSync + " itemMsg=" + itemMsgSync);
-      }
-    }
-  } catch (e) {
-    Variable.SetValue("@syncAutomationStatus", "FAILED");
-    Variable.SetValue("@syncAutomationResult", "FAILED: " + (e && e.message ? e.message : String(e)));
-  }
-}
-</script>
 
 <!DOCTYPE html>
 <html lang="en">
@@ -1360,218 +1288,6 @@ pre.log.show{display:block}
            border-color: #353333;
        } 
 
-      .trigger-btn {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 40px;
-          height: 40px;
-          padding: 0;
-          border: 1px solid #000000;
-          background: #111111;
-          color: white;
-          border-radius: var(--radius-sm);
-          font-size: 1.05rem;
-          font-weight: 700;
-          cursor: pointer;
-          transition: all 0.2s ease;
-          flex-shrink: 0;
-      }
-      .trigger-btn:hover:not([disabled]) {
-          background: #353333;
-          border-color: #353333;
-      }
-      .trigger-btn[disabled] {
-          opacity: 0.5;
-          cursor: not-allowed;
-          background: #555555;
-      }
-
-     .sync-btn {
-         display: inline-flex;
-         align-items: center;
-         justify-content: center;
-         width: 40px;
-         height: 40px;
-         padding: 0;
-         border: 1px solid #000000;
-         background: #000000;
-         color: white;
-         border-radius: var(--radius-sm);
-         font-size: 1.05rem;
-         font-weight: 700;
-         cursor: pointer;
-         transition: all 0.2s ease;
-         flex-shrink: 0;
-     }
-     .sync-btn:hover:not([disabled]) {
-         background: #353333;
-         border-color: #353333;
-     }
-     .sync-btn[disabled] {
-         opacity: 0.5;
-         cursor: not-allowed;
-         background: #555555;
-     }
-
-      .trigger-section {
-           margin-bottom: 24px;
-           padding: 20px;
-           background: var(--bg-tertiary);
-           display: none;
-       }
-       .trigger-section.visible {
-           display: block;
-       }
-       .trigger-section .trigger-row {
-           display: flex;
-           align-items: center;
-           justify-content: flex-end;
-           gap: 12px;
-           flex-wrap: wrap;
-       }
-       .trigger-section .trigger-note {
-           margin-right: auto;
-           font-size: 0.875rem;
-           color: var(--text-primary);
-           font-weight: 600;
-       }
-       .trigger-section .trigger-confirm-btn {
-           padding: 10px 20px;
-           border: 1px solid #000000;
-           background: #000000;
-           color: white;
-           font-size: 0.875rem;
-           font-weight: 600;
-           cursor: pointer;
-       }
-       .trigger-section .trigger-confirm-btn:hover {
-           background: #353333;
-       }
-       .trigger-section .trigger-confirm-btn[disabled] {
-           opacity: 0.7;
-           cursor: not-allowed;
-       }
-       .trigger-loading {
-           display: none;
-           align-items: center;
-           gap: 10px;
-           margin-top: 12px;
-           padding: 12px 16px;
-           background: var(--bg-primary);
-           border: 1px solid var(--border-color);
-           border-radius: var(--radius-sm);
-           font-weight: 600;
-           color: var(--text-primary);
-       }
-       .trigger-loading.visible {
-           display: inline-flex;
-       }
-       .trigger-spinner {
-           width: 16px;
-           height: 16px;
-           border: 3px solid rgba(0,0,0,0.15);
-           border-top-color: #000000;
-           border-radius: 50%;
-           animation: triggerSpin 0.8s linear infinite;
-       }
-       @keyframes triggerSpin {
-           to { transform: rotate(360deg); }
-       }
-       .trigger-section .trigger-result {
-           margin-top: 12px;
-           padding: 12px 16px;
-           border-radius: var(--radius-sm);
-           font-weight: 600;
-       }
-       .trigger-section .trigger-result.ok {
-           background: #d4edda;
-           color: #155724;
-       }
-      .trigger-section .trigger-result.failed {
-          background: #f8d7da;
-          color: #721c24;
-      }
-
-      .sync-section {
-          margin-bottom: 24px;
-          padding: 20px;
-          background: var(--bg-tertiary);
-          display: none;
-      }
-      .sync-section.visible {
-          display: block;
-      }
-      .sync-section .sync-row {
-          display: flex;
-          align-items: center;
-          justify-content: flex-end;
-          gap: 12px;
-          flex-wrap: wrap;
-      }
-      .sync-section .sync-note {
-          margin-right: auto;
-          font-size: 0.875rem;
-          color: var(--text-primary);
-          font-weight: 600;
-      }
-     .sync-section .sync-confirm-btn {
-         padding: 10px 20px;
-         border: 1px solid #000000;
-         background: #000000;
-         color: white;
-         font-size: 0.875rem;
-         font-weight: 600;
-         cursor: pointer;
-     }
-     .sync-section .sync-confirm-btn:hover {
-         background: #353333;
-     }
-      .sync-section .sync-confirm-btn[disabled] {
-          opacity: 0.7;
-          cursor: not-allowed;
-      }
-      .sync-loading {
-          display: none;
-          align-items: center;
-          gap: 10px;
-          margin-top: 12px;
-          padding: 12px 16px;
-          background: var(--bg-primary);
-          border: 1px solid var(--border-color);
-          border-radius: var(--radius-sm);
-          font-weight: 600;
-          color: var(--text-primary);
-      }
-      .sync-loading.visible {
-          display: inline-flex;
-      }
-     .sync-spinner {
-         width: 16px;
-         height: 16px;
-         border: 3px solid rgba(0, 0, 0, 0.15);
-         border-top-color: #000000;
-         border-radius: 50%;
-         animation: syncSpin 0.8s linear infinite;
-     }
-      @keyframes syncSpin {
-          to { transform: rotate(360deg); }
-      }
-      .sync-section .sync-result {
-          margin-top: 12px;
-          padding: 12px 16px;
-          border-radius: var(--radius-sm);
-          font-weight: 600;
-      }
-      .sync-section .sync-result.ok {
-          background: #d4edda;
-          color: #155724;
-      }
-      .sync-section .sync-result.failed {
-          background: #f8d7da;
-          color: #721c24;
-      }
-
       .add-contact-btn {
            display: inline-flex;
            align-items: center;
@@ -1885,59 +1601,7 @@ pre.log.show{display:block}
                   <button id="downloadBtn" class="download-button" onclick="downloadFilteredData()">
                       Download
                   </button>
-                   <button type="button" id="syncBtn" class="sync-btn" onclick="toggleSyncSection()" title="Sync automation" %%[ IF NOT Empty(@configError) OR Empty(@syncAutomationIdVar) THEN ]%%disabled style="opacity: 0.5; cursor: not-allowed;"%%[ ENDIF ]%%>↻</button>
-                   <button type="button" id="triggerBtn" class="trigger-btn" onclick="toggleTriggerSection()" title="Trigger automation" %%[ IF NOT Empty(@configError) THEN ]%%disabled style="opacity: 0.5; cursor: not-allowed;"%%[ ENDIF ]%%>⚡</button>
                    <button type="button" id="addContactBtn" class="add-contact-btn" onclick="toggleAddContactSection()" title="Search Contact In %%=v(@BU)=%% Emails" %%[ IF NOT Empty(@configError) THEN ]%%disabled style="opacity: 0.5; cursor: not-allowed;"%%[ ENDIF ]%%>🔍</button>
-              </div>
-               <div id="triggerSection" class="trigger-section %%[ IF NOT Empty(@triggerAutomationStatus) THEN ]%% visible %%[ ENDIF ]%%">
-                   <form id="triggerForm" method="post" action="">
-                       <input type="hidden" name="do" value="triggerAutomation" />
-                       <input type="hidden" name="confirm" value="1" />
-                      <div class="trigger-row">
-                          <div class="trigger-note">
-                              Trigger automation: <strong>Push Advice : Server Side Automation</strong><br>
-                              <small style="font-size: 0.75rem; color: var(--text-secondary);">ID: %%=v(@triggerAutomationId)=%%</small>
-                          </div>
-                        <div class="trigger-note" style="font-size: 0.85rem; color: #721c24; background: #f8d7da; padding: 8px; border-radius: 4px;">
-                          <strong>⚠ WARNING:</strong> Clicking confirm will trigger the automation that sends Push Advice emails. New recommendations will be generated.
-                          </div>
-                          <button type="submit" class="trigger-confirm-btn" id="triggerConfirmBtn">Confirm Trigger</button>
-                      </div>
-                   </form>
-                   <div id="triggerLoading" class="trigger-loading" role="status" aria-live="polite" aria-busy="true">
-                       <span class="trigger-spinner"></span>
-                       <span>Triggering automation...</span>
-                   </div>
-                  %%[ IF NOT Empty(@triggerAutomationResult) THEN ]%%
-                    <div class="trigger-result %%[ IF @triggerAutomationStatus == "OK" THEN ]%%ok%%[ ELSE ]%%failed%%[ ENDIF ]%%">
-                      %%=v(@triggerAutomationResult)=%%
-                    </div>
-                  %%[ ENDIF ]%%
-              </div>
-              <div id="syncSection" class="sync-section %%[ IF NOT Empty(@syncAutomationStatus) THEN ]%% visible %%[ ENDIF ]%%">
-                  <form id="syncForm" method="post" action="">
-                      <input type="hidden" name="do" value="syncAutomation" />
-                      <input type="hidden" name="confirm" value="1" />
-                      <div class="sync-row">
-                          <div class="sync-note">
-                              Sync automation: <strong>Data Sync Process</strong><br>
-                              <small style="font-size: 0.75rem; color: var(--text-secondary);">ID: %%=v(@syncAutomationIdVar)=%%</small>
-                          </div>
-                        <div class="sync-note" style="font-size: 0.85rem; color: #0f5132; background: #d1e7dd; padding: 8px; border-radius: 4px;">
-                          <strong>ℹ INFO:</strong> Clicking confirm will trigger the data synchronization automation.
-                          </div>
-                          <button type="submit" class="sync-confirm-btn" id="syncConfirmBtn">Confirm Sync</button>
-                      </div>
-                  </form>
-                  <div id="syncLoading" class="sync-loading" role="status" aria-live="polite" aria-busy="true">
-                      <span class="sync-spinner"></span>
-                      <span>Syncing automation...</span>
-                  </div>
-                  %%[ IF NOT Empty(@syncAutomationResult) THEN ]%%
-                    <div class="sync-result %%[ IF @syncAutomationStatus == "OK" THEN ]%%ok%%[ ELSE ]%%failed%%[ ENDIF ]%%">
-                      %%=v(@syncAutomationResult)=%%
-                    </div>
-                  %%[ ENDIF ]%%
               </div>
               <div id="addContactSection" class="add-contact-section %%[ IF RequestParameter("added") == "1" THEN ]%% visible show-success %%[ ENDIF ]%%">
                    <form id="addContactForm" method="get" action="">
@@ -3042,36 +2706,6 @@ pre.log.show{display:block}
           }
       }
 
-      function toggleTriggerSection() {
-          const btn = document.getElementById('triggerBtn');
-          if (btn && btn.hasAttribute('disabled')) return;
-          const section = document.getElementById('triggerSection');
-          if (!section) return;
-          section.classList.toggle('visible');
-      }
-
-      function showTriggerLoading() {
-          const loading = document.getElementById('triggerLoading');
-          if (loading) loading.classList.add('visible');
-          const btn = document.getElementById('triggerConfirmBtn');
-          if (btn) btn.setAttribute('disabled', 'disabled');
-      }
-
-      function toggleSyncSection() {
-          const btn = document.getElementById('syncBtn');
-          if (btn && btn.hasAttribute('disabled')) return;
-          const section = document.getElementById('syncSection');
-          if (!section) return;
-          section.classList.toggle('visible');
-      }
-
-      function showSyncLoading() {
-          const loading = document.getElementById('syncLoading');
-          if (loading) loading.classList.add('visible');
-          const btn = document.getElementById('syncConfirmBtn');
-          if (btn) btn.setAttribute('disabled', 'disabled');
-      }
-
        function downloadFilteredData() {
            const dataToDownload = filteredResponses.length > 0 ? filteredResponses : allResponses;
            if (dataToDownload.length === 0) {
@@ -3218,32 +2852,6 @@ pre.log.show{display:block}
            populateFilters();
            renderResponsesTable();
            renderPagination();
-
-           const triggerSection = document.getElementById('triggerSection');
-           if (triggerSection && triggerSection.querySelector('.trigger-result')) {
-               triggerSection.classList.add('visible');
-               triggerSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-           }
-
-          const triggerForm = document.getElementById('triggerForm');
-          if (triggerForm) {
-              triggerForm.addEventListener('submit', function () {
-                  showTriggerLoading();
-              });
-          }
-
-          const syncSection = document.getElementById('syncSection');
-          if (syncSection && syncSection.querySelector('.sync-result')) {
-              syncSection.classList.add('visible');
-              syncSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          }
-
-          const syncForm = document.getElementById('syncForm');
-          if (syncForm) {
-              syncForm.addEventListener('submit', function () {
-                  showSyncLoading();
-              });
-          }
       });
    </script>
 <style>
