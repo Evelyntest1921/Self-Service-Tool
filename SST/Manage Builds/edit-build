@@ -1791,10 +1791,24 @@ function truncLog(part) {
 }
 
 
-function deleteEmailAsset(sdom, tok, aid) {
- if (!aid) {
-   truncLog("[Email asset] SKIP - no asset id.");
+function isContentBuilderAssetId(aid) {
+ var raw = strTrim(aid);
+ if (!raw) {
    return false;
+ }
+ var lower = raw.toLowerCase();
+ if (lower === "n/a" || lower === "na" || lower === "none") {
+   return false;
+ }
+ var parsed = parseInt(raw, 10);
+ return !isNaN(parsed) && parsed > 0 && String(parsed) === raw;
+}
+
+
+function deleteEmailAsset(sdom, tok, aid) {
+ if (!isContentBuilderAssetId(aid)) {
+   truncLog("[Email asset] SKIP - no Content Builder asset on this build.");
+   return true;
  }
  try {
    var deleteUrl =
@@ -1809,8 +1823,16 @@ function deleteEmailAsset(sdom, tok, aid) {
    deleteReq.setHeader("Authorization", "Bearer " + tok);
    deleteReq.method = "DELETE";
    var deleteResp = deleteReq.send();
-   if (deleteResp.statusCode == 200 || deleteResp.statusCode == 204) {
-     truncLog("[Email asset] DELETE OK.");
+   if (
+     deleteResp.statusCode == 200 ||
+     deleteResp.statusCode == 204 ||
+     deleteResp.statusCode == 404
+   ) {
+     truncLog(
+       deleteResp.statusCode == 404
+         ? "[Email asset] SKIP - asset not found (already removed)."
+         : "[Email asset] DELETE OK."
+     );
      return true;
    }
    truncLog("[Email asset] DELETE HTTP " + deleteResp.statusCode + ".");
@@ -2149,6 +2171,9 @@ try {
    deleteEmailFromPost
  ) {
    try {
+     if (!isContentBuilderAssetId(deleteEmailFromPost)) {
+       step3bResult = " Step 3b SKIP - No Content Builder email on this build.";
+     } else {
      var assetId = String(deleteEmailFromPost);
      var deleteUrl2 =
        "https://" +
@@ -2162,13 +2187,18 @@ try {
      deleteReq2.setHeader("Authorization", "Bearer " + accessToken);
      deleteReq2.method = "DELETE";
      var deleteResp2 = deleteReq2.send();
-     if (deleteResp2.statusCode == 200 || deleteResp2.statusCode == 204) {
+     if (
+       deleteResp2.statusCode == 200 ||
+       deleteResp2.statusCode == 204 ||
+       deleteResp2.statusCode == 404
+     ) {
        step3bResult = " Step 3b OK - Email deleted.";
      } else {
        step3bResult =
          " Step 3b FAILED - Email delete HTTP " +
          deleteResp2.statusCode +
          ".";
+     }
      }
    } catch (deleteEx) {
      step3bResult =
@@ -3576,14 +3606,14 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
  <dt>Email asset Id</dt>
  <dd class="detail-dd-wrap">
   <div class="detail-dd-row">
-   <span>%%=IIF(NOT Empty(@dispEmailId), @dispEmailId, "—")=%%</span>
-%%[ IF NOT Empty(@dispEmailId) THEN ]%%
+   <span>%%=IIF(NOT Empty(@dispEmailId) AND Lowercase(@dispEmailId) != "n/a", @dispEmailId, "—")=%%</span>
+%%[ IF NOT Empty(@dispEmailId) AND Lowercase(@dispEmailId) != "n/a" THEN ]%%
    <button type="button" class="detail-expand-btn" aria-expanded="false" aria-controls="emailActionsPanel" aria-label="Show email actions">
     <svg class="detail-chevron" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/></svg>
    </button>
 %%[ ENDIF ]%%
   </div>
-%%[ IF NOT Empty(@dispEmailId) THEN ]%%
+%%[ IF NOT Empty(@dispEmailId) AND Lowercase(@dispEmailId) != "n/a" THEN ]%%
   <div id="emailActionsPanel" class="detail-row-expand" hidden>
    <div class="detail-row-actions">
     <form method="post" action="" style="margin:0" onsubmit="return confirm('Delete email %%=v(@dispEmailId)=%% from Content Builder only (journey and entry event stay).');">

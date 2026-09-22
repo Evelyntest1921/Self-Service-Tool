@@ -142,6 +142,93 @@ function postJson(url, token, payload) {
   };
 }
 
+function requestJson(url, token, method, payload) {
+  var req = new Script.Util.HttpRequest(url);
+  req.emptyContentHandling = 0;
+  req.continueOnError = true;
+  req.setHeader("Authorization", "Bearer " + token);
+  req.method = method;
+  if (payload !== null && typeof payload !== "undefined") {
+    req.contentType = "application/json";
+    req.postData = Platform.Function.Stringify(payload);
+  }
+  var resp = req.send();
+  return {
+    status: resp.statusCode,
+    body: resp.content ? String(resp.content) : ""
+  };
+}
+
+function parseJsonSafe(text) {
+  try {
+    return Platform.Function.ParseJSON(String(text || ""));
+  } catch (parseEx) {
+    return null;
+  }
+}
+
+function applyNoScheduleMeta(meta) {
+  if (!meta || typeof meta !== "object") {
+    meta = {};
+  }
+  meta.scheduleState = "No Schedule";
+  if (!meta.criteriaDescription) {
+    meta.criteriaDescription = "";
+  }
+  delete meta.scheduleFlowMode;
+  delete meta.runOnceScheduleMode;
+  return meta;
+}
+
+function syncDeEntryNoSchedule(token, subdomain, journeyId, eventDefId) {
+  if (!token || !subdomain || !journeyId || !eventDefId) {
+    return;
+  }
+  var eventUrl =
+    "https://" +
+    subdomain +
+    ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
+    encodeURIComponent(String(eventDefId));
+  var getEvent = requestJson(eventUrl, token, "GET", null);
+  if (getEvent.status == 200 || getEvent.status == 201) {
+    var eventObj = parseJsonSafe(getEvent.body);
+    if (eventObj) {
+      eventObj.metaData = applyNoScheduleMeta(eventObj.metaData);
+      if (eventObj.schedule) {
+        delete eventObj.schedule;
+      }
+      if (eventObj.arguments && typeof eventObj.arguments === "object") {
+        eventObj.arguments.useHighWatermark = false;
+      }
+      requestJson(eventUrl, token, "PUT", eventObj);
+    }
+  }
+  var journeyUrl =
+    "https://" +
+    subdomain +
+    ".rest.marketingcloudapis.com/interaction/v1/interactions/" +
+    encodeURIComponent(String(journeyId));
+  var getJourney = requestJson(journeyUrl, token, "GET", null);
+  if (getJourney.status != 200 && getJourney.status != 201) {
+    return;
+  }
+  var journeyObj = parseJsonSafe(getJourney.body);
+  if (!journeyObj || !journeyObj.triggers || !journeyObj.triggers.length) {
+    return;
+  }
+  journeyObj.metaData = applyNoScheduleMeta(journeyObj.metaData || {});
+  journeyObj.triggers[0].metaData = applyNoScheduleMeta(
+    journeyObj.triggers[0].metaData || {}
+  );
+  var versionNum = journeyObj.version || 1;
+  requestJson(
+    journeyUrl + "?versionNumber=" + encodeURIComponent(String(versionNum)),
+    token,
+    "PUT",
+    journeyObj
+  );
+}
+
 function createDeEntryEvent(token, subdomain, journeyName, deMeta) {
   var eventKey = "DEAudience-" + Platform.Function.GUID();
   var eventUrl =
@@ -151,10 +238,17 @@ function createDeEntryEvent(token, subdomain, journeyName, deMeta) {
     description: "",
     type: "EmailAudience",
     mode: "Production",
+    category: "Audience",
     eventDefinitionKey: eventKey,
     dataExtensionId: deMeta.objectId,
     dataExtensionName: deMeta.name,
     isVisibleInPicker: false,
+    arguments: {
+      criteria: "",
+      useHighWatermark: false,
+      EventDefinitionKey: eventKey,
+      DataExtensionId: deMeta.objectId
+    },
     configurationArguments: {},
     metaData: {
       criteriaDescription: "",
@@ -191,6 +285,7 @@ function createDeEntryEvent(token, subdomain, journeyName, deMeta) {
       arguments: {},
       configurationArguments: {},
       metaData: {
+        sourceInteractionId: "00000000-0000-0000-0000-000000000000",
         eventDefinitionId: eventDefId,
         eventDefinitionKey: eventKey,
         chainType: "None",
@@ -214,6 +309,7 @@ var resultText = asStr(Variable.GetValue("resultText"));
 var journeyId = "";
 var entryDeName = "";
 var entryDeKey = "";
+var attachedEventDefId = "";
 
 if (authOk == "true" && accessToken && subdomain && journeyName && journeyKey) {
   try {
@@ -242,6 +338,7 @@ if (authOk == "true" && accessToken && subdomain && journeyName && journeyKey) {
           resultText = eventResult.message;
         } else {
           triggers.push(eventResult.trigger);
+          attachedEventDefId = eventResult.eventDefId;
           entryDeName = deMeta.name;
           entryDeKey = deMeta.customerKey || deMeta.objectId;
         }
@@ -253,7 +350,7 @@ if (authOk == "true" && accessToken && subdomain && journeyName && journeyKey) {
     if (canCreateJourney) {
       var journeyUrl =
         "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/interactions";
-      var journeyResp = postJson(journeyUrl, accessToken, {
+      var journeyPayload = {
         name: journeyName,
         key: journeyKey,
         description: "",
@@ -269,12 +366,23 @@ if (authOk == "true" && accessToken && subdomain && journeyName && journeyKey) {
         exits: [],
         triggers: triggers,
         metaData: {
-          disableEndWait: true,
-          scheduleState: "No Schedule"
+          disableEndWait: true
         }
-      });
+      };
+      if (triggers.length > 0) {
+        journeyPayload.metaData.scheduleState = "No Schedule";
+      }
+      var journeyResp = postJson(journeyUrl, accessToken, journeyPayload);
       if (journeyResp.status == 200 || journeyResp.status == 201) {
         journeyId = firstMatch(journeyResp.body, /"id"\s*:\s*"?([^",}\s]+)"?/);
+        if (journeyId && attachedEventDefId) {
+          syncDeEntryNoSchedule(
+            accessToken,
+            subdomain,
+            journeyId,
+            attachedEventDefId
+          );
+        }
         if (entryDeName) {
           resultText =
             "Journey created as a draft using " +
