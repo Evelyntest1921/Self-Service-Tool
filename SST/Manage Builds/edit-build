@@ -2953,6 +2953,10 @@ IF @showChecklist == "1" THEN
   ENDIF
  ENDIF
 ENDIF
+SET @purgeConfirmMsg = "Delete automation and query (stack builds), journey (REST), Salesforce entry event and entry DE where possible, the Content Builder email asset, then remove this row from Recent builds. Published journeys sometimes block DELETE until stopped in Journey Builder."
+IF @isSurveyBuild == "true" THEN
+ SET @purgeConfirmMsg = "Delete automation and query (stack builds), journey (REST), Salesforce entry event and entry DE where possible, the Content Builder email asset, and survey questions/responses/master data, then remove this row from Recent builds. Published journeys sometimes block DELETE until stopped in Journey Builder."
+ENDIF
 SET @editSidebarHtml = ContentBlockByName("sst_shell_edit_sidebar")
 ]%%
 <!DOCTYPE html>
@@ -3225,6 +3229,13 @@ pre.log.show{display:block}
 .maker-btn--ghost:hover{color:var(--gray-900);border-color:var(--gray-400)}
 .maker-result-log{margin-top:12px;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-size:0.8125rem;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;white-space:pre-wrap;word-break:break-word;border-radius:var(--radius-md);max-height:280px;overflow-y:auto;display:none}
 .maker-result-log.is-visible{display:block;margin-top:20px}
+.build-delete-loading{position:fixed;inset:0;z-index:1000;display:none;align-items:center;justify-content:center;padding:28px;background:rgba(255,255,255,0.94)}
+.build-delete-loading.is-visible{display:flex}
+.build-delete-loading-inner{max-width:360px;text-align:center}
+.build-delete-spinner{width:40px;height:40px;margin:0 auto 16px;border:3px solid var(--border-color);border-top-color:var(--gray-900);border-radius:50%;animation:buildDeleteSpin 0.8s linear infinite}
+@keyframes buildDeleteSpin{to{transform:rotate(360deg)}}
+.build-delete-loading-title{margin:0 0 8px;font-size:1.125rem;font-weight:700;color:var(--gray-900)}
+.build-delete-loading-sub{margin:0;font-size:14px;color:var(--text-secondary);line-height:1.5}
 @media (max-width:768px){
 .maker-sidebar{width:100%;flex-direction:row;overflow-x:auto;align-items:center;min-height:0;padding:12px 0}
 .maker-sidebar .sidebar-logo{margin-bottom:0;flex-shrink:0;padding-right:16px}
@@ -3251,6 +3262,13 @@ pre.log.show{display:block}
 </aside>
 %%[ ENDIF ]%%
 <main class="maker-main">
+<div id="buildDeleteLoading" class="build-delete-loading" aria-hidden="true">
+ <div class="build-delete-loading-inner">
+  <div class="build-delete-spinner" aria-hidden="true"></div>
+  <p class="build-delete-loading-title">Deleting build</p>
+  <p class="build-delete-loading-sub">Removing assets and the Recent builds log row. This may take a moment.</p>
+ </div>
+</div>
 <div class="maker-main-inner">
 %%[ IF @pageStatus == "nodata" THEN ]%%
 <div class="breadcrumb-section">
@@ -3800,11 +3818,11 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
   </div>
   <div id="buildActionsPanel" class="detail-row-expand" hidden>
    <div class="detail-row-actions">
-    <form method="post" action="" style="margin:0" onsubmit="return confirm('Delete automation and query (stack builds), journey (REST), Salesforce entry event and entry DE where possible, the Content Builder email asset%%[ IF @isSurveyBuild == "true" THEN ]%%, and survey questions/responses/master data%%[ ENDIF ]%%, then remove this row from Recent builds. Published journeys sometimes block DELETE until stopped in Journey Builder.');">
+    <form method="post" action="" style="margin:0" id="purgeBuildForm" data-confirm="%%=Replace(Replace(v(@purgeConfirmMsg),'"','&quot;'),'''','&#39;')=%%">
      <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
      <input type="hidden" name="postedJourneyId" value="%%=v(@jid)=%%">
      <input type="hidden" name="deleteEmailId" value="%%=v(@dispEmailId)=%%">
-     <button type="submit" name="confirmPurgeBuild" value="1" class="btn-no-radius btn-danger btn-sm">Delete this build</button>
+     <button type="submit" name="confirmPurgeBuild" value="1" id="purgeBuildSubmitBtn" class="btn-no-radius btn-danger btn-sm">Delete this build</button>
     </form>
    </div>
   </div>
@@ -3938,6 +3956,39 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
     this.setAttribute("aria-expanded", "true");
     this.classList.add("is-open");
    }
+  });
+ }
+ function showBuildDeleteLoading() {
+  var loading = document.getElementById("buildDeleteLoading");
+  var main = document.querySelector(".maker-main");
+  var submitBtn = document.getElementById("purgeBuildSubmitBtn");
+  if (loading) {
+   loading.className = "build-delete-loading is-visible";
+   loading.setAttribute("aria-hidden", "false");
+  }
+  if (main) {
+   main.setAttribute("aria-busy", "true");
+  }
+  if (submitBtn) {
+   submitBtn.textContent = "Deleting…";
+   submitBtn.setAttribute("disabled", "disabled");
+  }
+ }
+ var purgeBuildForm = document.getElementById("purgeBuildForm");
+ var purgeBuildSubmitting = false;
+ if (purgeBuildForm) {
+  purgeBuildForm.addEventListener("submit", function (e) {
+   if (purgeBuildSubmitting) {
+    return;
+   }
+   e.preventDefault();
+   var msg = purgeBuildForm.getAttribute("data-confirm") || "Delete this build?";
+   if (!confirm(msg)) {
+    return;
+   }
+   purgeBuildSubmitting = true;
+   showBuildDeleteLoading();
+   purgeBuildForm.submit();
   });
  }
 })();
