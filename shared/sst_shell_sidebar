@@ -328,24 +328,21 @@ body {
   background: var(--gray-800);
   border-color: var(--gray-800);
 }
-.sidebar-env-loading {
-  position: fixed;
-  inset: 0;
-  z-index: 1000000;
+.sidebar-env-modal-loading-panel {
   display: none;
-  align-items: center;
-  justify-content: center;
-  padding: 28px;
-  background: rgba(255, 255, 255, 0.94);
-}
-.sidebar-env-loading.is-visible {
-  display: flex !important;
-}
-.sidebar-env-loading-inner {
-  max-width: 360px;
   text-align: center;
 }
-.sidebar-env-loading-spinner {
+.sidebar-env-modal.is-switching .sidebar-env-modal-confirm-panel {
+  display: none;
+}
+.sidebar-env-modal.is-switching .sidebar-env-modal-loading-panel {
+  display: block;
+}
+.sidebar-env-modal.is-switching .sidebar-env-modal-backdrop {
+  pointer-events: none;
+  cursor: default;
+}
+.sidebar-env-modal-spinner {
   width: 40px;
   height: 40px;
   margin: 0 auto 16px;
@@ -359,13 +356,13 @@ body {
     transform: rotate(360deg);
   }
 }
-.sidebar-env-loading-title {
+.sidebar-env-modal-loading-title {
   margin: 0 0 8px;
   font-size: 1.125rem;
   font-weight: 700;
   color: var(--gray-900);
 }
-.sidebar-env-loading-sub {
+.sidebar-env-modal-loading-sub {
   margin: 0;
   font-size: 14px;
   color: var(--gray-500);
@@ -528,19 +525,19 @@ body {
 <div class="sidebar-env-modal" id="sidebarEnvModal" role="dialog" aria-modal="true" aria-labelledby="sidebarEnvModalTitle">
   <label for="sstEnvModalOpen" class="sidebar-env-modal-backdrop" aria-label="Close environment switch dialog"></label>
   <div class="sidebar-env-modal-card">
-    <h2 class="sidebar-env-modal-title" id="sidebarEnvModalTitle">Switch Environment</h2>
-    <p class="sidebar-env-modal-desc">Are you sure you want to switch to <span class="sidebar-env-modal-env">%%=v(@envAltDisplayName)=%%</span>?</p>
-    <div class="sidebar-env-modal-actions">
-      <label for="sstEnvModalOpen" class="sidebar-env-modal-cancel">Cancel</label>
-      <a class="sidebar-env-modal-confirm" id="sidebarEnvSwitchConfirm" href="%%=v(@environmentSwitchUrl)=%%" onclick="var ev=event||window.event;if(ev){ev.preventDefault();}var targetUrl=this.getAttribute('href');var layer=document.getElementById('sidebarEnvSwitchLoading');if(layer){if(layer.parentNode!==document.body){document.body.appendChild(layer);}layer.classList.add('is-visible');layer.setAttribute('aria-hidden','false');}document.body.style.overflow='hidden';window.setTimeout(function(){window.location.href=targetUrl;},150);return false;">Switch</a>
+    <div class="sidebar-env-modal-confirm-panel" id="sidebarEnvModalConfirmPanel">
+      <h2 class="sidebar-env-modal-title" id="sidebarEnvModalTitle">Switch Environment</h2>
+      <p class="sidebar-env-modal-desc">Are you sure you want to switch to <span class="sidebar-env-modal-env">%%=v(@envAltDisplayName)=%%</span>?</p>
+      <div class="sidebar-env-modal-actions">
+        <label for="sstEnvModalOpen" class="sidebar-env-modal-cancel">Cancel</label>
+        <a class="sidebar-env-modal-confirm" id="sidebarEnvSwitchConfirm" href="%%=v(@environmentSwitchUrl)=%%" onclick="var ev=event||window.event;if(ev){ev.preventDefault();}var targetUrl=this.getAttribute('href');var modal=document.getElementById('sidebarEnvModal');if(modal){modal.classList.add('is-switching');if(modal.parentNode!==document.body){document.body.appendChild(modal);}}document.body.style.overflow='hidden';window.setTimeout(function(){window.location.href=targetUrl;},150);return false;">Switch</a>
+      </div>
     </div>
-  </div>
-</div>
-<div class="sidebar-env-loading" id="sidebarEnvSwitchLoading" aria-hidden="true" aria-live="polite">
-  <div class="sidebar-env-loading-inner">
-    <div class="sidebar-env-loading-spinner" aria-hidden="true"></div>
-    <p class="sidebar-env-loading-title">Switching environment</p>
-    <p class="sidebar-env-loading-sub">Loading %%=v(@envAltDisplayName)=%%. This may take a moment.</p>
+    <div class="sidebar-env-modal-loading-panel" id="sidebarEnvModalLoadingPanel" aria-live="polite">
+      <div class="sidebar-env-modal-spinner" aria-hidden="true"></div>
+      <p class="sidebar-env-modal-loading-title">Switching environment</p>
+      <p class="sidebar-env-modal-loading-sub">Loading %%=v(@envAltDisplayName)=%%. This may take a moment.</p>
+    </div>
   </div>
 </div>
 %%[ ENDIF ]%%
@@ -550,13 +547,12 @@ window.__sstEnvSwitchGo = function (el) {
   if (!href) {
     return true;
   }
-  var loading = document.getElementById("sidebarEnvSwitchLoading");
-  if (loading) {
-    if (loading.parentNode !== document.body) {
-      document.body.appendChild(loading);
+  var modal = document.getElementById("sidebarEnvModal");
+  if (modal) {
+    modal.classList.add("is-switching");
+    if (modal.parentNode !== document.body) {
+      document.body.appendChild(modal);
     }
-    loading.classList.add("is-visible");
-    loading.setAttribute("aria-hidden", "false");
   }
   document.body.style.overflow = "hidden";
   window.setTimeout(function () {
@@ -582,7 +578,7 @@ window.__sstEnvModalSync = function () {
       window.__sstEnvModalSync();
     });
     document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && check.checked) {
+      if (e.key === "Escape" && check.checked && modal && !modal.classList.contains("is-switching")) {
         check.checked = false;
         window.__sstEnvModalSync();
       }
