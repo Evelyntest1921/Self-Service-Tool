@@ -6,6 +6,8 @@ SET @entryScheduleType = Trim(RequestParameter("entryScheduleType"))
 SET @entryScheduleRepeat = Trim(RequestParameter("entryScheduleRepeat"))
 SET @entryScheduleInterval = Trim(RequestParameter("entryScheduleInterval"))
 SET @entryScheduleOccurrences = Trim(RequestParameter("entryScheduleOccurrences"))
+SET @entryScheduleEnd = Trim(RequestParameter("entryScheduleEnd"))
+SET @entryScheduleEndDate = Trim(RequestParameter("entryScheduleEndDate"))
 SET @entryScheduleWeekdays = Trim(RequestParameter("entryScheduleWeekdays"))
 SET @entryContactEvaluation = Trim(RequestParameter("entryContactEvaluation"))
 SET @entryScheduleStart = Trim(RequestParameter("entryScheduleStart"))
@@ -29,6 +31,9 @@ IF Empty(@entryScheduleInterval) THEN
 ENDIF
 IF Empty(@entryScheduleOccurrences) THEN
  SET @entryScheduleOccurrences = "2"
+ENDIF
+IF Empty(@entryScheduleEnd) OR (@entryScheduleEnd != "occurrences" AND @entryScheduleEnd != "endDate" AND @entryScheduleEnd != "never") THEN
+ SET @entryScheduleEnd = "occurrences"
 ENDIF
 IF Empty(@entryContactEvaluation) OR (@entryContactEvaluation != "all" AND @entryContactEvaluation != "newOnly") THEN
  SET @entryContactEvaluation = "newOnly"
@@ -293,11 +298,63 @@ function scheduleRepeatLabel(repeat) {
   return "Daily";
 }
 
+var SCHEDULE_NEVER_END = "2099-12-31T23:59:00";
+var SCHEDULE_NEVER_YEAR_MIN = 2050;
+
+function normalizeScheduleEndDate(raw, startDateTime) {
+  var value = asStr(raw);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value + "T23:59:00";
+  }
+  if (value.indexOf("T") > 0) {
+    return value.substring(0, 10) + "T23:59:00";
+  }
+  var parts = parseScheduleStartParts(startDateTime);
+  if (parts) {
+    var d = new Date(parts.y, parts.mo, parts.d, 23, 59, 0, 0);
+    d.setFullYear(d.getFullYear() + 1);
+    return formatScheduleDateTimeFromDate(d).substring(0, 10) + "T23:59:00";
+  }
+  var d2 = new Date();
+  d2.setFullYear(d2.getFullYear() + 1);
+  return formatScheduleDateTimeFromDate(d2).substring(0, 10) + "T23:59:00";
+}
+
+function applyRecurringScheduleEnd(schedule, endMode, occurrences, endDateRaw, startDateTime) {
+  var mode = asStr(endMode).toLowerCase();
+  var occurVal = parseInt(asStr(occurrences) || "2", 10);
+  if (isNaN(occurVal) || occurVal < 1) {
+    occurVal = 2;
+  }
+  if (mode === "never") {
+    schedule.endType = "EndDate";
+    schedule.endDateTime = SCHEDULE_NEVER_END;
+    try {
+      delete schedule.occurrences;
+    } catch (endNeverEx) {}
+  } else if (mode === "enddate") {
+    schedule.endType = "EndDate";
+    schedule.endDateTime = normalizeScheduleEndDate(endDateRaw, startDateTime);
+    try {
+      delete schedule.occurrences;
+    } catch (endDateEx) {}
+  } else {
+    schedule.endType = "Occurrences";
+    schedule.occurrences = occurVal;
+    try {
+      delete schedule.endDateTime;
+    } catch (endOccEx) {}
+  }
+  return schedule;
+}
+
 function buildRecurringSchedule(
   repeat,
   interval,
   scheduleStart,
+  endMode,
   occurrences,
+  endDate,
   weekdaysRaw
 ) {
   var easternTz = "Eastern Standard Time";
@@ -323,20 +380,21 @@ function buildRecurringSchedule(
   var parts = parseScheduleStartParts(startDateTime);
   var repeatKey = asStr(repeat).toLowerCase();
   var intervalVal = parseInt(asStr(interval) || "1", 10);
-  var occurVal = parseInt(asStr(occurrences) || "2", 10);
   if (isNaN(intervalVal) || intervalVal < 1) {
     intervalVal = 1;
   }
-  if (isNaN(occurVal) || occurVal < 1) {
-    occurVal = 2;
-  }
   var schedule = {
     startDateTime: startDateTime,
-    endType: "Occurrences",
-    occurrences: occurVal,
     timeZone: easternTz,
     interval: intervalVal
   };
+  applyRecurringScheduleEnd(
+    schedule,
+    endMode,
+    occurrences,
+    endDate,
+    startDateTime
+  );
   var weekdayIndex = parts
     ? new Date(parts.y, parts.mo, parts.d).getDay()
     : 0;
@@ -378,6 +436,8 @@ function buildDeEntryEventPayload(
   scheduleStart,
   scheduleInterval,
   scheduleOccurrences,
+  scheduleEnd,
+  scheduleEndDate,
   scheduleWeekdays,
   contactEvaluation
 ) {
@@ -401,7 +461,9 @@ function buildDeEntryEventPayload(
       scheduleRepeat,
       scheduleInterval,
       scheduleStart,
+      scheduleEnd,
       scheduleOccurrences,
+      scheduleEndDate,
       scheduleWeekdays
     );
   } else {
@@ -435,6 +497,8 @@ function createDeEntryEvent(
   scheduleStart,
   scheduleInterval,
   scheduleOccurrences,
+  scheduleEnd,
+  scheduleEndDate,
   scheduleWeekdays,
   contactEvaluation
 ) {
@@ -453,6 +517,8 @@ function createDeEntryEvent(
       scheduleStart,
       scheduleInterval,
       scheduleOccurrences,
+      scheduleEnd,
+      scheduleEndDate,
       scheduleWeekdays,
       contactEvaluation
     )
@@ -510,6 +576,8 @@ var entryScheduleType = asStr(Variable.GetValue("entryScheduleType")) || "runOnc
 var entryScheduleRepeat = asStr(Variable.GetValue("entryScheduleRepeat")) || "daily";
 var entryScheduleInterval = asStr(Variable.GetValue("entryScheduleInterval")) || "1";
 var entryScheduleOccurrences = asStr(Variable.GetValue("entryScheduleOccurrences")) || "2";
+var entryScheduleEnd = asStr(Variable.GetValue("entryScheduleEnd")) || "occurrences";
+var entryScheduleEndDate = asStr(Variable.GetValue("entryScheduleEndDate"));
 var entryScheduleWeekdays = asStr(Variable.GetValue("entryScheduleWeekdays"));
 var entryContactEvaluation = asStr(Variable.GetValue("entryContactEvaluation")) || "newOnly";
 var entryScheduleStart = asStr(Variable.GetValue("entryScheduleStart"));
@@ -551,6 +619,8 @@ if (authOk == "true" && accessToken && subdomain && journeyName && journeyKey) {
           entryScheduleStart,
           entryScheduleInterval,
           entryScheduleOccurrences,
+          entryScheduleEnd,
+          entryScheduleEndDate,
           entryScheduleWeekdays,
           entryContactEvaluation
         );
@@ -991,10 +1061,17 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 .schedule-weekday-panel { display: none; margin-top: 12px; }
 .schedule-weekday-panel.is-visible { display: block; }
 .schedule-eastern-note {
- font-size: 0.8125rem;
- color: var(--text-secondary);
- margin: 4px 0 0;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  margin: 6px 0 0;
 }
+.schedule-end-group { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.schedule-end-option { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer; }
+.schedule-end-option input[type="radio"] { margin: 0; }
+.schedule-end-inline { width: auto; max-width: 120px; padding: 8px 10px; }
+.schedule-end-date { max-width: 180px; }
+.schedule-end-panel { display: none; }
+.schedule-end-panel.is-visible { display: block; }
 .submit-section { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border-color); }
 .submit-button {
  background: #0e0e1d;
@@ -1141,8 +1218,25 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
             <p class="schedule-eastern-note">Start time is always 12:00 AM in Eastern Time (US &amp; Canada).</p>
           </div>
           <div class="form-group">
-            <label for="entryScheduleOccurrences">End after (occurrences)</label>
-            <input type="number" min="1" max="9999" class="textarea-control" name="entryScheduleOccurrences" id="entryScheduleOccurrences" value="%%=v(@entryScheduleOccurrences)=%%">
+            <span class="schedule-radio-title">End</span>
+            <div class="schedule-end-group">
+              <label class="schedule-end-option">
+                <input type="radio" name="entryScheduleEnd" value="occurrences" %%[ IF @entryScheduleEnd != "endDate" AND @entryScheduleEnd != "never" THEN ]%%checked%%[ ENDIF ]%%>
+                <span>After</span>
+                <input type="number" min="1" max="9999" class="textarea-control schedule-end-inline" name="entryScheduleOccurrences" id="entryScheduleOccurrences" value="%%=v(@entryScheduleOccurrences)=%%">
+                <span>occurrence(s)</span>
+              </label>
+              <label class="schedule-end-option">
+                <input type="radio" name="entryScheduleEnd" value="endDate" %%[ IF @entryScheduleEnd == "endDate" THEN ]%%checked%%[ ENDIF ]%%>
+                <span>On date</span>
+                <input type="date" class="textarea-control schedule-end-inline schedule-end-date" name="entryScheduleEndDate" id="entryScheduleEndDate" value="%%=IIF(Length(@entryScheduleEndDate)>=10,Substring(@entryScheduleEndDate,1,10),@entryScheduleEndDate)=%%">
+              </label>
+              <label class="schedule-end-option">
+                <input type="radio" name="entryScheduleEnd" value="never" %%[ IF @entryScheduleEnd == "never" THEN ]%%checked%%[ ENDIF ]%%>
+                <span>Never</span>
+              </label>
+            </div>
+            <p class="schedule-eastern-note">On date uses 11:59 PM Eastern Time on the selected day. Never uses a far-future end date (Journey Builder equivalent).</p>
           </div>
           <div class="form-group">
             <span class="schedule-radio-title">Contact evaluation</span>
@@ -1247,6 +1341,9 @@ var repeatSelect = document.getElementById('entryScheduleRepeat');
 var weeklyDayPanel = document.getElementById('weeklyDayPanel');
 var weekdayHidden = document.getElementById('entryScheduleWeekdays');
 var weekdayChecks = document.querySelectorAll('.schedule-weekday-cb');
+var endRadios = document.querySelectorAll('input[name="entryScheduleEnd"]');
+var endDateInput = document.getElementById('entryScheduleEndDate');
+var occurInput = document.getElementById('entryScheduleOccurrences');
 
 function padLocal(n) {
   return n < 10 ? '0' + n : String(n);
@@ -1287,6 +1384,40 @@ function loadWeekdayChecksFromHidden() {
   }
 }
 
+function selectedEndMode() {
+  for (var e = 0; e < endRadios.length; e++) {
+    if (endRadios[e].checked) {
+      return endRadios[e].value;
+    }
+  }
+  return 'occurrences';
+}
+
+function addYearsToDateKey(dateKey, years) {
+  if (!dateKey || dateKey.length < 10) {
+    return futureDateString(365);
+  }
+  var parts = dateKey.split('-');
+  var y = parseInt(parts[0], 10) + years;
+  return y + '-' + parts[1] + '-' + parts[2];
+}
+
+function syncEndInputsUi() {
+  var mode = selectedEndMode();
+  if (occurInput) {
+    occurInput.disabled = mode !== 'occurrences';
+  }
+  if (endDateInput) {
+    endDateInput.disabled = mode !== 'endDate';
+    if (mode === 'endDate' && !endDateInput.value) {
+      var startInput = document.getElementById('entryScheduleStart');
+      var base = startInput && startInput.value ? startInput.value : futureDateString(2);
+      endDateInput.value = addYearsToDateKey(base, 1);
+      endDateInput.min = base;
+    }
+  }
+}
+
 function syncEntryScheduleUi() {
   var hasDe = deInput && String(deInput.value || '').replace(/^\s+|\s+$/g, '').length > 0;
   if (scheduleSection) {
@@ -1315,6 +1446,7 @@ function syncEntryScheduleUi() {
     }
   }
   syncWeekdayHidden();
+  syncEndInputsUi();
 }
 
 if (deInput) {
@@ -1329,6 +1461,13 @@ if (repeatSelect) {
 }
 for (var w = 0; w < weekdayChecks.length; w++) {
   weekdayChecks[w].addEventListener('change', syncWeekdayHidden);
+}
+for (var er = 0; er < endRadios.length; er++) {
+  endRadios[er].addEventListener('change', syncEndInputsUi);
+}
+var startForEnd = document.getElementById('entryScheduleStart');
+if (startForEnd) {
+  startForEnd.addEventListener('change', syncEndInputsUi);
 }
 loadWeekdayChecksFromHidden();
 syncEntryScheduleUi();
