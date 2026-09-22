@@ -7,6 +7,50 @@ VAR @authOk, @accessToken, @subdomain, @clientId, @clientSecret, @authUrl, @auth
 VAR @MC_CLOUD
 VAR @journeyFlowHtml, @journeyActivitiesHtml, @journeyMetaHtml, @journeyBuilderUrl
 VAR @apiJourneyName, @apiJourneyStatus, @apiJourneyVersion, @apiActivityCount, @editSidebarHtml
+VAR @saveScheduleRequested, @schedulePanelVisible, @scheduleEventDefId, @scheduleSaveMsg
+VAR @entryScheduleType, @entryScheduleRepeat, @entryScheduleInterval, @entryScheduleOccurrences
+VAR @entryScheduleWeekdays, @entryContactEvaluation, @entryScheduleStart
+
+SET @saveScheduleRequested = "0"
+SET @schedulePanelVisible = "false"
+SET @scheduleEventDefId = ""
+SET @scheduleSaveMsg = ""
+SET @entryScheduleType = "runOnce"
+SET @entryScheduleRepeat = "daily"
+SET @entryScheduleInterval = "1"
+SET @entryScheduleOccurrences = "2"
+SET @entryScheduleWeekdays = ""
+SET @entryContactEvaluation = "newOnly"
+SET @entryScheduleStart = ""
+IF RequestParameter("saveSchedule") == "1" THEN
+ SET @saveScheduleRequested = "1"
+ SET @entryScheduleType = Trim(RequestParameter("entryScheduleType"))
+ SET @entryScheduleRepeat = Trim(RequestParameter("entryScheduleRepeat"))
+ SET @entryScheduleInterval = Trim(RequestParameter("entryScheduleInterval"))
+ SET @entryScheduleOccurrences = Trim(RequestParameter("entryScheduleOccurrences"))
+ SET @entryScheduleWeekdays = Trim(RequestParameter("entryScheduleWeekdays"))
+ SET @entryContactEvaluation = Trim(RequestParameter("entryContactEvaluation"))
+ SET @entryScheduleStart = Trim(RequestParameter("entryScheduleStart"))
+ SET @scheduleEventDefId = Trim(RequestParameter("scheduleEventDefId"))
+ENDIF
+IF Empty(@entryScheduleType) OR (@entryScheduleType != "runOnce" AND @entryScheduleType != "recurring") THEN
+ SET @entryScheduleType = "runOnce"
+ENDIF
+IF Empty(@entryScheduleRepeat) THEN
+ SET @entryScheduleRepeat = "daily"
+ENDIF
+IF @entryScheduleRepeat != "hourly" AND @entryScheduleRepeat != "daily" AND @entryScheduleRepeat != "weekdays" AND @entryScheduleRepeat != "weekly" AND @entryScheduleRepeat != "monthly" AND @entryScheduleRepeat != "yearly" THEN
+ SET @entryScheduleRepeat = "daily"
+ENDIF
+IF Empty(@entryScheduleInterval) THEN
+ SET @entryScheduleInterval = "1"
+ENDIF
+IF Empty(@entryScheduleOccurrences) THEN
+ SET @entryScheduleOccurrences = "2"
+ENDIF
+IF Empty(@entryContactEvaluation) OR (@entryContactEvaluation != "all" AND @entryContactEvaluation != "newOnly") THEN
+ SET @entryContactEvaluation = "newOnly"
+ENDIF
 
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
@@ -902,6 +946,352 @@ function buildMetaHtml(jObj, logName, builderUrl) {
   return parts.join("");
 }
 
+function pad2Schedule(n) {
+  var num = parseInt(n, 10);
+  if (isNaN(num)) {
+    return "00";
+  }
+  return num < 10 ? "0" + num : String(num);
+}
+
+function formatScheduleDateTimeFromDate(d) {
+  return (
+    d.getFullYear() +
+    "-" +
+    pad2Schedule(d.getMonth() + 1) +
+    "-" +
+    pad2Schedule(d.getDate()) +
+    "T" +
+    pad2Schedule(d.getHours()) +
+    ":" +
+    pad2Schedule(d.getMinutes()) +
+    ":00"
+  );
+}
+
+function parseScheduleStartParts(iso) {
+  var m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+  if (!m) {
+    return null;
+  }
+  return {
+    y: parseInt(m[1], 10),
+    mo: parseInt(m[2], 10) - 1,
+    d: parseInt(m[3], 10),
+    h: parseInt(m[4], 10),
+    mi: parseInt(m[5], 10)
+  };
+}
+
+function normalizeScheduleStart(raw) {
+  var value = strTrim(raw);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value + "T00:00:00";
+  }
+  if (!value) {
+    var d = new Date();
+    d.setDate(d.getDate() + 2);
+    d.setHours(0, 0, 0, 0);
+    return formatScheduleDateTimeFromDate(d);
+  }
+  if (value.indexOf("T") > 0) {
+    return value.substring(0, 10) + "T00:00:00";
+  }
+  return normalizeScheduleStart("");
+}
+
+function parseWeeklyDayFlags(raw, startParts) {
+  var flags = [false, false, false, false, false, false, false];
+  var tokenMap = {
+    sun: 0,
+    sunday: 0,
+    mon: 1,
+    monday: 1,
+    tue: 2,
+    tues: 2,
+    tuesday: 2,
+    wed: 3,
+    wednesday: 3,
+    thu: 4,
+    thur: 4,
+    thurs: 4,
+    thursday: 4,
+    fri: 5,
+    friday: 5,
+    sat: 6,
+    saturday: 6
+  };
+  var tokens = strTrim(raw).toLowerCase().split(/[,;\s]+/);
+  var i;
+  for (i = 0; i < tokens.length; i++) {
+    if (tokens[i] && tokenMap[tokens[i]] !== undefined) {
+      flags[tokenMap[tokens[i]]] = true;
+    }
+  }
+  var any = false;
+  for (i = 0; i < flags.length; i++) {
+    if (flags[i]) {
+      any = true;
+      break;
+    }
+  }
+  if (!any && startParts) {
+    flags[new Date(startParts.y, startParts.mo, startParts.d).getDay()] = true;
+  }
+  return flags;
+}
+
+function buildRecurringSchedule(
+  repeat,
+  interval,
+  scheduleStart,
+  occurrences,
+  weekdaysRaw,
+  requireFutureStart
+) {
+  var easternTz = "Eastern Standard Time";
+  var weekdayKeys = [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday"
+  ];
+  var weekdayNames = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday"
+  ];
+  var startDateTime = normalizeScheduleStart(scheduleStart);
+  if (requireFutureStart !== false) {
+    var pCheck = parseScheduleStartParts(startDateTime);
+    if (pCheck) {
+      var startDate = new Date(pCheck.y, pCheck.mo, pCheck.d, pCheck.h, pCheck.mi, 0, 0);
+      var minStart = new Date();
+      minStart.setTime(minStart.getTime() + 2 * 60 * 60 * 1000);
+      if (startDate.getTime() <= minStart.getTime()) {
+        startDateTime = normalizeScheduleStart("");
+      }
+    }
+  }
+  var parts = parseScheduleStartParts(startDateTime);
+  var repeatKey = strTrim(repeat).toLowerCase();
+  var intervalVal = parseInt(strTrim(interval) || "1", 10);
+  var occurVal = parseInt(strTrim(occurrences) || "2", 10);
+  if (isNaN(intervalVal) || intervalVal < 1) {
+    intervalVal = 1;
+  }
+  if (isNaN(occurVal) || occurVal < 1) {
+    occurVal = 2;
+  }
+  var schedule = {
+    startDateTime: startDateTime,
+    endType: "Occurrences",
+    occurrences: occurVal,
+    timeZone: easternTz,
+    interval: intervalVal
+  };
+  var weekdayIndex = parts
+    ? new Date(parts.y, parts.mo, parts.d).getDay()
+    : 0;
+  if (repeatKey === "hourly") {
+    schedule.frequency = "Hourly";
+    schedule.recurrencePattern = "Interval";
+  } else if (repeatKey === "weekdays") {
+    schedule.frequency = "Daily";
+    schedule.recurrencePattern = "DailyEveryWeekDay";
+  } else if (repeatKey === "weekly") {
+    var flags = parseWeeklyDayFlags(weekdaysRaw, parts);
+    schedule.frequency = "Weekly";
+    schedule.recurrencePattern = "ByDay";
+    schedule.scheduledDayOfWeek = weekdayNames[weekdayIndex];
+    for (var w = 0; w < weekdayKeys.length; w++) {
+      schedule[weekdayKeys[w]] = flags[w];
+    }
+  } else if (repeatKey === "monthly") {
+    schedule.frequency = "Monthly";
+    schedule.recurrencePattern = "Interval";
+    schedule.scheduledDay = parts ? parts.d : 1;
+  } else if (repeatKey === "yearly") {
+    schedule.frequency = "Yearly";
+    schedule.recurrencePattern = "Interval";
+    schedule.scheduledDay = parts ? parts.d : 1;
+  } else {
+    schedule.frequency = "Daily";
+    schedule.recurrencePattern = "Interval";
+  }
+  return schedule;
+}
+
+function findDeAudienceEntry(jObj) {
+  var triggers = jObj.triggers;
+  if (!triggers || !triggers.length) {
+    return null;
+  }
+  var i;
+  for (i = 0; i < triggers.length; i++) {
+    if (strTrim(triggers[i].type).toUpperCase() === "EMAILAUDIENCE") {
+      var meta = triggers[i].metaData || {};
+      var eventDefId = strTrim(meta.eventDefinitionId);
+      if (eventDefId) {
+        return {
+          eventDefId: eventDefId,
+          eventDefKey: strTrim(meta.eventDefinitionKey)
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function getEventDefinition(sub, token, eventDefId) {
+  var url =
+    "https://" +
+    sub +
+    ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
+    encodeURIComponent(eventDefId);
+  var resp = journeyHttpJson(token, "GET", url, null);
+  if (resp.status != 200 && resp.status != 201) {
+    return {
+      ok: false,
+      msg:
+        "Event definition GET HTTP " +
+        resp.status +
+        (resp.body ? " - " + resp.body.substring(0, 300) : "."),
+      obj: null
+    };
+  }
+  var evObj = parseJsonSafe(resp.body);
+  if (!evObj) {
+    return { ok: false, msg: "Could not parse event definition.", obj: null };
+  }
+  return { ok: true, msg: "", obj: evObj };
+}
+
+function inferScheduleTypeFromEvent(evObj) {
+  var meta = evObj.metaData || {};
+  var flow = strTrim(meta.scheduleFlowMode).toLowerCase();
+  if (flow === "recurring" || evObj.schedule) {
+    return "recurring";
+  }
+  return "runOnce";
+}
+
+function inferRepeatFromEvent(evObj) {
+  var sched = evObj.schedule || {};
+  if (sched.recurrencePattern === "DailyEveryWeekDay") {
+    return "weekdays";
+  }
+  var freq = strTrim(sched.frequency).toLowerCase();
+  if (freq === "hourly") {
+    return "hourly";
+  }
+  if (freq === "weekly") {
+    return "weekly";
+  }
+  if (freq === "monthly") {
+    return "monthly";
+  }
+  if (freq === "yearly") {
+    return "yearly";
+  }
+  if (freq === "daily") {
+    return "daily";
+  }
+  return "daily";
+}
+
+function formatDateInputFromEvent(evObj) {
+  var sched = evObj.schedule || {};
+  var start = strTrim(sched.startDateTime);
+  if (start.length >= 10) {
+    return start.substring(0, 10);
+  }
+  return "";
+}
+
+function inferWeekdaysFromEvent(evObj) {
+  var sched = evObj.schedule || {};
+  var shortKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+  var dayKeys = [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday"
+  ];
+  var parts = [];
+  var i;
+  for (i = 0; i < dayKeys.length; i++) {
+    if (sched[dayKeys[i]] === true) {
+      parts.push(shortKeys[i]);
+    }
+  }
+  return parts.join(",");
+}
+
+function syncScheduleFormFromEvent(evObj) {
+  Platform.Variable.SetValue("@entryScheduleType", inferScheduleTypeFromEvent(evObj));
+  Platform.Variable.SetValue("@entryScheduleRepeat", inferRepeatFromEvent(evObj));
+  Platform.Variable.SetValue(
+    "@entryScheduleInterval",
+    String(evObj.schedule && evObj.schedule.interval ? evObj.schedule.interval : 1)
+  );
+  Platform.Variable.SetValue(
+    "@entryScheduleOccurrences",
+    String(evObj.schedule && evObj.schedule.occurrences ? evObj.schedule.occurrences : 2)
+  );
+  Platform.Variable.SetValue("@entryScheduleStart", formatDateInputFromEvent(evObj));
+  Platform.Variable.SetValue("@entryScheduleWeekdays", inferWeekdaysFromEvent(evObj));
+  var args = evObj.arguments || {};
+  Platform.Variable.SetValue(
+    "@entryContactEvaluation",
+    args.useHighWatermark === false ? "all" : "newOnly"
+  );
+}
+
+function applyEventScheduleForm(
+  evObj,
+  scheduleType,
+  scheduleRepeat,
+  scheduleInterval,
+  scheduleStart,
+  scheduleOccurrences,
+  scheduleWeekdays,
+  contactEvaluation
+) {
+  evObj.metaData = evObj.metaData || {};
+  evObj.metaData.criteriaDescription = evObj.metaData.criteriaDescription || "";
+  if (strTrim(scheduleType).toLowerCase() === "recurring") {
+    evObj.metaData.scheduleFlowMode = "Recurring";
+    evObj.schedule = buildRecurringSchedule(
+      scheduleRepeat,
+      scheduleInterval,
+      scheduleStart,
+      scheduleOccurrences,
+      scheduleWeekdays,
+      false
+    );
+  } else {
+    evObj.metaData.scheduleFlowMode = "Run Once";
+    try {
+      delete evObj.schedule;
+    } catch (dropSchedEx) {}
+  }
+  evObj.arguments = evObj.arguments || {};
+  evObj.arguments.useHighWatermark =
+    strTrim(contactEvaluation).toLowerCase() !== "all";
+  return evObj;
+}
+
 var pageStatus = Platform.Variable.GetValue("@pageStatus") || "";
 var authOk = Platform.Variable.GetValue("@authOk") || "";
 var accessToken = Platform.Variable.GetValue("@accessToken") || "";
@@ -927,6 +1317,75 @@ try {
       journeyFlowHtml = buildFlowGraphHtml(startAct, activities);
       journeyActivitiesHtml = buildActivitiesTableHtml(activities);
       journeyMetaHtml = buildMetaHtml(jObj, logName, journeyBuilderUrl);
+
+      var deEntry = findDeAudienceEntry(jObj);
+      if (deEntry && deEntry.eventDefId) {
+        Platform.Variable.SetValue("@schedulePanelVisible", "true");
+        Platform.Variable.SetValue("@scheduleEventDefId", deEntry.eventDefId);
+        var saveSchedule =
+          Platform.Variable.GetValue("@saveScheduleRequested") === "1";
+        var evFetched = getEventDefinition(
+          subdomain,
+          accessToken,
+          deEntry.eventDefId
+        );
+        if (saveSchedule && !evFetched.ok) {
+          Platform.Variable.SetValue(
+            "@scheduleSaveMsg",
+            evFetched.msg || "Could not load event definition."
+          );
+        }
+        if (saveSchedule && evFetched.ok && evFetched.obj) {
+          var updatedEv = applyEventScheduleForm(
+            evFetched.obj,
+            Platform.Variable.GetValue("@entryScheduleType") || "runOnce",
+            Platform.Variable.GetValue("@entryScheduleRepeat") || "daily",
+            Platform.Variable.GetValue("@entryScheduleInterval") || "1",
+            Platform.Variable.GetValue("@entryScheduleStart") || "",
+            Platform.Variable.GetValue("@entryScheduleOccurrences") || "2",
+            Platform.Variable.GetValue("@entryScheduleWeekdays") || "",
+            Platform.Variable.GetValue("@entryContactEvaluation") || "newOnly"
+          );
+          var putUrl =
+            "https://" +
+            subdomain +
+            ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
+            encodeURIComponent(deEntry.eventDefId);
+          var putResp = journeyHttpJson(
+            accessToken,
+            "PUT",
+            putUrl,
+            Platform.Function.Stringify(updatedEv)
+          );
+          if (putResp.status == 200 || putResp.status == 201) {
+            Platform.Variable.SetValue("@scheduleSaveMsg", "Entry schedule saved.");
+            evFetched = getEventDefinition(
+              subdomain,
+              accessToken,
+              deEntry.eventDefId
+            );
+          } else {
+            Platform.Variable.SetValue(
+              "@scheduleSaveMsg",
+              "Could not save schedule: HTTP " +
+                putResp.status +
+                (putResp.body ? " - " + putResp.body.substring(0, 400) : ".")
+            );
+          }
+        }
+        if (!saveSchedule && evFetched.ok && evFetched.obj) {
+          syncScheduleFormFromEvent(evFetched.obj);
+        } else if (
+          saveSchedule &&
+          evFetched.ok &&
+          evFetched.obj &&
+          strTrim(Platform.Variable.GetValue("@scheduleSaveMsg") || "").indexOf(
+            "Could not"
+          ) !== 0
+        ) {
+          syncScheduleFormFromEvent(evFetched.obj);
+        }
+      }
     } else {
       loadErrorMsg = fetched.msg || "Could not load journey.";
       Platform.Variable.SetValue("@pageStatus", "apifail");
@@ -1034,6 +1493,24 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 .contacts-table tbody tr:last-child td{border-bottom:none}
 .contacts-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}
 .flow-hint{font-size:13px;color:var(--text-secondary);margin:0 0 14px 0}
+.schedule-form{margin:0}
+.schedule-radio-group{display:flex;flex-direction:column;gap:10px;margin:12px 0}
+.schedule-radio-option{display:flex;align-items:flex-start;gap:10px;padding:12px 14px;border:1px solid var(--border-color);border-radius:8px;cursor:pointer}
+.schedule-radio-option input{margin-top:3px}
+.schedule-radio-title{font-weight:600;font-size:0.9375rem;display:block}
+.schedule-radio-hint{font-size:0.8125rem;color:var(--text-secondary);display:block;margin-top:2px}
+.schedule-field{margin-bottom:16px}
+.schedule-field label{display:block;font-size:0.8125rem;font-weight:600;color:var(--text-secondary);margin-bottom:6px}
+.schedule-control{width:100%;padding:10px 12px;border:1px solid var(--border-color);border-radius:8px;font:inherit}
+.schedule-eastern-note{font-size:0.8125rem;color:var(--text-secondary);margin:6px 0 0}
+.schedule-weekday-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.schedule-weekday-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--border-color);border-radius:8px;font-size:0.8125rem;cursor:pointer}
+.schedule-weekday-panel{display:none;margin-bottom:16px}
+.schedule-weekday-panel.is-visible{display:block}
+.schedule-save-msg{font-size:14px;margin:0 0 14px 0;padding:10px 12px;border-radius:8px;border:1px solid #bbf7d0;background:#f0fdf4;color:#166534}
+.schedule-save-msg.is-error{border-color:#fecaca;background:#fef2f2;color:#b91c1c}
+.btn-save-schedule{display:inline-flex;align-items:center;justify-content:center;padding:10px 18px;font-size:14px;font-weight:600;border-radius:8px;border:none;background:var(--primary-color);color:#fff;cursor:pointer;font-family:inherit}
+.btn-save-schedule:hover{background:var(--primary-dark)}
 @media (max-width:768px){
 .dashboard-layout{flex-direction:column;height:auto;overflow:visible}
 .maker-sidebar{width:100%;flex-direction:row;overflow-x:auto;height:auto;padding:12px 0}
@@ -1088,6 +1565,85 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 <h1>%%[ IF NOT Empty(@apiJourneyName) THEN ]%%%%=v(@apiJourneyName)=%%%%[ ELSEIF NOT Empty(@dispName) THEN ]%%%%=v(@dispName)=%%%%[ ELSE ]%%Journey%%[ ENDIF ]%%</h1>
 <p class="sub">Check the journey setup from the first entry, through email sends, waits, and splits—using the same live view that Journey Builder uses. Use this view to make sure paths and branches are set up right when you're reviewing a build, showing a teammate how it works, or figuring out why a send happened the way it did.</p>
 <div class="panel">%%[ IF NOT Empty(@journeyMetaHtml) THEN ]%%%%=TreatAsContent(@journeyMetaHtml)=%%%%[ ENDIF ]%%</div>
+%%[ IF @schedulePanelVisible == "true" THEN ]%%
+<div class="panel">
+  <h2 class="panel-title">Entry schedule</h2>
+  <p class="flow-hint">Data extension entry schedule (Eastern Time, 12:00 AM start). Matches Journey Builder repeat options.</p>
+%%[ IF NOT Empty(@scheduleSaveMsg) THEN ]%%
+  <p class="schedule-save-msg%%[ IF IndexOf(@scheduleSaveMsg,"Could not") > 0 THEN ]%% is-error%%[ ENDIF ]%%">%%=v(@scheduleSaveMsg)=%%</p>
+%%[ ENDIF ]%%
+  <form method="post" action="" class="schedule-form" id="scheduleEditForm">
+    <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
+    <input type="hidden" name="scheduleEventDefId" value="%%=v(@scheduleEventDefId)=%%">
+    <input type="hidden" name="entryScheduleWeekdays" id="entryScheduleWeekdays" value="%%=v(@entryScheduleWeekdays)=%%">
+    <div class="schedule-field">
+      <span class="schedule-radio-title">Schedule mode</span>
+      <div class="schedule-radio-group">
+        <label class="schedule-radio-option">
+          <input type="radio" name="entryScheduleType" value="runOnce" %%[ IF @entryScheduleType != "recurring" THEN ]%%checked%%[ ENDIF ]%%>
+          <span><span class="schedule-radio-title">Run once</span><span class="schedule-radio-hint">One-time entry (On activation or specific start in Journey Builder).</span></span>
+        </label>
+        <label class="schedule-radio-option">
+          <input type="radio" name="entryScheduleType" value="recurring" %%[ IF @entryScheduleType == "recurring" THEN ]%%checked%%[ ENDIF ]%%>
+          <span><span class="schedule-radio-title">Recurring</span><span class="schedule-radio-hint">Hourly, Daily, Weekdays, Weekly, Monthly, or Yearly.</span></span>
+        </label>
+      </div>
+    </div>
+    <div id="recurringScheduleFields">
+      <div class="schedule-field">
+        <label for="entryScheduleRepeat">Repeat</label>
+        <select class="schedule-control" name="entryScheduleRepeat" id="entryScheduleRepeat">
+          <option value="hourly" %%[ IF @entryScheduleRepeat == "hourly" THEN ]%%selected%%[ ENDIF ]%%>Hourly</option>
+          <option value="daily" %%[ IF @entryScheduleRepeat == "daily" THEN ]%%selected%%[ ENDIF ]%%>Daily</option>
+          <option value="weekdays" %%[ IF @entryScheduleRepeat == "weekdays" THEN ]%%selected%%[ ENDIF ]%%>Weekdays</option>
+          <option value="weekly" %%[ IF @entryScheduleRepeat == "weekly" THEN ]%%selected%%[ ENDIF ]%%>Weekly</option>
+          <option value="monthly" %%[ IF @entryScheduleRepeat == "monthly" THEN ]%%selected%%[ ENDIF ]%%>Monthly</option>
+          <option value="yearly" %%[ IF @entryScheduleRepeat == "yearly" THEN ]%%selected%%[ ENDIF ]%%>Yearly</option>
+        </select>
+      </div>
+      <div class="schedule-field">
+        <label for="entryScheduleInterval">Every</label>
+        <input type="number" min="1" max="999" class="schedule-control" name="entryScheduleInterval" id="entryScheduleInterval" value="%%=v(@entryScheduleInterval)=%%">
+      </div>
+      <div id="weeklyDayPanel" class="schedule-weekday-panel">
+        <label>On the selected days</label>
+        <div class="schedule-weekday-row">
+          <label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="sun"> Sun</label>
+          <label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="mon"> Mon</label>
+          <label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="tue"> Tue</label>
+          <label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="wed"> Wed</label>
+          <label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="thu"> Thu</label>
+          <label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="fri"> Fri</label>
+          <label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="sat"> Sat</label>
+        </div>
+      </div>
+      <div class="schedule-field">
+        <label for="entryScheduleStart">Start date</label>
+        <input type="date" class="schedule-control" name="entryScheduleStart" id="entryScheduleStart" value="%%=IIF(Length(@entryScheduleStart)>=10,Substring(@entryScheduleStart,1,10),@entryScheduleStart)=%%">
+        <p class="schedule-eastern-note">Start time is 12:00 AM Eastern Time (US &amp; Canada).</p>
+      </div>
+      <div class="schedule-field">
+        <label for="entryScheduleOccurrences">End after (occurrences)</label>
+        <input type="number" min="1" max="9999" class="schedule-control" name="entryScheduleOccurrences" id="entryScheduleOccurrences" value="%%=v(@entryScheduleOccurrences)=%%">
+      </div>
+      <div class="schedule-field">
+        <span class="schedule-radio-title">Contact evaluation</span>
+        <div class="schedule-radio-group">
+          <label class="schedule-radio-option">
+            <input type="radio" name="entryContactEvaluation" value="newOnly" %%[ IF @entryContactEvaluation != "all" THEN ]%%checked%%[ ENDIF ]%%>
+            <span><span class="schedule-radio-title">Evaluate new records only</span></span>
+          </label>
+          <label class="schedule-radio-option">
+            <input type="radio" name="entryContactEvaluation" value="all" %%[ IF @entryContactEvaluation == "all" THEN ]%%checked%%[ ENDIF ]%%>
+            <span><span class="schedule-radio-title">Evaluate all records</span></span>
+          </label>
+        </div>
+      </div>
+    </div>
+    <button type="submit" name="saveSchedule" value="1" class="btn-save-schedule">Save schedule</button>
+  </form>
+</div>
+%%[ ENDIF ]%%
 <div class="panel">
   <h2 class="panel-title">Flow</h2>
   <p class="flow-hint">%%=v(@apiActivityCount)=%% activities in definition. Use Journey Builder for the full canvas.</p>
@@ -1109,5 +1665,99 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 </div>
 </main>
 </div>
+<script>
+(function(){
+var scheduleForm = document.getElementById("scheduleEditForm");
+if (!scheduleForm) {
+  return;
+}
+var repeatSelect = document.getElementById("entryScheduleRepeat");
+var weeklyDayPanel = document.getElementById("weeklyDayPanel");
+var weekdayHidden = document.getElementById("entryScheduleWeekdays");
+var weekdayChecks = document.querySelectorAll(".schedule-weekday-cb");
+var typeRadios = document.querySelectorAll('input[name="entryScheduleType"]');
+var recurringFields = document.getElementById("recurringScheduleFields");
+
+function padLocal(n) {
+  return n < 10 ? "0" + n : String(n);
+}
+
+function futureDateString(daysAhead) {
+  var d = new Date();
+  d.setDate(d.getDate() + daysAhead);
+  return d.getFullYear() + "-" + padLocal(d.getMonth() + 1) + "-" + padLocal(d.getDate());
+}
+
+function syncWeekdayHidden() {
+  if (!weekdayHidden) {
+    return;
+  }
+  var parts = [];
+  for (var i = 0; i < weekdayChecks.length; i++) {
+    if (weekdayChecks[i].checked) {
+      parts.push(weekdayChecks[i].value);
+    }
+  }
+  weekdayHidden.value = parts.join(",");
+}
+
+function loadWeekdayChecksFromHidden() {
+  if (!weekdayHidden || !weekdayHidden.value) {
+    return;
+  }
+  var set = {};
+  var tokens = String(weekdayHidden.value).toLowerCase().split(/[,;\s]+/);
+  for (var t = 0; t < tokens.length; t++) {
+    if (tokens[t]) {
+      set[tokens[t]] = true;
+    }
+  }
+  for (var i = 0; i < weekdayChecks.length; i++) {
+    weekdayChecks[i].checked = !!set[weekdayChecks[i].value];
+  }
+}
+
+function isRecurringSelected() {
+  for (var i = 0; i < typeRadios.length; i++) {
+    if (typeRadios[i].checked && typeRadios[i].value === "recurring") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function syncScheduleUi() {
+  var recurring = isRecurringSelected();
+  if (recurringFields) {
+    recurringFields.style.display = recurring ? "block" : "none";
+  }
+  var weekly = recurring && repeatSelect && repeatSelect.value === "weekly";
+  if (weeklyDayPanel) {
+    weeklyDayPanel.classList.toggle("is-visible", weekly);
+  }
+  var startInput = document.getElementById("entryScheduleStart");
+  if (startInput && !startInput.value) {
+    startInput.min = futureDateString(0);
+    startInput.value = futureDateString(2);
+  }
+  syncWeekdayHidden();
+}
+
+for (var r = 0; r < typeRadios.length; r++) {
+  typeRadios[r].addEventListener("change", syncScheduleUi);
+}
+if (repeatSelect) {
+  repeatSelect.addEventListener("change", syncScheduleUi);
+}
+for (var w = 0; w < weekdayChecks.length; w++) {
+  weekdayChecks[w].addEventListener("change", syncWeekdayHidden);
+}
+loadWeekdayChecksFromHidden();
+syncScheduleUi();
+scheduleForm.addEventListener("submit", function() {
+  syncWeekdayHidden();
+});
+})();
+</script>
 </body>
 </html>
