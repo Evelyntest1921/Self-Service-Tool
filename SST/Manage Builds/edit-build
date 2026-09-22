@@ -28,7 +28,7 @@ SET @QUICK_SEND_JOURNEY_TYPE = "Quick Send"
 VAR @jid, @detailRows, @detailRow, @detailCount
 VAR @dispName, @dispType, @dispEmailName, @dispEmailId, @dispDeName, @dispDeId, @dispCampaignId, @dispSurveyId
 VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationCustomerKey, @dispAutomationName, @dispQueryText, @isStackBuild, @isQuickSendBuild, @isSurveyBuild, @showChecklist
-VAR @dispJourneyStatus, @dispAutomationStatus, @dispSentCount, @dispDeRowCount, @dispDeIdCount, @dispSentDisplay, @sentCountV, @lookupDeKey, @journeyStatusColor, @automationStatusColor, @journeyBtnLabel, @journeyBtnClass, @journeyActionConfirm
+VAR @dispJourneyStatus, @dispAutomationStatus, @dispSentCount, @dispDeRowCount, @dispDeIdCount, @dispSentDisplay, @sentCountV, @lookupDeKey, @journeyStatusColor, @automationStatusColor, @journeyBtnLabel, @journeyBtnClass, @journeyActionConfirm, @journeyHeroAnimate
 VAR @surveyUrlRows, @surveyUrlRow, @buildNavContext, @buildNavActive
 VAR @chkCampaignId, @chkCampaignStatus, @chkCampaignMsg, @chkCampaignIcon
 VAR @chkPublishStatus, @chkPublishMsg, @chkPublishIcon
@@ -120,6 +120,7 @@ SET @dispAutomationCustomerKey = ""
 SET @dispAutomationName = ""
 SET @dispAutomationActive = "false"
 SET @dispJourneyStatus = ""
+SET @journeyHeroAnimate = "false"
 SET @dispAutomationStatus = ""
 SET @dispSentCount = ""
 SET @dispDeRowCount = "0"
@@ -247,6 +248,7 @@ IF @detailCount > 0 THEN
       SET @journeyBtnLabel = "Stop Journey"
       SET @journeyBtnClass = "btn-stop"
       SET @journeyActionConfirm = "Stop this journey? Contacts already in flight may still receive messages."
+      SET @journeyHeroAnimate = "true"
     ENDIF
   ENDIF
   IF NOT Empty(@dispAutomationStatus) THEN
@@ -2706,6 +2708,41 @@ if (showChecklist == "1") {
 
 
 Platform.Variable.SetValue("@step3bResult", step3bResult);
+
+var heroAnimateFromLog =
+  Platform.Variable.GetValue("@journeyHeroAnimate") === "true";
+Platform.Variable.SetValue("@journeyHeroAnimate", "false");
+try {
+  var pageStatusHero = Platform.Variable.GetValue("@pageStatus") || "";
+  var authOkHero = Platform.Variable.GetValue("@authOk") || "";
+  var tokenHero = Platform.Variable.GetValue("@accessToken") || "";
+  var subHero = Platform.Variable.GetValue("@subdomain") || "";
+  var jidHero = strTrim(Platform.Variable.GetValue("@jid") || "");
+  if (
+    pageStatusHero === "view" &&
+    authOkHero === "true" &&
+    tokenHero &&
+    subHero &&
+    jidHero &&
+    jidHero.substring(0, 6).toLowerCase() !== "email:"
+  ) {
+    var liveJourney = getJourneyObject(subHero, tokenHero, jidHero);
+    if (liveJourney.ok && liveJourney.obj) {
+      var liveStatus = liveJourney.obj.status ? String(liveJourney.obj.status) : "";
+      if (journeyStatusIsRunning(liveStatus)) {
+        Platform.Variable.SetValue("@journeyHeroAnimate", "true");
+      }
+    } else if (heroAnimateFromLog) {
+      Platform.Variable.SetValue("@journeyHeroAnimate", "true");
+    }
+  } else if (heroAnimateFromLog) {
+    Platform.Variable.SetValue("@journeyHeroAnimate", "true");
+  }
+} catch (heroAnimEx) {
+  if (heroAnimateFromLog) {
+    Platform.Variable.SetValue("@journeyHeroAnimate", "true");
+  }
+}
 </script>
 %%[
 VAR @combinedLog, @trailBody
@@ -2733,6 +2770,7 @@ IF (@attemptJourneyAction == "true") AND (@journeyActionOk == "true") AND NOT Em
   SET @journeyStatusColor = "#9ca3af"
  ELSEIF Lowercase(@dispJourneyStatus) == "running" OR Lowercase(@dispJourneyStatus) == "published" THEN
   SET @journeyStatusColor = "#10b981"
+  SET @journeyHeroAnimate = "true"
  ELSEIF Lowercase(@dispJourneyStatus) == "stopped" THEN
   SET @journeyStatusColor = "#f59e0b"
  ENDIF
@@ -3037,18 +3075,39 @@ color:var(--text-secondary);
 }
 .edit-breadcrumb-section{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
 .edit-breadcrumb-section--manage{
+  position:relative;
+  overflow:hidden;
   padding:30px 10px 10px 30px;
   border-radius:13px;
   margin-bottom:20px;
   border:1px solid #dddde3;
   background-color:#4f4d55;
+}
+.edit-breadcrumb-section--manage::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  z-index:0;
+  background-color:#4f4d55;
+  pointer-events:none;
+}
+.edit-breadcrumb-section--manage::after{
+  content:"";
+  position:absolute;
+  inset:0;
+  z-index:1;
   background-image:url("https://image.go.magmutual.com/lib/fe3411747364047e771073/m/1/5feb949b-a062-467c-b710-2f62592fe153.jpg");
   background-position:right;
   background-repeat:no-repeat;
-  background-blend-mode:difference;
+  mix-blend-mode:difference;
+  pointer-events:none;
 }
-.edit-breadcrumb-section--manage.is-running{
+.edit-breadcrumb-section--manage.is-running::before{
   animation:edit-breadcrumb-bg-shift 10s ease-in-out infinite;
+}
+.edit-breadcrumb-section--manage .edit-breadcrumb-section__copy{
+  position:relative;
+  z-index:2;
 }
 .edit-breadcrumb-section--manage .breadcrumb-link{color:#fdfdfd}
 .edit-breadcrumb-section--manage .breadcrumb-link:hover{color:#fff;text-decoration:underline}
@@ -3056,7 +3115,7 @@ color:var(--text-secondary);
 .edit-breadcrumb-section--manage .breadcrumb-current{color:#fdfdfd}
 .edit-breadcrumb-section--manage .edit-breadcrumb-title{color:#fdfdfd;padding-top:10px;margin:0;font-size:1.65rem;font-weight:700;line-height:1.25}
 .edit-breadcrumb-section--manage .edit-breadcrumb-sub{color:#a2a5ac;margin:8px 0 0}
-.edit-breadcrumb-section__copy{min-width:0;flex:1}
+.edit-breadcrumb-section__copy{min-width:0;flex:1;position:relative;z-index:2}
 .breadcrumb-nav{display: flex;
     align-items: center;
     flex-wrap: wrap;}
@@ -3301,7 +3360,7 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
 </div>
 %%[ ELSE ]%%
 
-<div class="edit-breadcrumb-section edit-breadcrumb-section--manage">
+<div class="edit-breadcrumb-section edit-breadcrumb-section--manage%%[ IF @journeyHeroAnimate == "true" THEN ]%% is-running%%[ ENDIF ]%%">
 <div class="edit-breadcrumb-section__copy">
 <nav class="breadcrumb-nav" aria-label="Breadcrumb">
  <a href="%%=v(@HOME_URL)=%%" class="breadcrumb-link">
