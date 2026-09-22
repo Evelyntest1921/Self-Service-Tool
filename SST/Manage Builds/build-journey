@@ -5,7 +5,7 @@ VAR @dispName, @dispType, @dispSurveyId, @isSurveyBuild, @buildNavContext, @buil
 VAR @surveyUrlRows, @surveyUrlRow, @pageStatus, @loadError, @isRealJourney
 VAR @authOk, @accessToken, @subdomain, @clientId, @clientSecret, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader, @tokenPattern, @accountId, @authR, @authRow
 VAR @MC_CLOUD
-VAR @journeyFlowHtml, @journeyActivitiesHtml, @journeyMetaHtml, @journeyBuilderUrl
+VAR @journeyFlowHtml, @journeyActivitiesHtml, @journeyEmailsHtml, @journeyMetaHtml, @journeyBuilderUrl
 VAR @apiJourneyName, @apiJourneyStatus, @apiJourneyVersion, @apiActivityCount, @editSidebarHtml
 VAR @saveScheduleRequested, @schedulePanelVisible, @scheduleEventDefId, @scheduleSaveMsg, @scheduleEditorOpen, @scheduleSummary
 VAR @entryScheduleType, @entryScheduleRepeat, @entryScheduleInterval, @entryScheduleOccurrences
@@ -100,6 +100,7 @@ SET @subdomain = ""
 SET @detailCount = 0
 SET @journeyFlowHtml = ""
 SET @journeyActivitiesHtml = ""
+SET @journeyEmailsHtml = ""
 SET @journeyMetaHtml = ""
 SET @journeyBuilderUrl = ""
 SET @apiJourneyName = ""
@@ -178,6 +179,7 @@ Platform.Load("core", "1");
 var MC_CLOUD = "https://mc.s13.exacttarget.com/cloud/";
 var journeyFlowHtml = "";
 var journeyActivitiesHtml = "";
+var journeyEmailsHtml = "";
 var journeyMetaHtml = "";
 var journeyBuilderUrl = "";
 var apiJourneyName = "";
@@ -538,6 +540,36 @@ function emailActivitySenderProfile(act, senderCache) {
     return senderCache[pid];
   }
   return formatSenderProfileDisplay(lookupSenderProfile(pid), pid) || "—";
+}
+
+function emailActivitySubject(act) {
+  var type = strTrim(act && act.type ? act.type : "").toUpperCase();
+  if (type !== "EMAILV2" && type !== "EMAIL") {
+    return "—";
+  }
+  var ts =
+    (act.configurationArguments && act.configurationArguments.triggeredSend) || {};
+  var subject = strTrim(ts.emailSubject || ts.dynamicEmailSubject || "");
+  return subject || "—";
+}
+
+function emailActivityListName(act) {
+  var type = strTrim(act && act.type ? act.type : "").toUpperCase();
+  if (type !== "EMAILV2" && type !== "EMAIL") {
+    return "—";
+  }
+  var ts =
+    (act.configurationArguments && act.configurationArguments.triggeredSend) || {};
+  if (ts.emailName) {
+    return strTrim(ts.emailName);
+  }
+  var stepName = activityDisplayName(act);
+  return stepName || "—";
+}
+
+function isEmailActivity(act) {
+  var type = strTrim(act && act.type ? act.type : "").toUpperCase();
+  return type === "EMAILV2" || type === "EMAIL";
 }
 
 function activityDisplayName(act) {
@@ -955,14 +987,11 @@ function coerceActivityList(activities) {
   return list;
 }
 
-function buildActivitiesTableHtml(activities, senderCache) {
+function buildActivitiesTableHtml(activities) {
   var normalized = coerceActivityList(activities);
   var i;
   if (!normalized.length) {
     return '<p class="recent-empty">No activities returned for this journey.</p>';
-  }
-  if (!senderCache) {
-    senderCache = buildSenderProfileLookupCache(normalized);
   }
   var sorted = [];
   for (i = 0; i < safeArrayLength(normalized); i++) {
@@ -987,7 +1016,6 @@ function buildActivitiesTableHtml(activities, senderCache) {
       "<th>Type</th>" +
       "<th>Name</th>" +
       "<th>Detail</th>" +
-      "<th>Sender profile</th>" +
       "<th>Configured</th>" +
       "<th>Key</th>" +
       "</tr></thead><tbody>"
@@ -1013,13 +1041,62 @@ function buildActivitiesTableHtml(activities, senderCache) {
         htmlSafe(activityDetailLine(act) || "—") +
         "</td>" +
         "<td>" +
-        htmlSafe(emailActivitySenderProfile(act, senderCache)) +
-        "</td>" +
-        "<td>" +
         htmlSafe(isConfigured(act)) +
         "</td>" +
         '<td class="contacts-mono">' +
         htmlSafe(strTrim(act.key) || "—") +
+        "</td>" +
+        "</tr>"
+    );
+  }
+  parts.push("</tbody></table></div>");
+  return parts.join("");
+}
+
+function buildEmailsTableHtml(activities, senderCache) {
+  var normalized = coerceActivityList(activities);
+  var emails = [];
+  var i;
+  for (i = 0; i < safeArrayLength(normalized); i++) {
+    var act = safeArrayGet(normalized, i);
+    if (act && isEmailActivity(act)) {
+      emails.push(act);
+    }
+  }
+  if (!emails.length) {
+    return '<p class="recent-empty">No email activities in this journey.</p>';
+  }
+  if (!senderCache) {
+    senderCache = buildSenderProfileLookupCache(emails);
+  }
+  try {
+    emails.sort(function (a, b) {
+      var na = emailActivityListName(a);
+      var nb = emailActivityListName(b);
+      return na > nb ? 1 : -1;
+    });
+  } catch (emailSortEx) {}
+  var parts = ['<div class="contacts-table-wrap"><table class="contacts-table journey-emails-table">'];
+  parts.push(
+    "<thead><tr>" +
+      "<th>Name</th>" +
+      "<th>Subject</th>" +
+      "<th>Sender profile</th>" +
+      "</tr></thead><tbody>"
+  );
+  var ei;
+  for (ei = 0; ei < emails.length; ei++) {
+    var emailAct = emails[ei];
+    parts.push(
+      "<tr>" +
+        "<td>" +
+        htmlSafe(emailActivityListName(emailAct)) +
+        "</td>" +
+        "<td>" +
+        htmlSafe(emailActivitySubject(emailAct)) +
+        "</td>" +
+        "<td>" +
+        htmlSafe(emailActivitySenderProfile(emailAct, senderCache)) +
         "</td>" +
         "</tr>"
     );
@@ -1729,7 +1806,8 @@ try {
       journeyBuilderUrl = buildJourneyOpenUrl(MC_CLOUD, jid, apiJourneyVersion);
       var startAct = findFlowStartActivity(activities, jObj);
       journeyFlowHtml = buildFlowGraphHtml(startAct, activities);
-      journeyActivitiesHtml = buildActivitiesTableHtml(activities, senderProfileCache);
+      journeyActivitiesHtml = buildActivitiesTableHtml(activities);
+      journeyEmailsHtml = buildEmailsTableHtml(activities, senderProfileCache);
       var entrySourceLabel = resolveEntrySourceLabel(jObj, activities, null);
 
       var deEntry = findDeAudienceEntry(jObj);
@@ -1839,6 +1917,7 @@ try {
 
 Platform.Variable.SetValue("@journeyFlowHtml", journeyFlowHtml);
 Platform.Variable.SetValue("@journeyActivitiesHtml", journeyActivitiesHtml);
+Platform.Variable.SetValue("@journeyEmailsHtml", journeyEmailsHtml);
 Platform.Variable.SetValue("@journeyMetaHtml", journeyMetaHtml);
 Platform.Variable.SetValue("@journeyBuilderUrl", journeyBuilderUrl);
 Platform.Variable.SetValue("@apiJourneyName", apiJourneyName);
@@ -2142,6 +2221,14 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
   %%=TreatAsContent(@journeyActivitiesHtml)=%%
   %%[ ELSE ]%%
   <p class="recent-empty">No activities available.</p>
+  %%[ ENDIF ]%%
+</div>
+<div class="panel">
+  <h2 class="panel-title">All Emails</h2>
+  %%[ IF NOT Empty(@journeyEmailsHtml) THEN ]%%
+  %%=TreatAsContent(@journeyEmailsHtml)=%%
+  %%[ ELSE ]%%
+  <p class="recent-empty">No emails available.</p>
   %%[ ENDIF ]%%
 </div>
 %%[ ENDIF ]%%
