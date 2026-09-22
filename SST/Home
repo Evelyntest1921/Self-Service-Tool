@@ -1,0 +1,4447 @@
+%%[ 
+  VAR @recentBuildsOk, @jaEmpty, @jaRecentBuildsMarkup, @jaBuildsLoadError, @sendLogChartJson
+  VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow, @environment, @environmentSwitchUrl, @envDisplayName, @envDisplayEmail, @envAvatarLetter, @envSwitchLabel, @calendarUrl, @journeyExitUrl
+  VAR @specDE, @specMi, @specRows, @specRow, @specRc, @specI, @specSpec, @specTrim, @specKey
+  VAR @specMap, @specMapKeys, @specMapRow, @specMapVal, @specFound, @specFoundIdx, @specMapIdx, @specMapIdx2, @specMapRow2, @specMapVal2, @specNewVal, @specMapKeysNew, @specParts
+  VAR @specName, @specOpen, @specDno, @specBnc, @specClk, @specTot, @specRowOpen, @specRowDno, @specRowBnc, @specRowClk, @specRowResp
+  VAR @specMapIdxOut
+  VAR @specLabelsOut, @specOpenOut, @specDnoOut, @specBncOut, @specClkOut, @specTotOut
+  VAR @monthLabelsOut, @monthOpensOut, @monthClicksOut, @monthUnsubOut, @monthBouncedOut, @monthOpenSum, @monthClickSum, @monthUnsubSum, @monthBounceSum, @monthLabel, @monthStartVal
+  VAR @specRowUnsub
+  VAR @homeDo, @browseJourneys, @browseMode, @jaBrowseMarkup, @jaBrowsePagination, @jaBrowseError, @addBuildMessage, @addBuildError, @addedBuild, @browsePage, @jaBrowseHint, @buildsPage, @jaBuildsPagination
+  VAR @addJourneyId, @addJourneyName
+  VAR @authRow, @authStatus, @authUrl, @authPayload, @authResponse, @authResponseHeader, @tokenPattern, @accountId, @clientId, @clientSecret, @subdomain, @accessToken
+  SET @sendLogChartJson = ""
+  SET @specLabelsOut = ""
+  SET @specOpenOut = ""
+  SET @specDnoOut = ""
+  SET @specBncOut = ""
+  SET @specClkOut = ""
+  SET @specTotOut = ""
+  SET @monthLabelsOut = ""
+  SET @monthOpensOut = ""
+  SET @monthClicksOut = ""
+  SET @monthUnsubOut = ""
+  SET @monthBouncedOut = ""
+  SET @browseMode = "0"
+  SET @jaBrowseMarkup = ""
+  SET @jaBrowsePagination = ""
+  SET @jaBuildsPagination = ""
+  SET @jaBrowseError = ""
+  SET @jaBrowseHint = ""
+  SET @browsePage = "1"
+  SET @buildsPage = "1"
+  SET @addBuildMessage = ""
+  SET @addBuildError = ""
+  SET @accessToken = ""
+  SET @subdomain = ""
+  SET @recentBuildsOk = "false"
+  SET @jaBuildsLoadError = ""
+  SET @jaEmpty = "1"
+  SET @jaRecentBuildsMarkup = ""
+  SET @redirect = requestparameter("redirect")
+  SET @allJourneysTotal = DataExtensionRowCount("Bd_journey_analytics")
+  SET @quickSends = LookupRows("Bd_journey_analytics", "journeyType", "Quick Send")
+  SET @quickSendsTotal = RowCount(@quickSends)
+  SET @automationsCount = LookupRows("Bd_journey_analytics", "journeyType", "Journey + Automation")
+  SET @automationsTotal = RowCount(@automationsCount)
+  SET @oneSendCount = LookupRows("Bd_journey_analytics", "journeyType", "Campaign journey")
+  SET @oneSendTotal = RowCount(@oneSendCount)
+  SET @mcSurveys = LookupRows("Bd_journey_analytics", "journeyType", "Survey")
+  SET @mcSurveysTotal = RowCount(@mcSurveys)
+  SET @salesforceSurveys = LookupRows("Bd_journey_analytics", "journeyType", "Salesforce Survey Send")
+  SET @salesforceSurveysTotal = RowCount(@salesforceSurveys)
+  SET @hubUrl = ""
+  SET @buildDetailUrl = ""
+  SET @emailOnlyUrl = ""
+  SET @quickSendUrl = ""
+  SET @campaignOnlyUrl = ""
+  SET @campaignAutomationUrl = ""
+  SET @emptyJourneyUrl = ""
+  SET @journeyExitUrl = ""
+  SET @calendarUrl = ""
+  SET @surveyPageUrl = ""
+  SET @surveyJourneyUrl = ""
+  SET @environment = ""
+  SET @environmentSwitchUrl = ""
+  SET @envDisplayName = ""
+  SET @envDisplayEmail = ""
+  SET @envAvatarLetter = ""
+  SET @envSwitchLabel = ""
+  SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
+  IF RowCount(@navRows) > 0 THEN
+    SET @navRow = Row(@navRows,1)
+    SET @hubUrl = Field(@navRow,"ss_home")
+    SET @buildDetailUrl = Field(@navRow,"ss_edit")
+    SET @emailOnlyUrl = Field(@navRow,"ss_email_only")
+    SET @quickSendUrl = Field(@navRow,"ss_quick_send")
+    SET @campaignOnlyUrl = Field(@navRow,"ss_campaign_only")
+    SET @SFsurveyJourneyUrl = Field(@navRow,"ss_sf_survey_journey")
+    SET @campaignAutomationUrl = Field(@navRow,"ss_campaign_automation")
+    SET @journeyExitUrl = Trim(Field(@navRow,"ss_journey_exit"))
+    SET @calendarUrl = Trim(Field(@navRow,"ss_email_calendar"))
+    SET @environment = Trim(Lowercase(Field(@navRow,"environment")))
+    SET @environmentSwitchUrl = Trim(Field(@navRow,"environment_switch"))
+  ENDIF
+  SET @surveyUrlRows = LookupRows("SST_SP_Survey_Url_DE","user","admin")
+  IF RowCount(@surveyUrlRows) > 0 THEN
+    SET @surveyUrlRow = Row(@surveyUrlRows,1)
+    SET @surveyPageUrl = Field(@surveyUrlRow,"dashboard")
+    IF Empty(@surveyPageUrl) THEN SET @surveyPageUrl = Field(@surveyUrlRow,"create") ENDIF
+    SET @surveyJourneyUrl = Field(@surveyUrlRow,"journey")
+  ENDIF
+  IF Empty(@surveyJourneyUrl) AND RowCount(@navRows) > 0 THEN
+    SET @surveyJourneyUrl = Field(@navRow,"ss_survey_journey")
+  ENDIF
+  IF @environment == "uat" THEN
+    SET @envDisplayName = "UAT"
+    SET @envDisplayEmail = "UAT+admin@magmutual.com"
+    SET @envAvatarLetter = "U"
+    SET @envSwitchLabel = "Switch to production environment"
+  ELSEIF @environment == "prod" THEN
+    SET @envDisplayName = "PROD"
+    SET @envDisplayEmail = "admin@magmutual.com"
+    SET @envAvatarLetter = "P"
+    SET @envSwitchLabel = "Switch to UAT environment"
+  ENDIF
+  IF @redirect == "true" THEN
+    Redirect(@hubUrl)
+  ENDIF
+  SET @homeDo = RequestParameter("do")
+  SET @browseJourneys = RequestParameter("browseJourneys")
+  SET @browsePage = Trim(RequestParameter("browsePage"))
+  IF Empty(@browsePage) THEN
+    SET @browsePage = "1"
+  ENDIF
+  SET @buildsPage = Trim(RequestParameter("buildsPage"))
+  IF Empty(@buildsPage) THEN
+    SET @buildsPage = "1"
+  ENDIF
+  SET @addedBuild = RequestParameter("added")
+  IF @addedBuild == "1" THEN
+    SET @addBuildMessage = "Journey added to Recent builds."
+  ENDIF
+  IF @homeDo == "addBuild" THEN
+    SET @addJourneyId = Trim(RequestParameter("journeyId"))
+    SET @addJourneyName = Trim(RequestParameter("journeyName"))
+    IF NOT Empty(@addJourneyId) AND NOT Empty(@addJourneyName) THEN
+      UpsertDE(
+        "Bd_journey_analytics",
+        1,
+        "journeyId",
+        Substring(@addJourneyId,1,250),
+        "journeyName", Substring(@addJourneyName,1,50),
+        "journeyType", "Existing Journey",
+        "emailName", "N/A",
+        "emailId", "N/A",
+        "deName", "N/A",
+        "deId", "N/A",
+        "updateDate", Now()
+      )
+      IF NOT Empty(@hubUrl) THEN
+        IF IndexOf(@hubUrl, "?") > 0 THEN
+          Redirect(Concat(@hubUrl, "&added=1"))
+        ELSE
+          Redirect(Concat(@hubUrl, "?added=1"))
+        ENDIF
+      ENDIF
+    ELSE
+      SET @addBuildError = "Missing journey ID or name."
+    ENDIF
+  ENDIF
+  IF @browseJourneys == "1" THEN
+    SET @browseMode = "1"
+    SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
+    IF RowCount(@authRow) > 0 THEN
+      SET @authRow = Row(@authRow,1)
+      SET @clientId = Field(@authRow,"clientId")
+      SET @clientSecret = Field(@authRow,"clientSecret")
+      SET @subdomain = Field(@authRow,"subdomain")
+      IF NOT Empty(@clientId) AND NOT Empty(@clientSecret) AND NOT Empty(@subdomain) THEN
+        SET @authUrl = Concat("https://",@subdomain,".auth.marketingcloudapis.com/v2/token")
+        SET @accountId = Trim(Field(@authRow,"accountId"))
+        SET @authPayload = Concat('{"grant_type":"client_credentials","client_id":"',@clientId,'","client_secret":"',@clientSecret,'"')
+        IF NOT Empty(@accountId) THEN
+          SET @authPayload = Concat(@authPayload,',"account_id":"',@accountId,'"')
+        ENDIF
+        SET @authPayload = Concat(@authPayload,'}')
+        SET @authStatus = HTTPPost2(@authUrl,"application/json",@authPayload,false,@authResponse,@authResponseHeader)
+        IF @authStatus == 200 THEN
+          SET @tokenPattern = '"access_token":"([^"]+)"'
+          SET @accessToken = RegExMatch(@authResponse,@tokenPattern,1)
+          IF Empty(@accessToken) THEN
+            SET @jaBrowseError = "Auth HTTP 200 but no access token in response."
+          ENDIF
+        ELSE
+          SET @jaBrowseError = Concat("Auth HTTP ",@authStatus," — ",Substring(IIF(NOT Empty(@authResponse),@authResponse,"(empty)"),1,200))
+        ENDIF
+      ELSE
+        SET @jaBrowseError = "Missing clientId, clientSecret, or subdomain in SFMC_AUTH."
+      ENDIF
+    ELSE
+      SET @jaBrowseError = "No SFMC_AUTH row for User=Admin."
+    ENDIF
+  ENDIF
+  SET @specDE = "sst_de_specialty_log_12_months"
+  SET @specMap = ""
+  IF DataExtensionRowCount(@specDE) == 0 THEN
+    SET @specDE = "SST_DE_SPECIALTY_LOG_12_MONTHS"
+  ENDIF
+  IF DataExtensionRowCount(@specDE) > 0 THEN
+    FOR @specMi = 1 TO 24 DO
+      SET @specRows = LookupRows(@specDE, "MonthIndex", @specMi)
+      IF RowCount(@specRows) == 0 THEN
+        SET @specRows = LookupRows(@specDE, "MonthIndex", Concat(@specMi))
+      ENDIF
+      IF RowCount(@specRows) == 0 THEN
+        SET @specRows = LookupOrderedRows(@specDE, 500, "MonthIndex ASC", "MonthIndex", @specMi)
+      ENDIF
+      SET @specRc = RowCount(@specRows)
+      IF @specRc > 0 THEN
+        SET @monthOpenSum = 0
+        SET @monthClickSum = 0
+        SET @monthUnsubSum = 0
+        SET @monthBounceSum = 0
+        SET @monthLabel = ""
+        FOR @specI = 1 TO @specRc DO
+          SET @specRow = Row(@specRows, @specI)
+          SET @specSpec = Field(@specRow, "Specialty")
+          IF NOT Empty(@specSpec) THEN
+            SET @specTrim = Trim(@specSpec)
+            SET @specKey = Concat(@specTrim, ":::")
+            SET @specRowOpen = Field(@specRow, "Opens")
+            SET @specRowDno = Field(@specRow, "DidNotOpen")
+            SET @specRowBnc = Field(@specRow, "Bounces")
+            SET @specRowClk = Field(@specRow, "Clicks")
+            SET @specRowResp = Field(@specRow, "Responses")
+            SET @specRowUnsub = Field(@specRow, "Unsubscribed")
+            IF Empty(@specRowOpen) THEN SET @specRowOpen = 0 ENDIF
+            IF Empty(@specRowDno) THEN SET @specRowDno = 0 ENDIF
+            IF Empty(@specRowBnc) THEN SET @specRowBnc = 0 ENDIF
+            IF Empty(@specRowClk) THEN SET @specRowClk = 0 ENDIF
+            IF Empty(@specRowResp) THEN SET @specRowResp = 0 ENDIF
+            IF Empty(@specRowUnsub) THEN SET @specRowUnsub = 0 ENDIF
+            SET @monthOpenSum = Add(@monthOpenSum, @specRowOpen)
+            SET @monthClickSum = Add(@monthClickSum, @specRowClk)
+            SET @monthUnsubSum = Add(@monthUnsubSum, @specRowUnsub)
+            SET @monthBounceSum = Add(@monthBounceSum, @specRowBnc)
+            IF Empty(@monthLabel) THEN
+              SET @monthStartVal = Field(@specRow, "MonthStart")
+              IF NOT Empty(@monthStartVal) THEN
+                SET @monthLabel = FormatDate(@monthStartVal, "MMM yyyy")
+              ELSE
+                SET @monthLabel = Concat("Month ", @specMi)
+              ENDIF
+            ENDIF
+            SET @specFound = 0
+            SET @specFoundIdx = 0
+            IF NOT Empty(@specMap) THEN
+              SET @specMapKeys = BuildRowsetFromString(@specMap, "|||")
+              FOR @specMapIdx = 1 TO RowCount(@specMapKeys) DO
+                SET @specMapRow = Row(@specMapKeys, @specMapIdx)
+                SET @specMapVal = Field(@specMapRow, 1)
+                IF IndexOf(@specMapVal, @specKey) == 1 THEN
+                  SET @specFound = 1
+                  SET @specFoundIdx = @specMapIdx
+                ENDIF
+              NEXT @specMapIdx
+            ENDIF
+            IF @specFound == 0 THEN
+              SET @specNewVal = Concat(@specTrim, ":::", @specRowOpen, ":::", @specRowDno, ":::", @specRowBnc, ":::", @specRowClk, ":::", @specRowResp)
+              IF Empty(@specMap) THEN
+                SET @specMap = @specNewVal
+              ELSE
+                SET @specMap = Concat(@specMap, "|||", @specNewVal)
+              ENDIF
+            ELSE
+              SET @specMapRow = Row(@specMapKeys, @specFoundIdx)
+              SET @specMapVal = Field(@specMapRow, 1)
+              SET @specParts = BuildRowsetFromString(@specMapVal, ":::")
+              SET @specName = Field(Row(@specParts, 1), 1)
+              SET @specOpen = Add(Field(Row(@specParts, 2), 1), @specRowOpen)
+              SET @specDno = Add(Field(Row(@specParts, 3), 1), @specRowDno)
+              SET @specBnc = Add(Field(Row(@specParts, 4), 1), @specRowBnc)
+              SET @specClk = Add(Field(Row(@specParts, 5), 1), @specRowClk)
+              SET @specTot = Add(Field(Row(@specParts, 6), 1), @specRowResp)
+              SET @specNewVal = Concat(@specName, ":::", @specOpen, ":::", @specDno, ":::", @specBnc, ":::", @specClk, ":::", @specTot)
+              SET @specMapKeysNew = BuildRowsetFromString(@specMap, "|||")
+              SET @specMap = ""
+              FOR @specMapIdx2 = 1 TO RowCount(@specMapKeysNew) DO
+                SET @specMapRow2 = Row(@specMapKeysNew, @specMapIdx2)
+                IF @specMapIdx2 == @specFoundIdx THEN
+                  SET @specMapVal2 = @specNewVal
+                ELSE
+                  SET @specMapVal2 = Field(@specMapRow2, 1)
+                ENDIF
+                IF Empty(@specMap) THEN
+                  SET @specMap = @specMapVal2
+                ELSE
+                  SET @specMap = Concat(@specMap, "|||", @specMapVal2)
+                ENDIF
+              NEXT @specMapIdx2
+            ENDIF
+          ENDIF
+        NEXT @specI
+        IF Empty(@monthLabelsOut) THEN
+          SET @monthLabelsOut = @monthLabel
+          SET @monthOpensOut = @monthOpenSum
+          SET @monthClicksOut = @monthClickSum
+          SET @monthUnsubOut = @monthUnsubSum
+          SET @monthBouncedOut = @monthBounceSum
+        ELSE
+          SET @monthLabelsOut = Concat(@monthLabelsOut, "|", @monthLabel)
+          SET @monthOpensOut = Concat(@monthOpensOut, "|", @monthOpenSum)
+          SET @monthClicksOut = Concat(@monthClicksOut, "|", @monthClickSum)
+          SET @monthUnsubOut = Concat(@monthUnsubOut, "|", @monthUnsubSum)
+          SET @monthBouncedOut = Concat(@monthBouncedOut, "|", @monthBounceSum)
+        ENDIF
+      ENDIF
+    NEXT @specMi
+  ENDIF
+  IF NOT Empty(@specMap) THEN
+    SET @specMapKeys = BuildRowsetFromString(@specMap, "|||")
+    FOR @specMapIdxOut = 1 TO RowCount(@specMapKeys) DO
+      SET @specMapRow = Row(@specMapKeys, @specMapIdxOut)
+      SET @specMapVal = Field(@specMapRow, 1)
+      SET @specParts = BuildRowsetFromString(@specMapVal, ":::")
+      SET @specName = Field(Row(@specParts, 1), 1)
+      SET @specOpen = Field(Row(@specParts, 2), 1)
+      SET @specDno = Field(Row(@specParts, 3), 1)
+      SET @specBnc = Field(Row(@specParts, 4), 1)
+      SET @specClk = Field(Row(@specParts, 5), 1)
+      SET @specTot = Field(Row(@specParts, 6), 1)
+      IF Empty(@specLabelsOut) THEN
+        SET @specLabelsOut = @specName
+        SET @specOpenOut = @specOpen
+        SET @specDnoOut = @specDno
+        SET @specBncOut = @specBnc
+        SET @specClkOut = @specClk
+        SET @specTotOut = @specTot
+      ELSE
+        SET @specLabelsOut = Concat(@specLabelsOut, "|", @specName)
+        SET @specOpenOut = Concat(@specOpenOut, "|", @specOpen)
+        SET @specDnoOut = Concat(@specDnoOut, "|", @specDno)
+        SET @specBncOut = Concat(@specBncOut, "|", @specBnc)
+        SET @specClkOut = Concat(@specClkOut, "|", @specClk)
+        SET @specTotOut = Concat(@specTotOut, "|", @specTot)
+      ENDIF
+    NEXT @specMapIdxOut
+  ENDIF
+]%%
+<script runat="server" language="javascript">
+  Platform.Load("Core", "1.1");
+  try {
+    var emptyJourneyUrl = Platform.Function.Lookup(
+      "bd_sst_page_navigation",
+      "ss_empty_journey",
+      "type",
+      "cloudpage"
+    );
+    if (emptyJourneyUrl) {
+      Platform.Variable.SetValue("@emptyJourneyUrl", String(emptyJourneyUrl));
+    }
+  } catch (emptyJourneyNavEx) {}
+  var DE_EXTERNAL_KEY = "Bd_journey_analytics";
+  var BROWSE_PAGE_SIZE = 50;
+  var BUILD_PAGE_SIZE = 20;
+  var MAX_DE_FETCH = 500;
+  var BUILD_DETAIL_URL = Platform.Variable.GetValue("@buildDetailUrl") || "";
+  function esc(s) {
+    if (s == null || s === undefined) return "";
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/"/g, "&quot;");
+  }
+  function wrapTitle(s, size) {
+    var text, i, chunk, parts;
+    size = size || 30;
+    text = String(s == null ? "" : s);
+    if (!text) return "";
+    parts = [];
+    for (i = 0; i < text.length; i += size) {
+      chunk = text.substring(i, i + size);
+      parts.push(esc(chunk));
+    }
+    return parts.join("<br>");
+  }
+  function resolveJourneyProgress(statusRaw) {
+    var status, label;
+    status = String(statusRaw == null ? "" : statusRaw).replace(/^\s+|\s+$/g, "").toLowerCase();
+    if (status === "draft") {
+      return {
+        label: "Draft",
+        width: "25%",
+        fillClass: "progress-fill--draft",
+        labelClass: "progress-percentage--draft"
+      };
+    }
+    if (status === "running") {
+      return {
+        label: "Running",
+        width: "100%",
+        fillClass: "progress-fill--running",
+        labelClass: "progress-percentage--running"
+      };
+    }
+    if (status === "stopped") {
+      return {
+        label: "Stopped",
+        width: "100%",
+        fillClass: "progress-fill--stopped",
+        labelClass: "progress-percentage--stopped"
+      };
+    }
+    if (status) {
+      label = String(statusRaw).replace(/^\s+|\s+$/g, "");
+      return {
+        label: label,
+        width: "35%",
+        fillClass: "progress-fill--ready",
+        labelClass: "progress-percentage--ready"
+      };
+    }
+    return {
+      label: "Ready",
+      width: "35%",
+      fillClass: "progress-fill--ready",
+      labelClass: "progress-percentage--ready"
+    };
+  }
+  function fieldFromPropertyList(props, names) {
+    var pi, i, pname, v;
+    if (!props || typeof props.length !== "number") {
+      return "";
+    }
+    for (pi = 0; pi < props.length; pi++) {
+      pname = props[pi].Name != null ? props[pi].Name : props[pi].name;
+      if (!pname) {
+        continue;
+      }
+      for (i = 0; i < names.length; i++) {
+        if (String(pname).toLowerCase() === String(names[i]).toLowerCase()) {
+          v = props[pi].Value != null ? props[pi].Value : props[pi].value;
+          if (v !== null && v !== undefined && v !== "") {
+            return v;
+          }
+        }
+      }
+    }
+    return "";
+  }
+  function fieldFromRow(r, names) {
+    var i, n, v;
+    if (r == null) return "";
+    for (i = 0; i < names.length; i++) {
+      n = names[i];
+      v = null;
+      try {
+        v = Platform.Function.Field(r, n);
+      }
+      catch (fe0) {
+      }
+      if (v === null || v === undefined || v === "") {
+        v = r[n];
+      }
+      if (v !== null && v !== undefined && v !== "") return v;
+    }
+    v = fieldFromPropertyList(r.Properties, names);
+    if (v !== "") return v;
+    v = fieldFromPropertyList(r.Property, names);
+    if (v !== "") return v;
+    return "";
+  }
+  function coerceDeRows(raw) {
+    if (raw == null) {
+      return [];
+    }
+    var r = raw;
+    if (r.Results && typeof r.Results.length === "number") {
+      r = r.Results;
+    }
+    if (r.rows && typeof r.rows.length === "number") {
+      r = r.rows;
+    }
+    if (r.Rows && typeof r.Rows.length === "number") {
+      r = r.Rows;
+    }
+    return coerceRows(r);
+  }
+  function journeyIdFromRow(r) {
+    return String(fieldFromRow(r, ["journeyId", "JourneyId", "JourneyID"]));
+  }
+  function safeSortStr(v) {
+    if (v === null || v === undefined) return "";
+    try {
+      return String(v);
+    }
+    catch (safeEx) {
+      return "";
+    }
+  }
+  function pad2(n) {
+    return n < 10 ? "0" + n : String(n);
+  }
+  function formatUsDateFromMs(ms) {
+    var dt, month, day, year, hour, min, sec, ampm, h12;
+    dt = new Date(ms);
+    if (!dt || !dt.getTime || isNaN(dt.getTime())) {
+      return "";
+    }
+    month = dt.getMonth() + 1;
+    day = dt.getDate();
+    year = dt.getFullYear();
+    hour = dt.getHours();
+    min = dt.getMinutes();
+    sec = dt.getSeconds();
+    ampm = hour >= 12 ? "PM" : "AM";
+    h12 = hour % 12;
+    if (h12 === 0) {
+      h12 = 12;
+    }
+    return month + "/" + day + "/" + year + " " + h12 + ":" + pad2(min) + ":" + pad2(sec) + " " + ampm;
+  }
+  function parseUsDateToMs(s) {
+    var text = String(s == null ? "" : s).replace(/^\s+|\s+$/g, "");
+    var m = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/i);
+    var month, day, year, hour, min, sec, ampm, dt;
+    if (!m) {
+      return 0;
+    }
+    month = parseInt(m[1], 10) - 1;
+    day = parseInt(m[2], 10);
+    year = parseInt(m[3], 10);
+    hour = parseInt(m[4], 10);
+    min = parseInt(m[5], 10);
+    sec = m[6] ? parseInt(m[6], 10) : 0;
+    ampm = String(m[7]).toUpperCase();
+    if (ampm === "PM" && hour < 12) {
+      hour += 12;
+    }
+    if (ampm === "AM" && hour === 12) {
+      hour = 0;
+    }
+    dt = new Date(year, month, day, hour, min, sec);
+    return dt && dt.getTime ? safeMs(dt.getTime()) : 0;
+  }
+  function parseSqlDateTimeToMs(s) {
+    var text = String(s == null ? "" : s).replace(/^\s+|\s+$/g, "");
+    var m = text.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?$/);
+    var year, month, day, hour, min, sec, dt;
+    if (!m) {
+      return 0;
+    }
+    year = parseInt(m[1], 10);
+    month = parseInt(m[2], 10) - 1;
+    day = parseInt(m[3], 10);
+    hour = parseInt(m[4], 10);
+    min = parseInt(m[5], 10);
+    sec = parseInt(m[6], 10);
+    dt = new Date(year, month, day, hour, min, sec);
+    return dt && dt.getTime ? safeMs(dt.getTime()) : 0;
+  }
+  function safeMs(val) {
+    var n = Number(val);
+    if (isNaN(n) || !isFinite(n)) {
+      return 0;
+    }
+    return n;
+  }
+  function normalizeEpochMs(ms) {
+    ms = safeMs(ms);
+    if (ms > 0 && ms < 1e12) {
+      return ms * 1000;
+    }
+    return ms;
+  }
+  function isPlausibleMs(ms) {
+    return safeMs(ms) >= 1e12;
+  }
+  function parseDateToMs(ud) {
+    var s, p, n, fmts, fi, ms, sqlMs;
+    if (ud === null || ud === undefined || ud === "") {
+      return 0;
+    }
+    try {
+      if (typeof ud === "object" && ud.getTime) {
+        ms = normalizeEpochMs(ud.getTime());
+        if (isPlausibleMs(ms)) {
+          return ms;
+        }
+      }
+    }
+    catch (e0) {
+    }
+    s = String(ud).replace(/^\s+|\s+$/g, "");
+    if (!s) {
+      return 0;
+    }
+    sqlMs = parseSqlDateTimeToMs(s);
+    if (sqlMs > 0) {
+      return sqlMs;
+    }
+    if (/^\d{10,13}$/.test(s)) {
+      n = parseInt(s, 10);
+      if (!isNaN(n)) {
+        return normalizeEpochMs(n);
+      }
+    }
+    fmts = [
+      "yyyy-MM-dd HH:mm:ss.SSS",
+      "yyyy-MM-dd HH:mm:ss",
+      "yyyy-MM-dd HH:mm",
+      "M/d/yyyy h:mm:ss a",
+      "M/d/yyyy h:mm a",
+      "MM/dd/yyyy h:mm:ss a",
+      "MM/dd/yyyy h:mm a",
+      "yyyy-MM-dd'T'HH:mm:ss",
+      "yyyy-MM-dd'T'HH:mm:ssZ"
+    ];
+    for (fi = 0; fi < fmts.length; fi++) {
+      try {
+        p = Platform.Function.ParseDate(s, fmts[fi]);
+        if (p && p.getTime) {
+          ms = normalizeEpochMs(p.getTime());
+          if (ms > 0) {
+            return ms;
+          }
+        }
+      }
+      catch (fmtEx) {
+      }
+    }
+    try {
+      p = Platform.Function.ParseDate(s);
+      if (p && p.getTime) {
+        ms = normalizeEpochMs(p.getTime());
+        if (ms > 0) {
+          return ms;
+        }
+      }
+    }
+    catch (e1) {
+    }
+    ms = parseUsDateToMs(s);
+    if (ms > 0) {
+      return ms;
+    }
+    return 0;
+  }
+  function msFromRow(r) {
+    return parseDateToMs(fieldFromRow(r, ["updateDate", "UpdateDate"]));
+  }
+  function formatRowDate(r) {
+    var udx = fieldFromRow(r, ["updateDate", "UpdateDate"]);
+    var ms, formatted;
+    if (udx === null || udx === undefined || udx === "") {
+      return "";
+    }
+    ms = parseDateToMs(udx);
+    if (ms > 0) {
+      formatted = formatUsDateFromMs(ms);
+      if (formatted) {
+        return formatted;
+      }
+    }
+    try {
+      formatted = Platform.Function.FormatDate(udx, "M/d/yyyy h:mm:ss a");
+      if (formatted !== null && formatted !== undefined && String(formatted) !== "") {
+        return String(formatted);
+      }
+    }
+    catch (e3) {
+    }
+    return safeSortStr(udx);
+  }
+  function sortRowsByUpdateDate(rows) {
+    var i, j, tmp, mi, mj, idi, idj;
+    for (i = 0; i < rows.length; i++) {
+      for (j = i + 1; j < rows.length; j++) {
+        try {
+          mi = safeMs(msFromRow(rows[i]));
+          mj = safeMs(msFromRow(rows[j]));
+          if (mj > mi) {
+            tmp = rows[i];
+            rows[i] = rows[j];
+            rows[j] = tmp;
+          }
+          else if (mj === mi) {
+            idi = safeSortStr(journeyIdFromRow(rows[i]));
+            idj = safeSortStr(journeyIdFromRow(rows[j]));
+            if (idj > idi) {
+              tmp = rows[i];
+              rows[i] = rows[j];
+              rows[j] = tmp;
+            }
+          }
+        }
+        catch (sortEx) {
+        }
+      }
+    }
+    return rows;
+  }
+  function mergeLookupRows(target, seen, col, val) {
+    var chunk = [];
+    var i, jid, row;
+    try {
+      chunk = coerceRows(Platform.Function.LookupRows(DE_EXTERNAL_KEY, col, val));
+    }
+    catch (lookupEx) {
+      return;
+    }
+    for (i = 0; i < chunk.length; i++) {
+      row = chunk[i];
+      jid = journeyIdFromRow(row);
+      if (jid && !seen[jid.toLowerCase()]) {
+        seen[jid.toLowerCase()] = true;
+        target.push(row);
+      }
+    }
+  }
+  function retrieveAnalyticsRows() {
+    var rows = [];
+    var types = [
+      "Quick Send",
+      "Journey + Automation",
+      "One Sender",
+      "Campaign Journey",
+      "Existing Journey",
+      "Create an Email",
+      "Create empty journey",
+      "Automation",
+      "Survey",
+      "Survey | email-only",
+      "Salesforce Survey Send"
+    ];
+    var seen = {
+    };
+    var ti;
+    for (ti = 0; ti < types.length; ti++) {
+      mergeLookupRows(rows, seen, "journeyType", types[ti]);
+    }
+    mergeLookupRows(rows, seen, "emailId", "N/A");
+    mergeLookupRows(rows, seen, "deId", "N/A");
+    return rows;
+  }
+  function loadRecentBuildRows(fetchLimit) {
+    var rows = [];
+    var limit = fetchLimit > 0 ? fetchLimit : MAX_DE_FETCH;
+    rows = retrieveAnalyticsRows();
+    if (!rows.length) {
+      return {
+        rows: [], count: 0 };
+    }
+    sortRowsByUpdateDate(rows);
+    if (rows.length > limit) {
+      rows = rows.slice(0, limit);
+    }
+    return {
+      rows: rows, count: rows.length };
+  }
+  function getDeRowCount() {
+    var total = 0;
+    total = parseInt(getAmpVar("allJourneysTotal"), 10);
+    if (!isNaN(total) && total > 0) {
+      return total;
+    }
+    try {
+      total = Platform.Function.DataExtensionRowCount(DE_EXTERNAL_KEY);
+    }
+    catch (e0) {
+    }
+    return total > 0 ? total : 0;
+  }
+  function hubUrlWithBuildsPage(hubUrl, page) {
+    var base = String(hubUrl || "");
+    if (!base) {
+      return "?buildsPage=" + page;
+    }
+    if (base.indexOf("?") >= 0) {
+      return base + "&buildsPage=" + page;
+    }
+    return base + "?buildsPage=" + page;
+  }
+  function renderBuildsPagination(hubUrl, page, totalPages, totalCount) {
+    if (totalPages <= 1) {
+      return "";
+    }
+    var parts = [
+      '<div class="browse-pagination">' +
+      '<div class="browse-pagination-inner">'
+    ];
+    if (page > 1) {
+      parts.push(
+        '<a href="' +
+        esc(hubUrlWithBuildsPage(hubUrl, page - 1)) +
+        '" class="filter-btn">Previous</a>'
+      );
+    }
+    else {
+      parts.push('<span class="filter-btn browse-page-disabled">Previous</span>');
+    }
+    parts.push(
+      '<span class="browse-page-label">Page ' +
+      page +
+      " of " +
+      totalPages +
+      " (" +
+      totalCount +
+      " builds)</span>"
+    );
+    if (page < totalPages) {
+      parts.push(
+        '<a href="' +
+        esc(hubUrlWithBuildsPage(hubUrl, page + 1)) +
+        '" class="filter-btn">Next</a>'
+      );
+    }
+    else {
+      parts.push('<span class="filter-btn browse-page-disabled">Next</span>');
+    }
+    parts.push("</div></div>");
+    return parts.join("");
+  }
+  function setV(key, val) {
+    var s = val == null ? "" : String(val);
+    try {
+      Platform.Variable.SetValue(key, s);
+    }
+    catch (e0) {
+    }
+    try {
+      Platform.Variable.SetValue("@" + key, s);
+    }
+    catch (e1) {
+    }
+  }
+  function lenArrayish(x) {
+    if (x == null) return -1;
+    if (typeof x.length === "number") return x.length;
+    return -1;
+  }
+  function coerceRows(raw) {
+    if (raw == null) return [];
+    var r = raw;
+    if (r.Results && typeof r.Results.length === "number") r = r.Results;
+    var n = lenArrayish(r);
+    if (n < 0) return [];
+    var out = [];
+    var i;
+    for (i = 0; i < n; i++) out.push(r[i]);
+    return out;
+  }
+  function getAmpVar(name) {
+    var v = "";
+    try {
+      v = Platform.Variable.GetValue("@" + name);
+    }
+    catch (e0) {
+    }
+    if (v === null || v === undefined || String(v) === "") {
+      try {
+        v = Variable.GetValue(name);
+      }
+      catch (e1) {
+      }
+    }
+    if (v === null || v === undefined) {
+      return "";
+    }
+    return String(v);
+  }
+  function authField(row, names) {
+    var i, n, v;
+    if (row == null) return "";
+    for (i = 0; i < names.length; i++) {
+      n = names[i];
+      v = row[n];
+      if (v != null && String(v) !== "") return String(v);
+    }
+    return "";
+  }
+  function extractAccessToken(body) {
+    var text = body == null ? "" : String(body);
+    if (!text) return "";
+    var parsed = null;
+    try {
+      parsed = Platform.Function.ParseJSON(text);
+    }
+    catch (parseEx) {
+    }
+    if (parsed) {
+      if (parsed.access_token) return String(parsed.access_token);
+      if (parsed["access_token"]) return String(parsed["access_token"]);
+    }
+    var tokenMatch = text.match(/"access_token"\s*:\s*"([^"]+)"/);
+    if (tokenMatch && tokenMatch[1]) return tokenMatch[1];
+    try {
+      var rx = Platform.Function.RegExMatch(text, '"access_token":"([^"]+)"', 1);
+      if (rx) return String(rx);
+    }
+    catch (regexEx) {
+    }
+    return "";
+  }
+  function fetchHomeRestAuth() {
+    var ampToken = getAmpVar("accessToken");
+    var ampSubdomain = getAmpVar("subdomain");
+    var ampBrowseError = getAmpVar("jaBrowseError");
+    if (ampToken && ampSubdomain) {
+      return {
+        token: ampToken, subdomain: ampSubdomain };
+    }
+    if (ampBrowseError) {
+      return {
+        error: ampBrowseError };
+    }
+    var rows = [];
+    try {
+      rows = Platform.Function.LookupRows("SFMC_AUTH", "User", "Admin");
+    }
+    catch (authLookupEx) {
+      return {
+        error: "Could not read SFMC_AUTH." };
+    }
+    if (!rows || rows.length === 0) {
+      return {
+        error: "No SFMC_AUTH row for User=Admin." };
+    }
+    var authRow = rows[0];
+    var clientId = authField(authRow, ["clientId", "ClientId"]);
+    var clientSecret = authField(authRow, ["clientSecret", "ClientSecret"]);
+    var subdomain = authField(authRow, ["subdomain", "Subdomain"]);
+    var accountId = authField(authRow, ["accountId", "AccountId"]);
+    if (!clientId || !clientSecret || !subdomain) {
+      return {
+        error: "Missing clientId, clientSecret, or subdomain in SFMC_AUTH." };
+    }
+    var authUrl = "https://" + subdomain + ".auth.marketingcloudapis.com/v2/token";
+    var authPayload =
+        '{"grant_type":"client_credentials","client_id":"' +
+        clientId +
+        '","client_secret":"' +
+        clientSecret +
+        '"';
+    if (accountId) {
+      authPayload += ',"account_id":"' + accountId + '"';
+    }
+    authPayload += "}";
+    var authReq = new Script.Util.HttpRequest(authUrl);
+    authReq.method = "POST";
+    authReq.contentType = "application/json";
+    authReq.postData = authPayload;
+    authReq.emptyContentHandling = 0;
+    authReq.retries = 1;
+    authReq.continueOnError = true;
+    var authResp = authReq.send();
+    if (!httpOk(authResp.statusCode)) {
+      var authErrBody = authResp.content ? String(authResp.content).substring(0, 200) : "";
+      return {
+        error:
+        "Auth HTTP " +
+        authResp.statusCode +
+        (authErrBody ? ": " + authErrBody : ".")
+      };
+    }
+    var authBody = authResp.content ? String(authResp.content) : "";
+    var token = extractAccessToken(authBody);
+    if (!token) {
+      var authSnippet = authBody ? authBody.substring(0, 200) : "(empty response body)";
+      return {
+        error: "Auth HTTP 200 but no access token in response: " + authSnippet };
+    }
+    return {
+      token: token, subdomain: subdomain };
+  }
+  function httpOk(code) {
+    return Number(code) === 200;
+  }
+  function buildJourneyListUrl(subdomain, page, pageSize) {
+    return (
+      "https://" +
+      subdomain +
+      ".rest.marketingcloudapis.com/interaction/v1/interactions?$page=" +
+      page +
+      "&$pagesize=" +
+      pageSize
+    );
+  }
+  function parseBrowsePage(val) {
+    var page = parseInt(String(val || "1"), 10);
+    if (isNaN(page) || page < 1) {
+      return 1;
+    }
+    return page;
+  }
+  function renderBrowsePagination(hubUrl, page, totalPages, totalCount) {
+    if (totalPages <= 1) {
+      return "";
+    }
+    var parts = [
+      '<div class="browse-pagination">' +
+      '<div class="browse-pagination-inner">'
+    ];
+    if (page > 1) {
+      parts.push(
+        '<a href="' +
+        esc(hubUrl) +
+        "?browseJourneys=1&amp;browsePage=" +
+        (page - 1) +
+        '" class="filter-btn">Previous</a>'
+      );
+    }
+    else {
+      parts.push('<span class="filter-btn browse-page-disabled">Previous</span>');
+    }
+    parts.push(
+      '<span class="browse-page-label">Page ' +
+      page +
+      " of " +
+      totalPages +
+      " (" +
+      totalCount +
+      " journeys)</span>"
+    );
+    if (page < totalPages) {
+      parts.push(
+        '<a href="' +
+        esc(hubUrl) +
+        "?browseJourneys=1&amp;browsePage=" +
+        (page + 1) +
+        '" class="filter-btn">Next</a>'
+      );
+    }
+    else {
+      parts.push('<span class="filter-btn browse-page-disabled">Next</span>');
+    }
+    parts.push("</div></div>");
+    return parts.join("");
+  }
+  function buildTypeIconKey(type) {
+    var t = String(type || "")
+      .replace(/^\s+|\s+$/g, "")
+      .toLowerCase();
+    if (t === "salesforce survey send") {
+      return "sf-survey";
+    }
+    if (
+      t === "survey" ||
+      t === "survey | email-only" ||
+      t.indexOf("survey") >= 0
+    ) {
+      return "survey";
+    }
+    if (t === "campaign journey") {
+      return "campaign";
+    }
+    if (
+      t === "journey + automation" ||
+      t === "automation" ||
+      t === "existing journey" ||
+      t === "create empty journey"
+    ) {
+      return "journey";
+    }
+    if (
+      t === "quick send" ||
+      t === "one sender" ||
+      t === "create an email"
+    ) {
+      return "mail";
+    }
+    if (t.indexOf("journey") >= 0) {
+      return "journey";
+    }
+    return "mail";
+  }
+  function renderBrowseJourneyCards(items, existing, hubUrl) {
+    var formAction = hubUrl ? String(hubUrl) : "";
+    var browseParts = [];
+    var bx, item, jid, jname, jstatus, jdate, exists, title, statusLabel, actionHtml;
+    for (bx = 0; bx < items.length; bx++) {
+      item = items[bx];
+      jid = item.id != null ? String(item.id) : "";
+      jname = item.name != null ? String(item.name) : "Untitled journey";
+      jstatus = item.status != null ? String(item.status) : "Journey";
+      jdate = formatBrowseDate(
+        item.modifiedDate || item.lastPublishedDate || item.createdDate || ""
+      );
+      exists = jid && existing[jid.toLowerCase()];
+      title = wrapTitle(jname, 30);
+      statusLabel = esc(jstatus.length > 28 ? jstatus.substring(0, 28) + "…" : jstatus);
+      if (exists) {
+        actionHtml =
+          '<button type="button" class="btn-secondary" disabled>Already added</button>';
+      }
+      else {
+        actionHtml =
+          '<form method="post" action="' + escAttr(formAction) + '" style="margin:0;display:inline">' +
+          '<input type="hidden" name="do" value="addBuild">' +
+          '<input type="hidden" name="journeyId" value="' + escAttr(jid) + '">' +
+          '<input type="hidden" name="journeyName" value="' + escAttr(jname) + '">' +
+          '<button type="submit" class="btn-secondary">Add to builds</button>' +
+          "</form>";
+      }
+      browseParts.push(
+        '<div class="survey-card survey-card-browse">' +
+        '<div class="survey-header">' +
+        '<div class="survey-icon" data-build-icon="' + escAttr(buildTypeIconKey("Existing Journey")) + '"></div>' +
+        '<div class="survey-status status-Active">' + statusLabel + "</div>" +
+        "</div>" +
+        '<h3 class="survey-title">' + title + "</h3>" +
+        '<div class="survey-meta">' +
+        '<span class="survey-id">ID: ' + esc(jid) + "</span>" +
+        '<span class="survey-date">' + esc(jdate) + "</span>" +
+        "</div>" +
+        '<div class="survey-actions">' +
+        actionHtml +
+        "</div>" +
+        "</div>"
+      );
+    }
+    return browseParts.join("");
+  }
+  function homeHttpGet(token, url) {
+    var req = new Script.Util.HttpRequest(url);
+    req.method = "GET";
+    req.contentType = "application/json";
+    req.emptyContentHandling = 0;
+    req.retries = 1;
+    req.continueOnError = true;
+    req.setHeader("Authorization", "Bearer " + token);
+    var resp = req.send();
+    return {
+      status: resp.statusCode,
+      body: resp.content ? String(resp.content) : ""
+    };
+  }
+  function parseJourneyListItems(parsed) {
+    if (!parsed) return [];
+    if (parsed.items) return coerceRows(parsed.items);
+    if (Array.isArray(parsed)) return parsed;
+    return [];
+  }
+  function isBrowseMode() {
+    if (getAmpVar("browseMode") === "1") return true;
+    try {
+      return Request.GetQueryStringParameter("browseJourneys") === "1";
+    }
+    catch (browseReqEx) {
+    }
+    return false;
+  }
+  function escAttr(s) {
+    if (s == null || s === undefined) return "";
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;");
+  }
+  function loadExistingJourneyIds() {
+    var map = {
+    };
+    var rows = retrieveAnalyticsRows();
+    var i, id;
+    for (i = 0; i < rows.length; i++) {
+      id = journeyIdFromRow(rows[i]);
+      if (id) map[id.toLowerCase()] = true;
+    }
+    return map;
+  }
+  function formatBrowseDate(val) {
+    if (val == null || val === "") return "";
+    try {
+      if (typeof val === "object" && val.getTime) {
+        return Platform.Function.FormatDate(val, "yyyy-MM-dd HH:mm");
+      }
+      var p = Platform.Function.ParseDate(String(val));
+      if (p && p.getTime) return Platform.Function.FormatDate(p, "yyyy-MM-dd HH:mm");
+    }
+    catch (e0) {
+    }
+    var s = String(val);
+    return s.length > 16 ? s.substring(0, 16) : s;
+  }
+  if (!isBrowseMode()) {
+    try {
+      var hubUrl = Platform.Variable.GetValue("@hubUrl") || "";
+      var buildsPage = parseBrowsePage(getAmpVar("buildsPage"));
+      if (!buildsPage || buildsPage === 1) {
+        try {
+          buildsPage = parseBrowsePage(Request.GetQueryStringParameter("buildsPage"));
+        }
+        catch (buildsPageEx) {
+        }
+      }
+      var totalInDe = getDeRowCount();
+      var fetchLimit = totalInDe > 0 ? (totalInDe > MAX_DE_FETCH ? MAX_DE_FETCH : totalInDe) : MAX_DE_FETCH;
+      var recentLoad = loadRecentBuildRows(fetchLimit);
+      var orderedRows = recentLoad.rows;
+      var rowCount = recentLoad.count;
+      var totalPages = rowCount > 0 ? Math.ceil(rowCount / BUILD_PAGE_SIZE) : 1;
+      if (buildsPage > totalPages) {
+        buildsPage = totalPages;
+      }
+      if (buildsPage < 1) {
+        buildsPage = 1;
+      }
+      setV("buildsPage", String(buildsPage));
+      if (!rowCount) {
+        setV("recentBuildsOk", "true");
+        setV("jaEmpty", "1");
+        setV("jaRecentBuildsMarkup", "");
+        setV("jaBuildsLoadError", "");
+        setV("jaBuildsPagination", "");
+      }
+      else {
+        var startIdx = (buildsPage - 1) * BUILD_PAGE_SIZE;
+        var endIdx = buildsPage * BUILD_PAGE_SIZE;
+        if (endIdx > rowCount) {
+          endIdx = rowCount;
+        }
+        var gx, r, nm, jidv, tp, cr, js, prog;
+        var parts = [];
+        for (gx = startIdx; gx < endIdx; gx++) {
+          r = orderedRows[gx];
+          nm = fieldFromRow(r, ["buildName", "BuildName"]);
+          if (!nm) {
+            nm = fieldFromRow(r, ["journeyName", "JourneyName", "emailName", "EmailName"]);
+          }
+          if (!nm) nm = "Untitled journey";
+          jidv = String(fieldFromRow(r, ["journeyId", "JourneyId", "JourneyID"]));
+          tp = String(fieldFromRow(r, ["journeyType", "JourneyType"]));
+          cr = formatRowDate(r);
+          js = String(fieldFromRow(r, ["JourneyStatus", "journeyStatus"]));
+          prog = resolveJourneyProgress(js);
+          var sentRaw = fieldFromRow(r, ["sentCount", "SentCount"]);
+          var sentHtml = "";
+          if (sentRaw !== null && sentRaw !== undefined && String(sentRaw).replace(/^\s+|\s+$/g, "") !== "") {
+            sentHtml = '<span class="progress-sent-count">' + esc(String(sentRaw)) + " sent</span>";
+          }
+          var detailHref =
+              jidv !== ""
+          ? BUILD_DETAIL_URL + "?journeyId=" + encodeURIComponent(jidv)
+          : BUILD_DETAIL_URL;
+          parts.push(
+            '<div class="survey-card">' +
+            '<div class="survey-header">' +
+            '<div class="survey-icon" data-build-icon="' + escAttr(buildTypeIconKey(tp)) + '"></div>' +
+            '<div class="survey-status status-Active">' +
+            esc(tp.length > 28 ? tp.substring(0, 28) + "..." : tp) +
+            "</div>" +
+            "</div>" +
+            '<h3 class="survey-title">' +
+            wrapTitle(nm, 30) +
+            "</h3>" +
+            '<div class="survey-meta">' +
+            '<span class="survey-id">ID: ' + esc(jidv) + '</span>' +
+            '<span class="survey-date">' + esc(cr) + "</span>" +
+            "</div>" +
+            '<div class="survey-progress">' +
+            '<div class="progress-info">' +
+            '<span class="progress-percentage ' +
+            prog.labelClass +
+            '">' +
+            esc(prog.label) +
+            "</span>" +
+            sentHtml +
+            "</div>" +
+            '<div class="progress-bar">' +
+            '<div class="progress-fill ' +
+            prog.fillClass +
+            '" style="width:' +
+            prog.width +
+            ';">' +
+            "</div>" +
+            "</div>" +
+            "</div>" +
+            '<div class="survey-actions">' +
+            '<a href="' +
+            detailHref +
+            '" class="btn-secondary">Manage build</a>' +
+            "</div>" +
+            "</div>"
+          );
+        }
+        setV("jaRecentBuildsMarkup", parts.join(""));
+        setV("jaEmpty", "0");
+        setV("recentBuildsOk", "true");
+        setV("jaBuildsLoadError", "");
+        setV("jaBuildsPagination", renderBuildsPagination(hubUrl, buildsPage, totalPages, rowCount));
+      }
+    }
+    catch (e) {
+      var errMsg = "Could not read recent builds.";
+      try {
+        errMsg = e.message != null && e.message !== "" ? String(e.message) : String(e);
+        if (errMsg.length > 400) errMsg = errMsg.substring(0, 400);
+      }
+      catch (err2) {
+      }
+      setV("jaBuildsLoadError", errMsg);
+      setV("recentBuildsOk", "false");
+      setV("jaEmpty", "1");
+      setV("jaRecentBuildsMarkup", "");
+      setV("jaBuildsPagination", "");
+    }
+  }
+  if (isBrowseMode()) {
+    setV("browseMode", "1");
+    var browsePage = parseBrowsePage(getAmpVar("browsePage"));
+    if (!browsePage || browsePage === 1) {
+      try {
+        browsePage = parseBrowsePage(Request.GetQueryStringParameter("browsePage"));
+      }
+      catch (browsePageEx) {
+      }
+    }
+    setV("browsePage", String(browsePage));
+    var authResult = fetchHomeRestAuth();
+    if (authResult.error) {
+      setV("jaBrowseError", authResult.error);
+    }
+    else {
+      try {
+        var listUrl = buildJourneyListUrl(authResult.subdomain, browsePage, BROWSE_PAGE_SIZE);
+        var listResp = homeHttpGet(authResult.token, listUrl);
+        if (!httpOk(listResp.status)) {
+          var listErrBody = listResp.body ? listResp.body.substring(0, 200) : "";
+          setV(
+            "jaBrowseError",
+            "Journey API HTTP " +
+            listResp.status +
+            (listErrBody ? ": " + listErrBody : ".")
+          );
+        }
+        else {
+          var parsed = null;
+          try {
+            parsed = Platform.Function.ParseJSON(listResp.body);
+          }
+          catch (listParseEx) {
+            setV("jaBrowseError", "Journey API returned invalid JSON.");
+            parsed = null;
+          }
+          var items = parseJourneyListItems(parsed);
+          var totalCount = parsed && parsed.count != null ? Number(parsed.count) : items.length;
+          if (isNaN(totalCount) || totalCount < 0) {
+            totalCount = items.length;
+          }
+          var totalPages = Math.ceil(totalCount / BROWSE_PAGE_SIZE);
+          if (totalPages < 1) {
+            totalPages = 1;
+          }
+          if (browsePage > totalPages) {
+            browsePage = totalPages;
+            setV("browsePage", String(browsePage));
+          }
+          setV(
+            "jaBrowseHint",
+            "Page " +
+            browsePage +
+            " of " +
+            totalPages +
+            ". Search filters journeys on this page."
+          );
+          if (parsed && !items.length) {
+            setV("jaBrowseError", "No journeys returned from Journey Builder.");
+          }
+          else if (items.length) {
+            var existing = loadExistingJourneyIds();
+            var hubUrl = getAmpVar("hubUrl");
+            setV("jaBrowseMarkup", renderBrowseJourneyCards(items, existing, hubUrl));
+            setV(
+              "jaBrowsePagination",
+              renderBrowsePagination(hubUrl, browsePage, totalPages, totalCount)
+            );
+          }
+        }
+      }
+      catch (browseEx) {
+        setV("jaBrowseError", browseEx.message != null ? String(browseEx.message) : String(browseEx));
+      }
+    }
+  }
+</script>
+<script runat="server" language="javascript">
+  Platform.Load("Core", "1.1");
+  function escJsonSendLog(v) {
+    if (v == null || v === undefined) return "";
+    return String(v).replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+  }
+  function rowHasDeFields(row) {
+    if (row == null || typeof row !== "object") return false;
+    return (
+      fieldValSendLog(row, ["Specialty", "SpecialtyName", "MonthIndex", "MonthLabel", "Responses"]) != null
+    );
+  }
+  function fieldValSendLog(row, names) {
+    var i, n, k, rowKeys, target, v;
+    if (row == null) return null;
+    for (i = 0; i < names.length; i++) {
+      n = names[i];
+      v = row[n];
+      if (v != null && v !== "") return v;
+      if (v === 0 || v === "0") return v;
+    }
+    rowKeys = [];
+    for (k in row) {
+      if (Object.prototype.hasOwnProperty.call(row, k)) rowKeys.push(k);
+    }
+    for (i = 0; i < names.length; i++) {
+      target = String(names[i]).toLowerCase();
+      for (k = 0; k < rowKeys.length; k++) {
+        if (String(rowKeys[k]).toLowerCase() === target) {
+          v = row[rowKeys[k]];
+          if (v != null && v !== "") return v;
+          if (v === 0 || v === "0") return v;
+        }
+      }
+    }
+    return null;
+  }
+  function coerceSendLogRows(raw) {
+    if (raw == null) return [];
+    var r = raw;
+    if (r.Results) r = r.Results;
+    if (r.rows && typeof r.rows.length === "number") r = r.rows;
+    if (r.Rows && typeof r.Rows.length === "number") r = r.Rows;
+    if (typeof r.length === "number") {
+      var out = [];
+      var i;
+      for (i = 0; i < r.length; i++) out.push(r[i]);
+      return out;
+    }
+    if (typeof r === "object" && rowHasDeFields(r)) return [r];
+    return [];
+  }
+  function retrieveDeRows(deKey) {
+    var keys = [];
+    var seen = {
+    };
+    var variants = [deKey, String(deKey).toLowerCase(), String(deKey).toUpperCase()];
+    var i, k, rows;
+    for (i = 0; i < variants.length; i++) {
+      k = variants[i];
+      if (!k || seen[k]) continue;
+      seen[k] = true;
+      keys.push(k);
+    }
+    for (i = 0; i < keys.length; i++) {
+      try {
+        rows = coerceSendLogRows(DataExtension.Init(keys[i]).Rows.Retrieve());
+        if (rows.length) return rows;
+      }
+      catch (e0) {
+      }
+    }
+    for (i = 0; i < keys.length; i++) {
+      try {
+        rows = coerceSendLogRows(
+          (new Script.Util.WSProxy()).retrieve(
+            "DataExtensionObject[" + keys[i] + "]",
+            ["MonthIndex", "MonthStart", "Specialty", "Responses", "Clicks", "Opens", "Bounces", "Unsubscribed", "DidNotOpen", "MonthLabel"],
+            {
+              Property: "Specialty",
+              SimpleOperator: "isNotNull"
+            }
+          )
+        );
+        if (rows.length) return rows;
+      }
+      catch (e1) {
+      }
+    }
+    return [];
+  }
+  function setChartVar(key, val) {
+    try {
+      Platform.Variable.SetValue("@" + key, val);
+    }
+    catch (e0) {
+    }
+    try {
+      Platform.Variable.SetValue(key, val);
+    }
+    catch (e1) {
+    }
+  }
+  function loadSendLogSeries(deKey) {
+    var out = {
+      labels: [], responses: [], hasData: false };
+    try {
+      var rows = retrieveDeRows(deKey);
+      rows.sort(function (a, b) {
+        var ai = parseInt(fieldValSendLog(a, ["MonthIndex", "monthIndex"]), 10) || 0;
+        var bi = parseInt(fieldValSendLog(b, ["MonthIndex", "monthIndex"]), 10) || 0;
+        if (ai < bi) return -1;
+        if (ai > bi) return 1;
+        return 0;
+      }
+               );
+      var i, label, resp, respNum;
+      for (i = 0; i < rows.length; i++) {
+        label = fieldValSendLog(rows[i], ["MonthLabel", "monthLabel"]);
+        resp = fieldValSendLog(rows[i], ["Responses", "responses"]);
+        respNum = parseInt(resp, 10);
+        if (isNaN(respNum)) respNum = 0;
+        out.labels.push(label != null ? String(label) : "");
+        out.responses.push(respNum);
+        if (respNum > 0) out.hasData = true;
+      }
+    }
+    catch (e0) {
+    }
+    return out;
+  }
+  function seriesToJsonKey(series, keyName) {
+    var labels = [];
+    var i;
+    for (i = 0; i < series.labels.length; i++) {
+      labels.push('"' + escJsonSendLog(series.labels[i]) + '"');
+    }
+    return (
+      '  "' + keyName + '": {\n' +
+      '    "labels": [' + labels.join(", ") + '],\n' +
+      '    "responses": [' + series.responses.join(", ") + '],\n' +
+      '    "hasData": ' + (series.hasData ? "true" : "false") + '\n' +
+      '  }'
+    );
+  }
+  var s12 = loadSendLogSeries("sst_de_send_log_12_months");
+  var s6 = loadSendLogSeries("sst_de_send_log_6_months");
+  var s30 = loadSendLogSeries("sst_de_send_log_30_days");
+  var chartJson =
+      "{\n" +
+      seriesToJsonKey(s12, "12months") + ",\n" +
+      seriesToJsonKey(s6, "6months") + ",\n" +
+      seriesToJsonKey(s30, "30days") + "\n" +
+      "}";
+  setChartVar("sendLogChartJson", chartJson);
+</script>
+<title>Self Service Dashboard - Magmutual
+</title>
+<link rel="icon" href="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" type="image/png">
+%%[ SET @activeNav = "home" ]%%
+<div class="dashboard-layout">
+  %%=ContentBlockByKey("sst_shell_sidebar")=%%
+  <main class="main-content">
+    <!-- Breadcrumb Section (Hidden by default) -->
+    <div class="breadcrumb-section" id="breadcrumbSection" style="display: none;">
+      <div class="breadcrumb">
+        <a href="#" onclick="showDashboard(); return false;" class="breadcrumb-link">Journey home</a>
+        <span class="breadcrumb-separator">/</span>
+        <span class="breadcrumb-current">Recent builds</span>
+      </div>
+    </div>
+    <!-- Hero Section -->
+    <div class="hero-section" id="heroSection">
+      <div class="hero-content">
+        <div class="hero-badge">MAKE A JOURNEY, DATA EXTENSION, AND AUTOMATIONS
+        </div>
+        <h1>Quickly build and monitor
+          <br> journeys in Marketing Cloud
+        </h1>
+        <p>Central hub to spin up emails, journeys, data extensions, automations and connect Salesforce campaigns to track engagements.
+        </p>
+        <button type="button" class="hero-cta" id="heroOpenBuilderBtn" onclick="toggleJourneyBuilderPanel(event)">
+          Start building
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/>
+          </svg>
+        </button>
+      </div>
+      <div class="hero-illustration">
+        <div class="floating-card card-1">
+          <div class="mini-chart">
+          </div>
+        </div>
+        <div class="floating-card card-2">
+          <div class="mini-stat">85%
+          </div>
+        </div>
+        <div class="floating-card card-3">
+          <div class="mini-progress">
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="journey-builder-panel-wrap" id="journeyBuilderPanel" aria-hidden="true">
+      <div class="journey-builder-panel">
+        <div class="journey-builder-panel-head">
+          <h2 class="journey-builder-panel-title">Choose a builder path
+          </h2>
+          <button type="button" class="journey-builder-panel-close" onclick="closeJourneyBuilderPanel()" aria-label="Close">✕</button>
+        </div>
+        <div class="journey-builder-panel-head">
+          <h2 class="" style="
+                              color: gray;
+                              font-weight: 400;
+                              font-size: 17px;
+                              margin-bottom: 20px;
+                              ">What do you want to build?
+          </h2>
+        </div>
+        <div class="journey-builder-panel-cards">
+          <a href="%%=v(@emailOnlyUrl)=%%" class="journey-builder-choice">
+            <span class="journey-builder-choice-label">Create an Email</span>
+            <span class="journey-builder-choice-hint">Make an email without starting a journey</span>
+          </a>
+          <a href="%%=v(@emptyJourneyUrl)=%%" class="journey-builder-choice">
+            <span class="journey-builder-choice-label">Create empty journey</span>
+            <span class="journey-builder-choice-hint">Start a blank journey you can finish later</span>
+          </a>
+          <a href="%%=v(@quickSendUrl)=%%" class="journey-builder-choice">
+            <span class="journey-builder-choice-label">Quick Send</span>
+            <span class="journey-builder-choice-hint">Send an email to a group of people</span>
+          </a>
+          <a href="%%=v(@campaignAutomationUrl)=%%" class="journey-builder-choice">
+            <span class="journey-builder-choice-label">Automation</span>
+            <span class="journey-builder-choice-hint">Build a journey with scheduled steps</span>
+          </a>
+          <a href="%%=v(@campaignOnlyUrl)=%%" class="journey-builder-choice">
+            <span class="journey-builder-choice-label">Campaign Journey</span>
+            <span class="journey-builder-choice-hint">Start a journey when someone joins a campaign</span>
+          </a>
+          <a href="%%=v(@surveyJourneyUrl)=%%" class="journey-builder-choice">
+            <span class="journey-builder-choice-label">Survey</span>
+            <span class="journey-builder-choice-hint">Send a survey after someone joins a campaign</span>
+          </a>
+          <a href="%%=v(@SFsurveyJourneyUrl)=%%" class="journey-builder-choice">
+            <span class="journey-builder-choice-label">Salesforce Survey</span>
+            <span class="journey-builder-choice-hint">Email a Salesforce survey invitation</span>
+          </a>
+        </div>
+      </div>
+    </div>
+    <div class="section-header">
+      <h2>Engagement pulse
+      </h2>
+      <div class="activity-filters">
+        <button class="activity-filter active" onclick="filterActivity('12months')" data-period="12months">12 months</button>
+        <button class="activity-filter" onclick="filterActivity('6months')" data-period="6months">6 months</button>
+        <button class="activity-filter" onclick="filterActivity('30days')" data-period="30days">30 days</button>
+      </div>
+    </div>
+    <!-- Statistics Cards -->
+    <div class="stats-grid">
+      %%[
+          VAR @surveyCount, @qsCount, @emailsCount, @automationsCount, @oneSend
+          SET @surveyCount = @allJourneysTotal
+          SET @emailsCount = @allJourneysTotal
+          SET @qsCount = @quickSendsTotal
+          SET @automationsCount = @automationsTotal
+          SET @oneSend = @oneSendTotal
+]%%
+      <div class="stat-card primary">
+        <div class="stat-icon" style="color: #000000;">    
+          <svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" 
+               viewBox="0 0 384.891 384.891" xml:space="preserve">
+            <g>
+              <g>
+                <rect x="13.438" y="207.825" style="fill:#CAA977;" width="214.023" height="154.009"/>
+                <rect y="170.511" style="fill:#DFCAA3;" width="227.461" height="37.314"/>
+                <rect x="227.461" y="207.825" style="fill:#A88D63;" width="143.992" height="154.009"/>
+                <rect x="227.461" y="170.511" style="fill:#CAA977;" width="157.43" height="37.314"/>
+                <path style="fill:#333E48;" d="M332.096,230.972c6.074,0,11,4.925,11,11s-4.926,11-11,11H285.82c-6.076,0-11-4.925-11-11
+                                               s4.924-11,11-11H332.096z"/>
+                <rect x="13.437" y="284.829" style="fill:#D16A70;" width="95.963" height="40.9"/>
+              </g>
+              <g>
+                <rect x="95.475" y="51.815" style="fill:#CAA977;" width="164.949" height="118.695"/>
+                <rect x="85.117" y="23.057" style="fill:#DFCAA3;" width="175.307" height="28.759"/>
+                <rect x="260.424" y="51.815" style="fill:#A88D63;" width="110.977" height="118.695"/>
+                <rect x="260.424" y="23.057" style="fill:#CAA977;" width="121.332" height="28.759"/>
+                <path style="fill:#333E48;" d="M341.066,69.654c4.682,0,8.478,3.796,8.478,8.478c0,4.683-3.797,8.479-8.478,8.479h-35.664
+                                               c-4.684,0-8.479-3.796-8.479-8.479c0-4.682,3.795-8.478,8.479-8.478C305.402,69.654,341.066,69.654,341.066,69.654z"/>
+                <rect x="95.475" y="111.163" style="fill:#D16A70;" width="73.959" height="31.521"/>
+              </g>
+            </g>
+          </svg>
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@surveyCount)=%%</div>
+          <div class="stat-label">All builds
+          </div>
+          <div class="stat-change">Self serviced journeys
+          </div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon success" style="color: #000000;">
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M13.025 17H3.707l5.963-5.963L12 12.83l2.33-1.794 1.603 1.603a5.463 5.463 0 0 1 1.004-.41l-1.808-1.808L21 5.9v6.72a5.514 5.514 0 0 1 1 .64V5.5A1.504 1.504 0 0 0 20.5 4h-17A1.504 1.504 0 0 0 2 5.5v11A1.5 1.5 0 0 0 3.5 18h9.525c-.015-.165-.025-.331-.025-.5s.01-.335.025-.5zM3 16.293V5.901l5.871 4.52zM20.5 5c.009 0 .016.005.025.005L12 11.57 3.475 5.005c.009 0 .016-.005.025-.005zm-2 8a4.505 4.505 0 0 0-4.5 4.5 4.403 4.403 0 0 0 .05.5 4.49 4.49 0 0 0 4.45 4h.5v-1h-.5a3.495 3.495 0 0 1-3.45-3 3.455 3.455 0 0 1-.05-.5 3.498 3.498 0 0 1 5.947-2.5H20v.513A2.476 2.476 0 0 0 18.5 15a2.5 2.5 0 1 0 1.733 4.295A1.497 1.497 0 0 0 23 18.5v-1a4.555 4.555 0 0 0-4.5-4.5zm0 6a1.498 1.498 0 0 1-1.408-1 1.483 1.483 0 0 1-.092-.5 1.5 1.5 0 0 1 3 0 1.483 1.483 0 0 1-.092.5 1.498 1.498 0 0 1-1.408 1zm3.5-.5a.5.5 0 0 1-1 0v-3.447a3.639 3.639 0 0 1 1 2.447z"/>
+            <path fill="none" d="M0 0h24v24H0z"/>
+          </svg>
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@emailsCount)=%%</div>
+          <div class="stat-label">Emails Created
+          </div>
+          <div class="stat-change">Illustrative totals
+          </div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon warning" style="color: #000000;">
+          <svg  viewBox="0 0 32 32" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+            <g id="icomoon-ignore">
+            </g>
+            <path d="M16.533 8.562v-1.647c0-0.487 1.029-1.131 1.855-1.649 1.184-0.741 2.41-1.509 2.41-2.627v-2.633h-1.066v2.633c0 0.527-1.058 1.19-1.909 1.723-1.158 0.725-2.356 1.475-2.356 2.552v1.647c-4.167 0.268-7.464 3.626-7.464 7.739v7.927c0 4.288 3.58 7.765 7.997 7.765s7.997-3.477 7.997-7.765v-7.927c0-4.114-3.297-7.472-7.464-7.739zM22.931 16.301v0.765h-6.398v-7.438c3.572 0.265 6.398 3.153 6.398 6.673zM9.069 16.301c0-3.52 2.825-6.408 6.398-6.673v7.438h-6.398v-0.765zM16 30.927c-3.821 0-6.931-3.005-6.931-6.699v-6.096h13.861v6.096c0 3.694-3.109 6.699-6.931 6.699z" fill="#000000">
+            </path>
+          </svg>
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@qsCount)=%%</div>
+          <div class="stat-label">Quick Send
+          </div>
+          <div class="stat-change">Distributed marketing campaigns
+          </div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon info" style="color: #000000;">
+          <svg version="1.1" id="Capa_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" 
+               viewBox="0 0 459.926 459.926" xml:space="preserve">
+            <g>
+              <g>
+                <path style="fill:#010002;" d="M229.963,45.76c90.863,0,165.545,70.421,172.46,159.542l-32-32l-8.437,8.437l42.765,42.765h8.437
+                                               l46.738-46.744l-8.437-8.437l-37.018,37.024c-6.432-96.204-86.699-172.52-184.508-172.52
+                                               c-101.998,0-184.973,82.981-184.973,184.973h11.934C56.924,123.389,134.553,45.76,229.963,45.76z"/>
+                <path style="fill:#010002;" d="M229.963,414.166c-90.863,0-165.545-70.421-172.46-159.542l32,32l8.437-8.437l-42.765-42.765
+                                               h-8.437L0,282.161l8.437,8.437l37.018-37.018c6.432,96.204,86.699,172.52,184.508,172.52
+                                               c101.998,0,184.973-82.975,184.973-184.973h-11.934C403.002,336.537,325.373,414.166,229.963,414.166z"/>
+              </g>
+            </g>
+          </svg>
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@automationsCount)=%%</div>
+          <div class="stat-label">Automations
+          </div>
+          <div class="stat-change">Automations created
+          </div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon info" style="color: #000000;">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M10 18C8.89543 18 8 18.8954 8 20V26C8 27.1046 8.89543 28 10 28H14V18H10ZM14 30H12V38C12 38.5523 12.4477 39 13 39C13.5523 39 14 38.5523 14 38V30ZM10 30C7.79086 30 6 28.2091 6 26V20C6 17.7909 7.79086 16 10 16H15C15.5523 16 16 16.4477 16 17V38C16 39.6569 14.6569 41 13 41C11.3431 41 10 39.6569 10 38V30Z" fill="#333333"/>
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M30.4812 7.12339C30.8012 7.29903 31 7.63502 31 8V18C33.2091 18 35 19.7909 35 22V23C35 25.2091 33.2091 27 31 27V37C31 37.365 30.8012 37.701 30.4812 37.8766C30.1613 38.0522 29.771 38.0396 29.4631 37.8437L18.4631 30.8437C18.1747 30.6601 18 30.3419 18 30V15C18 14.6581 18.1747 14.3399 18.4631 14.1563L29.4631 7.15634C29.771 6.96039 30.1613 6.94776 30.4812 7.12339ZM31 25C32.1046 25 33 24.1046 33 23V22C33 20.8954 32.1046 20 31 20V25ZM20 15.5489V29.4511L29 35.1783V9.82167L20 15.5489Z" fill="#333333"/>
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M40.832 17.4453C41.1384 17.9048 41.0142 18.5257 40.5547 18.832L37.5547 20.832C37.0952 21.1384 36.4743 21.0142 36.1679 20.5547C35.8616 20.0952 35.9858 19.4743 36.4453 19.1679L39.4453 17.1679C39.9048 16.8616 40.5257 16.9858 40.832 17.4453ZM36 24C36 23.4477 36.4477 23 37 23H41C41.5523 23 42 23.4477 42 24C42 24.5523 41.5523 25 41 25H37C36.4477 25 36 24.5523 36 24ZM36.1679 27.4453C36.4743 26.9858 37.0952 26.8616 37.5547 27.1679L40.5547 29.1679C41.0142 29.4743 41.1384 30.0952 40.832 30.5547C40.5257 31.0142 39.9048 31.1384 39.4453 30.832L36.4453 28.832C35.9858 28.5257 35.8616 27.9048 36.1679 27.4453Z" fill="#333333"/>
+          </svg>
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@oneSend)=%%</div>
+          <div class="stat-label">Campaign journey
+          </div>
+          <div class="stat-change">Campaign triggered journeys
+          </div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon info" style="color: #000000;">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M10 18C8.89543 18 8 18.8954 8 20V26C8 27.1046 8.89543 28 10 28H14V18H10ZM14 30H12V38C12 38.5523 12.4477 39 13 39C13.5523 39 14 38.5523 14 38V30ZM10 30C7.79086 30 6 28.2091 6 26V20C6 17.7909 7.79086 16 10 16H15C15.5523 16 16 16.4477 16 17V38C16 39.6569 14.6569 41 13 41C11.3431 41 10 39.6569 10 38V30Z" fill="#333333"/>
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M30.4812 7.12339C30.8012 7.29903 31 7.63502 31 8V18C33.2091 18 35 19.7909 35 22V23C35 25.2091 33.2091 27 31 27V37C31 37.365 30.8012 37.701 30.4812 37.8766C30.1613 38.0522 29.771 38.0396 29.4631 37.8437L18.4631 30.8437C18.1747 30.6601 18 30.3419 18 30V15C18 14.6581 18.1747 14.3399 18.4631 14.1563L29.4631 7.15634C29.771 6.96039 30.1613 6.94776 30.4812 7.12339ZM31 25C32.1046 25 33 24.1046 33 23V22C33 20.8954 32.1046 20 31 20V25ZM20 15.5489V29.4511L29 35.1783V9.82167L20 15.5489Z" fill="#333333"/>
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M40.832 17.4453C41.1384 17.9048 41.0142 18.5257 40.5547 18.832L37.5547 20.832C37.0952 21.1384 36.4743 21.0142 36.1679 20.5547C35.8616 20.0952 35.9858 19.4743 36.4453 19.1679L39.4453 17.1679C39.9048 16.8616 40.5257 16.9858 40.832 17.4453ZM36 24C36 23.4477 36.4477 23 37 23H41C41.5523 23 42 23.4477 42 24C42 24.5523 41.5523 25 41 25H37C36.4477 25 36 24.5523 36 24ZM36.1679 27.4453C36.4743 26.9858 37.0952 26.8616 37.5547 27.1679L40.5547 29.1679C41.0142 29.4743 41.1384 30.0952 40.832 30.5547C40.5257 31.0142 39.9048 31.1384 39.4453 30.832L36.4453 28.832C35.9858 28.5257 35.8616 27.9048 36.1679 27.4453Z" fill="#333333"/>
+          </svg>
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@mcSurveysTotal)=%%</div>
+          <div class="stat-label">Survey journeys
+          </div>
+          <div class="stat-change">Journeys with surveys hosted in Marketing Cloud
+          </div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon info" style="color: #000000;">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M10 18C8.89543 18 8 18.8954 8 20V26C8 27.1046 8.89543 28 10 28H14V18H10ZM14 30H12V38C12 38.5523 12.4477 39 13 39C13.5523 39 14 38.5523 14 38V30ZM10 30C7.79086 30 6 28.2091 6 26V20C6 17.7909 7.79086 16 10 16H15C15.5523 16 16 16.4477 16 17V38C16 39.6569 14.6569 41 13 41C11.3431 41 10 39.6569 10 38V30Z" fill="#333333"/>
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M30.4812 7.12339C30.8012 7.29903 31 7.63502 31 8V18C33.2091 18 35 19.7909 35 22V23C35 25.2091 33.2091 27 31 27V37C31 37.365 30.8012 37.701 30.4812 37.8766C30.1613 38.0522 29.771 38.0396 29.4631 37.8437L18.4631 30.8437C18.1747 30.6601 18 30.3419 18 30V15C18 14.6581 18.1747 14.3399 18.4631 14.1563L29.4631 7.15634C29.771 6.96039 30.1613 6.94776 30.4812 7.12339ZM31 25C32.1046 25 33 24.1046 33 23V22C33 20.8954 32.1046 20 31 20V25ZM20 15.5489V29.4511L29 35.1783V9.82167L20 15.5489Z" fill="#333333"/>
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M40.832 17.4453C41.1384 17.9048 41.0142 18.5257 40.5547 18.832L37.5547 20.832C37.0952 21.1384 36.4743 21.0142 36.1679 20.5547C35.8616 20.0952 35.9858 19.4743 36.4453 19.1679L39.4453 17.1679C39.9048 16.8616 40.5257 16.9858 40.832 17.4453ZM36 24C36 23.4477 36.4477 23 37 23H41C41.5523 23 42 23.4477 42 24C42 24.5523 41.5523 25 41 25H37C36.4477 25 36 24.5523 36 24ZM36.1679 27.4453C36.4743 26.9858 37.0952 26.8616 37.5547 27.1679L40.5547 29.1679C41.0142 29.4743 41.1384 30.0952 40.832 30.5547C40.5257 31.0142 39.9048 31.1384 39.4453 30.832L36.4453 28.832C35.9858 28.5257 35.8616 27.9048 36.1679 27.4453Z" fill="#333333"/>
+          </svg>
+        </div>
+        <div class="stat-content">
+          <div class="stat-value">%%=v(@salesforceSurveysTotal)=%%</div>
+          <div class="stat-label">Salesforce Survey journey
+          </div>
+          <div class="stat-change">SF Survey invitation journeys
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="chart-container home-engagement-chart" id="homeEngagementChartWrap">
+      <div class="chart-header">
+        <div class="chart-number">☈
+        </div>
+        <div class="chart-content">
+          <div class="chart-text">Engagement Trends
+          </div>
+          <div class="chart-type">Emails sent over time
+          </div>
+        </div>
+      </div>
+      <div class="chart-wrapper">
+        <canvas id="activityChart">
+        </canvas>
+      </div>
+    </div>
+    <!-- Hidden data for JavaScript -->
+    <script type="application/json" id="activityChartData">
+%%=TreatAsContent(@sendLogChartJson)=%%
+    </script>
+    <!-- Hidden data for Reports Chart -->
+    <script type="application/json" id="reportsChartData">
+%%=TreatAsContent(@sendLogChartJson)=%%
+    </script>
+    <div class="section-header recent-builds-header" id="allSurveysSection">
+      <div class="recent-builds-header-left">
+        <h2>Recent builds
+        </h2>
+        %%[ IF @browseMode == "1" THEN ]%%
+        <p class="recent-builds-browse-hint">%%=IIF(NOT Empty(@jaBrowseHint), @jaBrowseHint, "Select a journey to add.")=%%</p>
+        %%[ ENDIF ]%%
+        %%[ IF NOT Empty(@addBuildMessage) THEN ]%%
+        <p class="recent-builds-flash">%%=v(@addBuildMessage)=%%</p>
+        %%[ ENDIF ]%%
+        %%[ IF NOT Empty(@addBuildError) THEN ]%%
+        <p class="recent-builds-flash recent-builds-flash-error">%%=v(@addBuildError)=%%</p>
+        %%[ ENDIF ]%%
+      </div>
+      <div class="recent-builds-header-right">
+        %%[ IF @browseMode == "1" THEN ]%%
+        <a href="%%=v(@hubUrl)=%%" class="filter-btn">Cancel</a>
+        %%[ ELSE ]%%
+        <button type="button" class="btn-add-journey" id="browseJourneysBtn" onclick="openBrowseJourneys()" title="Add existing journey" aria-label="Add existing journey">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+        </button>
+        %%[ ENDIF ]%%
+        <div class="search-section">
+          <input class="search-input" type="text" placeholder="Search journeys by name or ID..." id="journeySearch" onkeyup="searchJourneys()">
+          <button class="filter-btn" onclick="toggleFilter()">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/>
+            </svg>
+            Filter
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="surveys-grid" id="surveysGrid">
+      %%[ IF @browseMode == "1" THEN ]%%
+      %%[ IF NOT Empty(@jaBrowseError) THEN ]%%
+      <div class="no-surveys-message" style="grid-column: 1 / -1;">
+        <div class="empty-state">
+          <h3>Could not load journeys
+          </h3>
+          <p>%%=v(@jaBrowseError)=%%</p>
+          <a href="%%=v(@hubUrl)=%%" class="btn-primary" style="display:inline-block;margin-top:12px;text-decoration:none;">Back to Recent builds</a>
+        </div>
+      </div>
+      %%[ ELSE ]%%
+      %%=TreatAsContent(@jaBrowseMarkup)=%%
+      %%[ ENDIF ]%%
+      %%[ ELSEIF @recentBuildsOk == "true" AND @jaEmpty == "1" THEN ]%%
+      <div class="no-surveys-message">
+        <div class="empty-state">
+          <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+            <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/>
+            <path d="M9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/>
+          </svg>
+          <h3>No builds yet
+          </h3>
+          <p>You haven't built anything yet.
+          </p>
+        </div>
+      </div>
+      %%[ ELSEIF @recentBuildsOk == "true" THEN ]%%
+      %%=TreatAsContent(@jaRecentBuildsMarkup)=%%
+      %%[ ELSE ]%%
+      %%[ IF NOT Empty(@jaBuildsLoadError) THEN ]%%
+      <div class="no-surveys-message" style="grid-column: 1 / -1; margin-bottom: 0;">
+        <div class="empty-state" style="padding: 16px 20px;">
+          <p style="margin: 0; font-size: 14px;">Recent builds could not be loaded from the log.
+          </p>
+          <p style="margin: 8px 0 0; font-size: 12px; opacity: 0.85;">%%=Replace(Replace(@jaBuildsLoadError,"\n"," "),"\r","")=%%</p>
+        </div>
+      </div>
+      %%[ ENDIF ]%%
+      %%[ ENDIF ]%%
+    </div>
+    <div id="buildsPaginationSection">
+      %%[ IF @browseMode == "1" AND NOT Empty(@jaBrowsePagination) THEN ]%%
+      %%=TreatAsContent(@jaBrowsePagination)=%%
+      %%[ ELSEIF @browseMode != "1" AND NOT Empty(@jaBuildsPagination) THEN ]%%
+      %%=TreatAsContent(@jaBuildsPagination)=%%
+      %%[ ENDIF ]%%
+    </div>
+    <!-- Reports Section (Hidden by default) -->
+    <div class="reports-section" id="reportsSection" style="display: none;">
+      <div class="section-header">
+        <h2>Performance
+        </h2>
+        <div class="activity-filters">
+          <button class="activity-filter active" onclick="filterActivity('12months')" data-period="12months">12 months</button>
+          <button class="activity-filter" onclick="filterActivity('6months')" data-period="6months">6 months</button>
+          <button class="activity-filter" onclick="filterActivity('30days')" data-period="30days">30 days</button>
+        </div>
+      </div>
+      <div class="chart-container">
+        <div class="chart-header">
+          <div class="chart-number">☈
+          </div>
+          <div class="chart-content">
+            <div class="chart-text">Engagement Trends
+            </div>
+            <div class="chart-type">Emails sent over time
+            </div>
+          </div>
+        </div>
+        <div class="chart-wrapper">
+          <canvas id="reportsChart">
+          </canvas>
+        </div>
+      </div>
+      <div class="chart-container">
+        <div class="chart-header">
+          <div class="chart-number">🏞
+          </div>
+          <div class="chart-content">
+            <div class="chart-text">Primary Specialty Distribution
+            </div>
+            <div class="chart-type">Email engagement by specialty (12 months)
+            </div>
+          </div>
+        </div>
+        <div class="chart-wrapper home-specialty-chart-wrapper">
+          <canvas id="reportsSpecialtyChart"
+                  data-de-count="%%=DataExtensionRowCount(@specDE)=%%"
+                  data-labels="%%=v(@specLabelsOut)=%%"
+                  data-opened="%%=v(@specOpenOut)=%%"
+                  data-didnotopen="%%=v(@specDnoOut)=%%"
+                  data-bounced="%%=v(@specBncOut)=%%"
+                  data-clicked="%%=v(@specClkOut)=%%"
+                  data-totals="%%=v(@specTotOut)=%%">
+          </canvas>
+        </div>
+      </div>
+      <div class="chart-container">
+        <div class="chart-header">
+          <div class="chart-number">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="3 17 9 11 13 15 21 7">
+              </polyline>
+            </svg>
+          </div>
+          <div class="chart-content">
+            <div class="chart-text">Engagement Over Time
+            </div>
+            <div class="chart-type" id="reportsOpenClickChartSubtitle">Monthly opens, clicks, bounces and unsubscribes (12 months)
+            </div>
+          </div>
+        </div>
+        <div class="chart-wrapper">
+          <canvas id="reportsOpenClickChart"
+                  data-labels="%%=v(@monthLabelsOut)=%%"
+                  data-opens="%%=v(@monthOpensOut)=%%"
+                  data-clicks="%%=v(@monthClicksOut)=%%"
+                  data-unsubscribed="%%=v(@monthUnsubOut)=%%"
+                  data-bounced="%%=v(@monthBouncedOut)=%%">
+          </canvas>
+        </div>
+      </div>
+    </div>
+    <!-- Responses Section (Hidden by default) -->
+    <div class="responses-section" id="responsesSection" style="display: none;">
+      <div class="section-header deploy-checklist-header">
+        <div>
+          <h2>Deployment
+          </h2>
+          <p class="deploy-checklist-intro">Deployment checklist — check items off as you complete Prod validation.
+          </p>
+        </div>
+        <button type="button" class="filter-btn" id="deployChecklistResetBtn">Reset checklist</button>
+      </div>
+      <div class="deploy-checklist-panel">
+        <ul class="deploy-checklist-list" id="deployChecklistList">
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="campaign-prod">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Use correct campaign numbers from SF Prod (BD setups)</span>
+                <span class="deploy-checklist-desc">Confirm Salesforce Campaign IDs match Production BD campaign setup records, not UAT or stale values.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="verify-queries">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Verify queries return the required records</span>
+                <span class="deploy-checklist-desc">Run or preview audience queries and confirm row counts and filters match the intended send population.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="sf-tracking">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Enable Send to Salesforce tracking (for IER creation)</span>
+                <span class="deploy-checklist-desc">Turn on Send to Salesforce tracking on the journey email so Individual Email Results are created in Salesforce.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="prod-cloudpages">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Ensure Unsubscribe and Manage Preferences links go to Prod CloudPages</span>
+                <span class="deploy-checklist-desc">Check footer links point to Production CloudPages URLs, not UAT or placeholder pages.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="review-email">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Review the email in the journey</span>
+                <span class="deploy-checklist-desc">Open the email activity in Journey Builder and confirm content, links, and dynamic content render as expected.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="subject-line">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Confirm the subject line is correct (no UAT prefix)</span>
+                <span class="deploy-checklist-desc">Verify the subject line matches Production standards and does not include UAT prefixes or test wording.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="sender-profile">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Confirm the sender profile is correct</span>
+                <span class="deploy-checklist-desc">Validate From name, From address, and send classification match the approved Production sender profile.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="email-test">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Validate a successful email test</span>
+                <span class="deploy-checklist-desc">Send a test to a subscribed contact. Some AMPscript issues do not surface as errors in Marketing Cloud; if the test will not deploy, AMPscript may be faulty or the contact may be unsubscribed.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="confirm-tracking">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Confirm tracking after deployment</span>
+                <span class="deploy-checklist-desc">One-time sends: verify within the hour or by the next day. Features or automations from other systems: verify within the same week.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="bcc-address">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Add a BCC address if needed to track deployments</span>
+                <span class="deploy-checklist-desc">Configure BCC on the triggered send when you need a copy of production sends for monitoring.</span>
+              </span>
+            </label>
+          </li>
+          <li class="deploy-checklist-item">
+            <label class="deploy-checklist-label">
+              <input type="checkbox" class="deploy-checklist-input" data-check-id="event-portal">
+              <span class="deploy-checklist-body">
+                <span class="deploy-checklist-title">Event Portal: test new features after deployment</span>
+                <span class="deploy-checklist-desc">After go-live, exercise new Event Portal functionality in Production to confirm end-to-end behavior.</span>
+              </span>
+            </label>
+          </li>
+        </ul>
+        <p class="deploy-checklist-progress" id="deployChecklistProgress" aria-live="polite">
+        </p>
+      </div>
+    </div>
+    <!-- Team Section (Hidden by default) -->
+    <div class="team-section" id="teamSection" style="display: none;">
+      <div class="section-header">
+        <h2>Builder team
+        </h2>
+        <div class="team-filters">
+          <button class="activity-filter active" onclick="filterTeam('all')" data-team-filter="all">All Users</button>
+          <button class="activity-filter" onclick="filterTeam('online')" data-team-filter="online">Online</button>
+          <button class="activity-filter" onclick="filterTeam('recent')" data-team-filter="recent">Recent Activity</button>
+        </div>
+      </div>
+      <div class="team-grid">
+        <div class="team-card">
+          <div class="team-avatar">JD
+          </div>
+          <div class="team-info">
+            <h4>John Doe
+            </h4>
+            <p class="team-role">Administrator
+            </p>
+            <p class="team-status online">Online
+            </p>
+            <p class="team-last-seen">Last active: 2 minutes ago
+            </p>
+          </div>
+          <div class="team-activity">
+            <div class="activity-item">
+              <span class="activity-icon">📸</span>
+              <span class="activity-text">Reviewed journey canvas</span>
+            </div>
+          </div>
+        </div>       
+        <div class="team-card">
+          <div class="team-avatar">JS
+          </div>
+          <div class="team-info">
+            <h4>Jane Smith
+            </h4>
+            <p class="team-role">Journey editor
+            </p>
+            <p class="team-status online">Online
+            </p>
+            <p class="team-last-seen">Last active: 5 minutes ago
+            </p>
+          </div>
+          <div class="team-activity">
+            <div class="activity-item">
+              <span class="activity-icon">📸</span>
+              <span class="activity-text">Reviewed journey canvas</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <footer class="maker-main-footer">
+      <span>Self Service</span>
+      <div class="maker-main-footer-end">
+        %%[ IF NOT Empty(@environmentSwitchUrl) THEN ]%%
+        <a href="%%=v(@environmentSwitchUrl)=%%" class="home-env-switch" aria-label="%%=v(@envSwitchLabel)=%%">
+          <svg class="home-env-switch-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M6.99 11L3 15l3.99 4v-3H14v-2H6.99v-3zM21 9l-3.99-4v3H10v2h7.01v3L21 9z"/>
+          </svg>
+          <span>%%=v(@envDisplayName)=%%</span>
+        </a>
+        %%[ ENDIF ]%%
+        <span>© 2026 All rights reserved | MagMutual</span>
+      </div>
+    </footer>
+<div id="buildIconLibrary" hidden aria-hidden="true">
+<template id="build-icon-mail">
+<svg class="build-type-icon" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M58.0034485,8H5.9965506c-3.3136795,0-5.9999995,2.6862001-5.9999995,6v36c0,3.3137016,2.6863203,6,5.9999995,6h52.006897c3.3137016,0,6-2.6862984,6-6V14C64.0034485,10.6862001,61.3171501,8,58.0034485,8z M62.0034485,49.1108017L43.084549,30.1919994l18.9188995-12.0555992V49.1108017z M5.9965506,10h52.006897c2.2056007,0,4,1.7943001,4,4v1.7664003L34.4677505,33.3134003c-1.4902,0.9492989-3.3935013,0.9199982-4.8495998-0.0703011L1.9965508,14.4694996V14C1.9965508,11.7943001,3.7910507,10,5.9965506,10z M1.9965508,16.8852005L21.182251,29.9251003L1.9965508,49.1108017V16.8852005z M58.0034485,54H5.9965506c-1.6473999,0-3.0638998-1.0021019-3.6760998-2.4278984l20.5199013-20.5200024l5.6547985,3.843401c1.0859013,0.7383003,2.3418007,1.1083984,3.5995998,1.1083984c1.1953011,0,2.3925018-0.3339996,3.4463005-1.0048981l5.8423996-3.7230015l20.2961006,20.2961025C61.0673485,52.9978981,59.6508713,54,58.0034485,54z"/></svg>
+</template>
+<template id="build-icon-survey">
+<svg class="build-type-icon" viewBox="0 0 470 470" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="m465.115,137.964c-3.342-3.609-8.103-5.884-13.398-5.884h-44.823v-124.58c0-4.143-3.357-7.5-7.5-7.5h-328.789c-4.143,0-7.5,3.357-7.5,7.5v124.579h-44.823c-5.294,0-10.055,2.276-13.397,5.884-3.021,3.263-4.885,7.612-4.885,12.398v301.356c0,10.082 8.201,18.283 18.282,18.283h433.436c10.081,0 18.282-8.201 18.282-18.282v-301.357c0-4.786-1.864-9.135-4.885-12.397zm-394.51,31.524c4.143,0 7.5-3.357 7.5-7.5v-146.988h313.789v146.988c0,4.143 3.357,7.5 7.5,7.5s7.5-3.357 7.5-7.5v-14.909h38.007l-201.46,209.814c-2.257,2.351-5.255,3.646-8.441,3.646s-6.185-1.295-8.441-3.646l-201.461-209.814h38.007v14.909c0,4.143 3.358,7.5 7.5,7.5zm381.113,285.512h-433.436c-1.779,0-3.282-1.503-3.282-3.282v-293.498l137.134,142.82-120.665,125.669c-2.868,2.987-2.772,7.735 0.216,10.604 1.454,1.396 3.325,2.09 5.193,2.09 1.971,0 3.938-0.771 5.411-2.306l120.243-125.229 53.207,55.413c5.112,5.324 11.953,8.257 19.262,8.257s14.149-2.933 19.262-8.257l53.207-55.413 47.031,48.98c1.473,1.534 3.44,2.306 5.411,2.306 1.868,0 3.739-0.694 5.193-2.09 2.988-2.869 3.084-7.617 0.216-10.604l-47.453-49.42 137.132-142.82v293.498c0,1.779-1.503,3.282-3.282,3.282z"/><path fill="currentColor" d="m389.19,375.321c-2.869-2.989-7.616-3.083-10.604-0.216-2.988,2.869-3.084,7.617-0.216,10.604l49.34,51.387c1.473,1.534 3.44,2.306 5.411,2.306 1.868,0 3.739-0.694 5.193-2.09 2.988-2.869 3.084-7.617 0.216-10.604l-49.34-51.387z"/><path fill="currentColor" d="m146.396,248h141.698c12.92,0 23.432-10.512 23.432-23.432 0-4.613-1.341-8.921-3.651-12.551 6.143-4.229 10.177-11.309 10.177-19.313 0-4.613-1.34-8.92-3.651-12.55 6.143-4.229 10.177-11.309 10.177-19.313 0-4.613-1.341-8.921-3.652-12.551 6.144-4.229 10.178-11.309 10.178-19.313 0-12.92-10.512-23.432-23.432-23.432l-42.542,.001c7.102-15.211 10.931-33.264 10.931-52.114 0-12.92-10.512-23.432-23.432-23.432s-23.432,10.512-23.432,23.432c0,28.735-23.378,52.113-52.113,52.113h-30.687c-4.143,0-7.5,3.357-7.5,7.5v127.455c-0.001,4.143 3.357,7.5 7.499,7.5zm97.8-194.568c0-4.649 3.782-8.432 8.432-8.432s8.432,3.782 8.432,8.432c0,21.038-5.297,40.756-14.914,55.521-1.502,2.306-1.621,5.249-0.31,7.668s3.842,3.926 6.594,3.926l55.241-.001c4.649,0 8.432,3.782 8.432,8.432s-3.782,8.432-8.432,8.432h-19.576c-4.143,0-7.5,3.357-7.5,7.5s3.357,7.5 7.5,7.5h13.051c4.649,0 8.432,3.783 8.432,8.433s-3.782,8.432-8.432,8.432h-13.051c-4.143,0-7.5,3.357-7.5,7.5s3.357,7.5 7.5,7.5h6.525c4.649,0 8.432,3.782 8.432,8.432s-3.782,8.432-8.432,8.432h-6.525c-4.143,0-7.5,3.357-7.5,7.5s3.357,7.5 7.5,7.5c4.649,0 8.432,3.783 8.432,8.433s-3.783,8.428-8.432,8.428h-103.512v-112.885c33.488-3.742 59.613-32.213 59.613-66.683zm-90.3,67.113h15.687v112.455h-15.687v-112.455z"/></svg>
+</template>
+<template id="build-icon-sf-survey">
+<svg class="build-type-icon" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M 10 6 C 6.144531 6 3 9.144531 3 13 C 3 13.421875 3.074219 13.8125 3.148438 14.203125 C 2.46875 15.203125 2 16.375 2 17.6875 C 2 21.132813 4.792969 23.933594 8.226563 23.984375 C 9.484375 25.183594 11.128906 26 13 26 C 14.921875 26 16.597656 25.140625 17.863281 23.886719 C 17.921875 23.890625 17.929688 23.894531 18 23.894531 C 19.597656 23.894531 20.898438 23.023438 21.789063 21.839844 C 22.1875 21.910156 22.578125 22 23 22 C 26.855469 22 30 18.855469 30 15 C 30 11.144531 26.855469 8 23 8 C 22.304688 8 21.664063 8.179688 21.03125 8.367188 C 19.886719 7.542969 18.515625 7 17 7 C 16.054688 7 15.203125 7.3125 14.375 7.65625 C 13.171875 6.667969 11.679688 6 10 6 Z M 10 8 C 11.363281 8 12.582031 8.539063 13.484375 9.421875 L 14.007813 9.929688 L 14.652344 9.585938 C 15.351563 9.210938 16.148438 9 17 9 C 18.226563 9 19.339844 9.4375 20.207031 10.167969 L 20.660156 10.546875 L 21.210938 10.335938 C 21.773438 10.121094 22.371094 10 23 10 C 25.773438 10 28 12.226563 28 15 C 28 17.773438 25.773438 20 23 20 C 22.558594 20 22.125 19.933594 21.703125 19.824219 L 20.925781 19.613281 L 20.558594 20.328125 C 20.070313 21.261719 19.121094 21.894531 18 21.894531 C 17.992188 21.894531 17.898438 21.882813 17.699219 21.859375 L 17.171875 21.808594 L 16.828125 22.214844 C 15.910156 23.304688 14.542969 24 13 24 C 11.507813 24 10.183594 23.347656 9.265625 22.3125 L 8.949219 21.957031 L 8.476563 21.980469 C 8.261719 21.988281 8.210938 22 8.3125 22 C 5.917969 22 4 20.082031 4 17.6875 C 4 16.679688 4.359375 15.765625 4.953125 15.019531 L 5.257813 14.640625 L 5.140625 14.167969 C 5.050781 13.78125 5 13.394531 5 13 C 5 10.226563 7.226563 8 10 8 Z M 11.265625 13 C 11.246094 13 11.230469 13.015625 11.230469 13.039063 L 11.230469 15.957031 C 11.230469 15.980469 11.246094 16 11.265625 16 L 11.605469 16 C 11.628906 16 11.640625 15.980469 11.640625 15.957031 L 11.640625 13.039063 C 11.640625 13.019531 11.625 13 11.605469 13 Z M 17.199219 13 C 16.957031 13 16.769531 13.066406 16.636719 13.203125 C 16.503906 13.335938 16.410156 13.5625 16.363281 13.828125 L 16.339844 14 L 16.039063 14 C 16.039063 14 16 14.011719 15.996094 14.050781 L 15.945313 14.328125 C 15.941406 14.351563 15.953125 14.371094 15.988281 14.371094 L 16.28125 14.371094 L 15.988281 16.003906 C 15.964844 16.140625 15.9375 16.25 15.90625 16.332031 C 15.878906 16.414063 15.851563 16.476563 15.816406 16.519531 C 15.78125 16.566406 15.75 16.597656 15.695313 16.613281 C 15.648438 16.628906 15.597656 16.636719 15.539063 16.636719 C 15.507813 16.636719 15.464844 16.632813 15.433594 16.625 C 15.402344 16.617188 15.386719 16.613281 15.359375 16.601563 C 15.359375 16.601563 15.328125 16.589844 15.3125 16.625 C 15.300781 16.652344 15.222656 16.867188 15.214844 16.890625 C 15.207031 16.917969 15.21875 16.9375 15.234375 16.945313 C 15.273438 16.960938 15.304688 16.96875 15.359375 16.980469 C 15.429688 17 15.492188 17 15.546875 17 C 15.671875 17 15.78125 16.980469 15.875 16.949219 C 15.96875 16.914063 16.046875 16.859375 16.121094 16.78125 C 16.195313 16.695313 16.246094 16.605469 16.292969 16.484375 C 16.339844 16.363281 16.375 16.210938 16.40625 16.035156 L 16.703125 14.371094 L 17.140625 14.371094 C 17.140625 14.371094 17.179688 14.371094 17.1875 14.328125 L 17.234375 14.054688 C 17.238281 14.027344 17.226563 14 17.191406 14 L 16.769531 14 C 16.773438 13.992188 16.800781 13.734375 16.851563 13.59375 C 16.871094 13.535156 16.910156 13.484375 16.941406 13.453125 C 16.976563 13.417969 17.015625 13.394531 17.054688 13.382813 C 17.097656 13.371094 17.144531 13.363281 17.199219 13.363281 C 17.238281 13.363281 17.277344 13.367188 17.308594 13.375 C 17.347656 13.382813 17.363281 13.386719 17.375 13.390625 C 17.417969 13.402344 17.421875 13.390625 17.433594 13.371094 L 17.53125 13.09375 C 17.542969 13.0625 17.519531 13.050781 17.511719 13.046875 C 17.46875 13.03125 17.429688 13.023438 17.378906 13.015625 C 17.328125 13.003906 17.265625 13 17.199219 13 Z M 8.023438 14 C 7.589844 14 7.289063 14.242188 7.289063 14.585938 L 7.289063 14.59375 C 7.289063 14.953125 7.621094 15.074219 7.933594 15.15625 L 7.984375 15.171875 C 8.210938 15.234375 8.40625 15.289063 8.40625 15.4375 L 8.40625 15.441406 C 8.40625 15.578125 8.277344 15.675781 8.074219 15.675781 C 7.996094 15.675781 7.742188 15.675781 7.46875 15.515625 C 7.433594 15.5 7.414063 15.488281 7.390625 15.472656 C 7.375 15.464844 7.34375 15.453125 7.328125 15.492188 L 7.234375 15.730469 C 7.21875 15.765625 7.238281 15.773438 7.242188 15.78125 C 7.289063 15.808594 7.332031 15.828125 7.375 15.851563 C 7.609375 15.964844 7.832031 16 8.0625 16 C 8.535156 16 8.828125 15.769531 8.828125 15.394531 L 8.828125 15.390625 C 8.828125 15.042969 8.496094 14.917969 8.1875 14.828125 L 8.148438 14.816406 C 7.914063 14.746094 7.710938 14.6875 7.710938 14.546875 L 7.710938 14.535156 C 7.710938 14.414063 7.828125 14.328125 8.011719 14.328125 C 8.214844 14.328125 8.453125 14.386719 8.609375 14.46875 C 8.609375 14.46875 8.65625 14.492188 8.671875 14.453125 C 8.683594 14.429688 8.761719 14.234375 8.769531 14.214844 C 8.777344 14.191406 8.761719 14.175781 8.746094 14.167969 C 8.570313 14.066406 8.324219 14 8.070313 14 Z M 9.988281 14 C 9.886719 14 9.730469 14.011719 9.632813 14.03125 C 9.632813 14.03125 9.339844 14.082031 9.21875 14.171875 C 9.21875 14.171875 9.195313 14.183594 9.210938 14.21875 L 9.304688 14.453125 C 9.316406 14.484375 9.347656 14.472656 9.347656 14.472656 C 9.347656 14.472656 9.355469 14.46875 9.367188 14.464844 C 9.625 14.332031 9.949219 14.339844 9.949219 14.339844 C 10.09375 14.339844 10.203125 14.363281 10.28125 14.417969 C 10.351563 14.46875 10.390625 14.550781 10.390625 14.714844 L 10.390625 14.765625 C 10.277344 14.75 10.171875 14.738281 10.171875 14.738281 C 10.117188 14.734375 10.046875 14.734375 9.960938 14.734375 C 9.847656 14.734375 9.738281 14.746094 9.632813 14.773438 C 9.527344 14.800781 9.433594 14.839844 9.355469 14.894531 C 9.273438 14.949219 9.210938 15.015625 9.164063 15.097656 C 9.113281 15.179688 9.089844 15.277344 9.089844 15.382813 C 9.089844 15.492188 9.109375 15.585938 9.148438 15.664063 C 9.191406 15.742188 9.25 15.808594 9.324219 15.859375 C 9.398438 15.90625 9.492188 15.945313 9.59375 15.96875 C 9.699219 15.988281 9.820313 16 9.949219 16 C 10.085938 16 10.222656 15.988281 10.355469 15.96875 C 10.488281 15.949219 10.644531 15.917969 10.691406 15.90625 C 10.734375 15.898438 10.78125 15.886719 10.78125 15.886719 C 10.816406 15.878906 10.8125 15.847656 10.8125 15.847656 L 10.8125 14.71875 C 10.8125 14.46875 10.742188 14.285156 10.601563 14.171875 C 10.460938 14.058594 10.253906 14 9.988281 14 Z M 12.988281 14 C 12.824219 14 12.671875 14.023438 12.550781 14.078125 C 12.429688 14.132813 12.324219 14.207031 12.246094 14.296875 C 12.164063 14.386719 12.101563 14.496094 12.0625 14.617188 C 12.023438 14.738281 12.003906 14.871094 12.003906 15.011719 C 12.003906 15.15625 12.027344 15.289063 12.066406 15.40625 C 12.105469 15.527344 12.171875 15.632813 12.261719 15.71875 C 12.347656 15.808594 12.457031 15.878906 12.59375 15.925781 C 12.726563 15.976563 12.890625 16 13.078125 16 C 13.464844 15.996094 13.664063 15.917969 13.75 15.875 C 13.761719 15.867188 13.777344 15.855469 13.761719 15.816406 L 13.671875 15.589844 C 13.660156 15.554688 13.621094 15.566406 13.621094 15.566406 C 13.523438 15.601563 13.390625 15.660156 13.074219 15.660156 C 12.867188 15.660156 12.714844 15.605469 12.621094 15.515625 C 12.519531 15.425781 12.472656 15.292969 12.464844 15.105469 L 13.796875 15.105469 C 13.796875 15.105469 13.832031 15.105469 13.835938 15.074219 C 13.835938 15.058594 13.882813 14.816406 13.796875 14.539063 C 13.765625 14.421875 13.679688 14.304688 13.625 14.25 C 13.539063 14.164063 13.457031 14.105469 13.375 14.074219 C 13.265625 14.027344 13.132813 14 12.988281 14 Z M 14.890625 14 C 14.460938 14 14.15625 14.242188 14.15625 14.585938 L 14.15625 14.59375 C 14.15625 14.953125 14.492188 15.074219 14.800781 15.15625 L 14.855469 15.171875 C 15.082031 15.234375 15.277344 15.289063 15.277344 15.4375 L 15.277344 15.441406 C 15.277344 15.578125 15.148438 15.675781 14.941406 15.675781 C 14.863281 15.675781 14.609375 15.675781 14.335938 15.515625 C 14.304688 15.5 14.28125 15.488281 14.257813 15.472656 C 14.25 15.46875 14.210938 15.453125 14.195313 15.492188 L 14.105469 15.730469 C 14.089844 15.765625 14.109375 15.773438 14.113281 15.78125 C 14.15625 15.808594 14.199219 15.828125 14.246094 15.851563 C 14.480469 15.964844 14.699219 16 14.933594 16 C 15.402344 16 15.699219 15.769531 15.699219 15.394531 L 15.699219 15.390625 C 15.699219 15.042969 15.367188 14.917969 15.058594 14.828125 L 15.015625 14.816406 C 14.78125 14.746094 14.578125 14.6875 14.578125 14.546875 L 14.578125 14.535156 C 14.578125 14.414063 14.699219 14.328125 14.878906 14.328125 C 15.082031 14.328125 15.324219 14.386719 15.480469 14.46875 C 15.480469 14.46875 15.527344 14.492188 15.542969 14.453125 C 15.550781 14.429688 15.628906 14.234375 15.640625 14.214844 C 15.648438 14.191406 15.632813 14.175781 15.613281 14.167969 C 15.4375 14.066406 15.191406 14 14.9375 14 Z M 18.160156 14 C 18 14 17.855469 14.027344 17.734375 14.078125 C 17.617188 14.128906 17.515625 14.203125 17.4375 14.292969 C 17.355469 14.382813 17.292969 14.488281 17.253906 14.609375 C 17.21875 14.730469 17.199219 14.863281 17.199219 15.003906 C 17.199219 15.144531 17.21875 15.277344 17.253906 15.394531 C 17.292969 15.515625 17.355469 15.625 17.4375 15.714844 C 17.515625 15.800781 17.617188 15.875 17.738281 15.925781 C 17.859375 15.976563 18 16 18.160156 16 C 18.320313 16 18.460938 15.976563 18.582031 15.921875 C 18.703125 15.871094 18.804688 15.800781 18.886719 15.710938 C 18.964844 15.621094 19.027344 15.515625 19.0625 15.394531 C 19.101563 15.273438 19.121094 15.140625 19.121094 15 C 19.121094 14.863281 19.101563 14.730469 19.0625 14.609375 C 19.027344 14.488281 18.964844 14.382813 18.886719 14.292969 C 18.804688 14.203125 18.703125 14.128906 18.582031 14.078125 C 18.460938 14.027344 18.320313 14 18.160156 14 Z M 21.644531 14 C 21.480469 14 21.332031 14.027344 21.203125 14.078125 C 21.078125 14.128906 20.972656 14.203125 20.890625 14.292969 C 20.804688 14.378906 20.738281 14.488281 20.699219 14.609375 C 20.652344 14.726563 20.632813 14.863281 20.632813 15 C 20.632813 15.304688 20.71875 15.550781 20.894531 15.730469 C 21.070313 15.910156 21.328125 16 21.671875 16 C 21.875 16 22.082031 15.960938 22.230469 15.90625 C 22.230469 15.90625 22.257813 15.894531 22.246094 15.863281 L 22.148438 15.617188 C 22.136719 15.582031 22.097656 15.59375 22.097656 15.59375 C 22.042969 15.617188 21.980469 15.632813 21.917969 15.640625 C 21.851563 15.652344 21.777344 15.65625 21.699219 15.65625 C 21.507813 15.65625 21.355469 15.605469 21.25 15.5 C 21.140625 15.398438 21.078125 15.230469 21.078125 15 C 21.082031 14.796875 21.132813 14.640625 21.230469 14.519531 C 21.328125 14.402344 21.472656 14.34375 21.667969 14.34375 C 21.828125 14.34375 21.953125 14.363281 22.082031 14.398438 C 22.082031 14.398438 22.117188 14.410156 22.128906 14.375 C 22.164063 14.285156 22.191406 14.222656 22.226563 14.125 C 22.238281 14.09375 22.210938 14.082031 22.203125 14.078125 C 22.148438 14.0625 22.03125 14.03125 21.9375 14.015625 C 21.855469 14.003906 21.753906 14 21.644531 14 Z M 23.277344 14 C 23.113281 14 22.960938 14.023438 22.839844 14.078125 C 22.714844 14.132813 22.613281 14.207031 22.53125 14.296875 C 22.449219 14.386719 22.386719 14.496094 22.347656 14.617188 C 22.3125 14.738281 22.292969 14.871094 22.292969 15.011719 C 22.292969 15.15625 22.3125 15.289063 22.355469 15.40625 C 22.394531 15.527344 22.457031 15.632813 22.546875 15.71875 C 22.636719 15.808594 22.746094 15.878906 22.878906 15.925781 C 23.015625 15.976563 23.179688 16 23.363281 16 C 23.75 15.996094 23.953125 15.917969 24.035156 15.875 C 24.050781 15.867188 24.066406 15.855469 24.046875 15.816406 L 23.957031 15.589844 C 23.945313 15.554688 23.90625 15.566406 23.90625 15.566406 C 23.8125 15.601563 23.675781 15.660156 23.359375 15.660156 C 23.15625 15.660156 23.003906 15.605469 22.90625 15.515625 C 22.808594 15.425781 22.761719 15.292969 22.75 15.105469 L 24.082031 15.105469 C 24.082031 15.105469 24.117188 15.105469 24.125 15.074219 C 24.125 15.058594 24.167969 14.816406 24.082031 14.539063 C 24.050781 14.421875 23.964844 14.304688 23.910156 14.25 C 23.824219 14.164063 23.742188 14.105469 23.660156 14.074219 C 23.550781 14.027344 23.421875 14 23.277344 14 Z M 20.386719 14 C 20.214844 13.992188 20.121094 14.019531 20.039063 14.054688 C 19.957031 14.089844 19.867188 14.148438 19.8125 14.214844 L 19.8125 14.058594 C 19.8125 14.035156 19.800781 14.019531 19.777344 14.019531 L 19.4375 14.019531 C 19.414063 14.019531 19.394531 14.035156 19.394531 14.058594 L 19.394531 15.960938 C 19.394531 15.980469 19.414063 16 19.4375 16 L 19.785156 16 C 19.808594 16 19.828125 15.980469 19.828125 15.960938 L 19.828125 15.011719 C 19.828125 14.882813 19.84375 14.753906 19.871094 14.671875 C 19.898438 14.59375 19.9375 14.53125 19.988281 14.484375 C 20.039063 14.441406 20.09375 14.410156 20.15625 14.390625 C 20.214844 14.371094 20.285156 14.367188 20.332031 14.367188 C 20.402344 14.367188 20.480469 14.386719 20.480469 14.386719 C 20.503906 14.386719 20.519531 14.371094 20.527344 14.347656 C 20.550781 14.292969 20.613281 14.117188 20.625 14.082031 C 20.636719 14.054688 20.617188 14.039063 20.609375 14.035156 C 20.585938 14.027344 20.472656 14.007813 20.386719 14 Z M 12.957031 14.328125 C 13.132813 14.328125 13.25 14.390625 13.332031 14.507813 C 13.386719 14.585938 13.410156 14.683594 13.421875 14.796875 L 12.46875 14.796875 C 12.488281 14.679688 12.523438 14.585938 12.578125 14.507813 C 12.65625 14.390625 12.78125 14.328125 12.957031 14.328125 Z M 23.246094 14.328125 C 23.421875 14.328125 23.535156 14.390625 23.621094 14.507813 C 23.675781 14.585938 23.699219 14.683594 23.707031 14.796875 L 22.757813 14.796875 C 22.777344 14.679688 22.8125 14.585938 22.863281 14.507813 C 22.945313 14.390625 23.070313 14.328125 23.246094 14.328125 Z M 18.160156 14.335938 C 18.335938 14.335938 18.460938 14.390625 18.542969 14.507813 C 18.628906 14.625 18.671875 14.789063 18.671875 15 C 18.671875 15.214844 18.628906 15.378906 18.546875 15.5 C 18.460938 15.613281 18.335938 15.671875 18.160156 15.671875 C 17.984375 15.671875 17.859375 15.613281 17.78125 15.5 C 17.695313 15.378906 17.65625 15.214844 17.65625 15 C 17.65625 14.789063 17.695313 14.625 17.777344 14.507813 C 17.859375 14.394531 17.984375 14.335938 18.160156 14.335938 Z M 10.027344 15.046875 C 10.21875 15.050781 10.390625 15.078125 10.390625 15.078125 L 10.390625 15.640625 C 10.390625 15.640625 10.21875 15.671875 10.03125 15.683594 C 9.757813 15.695313 9.636719 15.609375 9.640625 15.609375 C 9.585938 15.570313 9.582031 15.558594 9.5625 15.535156 C 9.535156 15.496094 9.523438 15.445313 9.523438 15.375 C 9.523438 15.265625 9.5625 15.1875 9.640625 15.136719 C 9.640625 15.136719 9.753906 15.042969 10.027344 15.046875 Z"/></svg>
+</template>
+<template id="build-icon-journey">
+<svg class="build-type-icon" viewBox="0 0 470 470" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M462.5,445H292.853v-15H462.5c4.143,0,7.5-3.357,7.5-7.5s-3.357-7.5-7.5-7.5H292.755c-0.556-3.593-3.653-6.346-7.402-6.346h-19.68v-22.5c0-4.143-3.357-7.5-7.5-7.5s-7.5,3.357-7.5,7.5v30c0,4.143,3.357,7.5,7.5,7.5h19.68V455h-85.705v-31.346h36.025c4.143,0,7.5-3.357,7.5-7.5s-3.357-7.5-7.5-7.5h-8.846v-22.5c0-4.143-3.357-7.5-7.5-7.5s-7.5,3.357-7.5,7.5v22.5h-19.68c-3.749,0-6.846,2.753-7.402,6.346H7.5c-4.143,0-7.5,3.357-7.5,7.5s3.357,7.5,7.5,7.5h169.647v15H7.5c-4.143,0-7.5,3.357-7.5,7.5s3.357,7.5,7.5,7.5h169.647v2.5c0,4.143,3.357,7.5,7.5,7.5h100.705c4.143,0,7.5-3.357,7.5-7.5V460H462.5c4.143,0,7.5-3.357,7.5-7.5S466.643,445,462.5,445z"/><path fill="currentColor" d="m103.212,363.75h268.788c4.143,0 7.5-3.357 7.5-7.5v-268.75c0-0.251-0.013-0.501-0.038-0.749-0.018-0.184-0.05-0.364-0.081-0.544-0.011-0.061-0.016-0.123-0.028-0.183-0.043-0.218-0.099-0.431-0.161-0.642-0.007-0.022-0.011-0.045-0.017-0.067-0.066-0.216-0.143-0.426-0.227-0.633-0.007-0.018-0.013-0.038-0.02-0.056-0.081-0.195-0.173-0.385-0.27-0.572-0.016-0.031-0.028-0.063-0.045-0.093-0.091-0.169-0.192-0.332-0.295-0.493-0.029-0.046-0.054-0.094-0.084-0.139-0.099-0.148-0.208-0.288-0.317-0.428-0.042-0.053-0.079-0.11-0.122-0.162-0.12-0.146-0.25-0.284-0.381-0.421-0.038-0.04-0.071-0.083-0.11-0.122l-80-80c-0.039-0.039-0.082-0.072-0.122-0.11-0.137-0.131-0.275-0.261-0.421-0.381-0.052-0.043-0.109-0.08-0.162-0.121-0.14-0.109-0.281-0.218-0.428-0.317-0.045-0.03-0.093-0.055-0.138-0.084-0.161-0.103-0.324-0.204-0.493-0.295-0.03-0.016-0.063-0.029-0.093-0.045-0.187-0.097-0.376-0.189-0.572-0.27-0.018-0.008-0.038-0.013-0.056-0.02-0.207-0.084-0.417-0.161-0.633-0.227-0.022-0.007-0.045-0.011-0.067-0.017-0.211-0.062-0.424-0.118-0.642-0.161-0.06-0.012-0.122-0.017-0.183-0.028-0.18-0.031-0.36-0.063-0.544-0.081-0.249-0.026-0.499-0.039-0.75-0.039h-188.788c-4.143,0-7.5,3.357-7.5,7.5v348.75c0,4.143 3.357,7.5 7.5,7.5zm196.288-338.144l54.394,54.394h-54.394v-54.394zm-188.788-10.606h173.788v72.5c0,4.143 3.357,7.5 7.5,7.5h72.5v253.75h-253.788v-333.75z"/><path fill="currentColor" d="m318.25,133.75h-161.288c-4.143,0-7.5,3.357-7.5,7.5s3.357,7.5 7.5,7.5h161.288c4.143,0 7.5-3.357 7.5-7.5s-3.357-7.5-7.5-7.5z"/><path fill="currentColor" d="m318.25,187.5h-161.288c-4.143,0-7.5,3.357-7.5,7.5s3.357,7.5 7.5,7.5h161.288c4.143,0 7.5-3.357 7.5-7.5s-3.357-7.5-7.5-7.5z"/><path fill="currentColor" d="m318.25,241.25h-161.288c-4.143,0-7.5,3.357-7.5,7.5s3.357,7.5 7.5,7.5h161.288c4.143,0 7.5-3.357 7.5-7.5s-3.357-7.5-7.5-7.5z"/><path fill="currentColor" d="m237.605,295h-80.644c-4.143,0-7.5,3.357-7.5,7.5s3.357,7.5 7.5,7.5h80.644c4.143,0 7.5-3.357 7.5-7.5s-3.357-7.5-7.5-7.5z"/></svg>
+</template>
+<template id="build-icon-campaign">
+<svg class="build-type-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M15.1823 12.0413C15.2625 11.9197 15.3033 11.7476 15.3033 11.5292C15.3033 11.3111 15.2625 11.1393 15.1826 11.019C15.103 10.8999 14.983 10.8419 14.8157 10.8419C14.648 10.8419 14.5286 10.8999 14.4506 11.019C14.3716 11.1393 14.3315 11.3111 14.3315 11.5292C14.3315 11.7476 14.3716 11.92 14.4506 12.0413C14.5286 12.1619 14.648 12.2202 14.8157 12.2202C14.983 12.2202 15.103 12.1616 15.1823 12.0413Z" fill="currentColor"/><path d="M19.5355 11.0191C19.4838 11.0977 19.4503 11.1987 19.4324 11.3199H20.3419C20.3328 11.2031 20.3099 11.0977 20.2573 11.0191C20.178 10.9 20.0674 10.8342 19.9 10.8342C19.7326 10.8342 19.6136 10.8997 19.5355 11.0191Z" fill="currentColor"/><path d="M9.32318 11.0191C9.27148 11.0977 9.23824 11.1987 9.22008 11.3199H10.1295C10.1204 11.2031 10.0975 11.0977 10.0452 11.0191C9.96563 10.9 9.85499 10.8342 9.68765 10.8342C9.5203 10.8342 9.40121 10.8997 9.32318 11.0191Z" fill="currentColor"/><path d="M6.39015 12.0794C6.40706 12.1051 6.41395 12.1151 6.46379 12.1549C6.46284 12.1546 6.57817 12.2452 6.83766 12.2295C7.02004 12.2185 7.18175 12.1837 7.18175 12.1837V11.604C7.18175 11.604 7.01848 11.577 6.83578 11.5745C6.57568 11.5711 6.46507 11.667 6.46599 11.6666C6.3892 11.7209 6.35223 11.8014 6.35223 11.9136C6.35223 11.9844 6.36506 12.0402 6.39015 12.0794Z" fill="currentColor"/><path fill-rule="evenodd" clip-rule="evenodd" d="M12.9449 4.78232C11.8524 4.78232 10.8646 5.24084 10.1551 5.98012C9.37442 4.9594 8.14311 4.30065 6.75761 4.30065C4.39778 4.30065 2.48453 6.21106 2.48453 8.56775C2.48453 9.17104 2.61021 9.74487 2.83615 10.2648C1.73866 10.9063 1 12.1053 1 13.4786C1 15.5279 2.64405 17.1888 4.672 17.1887C4.93087 17.1887 5.18315 17.1618 5.42665 17.1101C5.98385 18.6217 7.43547 19.6993 9.13874 19.6993C10.7743 19.6993 12.1777 18.706 12.78 17.2891C13.2382 17.5126 13.7528 17.6381 14.2969 17.6381C15.5965 17.6381 16.7288 16.922 17.3229 15.8622C17.6305 15.9243 17.9434 15.9555 18.2572 15.9553C20.8765 15.9553 23 13.8133 23 11.1708C23 8.52859 20.8765 6.38655 18.2572 6.38655C17.5743 6.38655 16.9253 6.5323 16.3389 6.79427C15.6642 5.59211 14.3971 4.78232 12.9449 4.78232ZM13.9857 9.69029C14.034 9.69937 14.071 9.70784 14.1117 9.72038C14.1205 9.7238 14.1453 9.73602 14.1352 9.76493L14.0378 10.0326C14.0296 10.0526 14.024 10.0648 13.9823 10.0523C13.9719 10.0491 13.9566 10.0448 13.9171 10.0363C13.8886 10.0303 13.8507 10.026 13.8124 10.026C13.762 10.026 13.7159 10.0322 13.6755 10.0454C13.636 10.0582 13.5999 10.0805 13.5686 10.1118C13.5369 10.1438 13.4993 10.1905 13.4793 10.2479C13.4395 10.363 13.4202 10.4843 13.414 10.5232L13.4119 10.5355H13.8196C13.8538 10.5355 13.8644 10.5512 13.8613 10.5766L13.8137 10.8417C13.8064 10.8802 13.771 10.879 13.771 10.879H13.3511L13.0637 12.5046C13.0336 12.6725 12.9957 12.8167 12.9515 12.9327C12.907 13.0502 12.8603 13.136 12.786 13.2182C12.7171 13.294 12.6394 13.3501 12.5504 13.3824C12.4617 13.4143 12.3545 13.4309 12.2373 13.4309C12.1812 13.4309 12.1214 13.43 12.0505 13.4134C11.9994 13.4012 11.9715 13.3924 11.9339 13.3792C11.918 13.3733 11.9054 13.3535 11.9142 13.3282C11.9233 13.3028 11.9985 13.0962 12.0089 13.069C12.022 13.0361 12.0549 13.0486 12.0549 13.0486C12.0778 13.0583 12.0938 13.0649 12.1239 13.0709C12.1543 13.0771 12.1953 13.0822 12.226 13.0822C12.2815 13.0822 12.3323 13.0753 12.3761 13.0605C12.4294 13.0427 12.4602 13.012 12.4927 12.9706C12.5266 12.9273 12.5538 12.8681 12.5817 12.7891C12.6103 12.7089 12.636 12.6033 12.6582 12.4748L12.944 10.879H12.6623C12.6285 10.879 12.6175 10.863 12.6209 10.8379L12.6682 10.5725C12.6758 10.5343 12.7109 10.5355 12.7109 10.5355H13.0004L13.0161 10.4493C13.0593 10.1933 13.1455 9.99866 13.2725 9.87078C13.4 9.7423 13.5818 9.67711 13.8125 9.67711C13.8786 9.67711 13.9368 9.68153 13.9857 9.69029ZM8.37841 12.5168C8.39973 12.5168 8.41508 12.4996 8.41508 12.4783V9.75672C8.41508 9.73544 8.39973 9.71819 8.37841 9.71819H8.04026C8.01895 9.71819 8.00391 9.73544 8.00391 9.75672V12.4783C8.00391 12.4996 8.01895 12.5168 8.04026 12.5168H8.37841ZM4.1927 12.3325C4.18612 12.3262 4.1752 12.3159 4.18661 12.2861L4.27569 12.0391C4.28978 11.9965 4.32207 12.0106 4.33491 12.0188C4.34531 12.025 4.35463 12.0311 4.36435 12.0374C4.37747 12.0459 4.3913 12.0548 4.40949 12.0654C4.6718 12.2312 4.91468 12.2328 4.99083 12.2328C5.18702 12.2328 5.30861 12.1288 5.30861 11.989V11.9815C5.30861 11.8287 5.12191 11.7713 4.90503 11.7046L4.85639 11.6897C4.55834 11.6045 4.24026 11.4822 4.24026 11.1052V11.0977C4.24026 10.7401 4.52857 10.4907 4.94161 10.4907L4.98673 10.4904C5.22928 10.4904 5.46371 10.5609 5.63325 10.664C5.6486 10.6734 5.66364 10.6909 5.65519 10.7148C5.64735 10.7367 5.57212 10.9391 5.56336 10.9617C5.54737 11.004 5.50381 10.9758 5.50381 10.9758C5.35527 10.8937 5.12461 10.8291 4.93031 10.8291C4.75544 10.8291 4.64262 10.9219 4.64262 11.0479V11.0557C4.64262 11.203 4.83544 11.2656 5.05905 11.3383L5.09797 11.3509C5.39476 11.4446 5.71095 11.5744 5.71095 11.9317V11.9392C5.71095 12.3256 5.43078 12.5656 4.97951 12.5656C4.75795 12.5656 4.54607 12.5309 4.32169 12.4118L4.2954 12.397C4.26199 12.3783 4.22879 12.3598 4.19601 12.3359C4.19526 12.3349 4.19407 12.3337 4.1927 12.3325ZM10.7992 12.3325C10.7927 12.3262 10.7817 12.3159 10.7932 12.2861L10.8822 12.0391C10.8953 11.9987 10.9336 12.0134 10.9417 12.0188L10.9568 12.0285C10.9744 12.04 10.9912 12.051 11.016 12.0654C11.2783 12.2312 11.5212 12.2328 11.5973 12.2328C11.7935 12.2328 11.9154 12.1288 11.9154 11.989V11.9815C11.9154 11.8288 11.7286 11.7714 11.5119 11.7048L11.4629 11.6897C11.1648 11.6045 10.8467 11.4822 10.8467 11.1052V11.0977C10.8467 10.7401 11.135 10.4907 11.5481 10.4907L11.5932 10.4904C11.8358 10.4904 12.0702 10.5609 12.2397 10.664C12.2551 10.6734 12.2702 10.6909 12.2617 10.7148C12.2538 10.7367 12.1786 10.9391 12.1698 10.9617C12.1539 11.004 12.1103 10.9758 12.1103 10.9758C11.9618 10.8937 11.7311 10.8291 11.5368 10.8291C11.3619 10.8291 11.2491 10.9219 11.2491 11.0479V11.0557C11.2491 11.2029 11.4419 11.2656 11.6653 11.3382L11.7045 11.3509C12.0013 11.4446 12.3175 11.5744 12.3175 11.9317V11.9392C12.3175 12.3256 12.0373 12.5656 11.586 12.5656C11.3645 12.5656 11.1526 12.5309 10.9282 12.4118L10.9018 12.3969C10.8685 12.3783 10.8353 12.3598 10.8026 12.3359C10.8021 12.3353 10.8015 12.3346 10.8008 12.3339C10.8003 12.3335 10.7998 12.333 10.7992 12.3325ZM15.5086 10.7971C15.5853 10.8889 15.643 10.9992 15.68 11.1243C15.7169 11.2487 15.7355 11.385 15.7355 11.5292C15.7355 11.6734 15.717 11.8097 15.68 11.9341C15.643 12.0591 15.5853 12.1695 15.5086 12.2613C15.4318 12.3534 15.3343 12.4271 15.2193 12.4794C15.104 12.5317 14.9683 12.5584 14.8157 12.5584C14.6627 12.5584 14.527 12.5317 14.4117 12.4794C14.2967 12.4271 14.1992 12.3534 14.1224 12.2613C14.0453 12.1692 13.988 12.0588 13.9507 11.9341C13.914 11.81 13.8955 11.6737 13.8955 11.5292C13.8955 11.3847 13.914 11.2487 13.9507 11.1243C13.988 10.9996 14.0457 10.8893 14.1221 10.7971C14.1992 10.705 14.2964 10.631 14.4117 10.5771C14.5267 10.5235 14.6627 10.4963 14.8157 10.4963C14.9683 10.4963 15.1043 10.5235 15.2193 10.5771C15.3346 10.631 15.4318 10.705 15.5086 10.7971ZM18.7254 12.139C18.7254 12.139 18.7608 12.1252 18.7733 12.1619L18.8658 12.4173C18.8777 12.449 18.8504 12.4621 18.8504 12.4621C18.7082 12.5182 18.5101 12.5574 18.3171 12.5574C17.9905 12.5574 17.7401 12.4631 17.5734 12.2775C17.407 12.0926 17.3227 11.84 17.3227 11.5276C17.3227 11.3831 17.3433 11.2465 17.3841 11.1221C17.4251 10.9973 17.4865 10.887 17.5674 10.7949C17.6482 10.7027 17.7504 10.6288 17.8708 10.5752C17.9914 10.5213 18.1324 10.4943 18.2907 10.4943C18.3966 10.4943 18.4919 10.5009 18.5734 10.5135C18.6605 10.5266 18.7758 10.5576 18.8247 10.5767C18.8335 10.5802 18.8579 10.5924 18.8479 10.6209C18.8244 10.6883 18.8056 10.7399 18.7859 10.7942L18.7554 10.8786C18.7413 10.9174 18.7116 10.9046 18.7116 10.9046C18.5875 10.8654 18.469 10.8475 18.3136 10.8475C18.1271 10.8475 17.9874 10.9099 17.8955 11.0315C17.8031 11.1537 17.7517 11.3142 17.751 11.5276C17.7504 11.762 17.8087 11.9353 17.9128 12.0425C18.0165 12.1497 18.1613 12.2039 18.3437 12.2039C18.4179 12.2039 18.4872 12.1989 18.5502 12.1892C18.6122 12.1795 18.6705 12.16 18.7254 12.139ZM20.5374 10.7549C20.5895 10.8107 20.6688 10.9326 20.7007 11.0532C20.7772 11.3219 20.7449 11.5563 20.7393 11.597L20.7386 11.6026C20.7351 11.6352 20.7016 11.6358 20.7016 11.6358L19.4265 11.6346C19.4346 11.8282 19.4807 11.9655 19.575 12.0589C19.6668 12.1501 19.8135 12.2084 20.0112 12.2087C20.2873 12.2093 20.4194 12.1587 20.5097 12.1241L20.5346 12.1147C20.5346 12.1147 20.5701 12.1018 20.5826 12.1366L20.6659 12.3701C20.6829 12.4096 20.6694 12.4234 20.6553 12.4312C20.5754 12.4754 20.3814 12.5575 20.0131 12.5587C19.8342 12.5591 19.6784 12.5334 19.5503 12.4838C19.4211 12.4341 19.3133 12.3626 19.2297 12.2714C19.1457 12.1808 19.0836 12.0715 19.0448 11.9473C19.0062 11.8242 18.9868 11.6872 18.9868 11.5402C18.9868 11.3958 19.0056 11.2588 19.0429 11.1332C19.0799 11.0069 19.1381 10.8956 19.2156 10.8022C19.293 10.7085 19.3917 10.6333 19.5092 10.5781C19.6264 10.523 19.7709 10.4963 19.9301 10.4963C20.0667 10.4963 20.1915 10.5258 20.2955 10.5703C20.3751 10.6048 20.4553 10.6665 20.5374 10.7549ZM10.3251 10.7549C10.3771 10.8107 10.4561 10.9326 10.488 11.0532C10.5645 11.3209 10.5328 11.5546 10.5271 11.5965L10.5263 11.6026C10.5229 11.6352 10.4893 11.6358 10.4893 11.6358L9.21415 11.6346C9.22232 11.8282 9.26837 11.9655 9.36271 12.0589C9.45454 12.1501 9.60121 12.2084 9.79864 12.2087C10.0751 12.2093 10.2071 12.1587 10.2974 12.1241L10.3223 12.1147C10.3223 12.1147 10.3577 12.1018 10.3706 12.1366L10.4536 12.3701C10.4705 12.4096 10.4571 12.4234 10.443 12.4312C10.363 12.4754 10.1691 12.5575 9.80082 12.5587C9.62187 12.5591 9.46613 12.5334 9.33794 12.4838C9.20882 12.4341 9.10103 12.3626 9.01734 12.2714C8.93337 12.1808 8.87132 12.0715 8.83245 11.9473C8.79389 11.8242 8.77446 11.6872 8.77446 11.5402C8.77446 11.3958 8.79358 11.2588 8.83055 11.1332C8.86753 11.0069 8.92582 10.8956 9.00323 10.8022C9.08063 10.7085 9.17936 10.6333 9.29687 10.5781C9.41407 10.523 9.55886 10.4963 9.71775 10.4963C9.8544 10.4963 9.97911 10.5258 10.0832 10.5703C10.1628 10.6048 10.243 10.6665 10.3251 10.7549ZM6.77214 11.253C6.85237 11.253 6.91944 11.2552 6.97115 11.2589C6.97115 11.2589 7.07175 11.268 7.18144 11.2837V11.2297C7.18144 11.0599 7.14603 10.9794 7.07646 10.9261C7.00502 10.8712 6.8991 10.8437 6.76119 10.8437C6.76119 10.8437 6.45095 10.8396 6.20556 10.9731C6.19426 10.9797 6.18455 10.9835 6.18455 10.9835C6.18455 10.9835 6.15414 10.9941 6.14286 10.9628L6.0526 10.7202C6.03881 10.6851 6.06387 10.6694 6.06387 10.6694C6.17858 10.5798 6.45718 10.5259 6.45718 10.5259C6.54932 10.5074 6.70319 10.4942 6.79879 10.4942C7.05356 10.4942 7.25068 10.5535 7.3845 10.6707C7.51895 10.7882 7.58726 10.9778 7.58726 11.2335L7.5879 12.3997C7.5879 12.3997 7.59041 12.4335 7.55874 12.4413C7.52908 12.4494 7.4993 12.457 7.46942 12.4642C7.42681 12.4739 7.27325 12.5049 7.14821 12.5263C7.02191 12.5479 6.89154 12.5585 6.76086 12.5585C6.63675 12.5585 6.52331 12.547 6.42333 12.5241C6.32181 12.5012 6.23436 12.4633 6.16354 12.4116C6.0921 12.3599 6.03601 12.2928 5.99714 12.2123C5.95827 12.132 5.93885 12.0339 5.93885 11.9211C5.93885 11.8102 5.96173 11.7111 6.00686 11.6271C6.0515 11.5438 6.11477 11.4718 6.19175 11.4168C6.26885 11.3617 6.35848 11.32 6.45813 11.2934C6.55716 11.2667 6.66278 11.253 6.77214 11.253ZM17.2369 10.5561C17.2454 10.5592 17.2657 10.573 17.256 10.6019C17.2441 10.6366 17.1821 10.8112 17.1601 10.8695C17.152 10.8917 17.1382 10.9068 17.1138 10.904C17.1138 10.904 17.0404 10.8868 16.9737 10.8868C16.9273 10.8868 16.8618 10.8927 16.8026 10.9109C16.7446 10.9287 16.6916 10.9604 16.6449 11.0055C16.5985 11.051 16.5609 11.1143 16.5334 11.1933C16.5052 11.2732 16.491 11.4004 16.491 11.5279V12.4781C16.4911 12.4884 16.487 12.4983 16.4798 12.5055C16.4726 12.5128 16.4628 12.517 16.4525 12.517H16.1175C16.0962 12.517 16.0786 12.4995 16.0786 12.4781V10.5762C16.0786 10.5545 16.094 10.5373 16.1153 10.5373H16.4421C16.4635 10.5373 16.4788 10.5545 16.4788 10.5762V10.7313C16.5277 10.6658 16.6155 10.6081 16.6944 10.5724C16.7741 10.5367 16.8631 10.5097 17.0232 10.5194C17.1069 10.5248 17.2153 10.5477 17.2369 10.5561Z" fill="currentColor"/></svg>
+</template>
+</div>
+  </main>
+</div>
+<style>
+  /* Modern Design System */
+  :root {
+    --primary-gradient: linear-gradient(135deg, #000000 0%, #060507 100%);
+    --primary-color: #6366f1;
+    --primary-dark: #4f46e5;
+    --success-color: #10b981;
+    --warning-color: #f59e0b;
+    --info-color: #3b82f6;
+    --danger-color: #ef4444;
+    --gray-50: #f9fafb;
+    --gray-100: #f3f4f6;
+    --gray-200: #e5e7eb;
+    --gray-300: #d1d5db;
+    --gray-400: #9ca3af;
+    --gray-500: #6b7280;
+    --gray-600: #4b5563;
+    --gray-700: #374151;
+    --gray-800: #1f2937;
+    --gray-900: #111827;
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  }
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    background: var(--gray-50);
+    color: var(--gray-900);
+    line-height: 1.6;
+    margin: 0;
+  }
+  /* Layout */
+  .dashboard-layout {
+    display: flex;
+    height: 100vh;
+    min-height: 100vh;
+    overflow: hidden;
+  }
+  /* Sidebar */
+  .sidebar {
+    width: 280px;
+    flex-shrink: 0;
+    height: 100vh;
+    overflow: hidden;
+    background: white;
+    border-right: 1px solid var(--gray-200);
+    display: flex;
+    flex-direction: column;
+    padding: 32px 0 0 0;
+    box-shadow: var(--shadow-sm);
+  }
+  .sidebar-logo {
+    padding: 0 20px;
+    margin-bottom: 40px;
+    border-bottom: 1px solid #ded5d563;
+    padding-bottom: 25px;
+  }
+  .nav-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--gray-400);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 0 32px;
+    margin-bottom: 16px;
+  }
+  .sidebar-nav {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .nav-link {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 32px;
+    color: var(--gray-600);
+    text-decoration: none;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    border-right: 3px solid transparent;
+  }
+  .nav-link:hover {
+    background: var(--gray-50);
+    color: var(--gray-900);
+  }
+  .nav-link.active {
+    background: linear-gradient(90deg, rgb(119 120 196 / 10%) 0%, rgb(2 3 22 / 5%) 100%);
+    color: #000000;
+    border-right-color: #2c2c31;
+  }
+  .nav-icon {
+    width: 20px;
+    height: 20px;
+    opacity: 0.7;
+  }
+  .nav-link.active .nav-icon {
+    opacity: 1;
+  }
+  .sidebar-footer {
+    flex-shrink: 0;
+    padding: 24px 32px 20px;
+    border-top: 1px solid var(--gray-200);
+    background: #fff;
+  }
+  .sidebar-user {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .user-avatar {
+    width: 40px;
+    height: 40px;
+    background: #000000;
+    color: white;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 16px;
+  }
+  .user-name {
+    font-weight: 600;
+    color: var(--gray-900);
+    font-size: 14px;
+  }
+  .user-email {
+    color: var(--gray-500);
+    font-size: 12px;
+  }
+  /* Main Content */
+  .main-content {
+    flex: 1;
+    min-width: 0;
+    height: 100vh;
+    padding: 40px;
+    overflow-y: auto;
+    background: var(--gray-50);
+  }
+  .maker-main-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-top: 48px;
+    padding-top: 14px;
+    border-top: 1px solid var(--gray-200);
+    font-size: 13px;
+    color: var(--gray-500);
+  }
+  .maker-main-footer-end {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .home-env-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: none;
+    border: none;
+    color: var(--gray-700);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .home-env-switch:hover {
+    color: var(--gray-900);
+  }
+  .home-env-switch-icon {
+    display: block;
+    color: var(--gray-500);
+  }
+  /* Demo Notice */
+  .demo-notice {
+    background: linear-gradient(90deg, #fef3c7, #fde68a);
+    border: 1px solid #f59e0b;
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    animation: slideIn 0.5s ease-out;
+  }
+  @keyframes slideIn {
+    from {
+      transform: translateY(-10px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+  .demo-icon {
+    font-size: 20px;
+  }
+  .demo-content {
+    flex: 1;
+    font-size: 14px;
+    color: #92400e;
+  }
+  .demo-content strong {
+    color: #78350f;
+  }
+  /* Hero Section */
+  .hero-section {
+    background: url(https://image.go.magmutual.com/lib/fe3411747364047e771073/m/1/662fb4a6-136a-4eaa-96d5-24ae513bb1bd.png);
+    border-radius: 20px;
+    padding: 48px 48px 48px 48px;
+    margin-bottom: 40px;
+    color: white;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background-position: right;
+    background-repeat: no-repeat;
+    background-color: #52575a;
+  }
+  .hero-content {
+    flex: 1;
+    z-index: 2;
+  }
+  .hero-badge {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    display: inline-block;
+    margin-bottom: 24px;
+  }
+  .hero-section h1 {
+    font-size: 42px;
+    font-weight: 700;
+    line-height: 1.2;
+    margin-bottom: 16px;
+  }
+  .hero-section p {
+    font-size: 18px;
+    opacity: 0.9;
+    margin-bottom: 32px;
+    max-width: 500px;
+  }
+  .hero-cta {
+    background: #0053ff;
+    color: #fdfdff;
+    padding: 16px 32px;
+    border-radius: 26px;
+    border: none;
+    font-weight: 600;
+    font-size: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.2s ease;
+  }
+  .hero-cta:hover {
+    background: white;
+    color: var(--primary-color);
+  }
+  .journey-builder-panel-wrap {
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: max-height 0.45s ease, opacity 0.3s ease, margin 0.3s ease;
+    margin-bottom: 0;
+  }
+  .journey-builder-panel-wrap.is-open {
+    max-height: 480px;
+    opacity: 1;
+    margin-bottom: 32px;
+  }
+  .journey-builder-panel {
+    background: white;
+    border: 1px solid var(--gray-200);
+    border-radius: 16px;
+    padding: 24px 28px 28px;
+    box-shadow: var(--shadow-md);
+  }
+  .journey-builder-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .journey-builder-panel-title {
+    font-size: 1.125rem;
+    font-weight: 700;
+    color: var(--gray-900);
+    margin: 0;
+  }
+  .journey-builder-panel-close {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--gray-200);
+    background: var(--gray-50);
+    border-radius: 10px;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    color: var(--gray-600);
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+  .journey-builder-panel-close:hover {
+    background: var(--gray-100);
+    border-color: var(--gray-300);
+    color: var(--gray-900);
+  }
+  .journey-builder-panel-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 16px;
+  }
+  .journey-builder-choice {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 20px 18px;
+    border-radius: 12px;
+    border: 1px solid var(--gray-200);
+    background: var(--gray-50);
+    text-decoration: none;
+    color: inherit;
+    transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+    cursor: pointer;
+  }
+  .journey-builder-choice:hover {
+    border-color: var(--gray-400);
+    /*-- background: #f9fafb0a;
+    filter: drop-shadow(3px 3px 1px #e5e7eb);*/
+    background: #f9fafb0a;
+    filter: drop-shadow(3px 3px 2px #e5e7eb);
+  }
+  .journey-builder-choice-featured {
+    border-color: #121314;
+    background: linear-gradient(145deg, #f8fafc 0%, #eef2ff 100%);
+  }
+  .journey-builder-choice-featured:hover {
+    border-color: var(--primary-dark);
+    box-shadow: var(--shadow-md);
+  }
+  .journey-builder-choice-label {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--gray-900);
+  }
+  .journey-builder-choice-hint {
+    font-size: 0.8125rem;
+    color: var(--gray-600);
+    line-height: 1.35;
+  }
+  @media (max-width: 900px) {
+    .journey-builder-panel-cards {
+      grid-template-columns: 1fr;
+    }
+    .journey-builder-panel-wrap.is-open {
+      max-height: none;
+      overflow: visible;
+    }
+  }
+  .hero-illustration {
+    position: relative;
+    width: 300px;
+    height: 200px;
+  }
+  .floating-card {
+    position: absolute;
+    background: rgba(255, 255, 255, 0.15);
+    backdrop-filter: blur(10px);
+    border-radius: 12px;
+    padding: 16px;
+    animation: float 6s ease-in-out infinite;
+  }
+  .card-1 {
+    top: 20px;
+    right: 40px;
+    animation-delay: 0s;
+  }
+  .card-2 {
+    top: 80px;
+    right: 120px;
+    animation-delay: 2s;
+  }
+  .card-3 {
+    top: 140px;
+    right: 20px;
+    animation-delay: 4s;
+  }
+  @keyframes float {
+    0%, 100% {
+      transform: translateY(0px);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
+  }
+  .mini-chart {
+    width: 40px;
+    height: 20px;
+    background: linear-gradient(45deg, rgba(255,255,255,0.3) 0%, rgba(255,255,255,0.1) 100%);
+    border-radius: 4px;
+  }
+  .mini-stat {
+    font-weight: 700;
+    font-size: 18px;
+    color: white;
+  }
+  .mini-progress {
+    width: 50px;
+    height: 6px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 3px;
+    position: relative;
+  }
+  .mini-progress::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 70%;
+    height: 100%;
+    background: white;
+    border-radius: 3px;
+  }
+  /* Statistics Grid */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 24px;
+    margin-bottom: 40px;
+  }
+  .stat-card {
+    background: white;
+    padding: 10px 28px;
+    border-radius: 12px;
+    /* box-shadow: var(--shadow-sm); */
+    border: 1px solid var(--gray-200);
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    transition: all 0.2s ease;
+  }
+  .stat-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+  }
+  .stat-card.primary {
+    background: url("https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/megaphone-new.png");
+    /* color: white; */
+    border: 1px solid #e5e7eb;
+    background-size: cover;
+    background-position: bottom;
+  }
+  .stat-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--gray-600);
+    font-size: 43px;
+  }
+  .stat-card.primary .stat-icon {
+    color: white;
+    font-size: 43px;
+  }
+  .stat-icon.success {
+    color: var(--success-color);
+  }
+  .stat-icon.warning {
+    color: var(--warning-color);
+  }
+  .stat-icon.info {
+    color: var(--info-color);
+  }
+  .stat-value {
+    font-size: 32px;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .stat-label {
+    font-size: 14px;
+    font-weight: 500;
+    opacity: 0.8;
+    margin-bottom: 4px;
+  }
+  .stat-change {
+    font-size: 12px;
+    opacity: 0.7;
+  }
+  .stat-change.success {
+    color: var(--success-color);
+  }
+  /* Section Headers */
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+  }
+  .section-header h2 {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--gray-900);
+  }
+  .recent-builds-header {
+    align-items: flex-start;
+    gap: 16px;
+  }
+  .recent-builds-header-left {
+    flex: 1;
+    min-width: 200px;
+  }
+  .recent-builds-header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-left: auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .recent-builds-browse-hint {
+    margin: 6px 0 0;
+    font-size: 14px;
+    color: var(--gray-500);
+  }
+  .recent-builds-flash {
+    margin: 8px 0 0;
+    font-size: 14px;
+    color: var(--success-color);
+    font-weight: 500;
+  }
+  .recent-builds-flash-error {
+    color: #dc2626;
+  }
+  .btn-add-journey {
+    width: 42px;
+    height: 42px;
+    border: 1px solid var(--gray-300);
+    border-radius: 8px;
+    background: white;
+    color: var(--gray-900);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+  }
+  .btn-add-journey:hover {
+    background: var(--gray-100);
+    border-color: var(--gray-400);
+  }
+  .survey-card-browse .survey-actions {
+    margin-top: auto;
+    padding-top: 16px;
+  }
+  .survey-card-browse .survey-actions .btn-secondary[disabled] {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  .browse-pagination {
+    display: flex;
+    justify-content: center;
+    padding: 4px 0 24px;
+    margin-top: 8px;
+  }
+  .browse-pagination-inner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .browse-page-label {
+    font-size: 14px;
+    color: var(--gray-600);
+  }
+  .browse-page-disabled {
+    opacity: 0.45;
+    pointer-events: none;
+  }
+  .activity-filters {
+    display: flex;
+    gap: 8px;
+  }
+  .activity-filter {
+    background: var(--gray-100);
+    border: none;
+    color: var(--gray-600);
+    font-weight: 500;
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-size: 14px;
+  }
+  .activity-filter.active  {
+    background: #121314;
+    color: white;
+  }
+  .activity-filter:hover {
+    background: #52575a;
+    color: white;
+  }
+  .search-section {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .search-input {
+    padding: 10px 16px;
+    border: 1px solid var(--gray-300);
+    border-radius: 8px;
+    font-size: 14px;
+    width: 300px;
+    outline: none;
+    transition: all 0.2s ease;
+  }
+  .search-input:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+  }
+  .filter-btn {
+    background: var(--gray-100);
+    border: none;
+    color: var(--gray-600);
+    padding: 10px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 500;
+  }
+  .filter-btn:hover {
+    background: var(--gray-200);
+  }
+  .chart-container {
+    background: white;
+    border: 1px solid var(--gray-200);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 32px;
+    box-shadow: var(--shadow-sm);
+  }
+  .chart-container .chart-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 20px;
+  }
+  .chart-number {
+    background: #000000;
+    color: white;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    font-weight: 600;
+    margin-right: 16px;
+    flex-shrink: 0;
+  }
+  .chart-number svg {
+    display: block;
+  }
+  .chart-content {
+    flex: 1;
+  }
+  .chart-text {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--gray-900);
+    margin-bottom: 8px;
+  }
+  .chart-type {
+    font-size: 0.875rem;
+    color: var(--gray-500);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .chart-container .chart-wrapper {
+    position: relative;
+    height: 300px;
+    margin-top: 20px;
+  }
+  .home-specialty-chart-wrapper {
+    height: 320px;
+  }
+  /* Journey roster grid cards */
+  .surveys-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+    gap: 24px;
+    margin-bottom: 40px;
+    width: 100%;
+    align-items: stretch;
+  }
+  .survey-card {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: white;
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: var(--shadow-sm);
+    border: 1px solid var(--gray-200);
+    transition: all 0.2s ease;
+    width: 100%;
+    max-width: 400px;
+  }
+  .survey-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+  }
+  .survey-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .survey-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--gray-700);
+    flex-shrink: 0;
+  }
+  .survey-icon .build-type-icon {
+    width: 32px;
+    height: 32px;
+    display: block;
+  }
+  .survey-status {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: capitalize;
+  }
+  .status-Active {
+    background: rgba(16, 185, 129, 0.1);
+    color: var(--success-color);
+  }
+  .status-Completed {
+    background: rgba(59, 130, 246, 0.1);
+    color: var(--info-color);
+  }
+  .status-Draft {
+    background: rgba(245, 158, 11, 0.1);
+    color: var(--warning-color);
+  }
+  .survey-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--gray-900);
+    margin-bottom: 12px;
+    line-height: 1.3;
+    min-height: 2.6em;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    text-transform: capitalize;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .survey-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 16px;
+    font-size: 12px;
+    color: var(--gray-500);
+    text-transform: uppercase;
+  }
+  .survey-id {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1 1 auto;
+  }
+  .survey-date {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    text-align: right;
+    text-transform: none;
+  }
+  .survey-progress {
+    margin-top: auto;
+    margin-bottom: 20px;
+  }
+  .progress-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    font-size: 14px;
+  }
+  .progress-percentage {
+    font-weight: 600;
+    color: var(--primary-color);
+  }
+  .progress-percentage--draft {
+    color: #6b7280;
+  }
+  .progress-percentage--running {
+    color: #059669;
+  }
+  .progress-percentage--stopped {
+    color: #d97706;
+  }
+  .progress-percentage--ready {
+    color: var(--primary-color);
+  }
+  .progress-sent-count {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--gray-500);
+    margin-left: auto;
+  }
+  .progress-bar {
+    height: 6px;
+    background: var(--gray-200);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s ease, background 0.3s ease;
+  }
+  .progress-fill--draft {
+    background: #9ca3af;
+  }
+  .progress-fill--running {
+    background: #10b981;
+    animation: progress-running-pulse 2s ease-in-out infinite;
+  }
+  .progress-fill--stopped {
+    background: #f59e0b;
+  }
+  .progress-fill--ready {
+    background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%);
+  }
+  @keyframes progress-running-pulse {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.72;
+    }
+  }
+  .survey-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .btn-secondary {
+    background: var(--gray-100);
+    color: var(--gray-700);
+    padding: 8px 16px;
+    border-radius: 8px;
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    flex: 1;
+    text-align: center;
+  }
+  .btn-secondary:hover {
+    background: #000000;
+    color: #ffffff;
+  }
+  .btn-icon {
+    width: 36px;
+    height: 36px;
+    background: var(--gray-100);
+    border: none;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--gray-600);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .btn-icon:hover {
+    background: var(--gray-200);
+  }
+  /* Empty State */
+  .no-surveys-message {
+    grid-column: 1 / -1;
+  }
+  .empty-state {
+    text-align: center;
+    padding: 60px 40px;
+    background: white;
+    border-radius: 16px;
+    border: 1px solid var(--gray-200);
+  }
+  .empty-state svg {
+    color: var(--gray-400);
+    margin-bottom: 24px;
+  }
+  .empty-state h3 {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--gray-900);
+    margin-bottom: 12px;
+  }
+  .empty-state p {
+    color: var(--gray-600);
+    margin-bottom: 32px;
+    max-width: 400px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .btn-primary {
+    background: var(--primary-gradient);
+    color: white;
+    padding: 12px 24px;
+    border-radius: 8px;
+    border: none;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+  }
+  /* Breadcrumb Styles */
+  .breadcrumb-section {
+    padding: 16px 0;
+  }
+  .breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--gray-600);
+  }
+  .breadcrumb-link {
+    color: var(--primary-color);
+    text-decoration: none;
+    font-weight: 500;
+    transition: color 0.2s ease;
+  }
+  .breadcrumb-link:hover {
+    color: var(--primary-dark);
+    text-decoration: underline;
+  }
+  .breadcrumb-separator {
+    color: var(--gray-400);
+  }
+  .breadcrumb-current {
+    color: var(--gray-900);
+    font-weight: 500;
+  }
+  /* Deployment checklist (Activity tab) */
+  .deploy-checklist-header {
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .deploy-checklist-intro {
+    margin: 6px 0 0;
+    font-size: 14px;
+    color: var(--gray-600);
+    max-width: 42rem;
+    line-height: 1.5;
+  }
+  .deploy-checklist-panel {
+    background: #fff;
+    border: 1px solid var(--gray-200);
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+    margin-bottom: 40px;
+  }
+  .deploy-checklist-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .deploy-checklist-item {
+    border-bottom: 1px solid var(--gray-200);
+  }
+  .deploy-checklist-item:last-child {
+    border-bottom: none;
+  }
+  .deploy-checklist-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 18px 20px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  .deploy-checklist-label:hover {
+    background: var(--gray-50);
+  }
+  .deploy-checklist-input {
+    width: 18px;
+    height: 18px;
+    margin-top: 3px;
+    flex-shrink: 0;
+    accent-color: var(--primary-color);
+    cursor: pointer;
+  }
+  .deploy-checklist-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+  .deploy-checklist-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--gray-900);
+    line-height: 1.35;
+  }
+  .deploy-checklist-desc {
+    font-size: 13px;
+    color: var(--gray-600);
+    line-height: 1.5;
+  }
+  .deploy-checklist-item.is-checked .deploy-checklist-title {
+    color: var(--gray-500);
+    text-decoration: line-through;
+    text-decoration-color: var(--gray-400);
+  }
+  .deploy-checklist-item.is-checked .deploy-checklist-desc {
+    color: var(--gray-500);
+  }
+  .deploy-checklist-progress {
+    margin: 0;
+    padding: 14px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--gray-600);
+    border-top: 1px solid var(--gray-200);
+    background: var(--gray-50);
+  }
+  /* Responses Grid */
+  .responses-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+    gap: 24px;
+    margin-bottom: 40px;
+  }
+  .response-card {
+    background: white;
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: var(--shadow-sm);
+    border: 1px solid var(--gray-200);
+    transition: all 0.2s ease;
+  }
+  .response-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+  }
+  .response-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .response-survey h4 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--gray-900);
+    margin-bottom: 4px;
+    line-height: 1.3;
+  }
+  .response-id {
+    font-size: 12px;
+    color: var(--gray-500);
+  }
+  .response-status {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: capitalize;
+  }
+  .status-Completed {
+    background: rgba(16, 185, 129, 0.1);
+    color: var(--success-color);
+  }
+  .response-meta {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 16px;
+    font-size: 12px;
+    color: var(--gray-500);
+  }
+  .response-answers {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+  }
+  .answer-item {
+    font-size: 13px;
+    color: var(--gray-700);
+    line-height: 1.4;
+  }
+  .answer-item strong {
+    color: var(--gray-900);
+    font-weight: 600;
+  }
+  /* Team Grid */
+  .team-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+    gap: 24px;
+    margin-bottom: 40px;
+  }
+  .team-card {
+    background: white;
+    border-radius: 12px;
+    padding: 20px 24px;
+    /* box-shadow: var(--shadow-sm); */
+    border: 1px solid var(--gray-200);
+    transition: all 0.2s ease;
+  }
+  .team-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+  }
+  .team-avatar {
+    width: 48px;
+    height: 48px;
+    background: #000000;
+    color: white;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 18px;
+    margin-bottom: 16px;
+  }
+  .team-info h4 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--gray-900);
+    margin-bottom: 4px;
+  }
+  .team-role {
+    font-size: 14px;
+    color: var(--gray-600);
+    margin-bottom: 8px;
+  }
+  .team-status {
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .team-status.online {
+    color: var(--success-color);
+  }
+  .team-status.offline {
+    color: var(--gray-500);
+  }
+  .team-last-seen {
+    font-size: 12px;
+    color: var(--gray-500);
+    margin-bottom: 16px;
+  }
+  .team-activity {
+    border-top: 1px solid var(--gray-200);
+    padding-top: 16px;
+  }
+  .activity-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 13px;
+    color: var(--gray-600);
+  }
+  .activity-item:last-child {
+    margin-bottom: 0;
+  }
+  .activity-icon {
+    font-size: 16px;
+  }
+  .activity-text {
+    flex: 1;
+  }
+  .team-filters {
+    display: flex;
+    gap: 8px;
+  }
+  /* Responsive Design */
+  .main-content {
+    padding: 24px;
+  }
+  .hero-section {
+    flex-direction: row;
+    text-align: left;
+    padding: 40px 32px;
+  }
+  .hero-illustration {
+    display: none;
+  }
+  .stats-grid {
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  }
+  .surveys-grid {
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  }
+  }
+  @media (max-width: 768px) {
+    .dashboard-layout {
+      flex-direction: column;
+      height: auto;
+      min-height: 0;
+      overflow: visible;
+    }
+    .survey-card {
+      max-width: none;
+      width: 100%;
+    }
+    .sidebar {
+      width: 100%;
+      height: auto;
+      flex-direction: row;
+      padding: 16px 0;
+      overflow-x: auto;
+      overflow-y: visible;
+    }
+    .sidebar-logo {
+      padding: 0 16px;
+      margin-bottom: 0;
+    }
+    .sidebar-nav {
+      display: flex;
+      gap: 8px;
+      padding: 0 16px;
+    }
+    .nav-link {
+      white-space: nowrap;
+      padding: 8px 16px;
+      border-radius: 8px;
+      border-right: none;
+    }
+    /*  this is the prof icon */
+    .sidebar-footer {
+      padding: 0 16px;
+      margin-left: auto;
+      width: auto;
+      position: static;
+      border-top: none;
+      padding-top: 0;
+      padding-bottom: 0;
+    }
+    .maker-main-footer {
+      margin-top: 32px;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    .maker-main-footer-end {
+      gap: 12px;
+    }
+    .main-content {
+      height: auto;
+      padding: 16px;
+    }
+    .hero-section h1 {
+      font-size: 28px;
+    }
+    .stats-grid {
+      grid-template-columns: 1fr;
+    }
+    .section-header {
+      flex-direction: column;
+      gap: 16px;
+      align-items: flex-start;
+    }
+    .search-section {
+      width: 100%;
+    }
+    .search-input {
+      flex: 1;
+    }
+    .responses-grid {
+      grid-template-columns: 1fr;
+    }
+    .team-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<span id="homeHubUrlData" data-url="%%=v(@hubUrl)=%%" hidden></span>
+<script>
+  function openBrowseJourneys() {
+    var dataEl = document.getElementById('homeHubUrlData');
+    var base = dataEl ? (dataEl.getAttribute('data-url') || '') : '';
+    if (!base) base = window.location.pathname;
+    var sep = base.indexOf('?') >= 0 ? '&' : '?';
+    window.location.href = base + sep + 'browseJourneys=1';
+  }
+  // Journey roster search
+  function searchJourneys() {
+    const searchInput = document.getElementById('journeySearch');
+    const searchTerm = searchInput.value.toLowerCase();
+    const journeyCards = document.querySelectorAll('.survey-card');
+    let visibleCount = 0;
+    journeyCards.forEach(card => {
+      const journeyTitle = card.querySelector('.survey-title').textContent.toLowerCase();
+      const journeyId = card.querySelector('.survey-id').textContent.toLowerCase();
+      const journeyStatus = card.querySelector('.survey-status').textContent.toLowerCase();
+      const isMatch = journeyTitle.includes(searchTerm) || 
+            journeyId.includes(searchTerm) || 
+            journeyStatus.includes(searchTerm);
+      if (isMatch) {
+        card.style.display = 'block';
+        visibleCount++;
+      }
+      else {
+        card.style.display = 'none';
+      }
+    }
+                        );
+    toggleNoResultsMessage(visibleCount === 0 && searchTerm !== '');
+  }
+  function toggleFilter() {
+    alert('Filter is not available yet. Use search to find journeys by name, ID, or status.');
+  }
+  function toggleNoResultsMessage(show) {
+    let noResultsMsg = document.querySelector('.no-search-results');
+    if (show && !noResultsMsg) {
+      const grid = document.querySelector('.surveys-grid');
+      noResultsMsg = document.createElement('div');
+      noResultsMsg.className = 'no-search-results';
+      noResultsMsg.innerHTML = `
+<div class="empty-state">
+<svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+<circle cx="11" cy="11" r="8"></circle>
+<path d="m21 21-4.35-4.35"></path>
+  </svg>
+<h3>No journeys found</h3>
+<p>Adjust your search or clear it to see the full list.</p>
+<button class="btn-primary" onclick="clearSearch()">Clear search</button>
+  </div>
+`;
+      grid.appendChild(noResultsMsg);
+    }
+    else if (!show && noResultsMsg) {
+      noResultsMsg.remove();
+    }
+  }
+  function clearSearch() {
+    var searchInput = document.getElementById('journeySearch');
+    if (searchInput) {
+      searchInput.value = '';
+    }
+    searchJourneys();
+  }
+  document.addEventListener('DOMContentLoaded', function() {
+    const searchInput = document.getElementById('journeySearch');
+    if (searchInput) {
+      searchInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          searchJourneys();
+        }
+      }
+                                  );
+    }
+    initializeActivityChart();
+  }
+                           );
+  function toggleJourneyBuilderPanel(ev) {
+    if (ev) ev.stopPropagation();
+    const wrap = document.getElementById('journeyBuilderPanel');
+    if (!wrap) return;
+    const next = !wrap.classList.contains('is-open');
+    wrap.classList.toggle('is-open', next);
+    wrap.setAttribute('aria-hidden', next ? 'false' : 'true');
+    if (next) wrap.scrollIntoView({
+      behavior: 'smooth', block: 'nearest' }
+                                 );
+  }
+  function closeJourneyBuilderPanel() {
+    const wrap = document.getElementById('journeyBuilderPanel');
+    if (!wrap) return;
+    wrap.classList.remove('is-open');
+    wrap.setAttribute('aria-hidden', 'true');
+  }
+  function applyBuildTypeIcons() {
+    var nodes = document.querySelectorAll('.survey-icon[data-build-icon]');
+    var i, el, key, tpl, svg;
+    for (i = 0; i < nodes.length; i++) {
+      el = nodes[i];
+      key = el.getAttribute('data-build-icon');
+      tpl = document.getElementById('build-icon-' + key);
+      if (!tpl || !tpl.content || !tpl.content.firstElementChild) {
+        continue;
+      }
+      svg = tpl.content.firstElementChild.cloneNode(true);
+      el.innerHTML = '';
+      el.appendChild(svg);
+    }
+  }
+  document.addEventListener('click', function(e) {
+    const wrap = document.getElementById('journeyBuilderPanel');
+    const btn = document.getElementById('heroOpenBuilderBtn');
+    if (!wrap || !wrap.classList.contains('is-open')) return;
+    if (btn && btn.contains(e.target)) return;
+    if (wrap.contains(e.target)) return;
+    closeJourneyBuilderPanel();
+  }
+                           );
+  document.addEventListener('DOMContentLoaded', function () {
+    applyBuildTypeIcons();
+    %%[ IF @browseMode == "1" THEN ]%%
+    showAllJourneys();
+    %%[ ENDIF ]%%
+  }
+                           );
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeJourneyBuilderPanel();
+  }
+                           );
+  let homeEngagementCharts = {
+  };
+  let homeSpecialtyChart = null;
+  let homeOpenClickChart = null;
+  function getSendLogChartData() {
+    var el = document.getElementById('activityChartData');
+    if (!el) return null;
+    try {
+      return JSON.parse(el.textContent);
+    }
+    catch (e) {
+      return null;
+    }
+  }
+  function getActivePeriod(scope) {
+    var root = scope || document;
+    var activeBtn = root.querySelector('.activity-filter.active');
+    return activeBtn ? activeBtn.getAttribute('data-period') : '12months';
+  }
+  function renderEngagementTrendChart(canvasId, periodData) {
+    var canvas = document.getElementById(canvasId);
+    if (!canvas || typeof Chart === 'undefined') return;
+    if (homeEngagementCharts[canvasId]) {
+      homeEngagementCharts[canvasId].destroy();
+      homeEngagementCharts[canvasId] = null;
+    }
+    var labels = (periodData && periodData.labels) ? periodData.labels.slice() : [];
+    var responses = (periodData && periodData.responses) ? periodData.responses.slice() : [];
+    var allValues = responses.filter(function (v) {
+      return !isNaN(v);
+    }
+                                    );
+    var maxValue = allValues.length > 0 ? Math.max.apply(null, allValues) : 1;
+    var stepSize = Math.max(1, Math.ceil(maxValue / 10));
+    homeEngagementCharts[canvasId] = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Emails sent',
+          data: responses,
+          borderColor: '#000000',
+          backgroundColor: 'rgba(99, 102, 241, 0.1)',
+          borderWidth: 3,
+          fill: true,
+          tension: 0.4,
+          pointBackgroundColor: '#000000',
+          pointBorderColor: '#ffffff',
+          pointBorderWidth: 2,
+          pointRadius: 6,
+          pointHoverRadius: 8,
+          pointHoverBackgroundColor: '#4f46e5',
+          pointHoverBorderColor: '#ffffff',
+          pointHoverBorderWidth: 3
+        }
+                  ]
+      }
+      ,
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: {
+          duration: 1500,
+          easing: 'easeInOutQuart',
+          delay: function (context) {
+            return context.dataIndex * 50;
+          }
+        }
+        ,
+        plugins: {
+          legend: {
+            display: true,
+            position: 'top',
+            align: 'center',
+            labels: {
+              usePointStyle: true,
+              pointStyle: 'circle',
+              padding: 25,
+              font: {
+                size: 13,
+                weight: '500',
+                family: "'Inter', sans-serif"
+              }
+              ,
+              color: '#374151'
+            }
+          }
+          ,
+          tooltip: {
+            backgroundColor: 'rgba(17, 24, 39, 0.95)',
+            titleColor: '#ffffff',
+            bodyColor: '#ffffff',
+            borderColor: '#6366f1',
+            borderWidth: 2,
+            cornerRadius: 0,
+            padding: 16,
+            titleFont: {
+              size: 14,
+              weight: '600',
+              family: "'Inter', sans-serif"
+            }
+            ,
+            bodyFont: {
+              size: 13,
+              weight: '500',
+              family: "'Inter', sans-serif"
+            }
+            ,
+            mode: 'index',
+            intersect: false,
+            displayColors: true,
+            callbacks: {
+              title: function (context) {
+                return context[0].label;
+              }
+              ,
+              label: function (context) {
+                return 'Emails sent: ' + context.parsed.y.toLocaleString();
+              }
+            }
+          }
+        }
+        ,
+        scales: {
+          x: {
+            grid: {
+              display: true,
+              color: 'rgba(229, 231, 235, 0.8)',
+              borderColor: 'rgba(229, 231, 235, 0.8)',
+              lineWidth: 1
+            }
+            ,
+            border: {
+              display: true,
+              color: 'rgba(209, 213, 219, 0.8)',
+              width: 2
+            }
+            ,
+            ticks: {
+              color: '#6b7280',
+              font: {
+                size: 12,
+                weight: '500',
+                family: "'Inter', sans-serif"
+              }
+              ,
+              maxRotation: 45,
+              minRotation: 0,
+              padding: 12,
+              callback: function (value) {
+                var label = this.getLabelForValue(value);
+                return label.length > 15 ? label.substring(0, 15) + '...' : label;
+              }
+            }
+          }
+          ,
+          y: {
+            beginAtZero: true,
+            grid: {
+              display: true,
+              color: 'rgba(229, 231, 235, 0.6)',
+              borderColor: 'rgba(229, 231, 235, 0.8)',
+              lineWidth: 1,
+              drawBorder: true
+            }
+            ,
+            border: {
+              display: true,
+              color: 'rgba(209, 213, 219, 0.8)',
+              width: 2
+            }
+            ,
+            ticks: {
+              color: '#6b7280',
+              font: {
+                size: 12,
+                weight: '500',
+                family: "'Inter', sans-serif"
+              }
+              ,
+              stepSize: stepSize,
+              padding: 12,
+              callback: function (value) {
+                return value.toLocaleString();
+              }
+            }
+          }
+        }
+        ,
+        interaction: {
+          intersect: false,
+          mode: 'index'
+        }
+      }
+    }
+                                              );
+  }
+  function updateEngagementTrendCharts(period) {
+    var chartData = getSendLogChartData();
+    if (!chartData) return;
+    var periodData = chartData[period] || chartData['12months'];
+    renderEngagementTrendChart('activityChart', periodData);
+    renderEngagementTrendChart('reportsChart', periodData);
+  }
+  function splitPipeNumbers(raw) {
+    if (!raw) return [];
+    return raw.split('|').map(function (v) {
+      var n = parseInt(v, 10);
+      return isNaN(n) ? 0 : n;
+    }
+                             );
+  }
+  function getSpecialtyChartData() {
+    var canvas = document.getElementById('reportsSpecialtyChart');
+    if (canvas) {
+      var labelsRaw = canvas.getAttribute('data-labels');
+      if (labelsRaw) {
+        return {
+          labels: labelsRaw.split('|'),
+          opened: splitPipeNumbers(canvas.getAttribute('data-opened')),
+          didNotOpen: splitPipeNumbers(canvas.getAttribute('data-didnotopen')),
+          bounced: splitPipeNumbers(canvas.getAttribute('data-bounced')),
+          clicked: splitPipeNumbers(canvas.getAttribute('data-clicked')),
+          totals: splitPipeNumbers(canvas.getAttribute('data-totals'))
+        };
+      }
+    }
+    var el = document.getElementById('specialtyChartData');
+    if (!el) return null;
+    var raw = (el.textContent || el.innerText || "").replace(/^\uFEFF/, "").trim();
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    }
+    catch (e) {
+      return null;
+    }
+  }
+  function renderSpecialtyChart() {
+    var canvas = document.getElementById('reportsSpecialtyChart');
+    if (!canvas || typeof Chart === 'undefined') return;
+    if (homeSpecialtyChart) {
+      homeSpecialtyChart.destroy();
+      homeSpecialtyChart = null;
+    }
+    var chartData = getSpecialtyChartData();
+    if (!chartData || !chartData.labels || !chartData.labels.length) {
+      var deCount = canvas.getAttribute('data-de-count');
+      var emptyMsg = 'No specialty data available';
+      if (deCount === '0') {
+        emptyMsg += '. DE sst_de_specialty_log_12_months has 0 rows in this BU or external key does not match.';
+      }
+      else if (deCount && deCount !== '0') {
+        emptyMsg += '. DE has ' + deCount + ' rows but lookup returned no chart data. Check MonthIndex values (expected 1–24).';
+      }
+      canvas.parentElement.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">' + emptyMsg + '</div>';
+      return;
+    }
+    var labels = chartData.labels || [];
+    var opened = chartData.opened || [];
+    var didNotOpen = chartData.didNotOpen || [];
+    var bounced = chartData.bounced || [];
+    var clicked = chartData.clicked || [];
+    var totals = chartData.totals || [];
+    homeSpecialtyChart = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: 'Opened',
+            data: opened,
+            backgroundColor: '#3fc699',
+            borderWidth: 0
+          }
+          ,
+          {
+            label: 'Did Not Open',
+            data: didNotOpen,
+            backgroundColor: '#000000',
+            borderWidth: 0
+          }
+          ,
+          {
+            label: 'Bounced',
+            data: bounced,
+            backgroundColor: 'rgba(220, 38, 38, 0.8)',
+            borderWidth: 0
+          }
+          ,
+          {
+            label: 'Clicked',
+            data: clicked,
+            backgroundColor: 'rgba(99, 102, 241, 0.8)',
+            borderWidth: 0
+          }
+        ]
+      }
+      ,
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: true,
+            position: 'top',
+            labels: {
+              usePointStyle: true,
+              pointStyle: 'circle',
+              padding: 20,
+              font: {
+                size: 13,
+                weight: '500',
+                family: "'Inter', sans-serif"
+              }
+              ,
+              color: '#374151'
+            }
+          }
+          ,
+          tooltip: {
+            backgroundColor: 'rgba(17, 24, 39, 0.95)',
+            titleColor: '#ffffff',
+            bodyColor: '#ffffff',
+            borderColor: '#6366f1',
+            borderWidth: 2,
+            cornerRadius: 0,
+            padding: 16,
+            callbacks: {
+              afterBody: function (context) {
+                var i = context[0].dataIndex;
+                if (context[0].datasetIndex === 0) {
+                  return [
+                    'Did Not Open: ' + (didNotOpen[i] || 0).toLocaleString(),
+                    'Bounced: ' + (bounced[i] || 0).toLocaleString(),
+                    'Clicked: ' + (clicked[i] || 0).toLocaleString(),
+                    'Total sends: ' + (totals[i] || 0).toLocaleString()
+                  ];
+                }
+                return [];
+              }
+            }
+          }
+        }
+        ,
+        scales: {
+          x: {
+            stacked: true,
+            grid: {
+              display: false
+            }
+            ,
+            ticks: {
+              font: {
+                size: 12,
+                family: "'Inter', sans-serif"
+              }
+              ,
+              color: '#6b7280'
+            }
+          }
+          ,
+          y: {
+            stacked: true,
+            beginAtZero: true,
+            maxBarThickness: 60,
+            grid: {
+              color: 'rgba(0, 0, 0, 0.05)'
+            }
+            ,
+            ticks: {
+              font: {
+                size: 12,
+                family: "'Inter', sans-serif"
+              }
+              ,
+              color: '#6b7280'
+            }
+          }
+        }
+      }
+    }
+                                  );
+  }
+  function getOpenClickChartData() {
+    var canvas = document.getElementById('reportsOpenClickChart');
+    if (!canvas) return null;
+    var labelsRaw = canvas.getAttribute('data-labels');
+    if (!labelsRaw) return null;
+    return {
+      labels: labelsRaw.split('|'),
+      opens: splitPipeNumbers(canvas.getAttribute('data-opens')),
+      clicks: splitPipeNumbers(canvas.getAttribute('data-clicks')),
+      unsubscribed: splitPipeNumbers(canvas.getAttribute('data-unsubscribed')),
+      bounced: splitPipeNumbers(canvas.getAttribute('data-bounced'))
+    };
+  }
+  function sumChartValues(values) {
+    var total = 0;
+    var i;
+    for (i = 0; i < values.length; i++) total += values[i] || 0;
+    return total;
+  }
+  function renderOpenClickChart() {
+    var canvas = document.getElementById('reportsOpenClickChart');
+    if (!canvas || typeof Chart === 'undefined') return;
+    if (homeOpenClickChart) {
+      homeOpenClickChart.destroy();
+      homeOpenClickChart = null;
+    }
+    var chartData = getOpenClickChartData();
+    if (!chartData || !chartData.labels || !chartData.labels.length) {
+      canvas.parentElement.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">No opens and clicks data available</div>';
+      return;
+    }
+    var labels = chartData.labels;
+    var opens = chartData.opens;
+    var clicks = chartData.clicks;
+    var unsubscribed = chartData.unsubscribed;
+    var bounced = chartData.bounced;
+    var openTotal = sumChartValues(opens);
+    var clickTotal = sumChartValues(clicks);
+    var unsubTotal = sumChartValues(unsubscribed);
+    var bounceTotal = sumChartValues(bounced);
+    var subtitleEl = document.getElementById('reportsOpenClickChartSubtitle');
+    if (subtitleEl) {
+      subtitleEl.textContent =
+        openTotal.toLocaleString() + ' opens · ' +
+        clickTotal.toLocaleString() + ' clicks · ' +
+        bounceTotal.toLocaleString() + ' bounces · ' +
+        unsubTotal.toLocaleString() + ' unsubscribes (12 months)';
+    }
+    var allValues = opens.concat(clicks).concat(unsubscribed).concat(bounced).filter(function (v) {
+      return !isNaN(v);
+    }
+                                                                                    );
+    var maxValue = allValues.length > 0 ? Math.max.apply(null, allValues) : 1;
+    var stepSize = Math.max(1, Math.ceil(maxValue / 10));
+    homeOpenClickChart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: 'Opens (' + openTotal.toLocaleString() + ')',
+            data: opens,
+            borderColor: '#3fc699',
+            backgroundColor: 'rgba(63, 198, 153, 0.12)',
+            borderWidth: 3,
+            fill: false,
+            tension: 0.4,
+            pointBackgroundColor: '#3fc699',
+            pointBorderColor: '#ffffff',
+            pointBorderWidth: 2,
+            pointRadius: 5,
+            pointHoverRadius: 7
+          }
+          ,
+          {
+            label: 'Clicks (' + clickTotal.toLocaleString() + ')',
+            data: clicks,
+            borderColor: '#6366f1',
+            backgroundColor: 'rgba(99, 102, 241, 0.12)',
+            borderWidth: 3,
+            fill: false,
+            tension: 0.4,
+            pointBackgroundColor: '#6366f1',
+            pointBorderColor: '#ffffff',
+            pointBorderWidth: 2,
+            pointRadius: 5,
+            pointHoverRadius: 7
+          }
+          ,
+          {
+            label: 'Unsubscribed (' + unsubTotal.toLocaleString() + ')',
+            data: unsubscribed,
+            borderColor: '#dc2626',
+            backgroundColor: 'rgba(220, 38, 38, 0.12)',
+            borderWidth: 3,
+            fill: false,
+            tension: 0.4,
+            pointBackgroundColor: '#dc2626',
+            pointBorderColor: '#ffffff',
+            pointBorderWidth: 2,
+            pointRadius: 5,
+            pointHoverRadius: 7
+          }
+          ,
+          {
+            label: 'Bounced (' + bounceTotal.toLocaleString() + ')',
+            data: bounced,
+            borderColor: '#f97316',
+            backgroundColor: 'rgba(249, 115, 22, 0.12)',
+            borderWidth: 3,
+            fill: false,
+            tension: 0.4,
+            pointBackgroundColor: '#f97316',
+            pointBorderColor: '#ffffff',
+            pointBorderWidth: 2,
+            pointRadius: 5,
+            pointHoverRadius: 7
+          }
+        ]
+      }
+      ,
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: true,
+            position: 'top',
+            labels: {
+              usePointStyle: true,
+              pointStyle: 'circle',
+              padding: 20,
+              font: {
+                size: 13,
+                weight: '500',
+                family: "'Inter', sans-serif"
+              }
+              ,
+              color: '#374151'
+            }
+          }
+          ,
+          tooltip: {
+            backgroundColor: 'rgba(17, 24, 39, 0.95)',
+            titleColor: '#ffffff',
+            bodyColor: '#ffffff',
+            borderColor: '#6366f1',
+            borderWidth: 2,
+            cornerRadius: 0,
+            padding: 16,
+            mode: 'index',
+            intersect: false
+          }
+        }
+        ,
+        scales: {
+          x: {
+            grid: {
+              display: false }
+            ,
+            ticks: {
+              font: {
+                size: 12, family: "'Inter', sans-serif" }
+              ,
+              color: '#6b7280'
+            }
+          }
+          ,
+          y: {
+            beginAtZero: true,
+            ticks: {
+              stepSize: stepSize,
+              font: {
+                size: 12, family: "'Inter', sans-serif" }
+              ,
+              color: '#6b7280'
+            }
+            ,
+            grid: {
+              color: 'rgba(0, 0, 0, 0.05)' }
+          }
+        }
+        ,
+        interaction: {
+          intersect: false,
+          mode: 'index'
+        }
+      }
+    }
+                                  );
+  }
+  function initializeActivityChart() {
+    var chartData = getSendLogChartData();
+    if (!chartData) return;
+    renderEngagementTrendChart('activityChart', chartData['12months']);
+  }
+  function filterActivity(period) {
+    document.querySelectorAll('.activity-filter').forEach(function (btn) {
+      btn.classList.toggle('active', btn.getAttribute('data-period') === period);
+    }
+                                                         );
+    updateEngagementTrendCharts(period);
+  }
+  function showAllJourneys() {
+    hideAllSections();
+    document.getElementById('allSurveysSection').style.display = 'block';
+    var surveysGrid = document.getElementById('surveysGrid');
+    if (surveysGrid) {
+      surveysGrid.style.display = 'grid';
+    }
+    var buildsPaginationSection = document.getElementById('buildsPaginationSection');
+    if (buildsPaginationSection) {
+      buildsPaginationSection.style.display = 'block';
+    }
+    document.querySelectorAll('.nav-link').forEach(link => {
+      link.classList.remove('active');
+    }
+                                                  );
+    document.querySelector('.nav-link[onclick*="showAllJourneys"]').classList.add('active');
+    document.getElementById('allSurveysSection').scrollIntoView({
+      behavior: 'smooth' }
+                                                               );
+  }
+  // Show Dashboard functionality
+  function showDashboard() {
+    hideAllSections();
+    document.getElementById('heroSection').style.display = 'flex';
+    document.querySelector('.stats-grid').style.display = 'grid';
+    document.querySelector('.section-header').style.display = 'flex';
+    document.getElementById('homeEngagementChartWrap').style.display = 'block';
+    document.querySelectorAll('.nav-link').forEach(link => {
+      link.classList.remove('active');
+    }
+                                                  );
+    document.querySelector('.nav-link:first-of-type').classList.add('active');
+    window.scrollTo(0, 0);
+  }
+  // Show Reports functionality
+  function showReports() {
+    // Hide all sections first
+    hideAllSections();
+    // Show reports section
+    document.getElementById('reportsSection').style.display = 'block';
+    // Update navigation active state
+    document.querySelectorAll('.nav-link').forEach(link => {
+      link.classList.remove('active');
+    }
+                                                  );
+    document.querySelector('.nav-link[onclick*="showReports"]').classList.add('active');
+    // Initialize reports chart
+    initializeReportsChart();
+    // Scroll to top
+    window.scrollTo(0, 0);
+  }
+  // Show Responses functionality
+  function showResponses() {
+    hideAllSections();
+    document.getElementById('responsesSection').style.display = 'block';
+    document.querySelectorAll('.nav-link').forEach(link => {
+      link.classList.remove('active');
+    }
+                                                  );
+    document.querySelector('.nav-link[onclick*="showResponses"]').classList.add('active');
+    initDeployChecklist();
+    window.scrollTo(0, 0);
+  }
+  function updateDeployChecklistProgress() {
+    var inputs = document.querySelectorAll('.deploy-checklist-input');
+    var progressEl = document.getElementById('deployChecklistProgress');
+    if (!inputs.length || !progressEl) return;
+    var done = 0;
+    inputs.forEach(function (input) {
+      if (input.checked) done++;
+    }
+                  );
+    progressEl.textContent = done + ' of ' + inputs.length + ' complete';
+  }
+  function initDeployChecklist() {
+    var inputs = document.querySelectorAll('.deploy-checklist-input');
+    if (!inputs.length) return;
+    inputs.forEach(function (input) {
+      var item = input.closest('.deploy-checklist-item');
+      if (item) item.classList.toggle('is-checked', input.checked);
+      if (input._deployChecklistBound) return;
+      input._deployChecklistBound = true;
+      input.addEventListener('change', function () {
+        var row = input.closest('.deploy-checklist-item');
+        if (row) row.classList.toggle('is-checked', input.checked);
+        updateDeployChecklistProgress();
+      }
+                            );
+    }
+                  );
+    updateDeployChecklistProgress();
+  }
+  document.addEventListener('DOMContentLoaded', function () {
+    initDeployChecklist();
+    var resetBtn = document.getElementById('deployChecklistResetBtn');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', function () {
+        document.querySelectorAll('.deploy-checklist-input').forEach(function (input) {
+          input.checked = false;
+          var item = input.closest('.deploy-checklist-item');
+          if (item) item.classList.remove('is-checked');
+        }
+                                                                    );
+        updateDeployChecklistProgress();
+      }
+                               );
+    }
+  }
+                           );
+  // Show Team functionality
+  function showTeam() {
+    // Hide all sections first
+    hideAllSections();
+    // Show team section
+    document.getElementById('teamSection').style.display = 'block';
+    // Update navigation active state
+    document.querySelectorAll('.nav-link').forEach(link => {
+      link.classList.remove('active');
+    }
+                                                  );
+    document.querySelector('.nav-link[onclick*="showTeam"]').classList.add('active');
+    // Scroll to top
+    window.scrollTo(0, 0);
+  }
+  // Hide all sections helper function
+  function hideAllSections() {
+    document.getElementById('breadcrumbSection').style.display = 'none';
+    document.getElementById('heroSection').style.display = 'none';
+    closeJourneyBuilderPanel();
+    document.querySelector('.stats-grid').style.display = 'none';
+    document.querySelector('.section-header').style.display = 'none';
+    document.getElementById('homeEngagementChartWrap').style.display = 'none';
+    document.getElementById('allSurveysSection').style.display = 'none';
+    var surveysGrid = document.getElementById('surveysGrid');
+    if (surveysGrid) {
+      surveysGrid.style.display = 'none';
+    }
+    var buildsPaginationSection = document.getElementById('buildsPaginationSection');
+    if (buildsPaginationSection) {
+      buildsPaginationSection.style.display = 'none';
+    }
+    document.getElementById('reportsSection').style.display = 'none';
+    document.getElementById('responsesSection').style.display = 'none';
+    document.getElementById('teamSection').style.display = 'none';
+  }
+  function initializeReportsChart() {
+    var reportsSection = document.getElementById('reportsSection');
+    var period = reportsSection ? getActivePeriod(reportsSection) : '12months';
+    updateEngagementTrendCharts(period);
+    renderSpecialtyChart();
+    renderOpenClickChart();
+  }
+  // Search responses functionality
+  function searchResponses() {
+    const searchInput = document.getElementById('responseSearch');
+    const searchTerm = searchInput.value.toLowerCase();
+    const responseCards = document.querySelectorAll('.response-card');
+    let visibleCount = 0;
+    responseCards.forEach(card => {
+      const journeyTitle = card.querySelector('.response-survey h4').textContent.toLowerCase();
+      const journeyKey = card.querySelector('.response-id').textContent.toLowerCase();
+      const contact = card.querySelector('.response-contact').textContent.toLowerCase();
+      const status = card.querySelector('.response-status').textContent.toLowerCase();
+      const isMatch = journeyTitle.includes(searchTerm) ||
+            journeyKey.includes(searchTerm) ||
+            contact.includes(searchTerm) || 
+            status.includes(searchTerm);
+      if (isMatch) {
+        card.style.display = 'block';
+        visibleCount++;
+      }
+      else {
+        card.style.display = 'none';
+      }
+    }
+                         );
+    // Show/hide no results message
+    toggleNoResponsesMessage(visibleCount === 0 && searchTerm !== '');
+  }
+  // Toggle response filter (placeholder for future functionality)
+  function toggleResponseFilter() {
+    alert('Response filters are not available yet. Search by journey name, ID, contact, or status.');
+  }
+  // Show/hide no responses message
+  function toggleNoResponsesMessage(show) {
+    let noResultsMsg = document.querySelector('.no-responses-message');
+    if (show && !noResultsMsg) {
+      // Create no results message
+      const responsesGrid = document.querySelector('.responses-grid');
+      noResultsMsg = document.createElement('div');
+      noResultsMsg.className = 'no-responses-message';
+      noResultsMsg.innerHTML = `
+<div class="empty-state">
+<svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+<circle cx="11" cy="11" r="8"></circle>
+<path d="m21 21-4.35-4.35"></path>
+  </svg>
+<h3>No activity rows found</h3>
+<p>Adjust your search or clear it to reload the subscriber log demo.</p>
+<button class="btn-primary" onclick="clearResponseSearch()">Clear search</button>
+  </div>
+`;
+      responsesGrid.appendChild(noResultsMsg);
+    }
+    else if (!show && noResultsMsg) {
+      noResultsMsg.remove();
+    }
+  }
+  // Clear response search functionality
+  function clearResponseSearch() {
+    document.getElementById('responseSearch').value = '';
+    searchResponses();
+  }
+  // Filter team functionality
+  function filterTeam(filter) {
+    // Update active filter button
+    document.querySelectorAll('[data-team-filter]').forEach(btn => {
+      btn.classList.remove('active');
+    }
+                                                           );
+    document.querySelector(`[data-team-filter="${filter}
+"]`).classList.add('active');
+    const teamCards = document.querySelectorAll('.team-card');
+    teamCards.forEach(card => {
+      const status = card.querySelector('.team-status').textContent.toLowerCase();
+      const lastSeen = card.querySelector('.team-last-seen').textContent.toLowerCase();
+      let shouldShow = true;
+      if (filter === 'online') {
+        shouldShow = status === 'online';
+      }
+      else if (filter === 'recent') {
+        // Show users active in last 30 minutes
+        shouldShow = lastSeen.includes('minutes ago') || lastSeen.includes('minute ago');
+      }
+      // 'all' shows everything
+      card.style.display = shouldShow ? 'block' : 'none';
+    }
+                     );
+  }
+</script>
