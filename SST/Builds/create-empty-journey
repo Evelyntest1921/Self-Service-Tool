@@ -24,10 +24,10 @@ ENDIF
 IF @entryScheduleRepeat != "hourly" AND @entryScheduleRepeat != "daily" AND @entryScheduleRepeat != "weekdays" AND @entryScheduleRepeat != "weekly" AND @entryScheduleRepeat != "monthly" AND @entryScheduleRepeat != "yearly" THEN
  SET @entryScheduleRepeat = "daily"
 ENDIF
-IF Empty(@entryScheduleInterval) OR RegExMatch(@entryScheduleInterval,"^[0-9]+$") == 0 THEN
+IF Empty(@entryScheduleInterval) THEN
  SET @entryScheduleInterval = "1"
 ENDIF
-IF Empty(@entryScheduleOccurrences) OR RegExMatch(@entryScheduleOccurrences,"^[0-9]+$") == 0 THEN
+IF Empty(@entryScheduleOccurrences) THEN
  SET @entryScheduleOccurrences = "2"
 ENDIF
 IF Empty(@entryContactEvaluation) OR (@entryContactEvaluation != "all" AND @entryContactEvaluation != "newOnly") THEN
@@ -166,43 +166,6 @@ function pad2(num) {
   return n < 10 ? "0" + n : String(n);
 }
 
-var EASTERN_SCHEDULE_TZ = "Eastern Standard Time";
-
-var WEEKDAY_KEYS = [
-  "sunday",
-  "monday",
-  "tuesday",
-  "wednesday",
-  "thursday",
-  "friday",
-  "saturday"
-];
-
-var WEEKDAY_NAMES = [
-  "Sunday",
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday"
-];
-
-var MONTH_NAMES = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December"
-];
-
 function formatScheduleDateTimeFromDate(d) {
   return (
     d.getFullYear() +
@@ -337,6 +300,25 @@ function buildRecurringSchedule(
   occurrences,
   weekdaysRaw
 ) {
+  var easternTz = "Eastern Standard Time";
+  var weekdayKeys = [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday"
+  ];
+  var weekdayNames = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday"
+  ];
   var startDateTime = ensureFutureScheduleStart(scheduleStart);
   var parts = parseScheduleStartParts(startDateTime);
   var repeatKey = asStr(repeat).toLowerCase();
@@ -352,7 +334,7 @@ function buildRecurringSchedule(
     startDateTime: startDateTime,
     endType: "Occurrences",
     occurrences: occurVal,
-    timeZone: EASTERN_SCHEDULE_TZ,
+    timeZone: easternTz,
     interval: intervalVal
   };
   var weekdayIndex = parts
@@ -368,25 +350,18 @@ function buildRecurringSchedule(
     var flags = parseWeeklyDayFlags(weekdaysRaw, parts);
     schedule.frequency = "Weekly";
     schedule.recurrencePattern = "ByDay";
-    schedule.scheduledDayOfWeek = WEEKDAY_NAMES[weekdayIndex];
-    for (var w = 0; w < WEEKDAY_KEYS.length; w++) {
-      schedule[WEEKDAY_KEYS[w]] = flags[w];
+    schedule.scheduledDayOfWeek = weekdayNames[weekdayIndex];
+    for (var w = 0; w < weekdayKeys.length; w++) {
+      schedule[weekdayKeys[w]] = flags[w];
     }
   } else if (repeatKey === "monthly") {
     schedule.frequency = "Monthly";
-    schedule.recurrencePattern = "ByDay";
+    schedule.recurrencePattern = "Interval";
     schedule.scheduledDay = parts ? parts.d : 1;
-    schedule.scheduledWeek = "First";
-    schedule.scheduledDayOfWeek = WEEKDAY_NAMES[weekdayIndex];
   } else if (repeatKey === "yearly") {
     schedule.frequency = "Yearly";
-    schedule.recurrencePattern = "ByDay";
+    schedule.recurrencePattern = "Interval";
     schedule.scheduledDay = parts ? parts.d : 1;
-    schedule.scheduledWeek = "First";
-    schedule.scheduledDayOfWeek = WEEKDAY_NAMES[weekdayIndex];
-    if (parts) {
-      schedule.month = MONTH_NAMES[parts.mo];
-    }
   } else {
     schedule.frequency = "Daily";
     schedule.recurrencePattern = "Interval";
@@ -429,12 +404,6 @@ function buildDeEntryEventPayload(
       scheduleOccurrences,
       scheduleWeekdays
     );
-    payload.arguments = {
-      criteria: "",
-      useHighWatermark: asStr(contactEvaluation).toLowerCase() !== "all",
-      EventDefinitionKey: eventKey,
-      DataExtensionId: deMeta.objectId
-    };
   } else {
     payload.metaData.scheduleFlowMode = "Run Once";
   }
@@ -550,6 +519,7 @@ var journeyId = "";
 var entryDeName = "";
 var entryDeKey = "";
 
+try {
 if (authOk == "true" && accessToken && subdomain && journeyName && journeyKey) {
   try {
     var triggers = [];
@@ -668,6 +638,10 @@ if (authOk == "true" && accessToken && subdomain && journeyName && journeyKey) {
     resultText = "Could not create the journey: " + (createEx.message || String(createEx));
   }
 }
+} catch (pageScriptEx) {
+  resultText =
+    "Could not create the journey: " + (pageScriptEx.message || String(pageScriptEx));
+}
 
 Platform.Variable.SetValue("@journeyId", journeyId);
 Platform.Variable.SetValue("@entryDeName", entryDeName);
@@ -677,7 +651,7 @@ Platform.Variable.SetValue("@resultText", resultText);
 </script>
 %%[
 SET @createFailed = "0"
-IF IndexOf(@resultText,"Could not") > 0 OR IndexOf(@resultText,"Missing") > 0 OR IndexOf(@resultText,"No SFMC_AUTH") > 0 OR IndexOf(@resultText,"Enter a name") > 0 THEN
+IF IndexOf(@resultText,"Could not") > 0 OR IndexOf(@resultText,"Missing") > 0 OR IndexOf(@resultText,"No SFMC_AUTH") > 0 OR IndexOf(@resultText,"Enter a name") > 0 OR IndexOf(@resultText,"HTTP 4") > 0 OR IndexOf(@resultText,"HTTP 5") > 0 THEN
  SET @createFailed = "1"
 ENDIF
 IF @showForm == "false" AND @createFailed != "1" AND NOT Empty(@journeyId) THEN
@@ -1246,7 +1220,7 @@ Your blank journey is ready. Open it in Journey Builder to add an entry source, 
        </div>
        <div class="maker-result-log-wrap">
          <button type="button" class="maker-btn maker-btn--ghost" id="showLogBtn">Show log</button>
-         <pre class="maker-result-log" id="apiLog">%%=v(@resultText)=%%</pre>
+         <pre class="maker-result-log%%[ IF @createFailed == "1" THEN ]%% is-visible%%[ ENDIF ]%%" id="apiLog">%%=v(@resultText)=%%</pre>
        </div>
        <div class="maker-result-actions maker-result-actions--tight">
          <form method="post" action="" style="margin:0">
