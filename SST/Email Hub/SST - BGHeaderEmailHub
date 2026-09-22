@@ -78,11 +78,6 @@ function guidKey() {
   return String(Platform.Function.GUID()).replace(/-/g, "");
 }
 
-function ampBlock(lines) {
-  var pct = String.fromCharCode(37, 37);
-  return pct + "[" + lines.join("\n") + "]" + pct;
-}
-
 function ampValue(value) {
   var pct = String.fromCharCode(37, 37);
   return pct + "=" + value + "=" + pct;
@@ -91,6 +86,18 @@ function ampValue(value) {
 function ampToken(value) {
   var pct = String.fromCharCode(37, 37);
   return pct + value + pct;
+}
+
+function defaultCreatedEmailSignatureHtml() {
+  return [
+    "<p style=\"margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">",
+    "Best regards,<br>",
+    "<span style=\"font-style:italic;font-family:serif;font-size:20px;\">MagMutual</span><br>",
+    "MagMutual<br>",
+    "info@magmutual.com<br>",
+    "(800) 282-4882<br>",
+    " MagMutual Insurance</p>"
+  ].join("");
 }
 
 function field(row, name) {
@@ -333,147 +340,9 @@ function buildPreviewData(contactId, environment) {
   };
 }
 
-function minimalEmailHtml(headline, textBody, surveyId, syncTables) {
-  var tables = syncTables || previewTables("uat");
-  var contactDe = tables.contact;
-  var accountDe = tables.account;
-  var userDe = tables.user;
-  var personalizationAmp = ampBlock([
-    "VAR @surveyContactId, @subscriberKey, @firstName, @lastName, @salutation, @contactAccountId",
-    "VAR @contactLookupKey, @ownerId, @sendfromName, @sendFromEmail, @senderTitle, @signaturePhone",
-    "VAR @senderSalesLicenseNumber, @senderAppointmentLink, @senderLicense, @senderFirstName, @fullGreeting, @signature",
-    "SET @surveyContactId = \"\"",
-    "SET @subscriberKey = \"\"",
-    "SET @contactLookupKey = \"\"",
-    "SET @firstName = \"\"",
-    "SET @lastName = \"\"",
-    "SET @salutation = \"\"",
-    "SET @contactAccountId = \"\"",
-    "SET @ownerId = \"\"",
-    "SET @surveyContactId = Concat(\"\", Trim(AttributeValue(\"CampaignMember:Common:Id\")))",
-    "IF EMPTY(@surveyContactId) THEN",
-    "  SET @surveyContactId = Concat(\"\", Trim(AttributeValue(\"ContactId\")))",
-    "ENDIF",
-    "IF EMPTY(@surveyContactId) THEN",
-    "  SET @surveyContactId = Concat(\"\", Trim(_subscriberKey))",
-    "ENDIF",
-    "SET @subscriberKey = Concat(\"\", Trim(_subscriberKey))",
-    "IF EMPTY(@subscriberKey) THEN",
-    "  SET @subscriberKey = Concat(\"\", Trim(emailaddr))",
-    "ENDIF",
-    "SET @firstName = Concat(\"\", Trim(AttributeValue(\"CampaignMember:Common:FirstName\")))",
-    "IF EMPTY(@firstName) THEN",
-    "  SET @firstName = Concat(\"\", Trim(AttributeValue(\"FirstName\")))",
-    "ENDIF",
-    "SET @lastName = Concat(\"\", Trim(AttributeValue(\"CampaignMember:Common:LastName\")))",
-    "IF EMPTY(@lastName) THEN",
-    "  SET @lastName = Concat(\"\", Trim(AttributeValue(\"LastName\")))",
-    "ENDIF",
-    "SET @salutation = Concat(\"\", Trim(AttributeValue(\"CampaignMember:Common:Salutation\")))",
-    "IF EMPTY(@salutation) THEN",
-    "  SET @salutation = Concat(\"\", Trim(AttributeValue(\"Salutation\")))",
-    "ENDIF",
-    "SET @contactAccountId = Concat(\"\", Trim(AttributeValue(\"CampaignMember:Account:Id\")))",
-    "IF NOT EMPTY(@surveyContactId) THEN",
-    "  SET @contactLookupKey = @surveyContactId",
-    "  IF EMPTY(@firstName) THEN",
-    "    SET @firstName = Concat(\"\", Lookup(\"" + contactDe + "\",\"FirstName\",\"Id\",@contactLookupKey))",
-    "  ENDIF",
-    "  IF EMPTY(@lastName) THEN",
-    "    SET @lastName = Concat(\"\", Lookup(\"" + contactDe + "\",\"LastName\",\"Id\",@contactLookupKey))",
-    "  ENDIF",
-    "  IF EMPTY(@salutation) THEN",
-    "    SET @salutation = Concat(\"\", Lookup(\"" + contactDe + "\",\"Salutation\",\"Id\",@contactLookupKey))",
-    "  ENDIF",
-    "  IF EMPTY(@contactAccountId) THEN",
-    "    SET @contactAccountId = Concat(\"\", Lookup(\"" + contactDe + "\",\"AccountId\",\"Id\",@contactLookupKey))",
-    "  ENDIF",
-    "ENDIF",
-    "IF NOT EMPTY(@subscriberKey) AND IndexOf(@subscriberKey,\"@\") > 0 THEN",
-    "  SET @contactLookupKey = @subscriberKey",
-    "  IF EMPTY(@firstName) THEN",
-    "    SET @firstName = Concat(\"\", Lookup(\"" + contactDe + "\",\"FirstName\",\"Email\",@contactLookupKey))",
-    "  ENDIF",
-    "  IF EMPTY(@lastName) THEN",
-    "    SET @lastName = Concat(\"\", Lookup(\"" + contactDe + "\",\"LastName\",\"Email\",@contactLookupKey))",
-    "  ENDIF",
-    "  IF EMPTY(@salutation) THEN",
-    "    SET @salutation = Concat(\"\", Lookup(\"" + contactDe + "\",\"Salutation\",\"Email\",@contactLookupKey))",
-    "  ENDIF",
-    "  IF EMPTY(@contactAccountId) THEN",
-    "    SET @contactAccountId = Concat(\"\", Lookup(\"" + contactDe + "\",\"AccountId\",\"Email\",@contactLookupKey))",
-    "  ENDIF",
-    "  IF EMPTY(@surveyContactId) OR IndexOf(@surveyContactId,\"@\") > 0 THEN",
-    "    SET @surveyContactId = Concat(\"\", Lookup(\"" + contactDe + "\",\"Id\",\"Email\",@contactLookupKey))",
-    "  ENDIF",
-    "ENDIF",
-    "IF NOT EMPTY(@subscriberKey) AND EMPTY(@firstName) AND EMPTY(@lastName) THEN",
-    "  SET @contactLookupKey = @subscriberKey",
-    "  SET @firstName = Concat(\"\", Lookup(\"" + contactDe + "\",\"FirstName\",\"Id\",@contactLookupKey))",
-    "  SET @lastName = Concat(\"\", Lookup(\"" + contactDe + "\",\"LastName\",\"Id\",@contactLookupKey))",
-    "  SET @salutation = Concat(\"\", Lookup(\"" + contactDe + "\",\"Salutation\",\"Id\",@contactLookupKey))",
-    "  SET @contactAccountId = Concat(\"\", Lookup(\"" + contactDe + "\",\"AccountId\",\"Id\",@contactLookupKey))",
-    "  IF EMPTY(@surveyContactId) THEN",
-    "    SET @surveyContactId = Concat(\"\", Lookup(\"" + contactDe + "\",\"Id\",\"Id\",@contactLookupKey))",
-    "  ENDIF",
-    "ENDIF",
-    "IF NOT EMPTY(@salutation) AND NOT EMPTY(@lastName) THEN",
-    "  SET @fullGreeting = Concat(\"Hello \", @salutation, \" \", @lastName, \",\")",
-    "ELSEIF NOT EMPTY(@firstName) THEN",
-    "  SET @fullGreeting = Concat(\"Hello \", @firstName, \",\")",
-    "ELSEIF NOT EMPTY(@lastName) THEN",
-    "  SET @fullGreeting = Concat(\"Hello Mr./Mrs. \", @lastName, \",\")",
-    "ELSE",
-    "  SET @fullGreeting = \"Hello,\"",
-    "ENDIF",
-    "SET @ownerId = Concat(\"\", Trim(AttributeValue(\"CampaignMember:Account:OwnerId\")))",
-    "IF EMPTY(@ownerId) THEN",
-    "  SET @ownerId = Concat(\"\", Trim(AttributeValue(\"CampaignMember:Account_Owner__c\")))",
-    "ENDIF",
-    "IF EMPTY(@ownerId) THEN",
-    "  SET @ownerId = Concat(\"\", Trim(AttributeValue(\"OwnerId\")))",
-    "ENDIF",
-    "IF EMPTY(@ownerId) AND NOT EMPTY(@contactAccountId) THEN",
-    "  SET @ownerId = Concat(\"\", Lookup(\"" + accountDe + "\",\"OwnerId\",\"Id\",@contactAccountId))",
-    "ENDIF",
-    "SET @sendfromName = \"MagMutual\"",
-    "SET @sendFromEmail = \"info@magmutual.com\"",
-    "SET @senderTitle = \"\"",
-    "SET @signaturePhone = \"(800) 282-4882\"",
-    "SET @senderSalesLicenseNumber = \"\"",
-    "SET @senderAppointmentLink = \"\"",
-    "SET @senderLicense = \"\"",
-    "IF NOT EMPTY(@ownerId) THEN",
-    "  SET @sendfromName = Concat(\"\", Lookup(\"" + userDe + "\",\"Name\",\"Id\",@ownerId))",
-    "  SET @sendFromEmail = Concat(\"\", Lookup(\"" + userDe + "\",\"Email\",\"Id\",@ownerId))",
-    "  SET @senderTitle = Concat(\"\", Lookup(\"" + userDe + "\",\"Title\",\"Id\",@ownerId))",
-    "  SET @signaturePhone = Concat(\"\", Lookup(\"" + userDe + "\",\"Phone\",\"Id\",@ownerId))",
-    "  SET @senderSalesLicenseNumber = Concat(\"\", Lookup(\"" + userDe + "\",\"Sales_License_Number__c\",\"Id\",@ownerId))",
-    "  SET @senderAppointmentLink = Concat(\"\", Lookup(\"" + userDe + "\",\"Appointment_Link__c\",\"Id\",@ownerId))",
-    "ENDIF",
-    "IF EMPTY(@sendfromName) THEN",
-    "  SET @sendfromName = \"MagMutual\"",
-    "ENDIF",
-    "IF EMPTY(@sendFromEmail) THEN",
-    "  SET @sendFromEmail = \"info@magmutual.com\"",
-    "ENDIF",
-    "IF EMPTY(@signaturePhone) THEN",
-    "  SET @signaturePhone = \"(800) 282-4882\"",
-    "ENDIF",
-    "IF NOT EMPTY(@senderSalesLicenseNumber) THEN",
-    "  SET @senderLicense = Concat(\"License #: \",@senderSalesLicenseNumber,\"<br>\")",
-    "ENDIF",
-    "IF IndexOf(@sendfromName,\" \") > 0 THEN",
-    "  SET @senderFirstName = Substring(@sendfromName,1,Subtract(IndexOf(@sendfromName,\" \"),1))",
-    "ELSE",
-    "  SET @senderFirstName = @sendfromName",
-    "ENDIF",
-    "SET @signature = Concat('<p style=\"margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">',IIF(NOT EMPTY(@senderAppointmentLink),Concat('<a href=\"https://cloud.go.magmutual.com/go-redirect-to-uat-link?url=',@senderAppointmentLink,'\" target=\"_blank\" style=\"text-decoration:underline;\">Book time to meet with me</a><br><br>'),''),'Best regards,<br>','<span style=\"font-style:italic;font-family:serif;font-size:20px;\">',@senderFirstName,'</span><br>',IIF(NOT EMPTY(@senderTitle),Concat(@senderTitle,'<br>'),''),@sendfromName,'<br>',@sendFromEmail,'<br>',@signaturePhone,'<br>',@senderLicense,' MagMutual Insurance','</p>')"
-  ]);
-  var surveyContactId = ampValue("v(@surveyContactId)");
-  var surveyUrl = takeSurveyUrl(surveyId, surveyContactId);
-  var fullGreeting = ampValue("v(@fullGreeting)");
-  var signatureOutput = ampValue("v(@signature)");
+function minimalEmailHtml(headline, textBody, surveyId) {
+  var surveyHref =
+    takeSurveyUrl(surveyId, "") + "&contact=" + ampValue("v(@SubscriberKey)");
   var footerBlock = ampValue("ContentBlockByKey(\"Email_Footer_2407\")");
   var memberAddressBlock = [
     "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;\">",
@@ -496,13 +365,12 @@ function minimalEmailHtml(headline, textBody, surveyId, syncTables) {
     "</table>",
     "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;\">",
     "<tr><td style=\"padding:30px;font-family:Arial,Helvetica,sans-serif;color:#161616;font-size:14px;line-height:20px;\">",
-    "<div style=\"display:none;\">" + personalizationAmp + "</div>",
-    "<p style=\"margin:0 0 20px;\">" + fullGreeting + "</p>",
+    "<p style=\"margin:0 0 20px;\">Hello,</p>",
     textBodyParagraph(textBody),
-    "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr><td bgcolor=\"#0060F5\" style=\"background:#0060F5;\"><a href=\"" + htmlSafe(surveyUrl) + "\" target=\"_blank\" style=\"display:block;padding:10px 99px 10px 10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;text-decoration:none;\">Take Survey</a></td></tr></table>",
+    "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr><td bgcolor=\"#0060F5\" style=\"background:#0060F5;\"><a href=\"" + surveyHref + "\" target=\"_blank\" style=\"display:block;padding:10px 99px 10px 10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;text-decoration:none;\">Take Survey</a></td></tr></table>",
     "<p style=\"margin:20px 0 0;\">If you have any questions or run into any issues, don't hesitate to reach out.</p>",
     "<p style=\"margin:20px 0 0;\">Thank you for sharing your thoughts &mdash; we truly value your feedback!</p>",
-    signatureOutput,
+    defaultCreatedEmailSignatureHtml(),
     "</td></tr>",
     "</table>",
     footerBlock,
@@ -586,13 +454,11 @@ if (formValue("createEmail") == "1") {
     }
     var existingAssetId = clean(formValue("existingAssetId"));
     var surveyUrl = takeSurveyUrl(surveyId, "");
-    var hubNavEnv = clean(lookupValue("bd_sst_page_navigation", "environment", "type", "cloudpage")).toLowerCase();
-    var hubSyncTables = previewTables(hubNavEnv == "uat" ? "uat" : "prod");
     var payload = {
       name: emailName,
       views: {
         html: {
-          content: minimalEmailHtml(headline, textBody, surveyId, hubSyncTables)
+          content: minimalEmailHtml(headline, textBody, surveyId)
         },
         text: {
           content: textBody + "\n\nTake Survey: " + surveyUrl
