@@ -7,7 +7,7 @@ VAR @authOk, @accessToken, @subdomain, @clientId, @clientSecret, @authUrl, @auth
 VAR @MC_CLOUD
 VAR @journeyFlowHtml, @journeyActivitiesHtml, @journeyMetaHtml, @journeyBuilderUrl
 VAR @apiJourneyName, @apiJourneyStatus, @apiJourneyVersion, @apiActivityCount, @editSidebarHtml
-VAR @saveScheduleRequested, @schedulePanelVisible, @scheduleEventDefId, @scheduleSaveMsg, @scheduleEditorOpen
+VAR @saveScheduleRequested, @schedulePanelVisible, @scheduleEventDefId, @scheduleSaveMsg, @scheduleEditorOpen, @scheduleSummary
 VAR @entryScheduleType, @entryScheduleRepeat, @entryScheduleInterval, @entryScheduleOccurrences
 VAR @entryScheduleEnd, @entryScheduleEndDate
 VAR @entryScheduleWeekdays, @entryContactEvaluation, @entryScheduleStart
@@ -17,6 +17,7 @@ SET @schedulePanelVisible = "false"
 SET @scheduleEventDefId = ""
 SET @scheduleSaveMsg = ""
 SET @scheduleEditorOpen = "false"
+SET @scheduleSummary = ""
 SET @entryScheduleType = "runOnce"
 SET @entryScheduleRepeat = "daily"
 SET @entryScheduleInterval = "1"
@@ -1392,6 +1393,118 @@ function formatEndDateInputFromEvent(evObj) {
   return "";
 }
 
+function formatUsDateFromIso(iso) {
+  var s = strTrim(iso);
+  if (s.length < 10) {
+    return s;
+  }
+  var parts = s.substring(0, 10).split("-");
+  if (parts.length !== 3) {
+    return s.substring(0, 10);
+  }
+  return parts[1] + "/" + parts[2] + "/" + parts[0];
+}
+
+function repeatUnitLabel(repeat, interval) {
+  var r = strTrim(repeat).toLowerCase();
+  var n = parseInt(strTrim(interval) || "1", 10);
+  if (isNaN(n) || n < 1) {
+    n = 1;
+  }
+  if (r === "hourly") {
+    return n === 1 ? "hour" : "hours";
+  }
+  if (r === "weekly") {
+    return n === 1 ? "week" : "weeks";
+  }
+  if (r === "monthly") {
+    return n === 1 ? "month" : "months";
+  }
+  if (r === "yearly") {
+    return n === 1 ? "year" : "years";
+  }
+  if (r === "weekdays") {
+    return "weekday";
+  }
+  return n === 1 ? "day" : "days";
+}
+
+function repeatTitleLabel(repeat) {
+  var r = strTrim(repeat).toLowerCase();
+  if (r === "hourly") {
+    return "Hourly";
+  }
+  if (r === "weekdays") {
+    return "Weekdays";
+  }
+  if (r === "weekly") {
+    return "Weekly";
+  }
+  if (r === "monthly") {
+    return "Monthly";
+  }
+  if (r === "yearly") {
+    return "Yearly";
+  }
+  return "Daily";
+}
+
+function formatEndSummary(endMode, occurrences, endDate) {
+  var mode = strTrim(endMode).toLowerCase();
+  if (mode === "never") {
+    return "End: Never";
+  }
+  if (mode === "enddate") {
+    var d = formatUsDateFromIso(endDate);
+    return d ? "End: On " + d : "End: On date";
+  }
+  var n = parseInt(strTrim(occurrences) || "2", 10);
+  if (isNaN(n) || n < 1) {
+    n = 2;
+  }
+  return "End: After " + n + " occurrence" + (n === 1 ? "" : "s");
+}
+
+function buildScheduleSummaryFromEvent(evObj) {
+  if (!evObj) {
+    return "No schedule information available.";
+  }
+  if (inferScheduleTypeFromEvent(evObj) !== "recurring") {
+    return "Run once (on activation or a specific start in Journey Builder).";
+  }
+  var sched = evObj.schedule || {};
+  var repeat = inferRepeatFromEvent(evObj);
+  var interval = sched.interval !== undefined && sched.interval !== null ? String(sched.interval) : "1";
+  var start = formatUsDateFromIso(sched.startDateTime);
+  var endMode = inferEndModeFromEvent(evObj);
+  var occ = sched.occurrences !== undefined && sched.occurrences !== null ? String(sched.occurrences) : "2";
+  var endDate = formatEndDateInputFromEvent(evObj);
+  var chunks = [];
+  chunks.push("Recurring " + repeatTitleLabel(repeat).toLowerCase());
+  if (repeat === "weekdays") {
+    chunks.push("every weekday");
+  } else {
+    chunks.push("every " + interval + " " + repeatUnitLabel(repeat, interval));
+  }
+  if (repeat === "weekly") {
+    var days = inferWeekdaysFromEvent(evObj);
+    if (days) {
+      chunks.push("on " + days.toUpperCase().replace(/,/g, ", "));
+    }
+  }
+  if (start) {
+    chunks.push("starts " + start + " at 12:00 AM Eastern");
+  }
+  chunks.push(formatEndSummary(endMode, occ, endDate));
+  var args = evObj.arguments || {};
+  if (args.useHighWatermark === false) {
+    chunks.push("Evaluates all records");
+  } else {
+    chunks.push("Evaluates new records only");
+  }
+  return chunks.join(" · ");
+}
+
 function syncScheduleFormFromEvent(evObj) {
   Platform.Variable.SetValue("@entryScheduleType", inferScheduleTypeFromEvent(evObj));
   Platform.Variable.SetValue("@entryScheduleRepeat", inferRepeatFromEvent(evObj));
@@ -1412,6 +1525,7 @@ function syncScheduleFormFromEvent(evObj) {
     "@entryContactEvaluation",
     args.useHighWatermark === false ? "all" : "newOnly"
   );
+  Platform.Variable.SetValue("@scheduleSummary", buildScheduleSummaryFromEvent(evObj));
 }
 
 function applyEventScheduleForm(
@@ -1488,15 +1602,20 @@ try {
           accessToken,
           deEntry.eventDefId
         );
+        var saveSchedule =
+          Platform.Variable.GetValue("@saveScheduleRequested") === "1";
         if (evFetched.ok && evFetched.obj) {
           entrySourceLabel = resolveEntrySourceLabel(
             jObj,
             activities,
             evFetched.obj
           );
+        } else if (!saveSchedule) {
+          Platform.Variable.SetValue(
+            "@scheduleSummary",
+            "Could not load current schedule."
+          );
         }
-        var saveSchedule =
-          Platform.Variable.GetValue("@saveScheduleRequested") === "1";
         if (saveSchedule && !evFetched.ok) {
           Platform.Variable.SetValue(
             "@scheduleSaveMsg",
@@ -1767,7 +1886,8 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 <div class="panel">%%[ IF NOT Empty(@journeyMetaHtml) THEN ]%%%%=TreatAsContent(@journeyMetaHtml)=%%%%[ ENDIF ]%%</div>
 %%[ IF @schedulePanelVisible == "true" THEN ]%%
 <div class="panel schedule-panel%%[ IF @scheduleEditorOpen == "true" THEN ]%% is-editing%%[ ENDIF ]%%" id="schedulePanel">
-  <p class="flow-hint schedule-panel-lead">Data extension entry schedule (Eastern Time, 12:00 AM start). Matches Journey Builder repeat options.</p>
+  <h2 class="panel-title">Schedule</h2>
+  <p class="flow-hint schedule-panel-lead">%%=IIF(NOT Empty(@scheduleSummary), @scheduleSummary, "Loading schedule…")=%%</p>
 %%[ IF NOT Empty(@scheduleSaveMsg) THEN ]%%
   <p class="schedule-save-msg%%[ IF IndexOf(@scheduleSaveMsg,"Could not") > 0 THEN ]%% is-error%%[ ENDIF ]%%">%%=v(@scheduleSaveMsg)=%%</p>
 %%[ ENDIF ]%%
