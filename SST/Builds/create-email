@@ -15,6 +15,18 @@ SET @emailHeadline = Trim(RequestParameter("emailHeadline"))
 SET @surveyId = Trim(RequestParameter("surveyId"))
 SET @emailRowId = Trim(RequestParameter("emailRowId"))
 SET @previewFlow = Trim(RequestParameter("previewFlow"))
+SET @signatureChoice = Trim(RequestParameter("signatureChoice"))
+SET @signatureSlotKey = Trim(RequestParameter("signatureSlotKey"))
+SET @signaturePermKey = ""
+IF @signatureChoice == "standard" THEN
+SET @signaturePermKey = "standard_signature"
+ELSEIF @signatureChoice == "book_link" THEN
+SET @signaturePermKey = "booking_link_signature"
+ENDIF
+SET @signatureContentBlockName = ""
+IF NOT Empty(@signaturePermKey) THEN
+SET @signatureContentBlockName = Lookup("bd_sst_email_perm_blocks","content_block_block","content_block_name",@signaturePermKey)
+ENDIF
 SET @navHomeRow = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navHomeRow) > 0 THEN
     SET @navBackHome = Row(@navHomeRow,1)
@@ -65,7 +77,7 @@ ENDIF
 IF Empty(@emailRowId) THEN
 SET @emailRowId = @emailId
 ENDIF
-IF @previewFlow == "1" AND NOT Empty(@emailRowId) AND (Empty(@bodySlotKey) OR Empty(@headerSlotKey) OR Empty(@buttonSlotKey) OR Empty(@templateEmailName)) THEN
+IF @previewFlow == "1" AND NOT Empty(@emailRowId) AND (Empty(@bodySlotKey) OR Empty(@headerSlotKey) OR Empty(@buttonSlotKey) OR Empty(@signatureSlotKey) OR Empty(@templateEmailName)) THEN
 SET @slotKeyLookupRows = LookupRows("bd_sst_email_templates","email_id",@emailRowId)
 IF RowCount(@slotKeyLookupRows) > 0 THEN
 SET @slotKeyLookupRow = Row(@slotKeyLookupRows,1)
@@ -77,6 +89,9 @@ SET @headerSlotKey = Trim(Field(@slotKeyLookupRow,"header_slot_key"))
 ENDIF
 IF Empty(@buttonSlotKey) THEN
 SET @buttonSlotKey = Trim(Field(@slotKeyLookupRow,"button_slot_key"))
+ENDIF
+IF Empty(@signatureSlotKey) THEN
+SET @signatureSlotKey = Trim(Field(@slotKeyLookupRow,"signature_slot_key"))
 ENDIF
 IF Empty(@templateEmailName) THEN
 SET @templateEmailName = Trim(Field(@slotKeyLookupRow,"email_name"))
@@ -320,6 +335,28 @@ if (
 if (buttonSlotKey && surveyId && templateEmailName === "survey") {
   applySlotHtmlContent(payload, buttonSlotKey, wrapSurveyButtonHtmlForSlot(surveyId));
 }
+var signatureSlotKey = Platform.Variable.GetValue("@signatureSlotKey") || "";
+var signatureContentBlockName = Platform.Variable.GetValue("@signatureContentBlockName") || "";
+var signatureChoice = Platform.Variable.GetValue("@signatureChoice") || "";
+if (
+  signatureSlotKey &&
+  signatureContentBlockName &&
+  signatureChoice !== "none" &&
+  signatureChoice !== ""
+) {
+  applySlotHtmlContent(
+    payload,
+    signatureSlotKey,
+    buildSignatureSlotAmpContent(signatureContentBlockName)
+  );
+}
+}
+function buildSignatureSlotAmpContent(blockName) {
+var safeName = String(blockName || "").replace(/"/g, "");
+if (!safeName) {
+  return "";
+}
+return '%%=ContentBlockByName("' + safeName + '")=%%';
 }
 function normalizeTemplateEmailName(value) {
 return String(value || "").replace(/^\s+|\s+$/g, "").toLowerCase();
@@ -1309,6 +1346,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
               SET @cardBodySlotKey = Trim(Field(@templateRow,"body_slot_key"))
               SET @cardHeaderSlotKey = Trim(Field(@templateRow,"header_slot_key"))
               SET @cardButtonSlotKey = Trim(Field(@templateRow,"button_slot_key"))
+              SET @cardSignatureSlotKey = Trim(Field(@templateRow,"signature_slot_key"))
               SET @cardHasPreviewFlow = "false"
               IF NOT Empty(@cardTemplateId) THEN
                 SET @cardHasPreviewFlow = "true"
@@ -1332,7 +1370,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
                 SET @cardLabel = Concat(Substring(@cardLabel,1,18),"...")
               ENDIF
         ]%%
-        <label class="email-card %%[ IF @emailId == @cardEmailId THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@cardEmailId)=%%" data-template-id="%%=v(@cardTemplateId)=%%" data-has-preview-flow="%%=v(@cardHasPreviewFlow)=%%" data-email-name="%%=v(@cardEmailName)=%%" data-preview-renderer="%%=v(@cardPreviewRenderer)=%%" data-body-slot-key="%%=v(@cardBodySlotKey)=%%" data-header-slot-key="%%=v(@cardHeaderSlotKey)=%%" data-button-slot-key="%%=v(@cardButtonSlotKey)=%%">
+        <label class="email-card %%[ IF @emailId == @cardEmailId THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@cardEmailId)=%%" data-template-id="%%=v(@cardTemplateId)=%%" data-has-preview-flow="%%=v(@cardHasPreviewFlow)=%%" data-email-name="%%=v(@cardEmailName)=%%" data-preview-renderer="%%=v(@cardPreviewRenderer)=%%" data-body-slot-key="%%=v(@cardBodySlotKey)=%%" data-header-slot-key="%%=v(@cardHeaderSlotKey)=%%" data-button-slot-key="%%=v(@cardButtonSlotKey)=%%" data-signature-slot-key="%%=v(@cardSignatureSlotKey)=%%">
           <input type="radio" name="emailId" value="%%=v(@cardEmailId)=%%" %%[ IF @emailId == @cardEmailId THEN ]%%checked%%[ ENDIF ]%%>
           <img class="email-card-img" src="%%=v(@cardEmailPreview)=%%" alt="%%=v(@cardEmailName)=%%">
           <div class="email-card-label">%%=v(@cardLabel)=%%</div>
@@ -1391,6 +1429,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
           <input type="hidden" name="bodySlotKey" id="step2BodySlotKey" value="">
           <input type="hidden" name="headerSlotKey" id="step2HeaderSlotKey" value="">
           <input type="hidden" name="buttonSlotKey" id="step2ButtonSlotKey" value="">
+          <input type="hidden" name="signatureSlotKey" id="step2SignatureSlotKey" value="">
           <input type="hidden" name="templateEmailName" id="step2TemplateEmailName" value="">
           <input type="hidden" name="emailBodyText" id="step2EmailBodyText" value="">
           <input type="hidden" name="emailHeadline" id="step2EmailHeadline" value="">
@@ -1422,6 +1461,14 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
               </div>
             </div>
           </div>
+          <div class="form-group" id="step2SignatureGroup" style="display:none;">
+            <label class="form-label" for="step2SignatureChoice">Signature</label>
+            <select class="form-input" id="step2SignatureChoice" name="signatureChoice">
+              <option value="none">No Signature</option>
+              <option value="standard">Standard Signature</option>
+              <option value="book_link">Signature &amp; Book Link</option>
+            </select>
+          </div>
           <div class="step2-actions">
             <button type="button" class="maker-btn maker-btn--secondary" id="createEmailBackBtn">Back</button>
             <button type="submit" class="submit-button" id="submitBtn">
@@ -1447,6 +1494,12 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   </form>
   </div>
    </div>
+%%[
+SET @permStdBlockName = Lookup("bd_sst_email_perm_blocks","content_block_block","content_block_name","standard_signature")
+SET @permBookBlockName = Lookup("bd_sst_email_perm_blocks","content_block_block","content_block_name","booking_link_signature")
+]%%
+<div id="sigPreviewStandard" hidden aria-hidden="true" style="display:none;">%%[ IF NOT Empty(@permStdBlockName) THEN ]%%%%=TreatAsContent(ContentBlockByName(@permStdBlockName))=%%%%[ ENDIF ]%%</div>
+<div id="sigPreviewBook" hidden aria-hidden="true" style="display:none;">%%[ IF NOT Empty(@permBookBlockName) THEN ]%%%%=TreatAsContent(ContentBlockByName(@permBookBlockName))=%%%%[ ENDIF ]%%</div>
 %%[ ELSE ]%%
    <div class="maker-page-heading">
      <div class="maker-page-heading-icon maker-result-status %%[ IF IndexOf(@resultText,"FAILED") > 0 THEN ]%%is-error%%[ ELSE ]%%is-success%%[ ENDIF ]%%" aria-hidden="true">
@@ -1521,7 +1574,7 @@ Your email asset is in Content Builder. Use the link below when you are ready to
       render: function (state) {
         var greeting = escapeHtml(state.greeting || "Hello,");
         var introBody = textToHtml(state.body || "");
-        var signatureHtml = state.signatureHtml || defaultSignature;
+        var signatureHtml = state.signatureHtml || "";
         return [
           "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;margin:0;padding:30px 0;\">",
           "<tr><td align=\"left\">",
@@ -1542,7 +1595,7 @@ Your email asset is in Content Builder. Use the link below when you are ready to
         var headline = escapeHtml(state.headline || state.subject || "Your headline");
         var greeting = escapeHtml(state.greeting || "Hello,");
         var textBody = textToHtml(state.body || "");
-        var signatureHtml = state.signatureHtml || defaultSignature;
+        var signatureHtml = state.signatureHtml || "";
         var surveyId = encodeURIComponent(state.surveyId || "SURV_20260612_102301");
         var surveyUrl =
           "https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=" +
@@ -1584,14 +1637,28 @@ Your email asset is in Content Builder. Use the link below when you are ready to
         var node = root.getElementById ? root.getElementById(id) : document.getElementById(id);
         return node ? node.value : "";
       }
+      function resolveSignaturePreviewHtml(choice) {
+        var previewNode;
+        if (choice === "standard") {
+          previewNode = document.getElementById("sigPreviewStandard");
+          return previewNode ? previewNode.innerHTML : "";
+        }
+        if (choice === "book_link") {
+          previewNode = document.getElementById("sigPreviewBook");
+          return previewNode ? previewNode.innerHTML : "";
+        }
+        return "";
+      }
+      var signatureChoice = val("step2SignatureChoice") || "none";
       return {
         subject: val("step2EmailSubjectLine"),
         preheader: val("step2Preheader"),
         body: val("step2Body") || val("step2BodyBg"),
         headline: val("step2Headline"),
         surveyId: val("step2SurveyId"),
-        greeting: "Hello,",
-        signatureHtml: defaultSignature
+        signatureChoice: signatureChoice,
+        signatureHtml: resolveSignaturePreviewHtml(signatureChoice),
+        greeting: "Hello,"
       };
     },
     update: function (rendererKey, state, ui) {
@@ -1679,7 +1746,17 @@ function syncStep2FromStep1() {
   document.getElementById('step2BodySlotKey').value = card ? (card.getAttribute('data-body-slot-key') || '') : '';
   document.getElementById('step2HeaderSlotKey').value = card ? (card.getAttribute('data-header-slot-key') || '') : '';
   document.getElementById('step2ButtonSlotKey').value = card ? (card.getAttribute('data-button-slot-key') || '') : '';
+  document.getElementById('step2SignatureSlotKey').value = card ? (card.getAttribute('data-signature-slot-key') || '') : '';
   document.getElementById('step2TemplateEmailName').value = templateEmailName;
+  var signatureGroup = document.getElementById('step2SignatureGroup');
+  var signatureSlotKey = card ? (card.getAttribute('data-signature-slot-key') || '') : '';
+  if (signatureGroup) {
+    signatureGroup.style.display = signatureSlotKey ? 'block' : 'none';
+  }
+  var signatureChoiceEl = document.getElementById('step2SignatureChoice');
+  if (signatureChoiceEl && !signatureSlotKey) {
+    signatureChoiceEl.value = 'none';
+  }
   var headlineEl = document.getElementById('step2Headline');
   if (headlineEl && !headlineEl.dataset.userEdited) {
     headlineEl.value = subject;
@@ -1766,7 +1843,7 @@ if (headlineEl) {
     headlineEl.dataset.userEdited = '1';
   });
 }
-['step2Preheader','step2Body','step2BodyBg','step2Headline','step2SurveyId','step2EmailSubjectLine'].forEach(function(id) {
+['step2Preheader','step2Body','step2BodyBg','step2Headline','step2SurveyId','step2EmailSubjectLine','step2SignatureChoice'].forEach(function(id) {
   var node = document.getElementById(id);
   if (node) node.addEventListener('input', refreshCreateEmailPreview);
 });
