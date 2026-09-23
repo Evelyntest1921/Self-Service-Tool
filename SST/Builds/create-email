@@ -13,6 +13,8 @@ SET @buttonSlotKey = Trim(RequestParameter("buttonSlotKey"))
 SET @templateEmailName = Trim(RequestParameter("templateEmailName"))
 SET @emailHeadline = Trim(RequestParameter("emailHeadline"))
 SET @surveyId = Trim(RequestParameter("surveyId"))
+SET @emailRowId = Trim(RequestParameter("emailRowId"))
+SET @previewFlow = Trim(RequestParameter("previewFlow"))
 SET @navHomeRow = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navHomeRow) > 0 THEN
     SET @navBackHome = Row(@navHomeRow,1)
@@ -60,8 +62,11 @@ ENDIF
 IF Empty(@emailSubjectLine) THEN
 SET @emailSubjectLine = "Campaign Event"
 ENDIF
-IF NOT Empty(@emailId) AND (Empty(@bodySlotKey) OR Empty(@headerSlotKey) OR Empty(@buttonSlotKey) OR Empty(@templateEmailName)) THEN
-SET @slotKeyLookupRows = LookupRows("bd_sst_email_templates","email_id",@emailId)
+IF Empty(@emailRowId) THEN
+SET @emailRowId = @emailId
+ENDIF
+IF @previewFlow == "1" AND NOT Empty(@emailRowId) AND (Empty(@bodySlotKey) OR Empty(@headerSlotKey) OR Empty(@buttonSlotKey) OR Empty(@templateEmailName)) THEN
+SET @slotKeyLookupRows = LookupRows("bd_sst_email_templates","email_id",@emailRowId)
 IF RowCount(@slotKeyLookupRows) > 0 THEN
 SET @slotKeyLookupRow = Row(@slotKeyLookupRows,1)
 IF Empty(@bodySlotKey) THEN
@@ -285,6 +290,9 @@ if (!slot.content) {
 }
 }
 function applyCreateEmailContent(payload) {
+if (Platform.Variable.GetValue("@previewFlow") != "1") {
+  return;
+}
 var bodySlotKey = Platform.Variable.GetValue("@bodySlotKey") || "";
 var emailBodyText = Platform.Variable.GetValue("@emailBodyText") || "";
 var emailPreheader = Platform.Variable.GetValue("@emailPreheader") || "";
@@ -1294,12 +1302,21 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
             FOR @ti = 1 TO @templateCount DO
               SET @templateRow = Row(@templateRows,@ti)
               SET @cardEmailId = Trim(Field(@templateRow,"email_id"))
+              SET @cardTemplateId = Trim(Field(@templateRow,"template_id"))
               SET @cardEmailName = Field(@templateRow,"email_name")
               SET @cardEmailPreview = Field(@templateRow,"email_preview")
               SET @cardPreviewRenderer = Trim(Field(@templateRow,"preview_renderer"))
               SET @cardBodySlotKey = Trim(Field(@templateRow,"body_slot_key"))
               SET @cardHeaderSlotKey = Trim(Field(@templateRow,"header_slot_key"))
               SET @cardButtonSlotKey = Trim(Field(@templateRow,"button_slot_key"))
+              SET @cardHasPreviewFlow = "false"
+              IF NOT Empty(@cardTemplateId) THEN
+                SET @cardHasPreviewFlow = "true"
+              ENDIF
+              SET @cardDisplayId = @cardEmailId
+              IF NOT Empty(@cardTemplateId) THEN
+                SET @cardDisplayId = @cardTemplateId
+              ENDIF
               SET @cardEmailNameLower = Lowercase(Trim(@cardEmailName))
               IF Empty(@cardPreviewRenderer) THEN
                 IF @cardEmailNameLower == "no_header" OR @cardEmailNameLower == "dm_quick_send" THEN
@@ -1315,27 +1332,27 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
                 SET @cardLabel = Concat(Substring(@cardLabel,1,18),"...")
               ENDIF
         ]%%
-        <label class="email-card %%[ IF @emailId == @cardEmailId THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@cardEmailId)=%%" data-email-name="%%=v(@cardEmailName)=%%" data-preview-renderer="%%=v(@cardPreviewRenderer)=%%" data-body-slot-key="%%=v(@cardBodySlotKey)=%%" data-header-slot-key="%%=v(@cardHeaderSlotKey)=%%" data-button-slot-key="%%=v(@cardButtonSlotKey)=%%">
+        <label class="email-card %%[ IF @emailId == @cardEmailId THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@cardEmailId)=%%" data-template-id="%%=v(@cardTemplateId)=%%" data-has-preview-flow="%%=v(@cardHasPreviewFlow)=%%" data-email-name="%%=v(@cardEmailName)=%%" data-preview-renderer="%%=v(@cardPreviewRenderer)=%%" data-body-slot-key="%%=v(@cardBodySlotKey)=%%" data-header-slot-key="%%=v(@cardHeaderSlotKey)=%%" data-button-slot-key="%%=v(@cardButtonSlotKey)=%%">
           <input type="radio" name="emailId" value="%%=v(@cardEmailId)=%%" %%[ IF @emailId == @cardEmailId THEN ]%%checked%%[ ENDIF ]%%>
           <img class="email-card-img" src="%%=v(@cardEmailPreview)=%%" alt="%%=v(@cardEmailName)=%%">
           <div class="email-card-label">%%=v(@cardLabel)=%%</div>
-          <div class="email-card-id">ID: %%=v(@cardEmailId)=%%</div>
+          <div class="email-card-id">ID: %%=v(@cardDisplayId)=%%</div>
         </label>
         %%[ NEXT @ti
           ELSE ]%%
-        <label class="email-card %%[ IF @emailId == @emailIdLg THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@emailIdLg)=%%" data-email-name="large_header" data-preview-renderer="bg_header">
+        <label class="email-card %%[ IF @emailId == @emailIdLg THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@emailIdLg)=%%" data-template-id="" data-has-preview-flow="false" data-email-name="large_header" data-preview-renderer="bg_header">
           <input type="radio" name="emailId" value="%%=v(@emailIdLg)=%%" %%[ IF @emailId == @emailIdLg THEN ]%%checked%%[ ENDIF ]%%>
           <img class="email-card-img" src="https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/BG-LG-Header-templates.png" alt="Big header">
           <div class="email-card-label">Big Header</div>
           <div class="email-card-id">ID: %%=v(@emailIdLg)=%%</div>
         </label>
-        <label class="email-card %%[ IF @emailId == @emailIdSm THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@emailIdSm)=%%" data-email-name="small_header" data-preview-renderer="bg_header">
+        <label class="email-card %%[ IF @emailId == @emailIdSm THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@emailIdSm)=%%" data-template-id="" data-has-preview-flow="false" data-email-name="small_header" data-preview-renderer="bg_header">
           <input type="radio" name="emailId" value="%%=v(@emailIdSm)=%%" %%[ IF @emailId == @emailIdSm THEN ]%%checked%%[ ENDIF ]%%>
           <img class="email-card-img" src="https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/BG-Header-templates.png" alt="Small header with background">
           <div class="email-card-label">Small Header</div>
           <div class="email-card-id">ID: %%=v(@emailIdSm)=%%</div>
         </label>
-        <label class="email-card %%[ IF @emailId == @emailIdNoBg THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@emailIdNoBg)=%%" data-email-name="no_header" data-preview-renderer="quick_send">
+        <label class="email-card %%[ IF @emailId == @emailIdNoBg THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@emailIdNoBg)=%%" data-template-id="" data-has-preview-flow="false" data-email-name="no_header" data-preview-renderer="quick_send">
           <input type="radio" name="emailId" value="%%=v(@emailIdNoBg)=%%" %%[ IF @emailId == @emailIdNoBg THEN ]%%checked%%[ ENDIF ]%%>
           <img class="email-card-img" src="https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/BG-NO-Header-templates.png" alt="No header with background">
           <div class="email-card-label">No Header</div>
@@ -1346,8 +1363,14 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
         <div class="maker-alert" role="alert">Template config missing in `bd_sst_email_templates` (email_type=template) or `SFMC_TEMPLATES`.</div>
         %%[ ENDIF ]%%
       </div>
-      <div class="submit-section">
+      <div class="submit-section" id="createEmailNextActions">
         <button type="button" class="submit-button" id="createEmailNextBtn" %%[ IF @templateConfigOk != "true" THEN ]%%disabled%%[ ENDIF ]%%>Next</button>
+      </div>
+      <div class="submit-section create-step-hidden" id="createEmailLegacyActions">
+        <button type="submit" class="submit-button" name="create" value="1" id="createEmailLegacySubmitBtn">
+          <span id="legacyBtnText">Create email</span>
+          <span id="legacyBtnSpinner" class="spinner" style="display:none"></span>
+        </button>
       </div>
     </div>
   </form>
@@ -1359,6 +1382,8 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
         <div>
           <p class="step2-summary" id="createEmailStep2Summary"></p>
           <input type="hidden" name="create" value="1">
+          <input type="hidden" name="previewFlow" value="1">
+          <input type="hidden" name="emailRowId" id="step2EmailRowId" value="">
           <input type="hidden" name="itemBaseName" id="step2ItemBaseName" value="">
           <input type="hidden" name="emailSubjectLine" id="step2EmailSubjectLine" value="">
           <input type="hidden" name="emailId" id="step2EmailId" value="">
@@ -1602,6 +1627,21 @@ function getSelectedTemplateCard() {
   if (!checked) return null;
   return checked.closest('.email-card');
 }
+function cardHasPreviewFlow(card) {
+  return !!(card && card.getAttribute('data-has-preview-flow') === 'true' && card.getAttribute('data-template-id'));
+}
+function updateStep1Actions() {
+  var card = getSelectedTemplateCard();
+  var preview = cardHasPreviewFlow(card);
+  var nextBlock = document.getElementById('createEmailNextActions');
+  var legacyBlock = document.getElementById('createEmailLegacyActions');
+  if (nextBlock) {
+    nextBlock.style.display = preview ? 'block' : 'none';
+  }
+  if (legacyBlock) {
+    legacyBlock.style.display = preview ? 'none' : 'block';
+  }
+}
 function normalizeTemplateEmailName(value) {
   return String(value || '').replace(/^\s+|\s+$/g, '').toLowerCase();
 }
@@ -1628,11 +1668,13 @@ function syncStep2FromStep1() {
   if (!subject) subject = 'Campaign Event';
   var card = getSelectedTemplateCard();
   var emailId = card ? card.getAttribute('data-email-id') : '';
+  var templateAssetId = card ? (card.getAttribute('data-template-id') || '') : '';
   var renderer = card ? (card.getAttribute('data-preview-renderer') || 'quick_send') : 'quick_send';
   var templateEmailName = card ? (card.getAttribute('data-email-name') || '') : '';
   document.getElementById('step2ItemBaseName').value = name;
   document.getElementById('step2EmailSubjectLine').value = subject;
-  document.getElementById('step2EmailId').value = emailId;
+  document.getElementById('step2EmailId').value = templateAssetId || emailId;
+  document.getElementById('step2EmailRowId').value = emailId;
   document.getElementById('step2PreviewRenderer').value = renderer;
   document.getElementById('step2BodySlotKey').value = card ? (card.getAttribute('data-body-slot-key') || '') : '';
   document.getElementById('step2HeaderSlotKey').value = card ? (card.getAttribute('data-header-slot-key') || '') : '';
@@ -1644,7 +1686,7 @@ function syncStep2FromStep1() {
   }
   var summary = document.getElementById('createEmailStep2Summary');
   if (summary) {
-    summary.innerHTML = '<strong>' + name.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</strong> · Template ID ' + emailId;
+    summary.innerHTML = '<strong>' + name.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</strong> · Template ID ' + (templateAssetId || emailId);
   }
   if (window.SSTEmailPreview) {
     SSTEmailPreview.toggleRendererFields(renderer);
@@ -1696,8 +1738,13 @@ var subtitle = document.getElementById('createEmailSubtitle');
 if (nextBtn && step1Form) {
   nextBtn.addEventListener('click', function() {
     if (!step1Form.reportValidity()) return;
-    if (!getSelectedTemplateCard()) {
+    var card = getSelectedTemplateCard();
+    if (!card) {
       window.alert('Choose an email template.');
+      return;
+    }
+    if (!cardHasPreviewFlow(card)) {
+      window.alert('This template is not configured for preview. Use Create email to duplicate the asset.');
       return;
     }
     syncStep2FromStep1();
@@ -1734,6 +1781,16 @@ if (step2Form && step2Form.querySelector('#submitBtn')) {
     if (btnSpinner) btnSpinner.style.display = 'inline-block';
   });
 }
+if (step1Form && step1Form.querySelector('#createEmailLegacySubmitBtn')) {
+  var legacyBtn = document.getElementById('createEmailLegacySubmitBtn');
+  var legacyBtnText = document.getElementById('legacyBtnText');
+  var legacyBtnSpinner = document.getElementById('legacyBtnSpinner');
+  step1Form.addEventListener('submit', function() {
+    if (legacyBtn) legacyBtn.disabled = true;
+    if (legacyBtnText) legacyBtnText.textContent = 'Creating...';
+    if (legacyBtnSpinner) legacyBtnSpinner.style.display = 'inline-block';
+  });
+}
 var cards = document.querySelectorAll('#createEmailTemplateCards .email-card');
 cards.forEach(function(card) {
   card.addEventListener('click', function() {
@@ -1741,8 +1798,10 @@ cards.forEach(function(card) {
     card.classList.add('selected');
     var input = card.querySelector('input[type="radio"]');
     if (input) input.checked = true;
+    updateStep1Actions();
   });
 });
+updateStep1Actions();
 var showLogBtn = document.getElementById('showLogBtn');
 var apiLog = document.getElementById('apiLog');
 if (showLogBtn && apiLog) {
