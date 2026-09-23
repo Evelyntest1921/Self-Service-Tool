@@ -5,6 +5,9 @@ SET @deleteEmailId = Trim(RequestParameter("deleteEmailId"))
 SET @emailId = RequestParameter("emailId")
 SET @itemBaseName = Trim(RequestParameter("itemBaseName"))
 SET @emailSubjectLine = Trim(RequestParameter("emailSubjectLine"))
+SET @emailPreheader = Trim(RequestParameter("emailPreheader"))
+SET @emailBodyText = RequestParameter("emailBodyText")
+SET @bodySlotKey = Trim(RequestParameter("bodySlotKey"))
 SET @navHomeRow = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navHomeRow) > 0 THEN
     SET @navBackHome = Row(@navHomeRow,1)
@@ -51,6 +54,12 @@ SET @emailId = @defaultEmailId
 ENDIF
 IF Empty(@emailSubjectLine) THEN
 SET @emailSubjectLine = "Campaign Event"
+ENDIF
+IF NOT Empty(@emailId) AND Empty(@bodySlotKey) THEN
+SET @slotKeyLookupRows = LookupRows("bd_sst_email_templates","email_id",@emailId)
+IF RowCount(@slotKeyLookupRows) > 0 THEN
+SET @bodySlotKey = Trim(Field(Row(@slotKeyLookupRows,1),"body_slot_key"))
+ENDIF
 ENDIF
 SET @emailName = ""
 IF NOT Empty(@itemBaseName) THEN
@@ -183,6 +192,100 @@ function truncateString(value, maxLength) {
 var str = value ? String(value) : "";
 if (str.length <= maxLength) return str;
 return str.substring(0, maxLength) + "...[truncated]";
+}
+function htmlSafe(value) {
+return String(value || "")
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;");
+}
+function textBodyParagraph(value) {
+var safeValue = htmlSafe(value).replace(/\r\n|\r|\n/g, "<br>");
+return "<p style=\"margin:0 0 18px;\">" + safeValue + "</p>";
+}
+function wrapBodyHtmlForSlot(text) {
+var lines = String(text || "").split(/\r\n|\r|\n/);
+var html = "";
+var i;
+for (i = 0; i < lines.length; i++) {
+  if (lines[i] === "" && i === lines.length - 1) {
+    continue;
+  }
+  html += textBodyParagraph(lines[i]);
+}
+if (!html) {
+  html = textBodyParagraph("");
+}
+return html;
+}
+function findBlockKeyInSlot(slots, slotKey) {
+var slot;
+var keys;
+if (!slots || !slotKey) {
+  return "";
+}
+slot = slots[slotKey];
+if (!slot || !slot.blocks || typeof slot.blocks !== "object") {
+  return "";
+}
+keys = objectKeys(slot.blocks);
+if (!keys.length) {
+  return "";
+}
+return keys[0];
+}
+function applyBodyToSlot(payload, slotKey, blockKey, bodyHtml) {
+var htmlView;
+var slots;
+var slot;
+if (!payload.views) {
+  payload.views = {};
+}
+if (!payload.views.html) {
+  payload.views.html = {};
+}
+htmlView = payload.views.html;
+if (!htmlView.slots || typeof htmlView.slots !== "object") {
+  htmlView.slots = {};
+}
+slots = htmlView.slots;
+if (!slots[slotKey] || typeof slots[slotKey] !== "object") {
+  slots[slotKey] = { content: "", blocks: {} };
+}
+slot = slots[slotKey];
+if (!slot.blocks || typeof slot.blocks !== "object") {
+  slot.blocks = {};
+}
+if (!slot.blocks[blockKey] || typeof slot.blocks[blockKey] !== "object") {
+  slot.blocks[blockKey] = {
+    assetType: { id: 196, name: "textblock" }
+  };
+}
+slot.blocks[blockKey].content = bodyHtml;
+if (!slot.content) {
+  slot.content = '<div data-type="block" data-key="' + blockKey + '"></div>';
+}
+}
+function applyCreateEmailContent(payload) {
+var bodySlotKey = Platform.Variable.GetValue("@bodySlotKey") || "";
+var emailBodyText = Platform.Variable.GetValue("@emailBodyText") || "";
+var emailPreheader = Platform.Variable.GetValue("@emailPreheader") || "";
+if (!payload || !payload.views) {
+  return;
+}
+if (emailPreheader) {
+  payload.views.preheader = { content: String(emailPreheader) };
+}
+if (!bodySlotKey || !emailBodyText || !payload.views.html) {
+  return;
+}
+var slotsForBlock = payload.views.html.slots;
+if (!slotsForBlock || typeof slotsForBlock !== "object") {
+  return;
+}
+var blockKey = findBlockKeyInSlot(slotsForBlock, bodySlotKey) || "bodyblock1";
+applyBodyToSlot(payload, bodySlotKey, blockKey, wrapBodyHtmlForSlot(emailBodyText));
 }
 function summarizeTemplateRef(templateRef) {
 if (!templateRef || typeof templateRef !== "object") return null;
@@ -413,7 +516,10 @@ try {
     var htmlView = sourceViews.html || {};
     var emailSubjectForAsset = Platform.Variable.GetValue("@emailSubjectLine") || "";
     var subjectlineContent = emailSubjectForAsset || ((sourceViews.subjectline && sourceViews.subjectline.content) ? sourceViews.subjectline.content : "Campaign Event");
-    var preheaderContent = (sourceViews.preheader && sourceViews.preheader.content) ? sourceViews.preheader.content : "";
+    var preheaderContent = Platform.Variable.GetValue("@emailPreheader") || "";
+    if (!preheaderContent && sourceViews.preheader && sourceViews.preheader.content) {
+      preheaderContent = sourceViews.preheader.content;
+    }
     var textContent = (sourceViews.text && sourceViews.text.content) ? sourceViews.text.content : "";
     var htmlContent = htmlView.content || template.content || "";
     var htmlSlots = (htmlView.slots && typeof htmlView.slots === "object") ? htmlView.slots : ((template.slots && typeof template.slots === "object") ? template.slots : {});
@@ -474,6 +580,7 @@ try {
       step3bResult = " Step 3b SKIP - Email not duplicated: Unsupported source asset type " + assetTypeId + "." + debugPrefix;
     }
     if (payload && !step3bResult.match(/views\.html\.template is missing|Unsupported source asset type/)) {
+      applyCreateEmailContent(payload);
       var debugObj = {
         source: {
           assetTypeId: assetTypeId,
@@ -1134,6 +1241,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
               SET @cardEmailName = Field(@templateRow,"email_name")
               SET @cardEmailPreview = Field(@templateRow,"email_preview")
               SET @cardPreviewRenderer = Trim(Field(@templateRow,"preview_renderer"))
+              SET @cardBodySlotKey = Trim(Field(@templateRow,"body_slot_key"))
               SET @cardEmailNameLower = Lowercase(Trim(@cardEmailName))
               IF Empty(@cardPreviewRenderer) THEN
                 IF @cardEmailNameLower == "no_header" OR @cardEmailNameLower == "dm_quick_send" THEN
@@ -1149,7 +1257,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
                 SET @cardLabel = Concat(Substring(@cardLabel,1,18),"...")
               ENDIF
         ]%%
-        <label class="email-card %%[ IF @emailId == @cardEmailId THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@cardEmailId)=%%" data-preview-renderer="%%=v(@cardPreviewRenderer)=%%">
+        <label class="email-card %%[ IF @emailId == @cardEmailId THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@cardEmailId)=%%" data-preview-renderer="%%=v(@cardPreviewRenderer)=%%" data-body-slot-key="%%=v(@cardBodySlotKey)=%%">
           <input type="radio" name="emailId" value="%%=v(@cardEmailId)=%%" %%[ IF @emailId == @cardEmailId THEN ]%%checked%%[ ENDIF ]%%>
           <img class="email-card-img" src="%%=v(@cardEmailPreview)=%%" alt="%%=v(@cardEmailName)=%%">
           <div class="email-card-label">%%=v(@cardLabel)=%%</div>
@@ -1197,9 +1305,11 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
           <input type="hidden" name="emailSubjectLine" id="step2EmailSubjectLine" value="">
           <input type="hidden" name="emailId" id="step2EmailId" value="">
           <input type="hidden" id="step2PreviewRenderer" value="quick_send">
+          <input type="hidden" name="bodySlotKey" id="step2BodySlotKey" value="">
+          <input type="hidden" name="emailBodyText" id="step2EmailBodyText" value="">
           <div class="form-group">
             <label class="form-label" for="step2Preheader">Preheader</label>
-            <input class="form-input" type="text" id="step2Preheader" value="Preview preheader text">
+            <input class="form-input" type="text" id="step2Preheader" name="emailPreheader" value="Preview preheader text">
           </div>
           <div class="renderer-field-panel" data-renderer-fields="quick_send" style="display:none;">
             <div class="form-group">
@@ -1439,6 +1549,7 @@ function syncStep2FromStep1() {
   document.getElementById('step2EmailSubjectLine').value = subject;
   document.getElementById('step2EmailId').value = emailId;
   document.getElementById('step2PreviewRenderer').value = renderer;
+  document.getElementById('step2BodySlotKey').value = card ? (card.getAttribute('data-body-slot-key') || '') : '';
   var headlineEl = document.getElementById('step2Headline');
   if (headlineEl && !headlineEl.dataset.userEdited) {
     headlineEl.value = subject;
@@ -1452,6 +1563,15 @@ function syncStep2FromStep1() {
   }
   refreshCreateEmailPreview();
 }
+function syncEmailBodyTextForPost() {
+  var rendererEl = document.getElementById('step2PreviewRenderer');
+  var renderer = rendererEl ? rendererEl.value : 'quick_send';
+  var bodyNode = renderer === 'bg_header' ? document.getElementById('step2BodyBg') : document.getElementById('step2Body');
+  var hiddenBody = document.getElementById('step2EmailBodyText');
+  if (hiddenBody) {
+    hiddenBody.value = bodyNode ? bodyNode.value : '';
+  }
+}
 function refreshCreateEmailPreview() {
   if (!window.SSTEmailPreview) return;
   var renderer = document.getElementById('step2PreviewRenderer').value || 'quick_send';
@@ -1462,6 +1582,7 @@ function refreshCreateEmailPreview() {
     dateEl: document.getElementById('previewDate'),
     frameEl: document.getElementById('emailPreviewFrame')
   });
+  syncEmailBodyTextForPost();
 }
 var step1Form = document.getElementById('createEmailStep1Form');
 var step2Form = document.getElementById('createEmailStep2Form');
@@ -1505,6 +1626,7 @@ if (step2Form && step2Form.querySelector('#submitBtn')) {
   var btnText = document.getElementById('btnText');
   var btnSpinner = document.getElementById('btnSpinner');
   step2Form.addEventListener('submit', function() {
+    syncEmailBodyTextForPost();
     btn.disabled = true;
     if (btnText) btnText.textContent = 'Creating...';
     if (btnSpinner) btnSpinner.style.display = 'inline-block';
