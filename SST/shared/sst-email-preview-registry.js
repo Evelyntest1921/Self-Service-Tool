@@ -11,6 +11,23 @@
     return escapeHtml(value).replace(/\r\n|\r|\n/g, "<br>");
   }
 
+  function previewSpacerRow(height) {
+    return (
+      "<tr><td align=\"center\" height=\"" +
+      height +
+      "\" style=\"line-height:0;font-size:" +
+      height +
+      "px;height:" +
+      height +
+      "px;\"><img src=\"https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/spacer.gif\" width=\"1\" height=\"" +
+      height +
+      "\" alt=\"\" border=\"0\" style=\"display:block;\" /></td></tr>"
+    );
+  }
+
+  var previewFontStack =
+    "'IBM Plex Sans', Arial, Helvetica, sans-serif";
+
   var defaultSignature =
     "<p style=\"margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">Best regards,<br><span style=\"font-style:italic;font-family:serif;font-size:20px;\">MagMutual</span><br>MagMutual Insurance</p>";
 
@@ -78,8 +95,79 @@
           "</table>"
         ].join("");
       }
+    },
+    small_header: {
+      fieldIds: ["step2Preheader", "step2BodyBg"],
+      render: function (state) {
+        var greeting = escapeHtml(state.greeting || "Hello,");
+        var textBody = textToHtml(state.body || "");
+        var signatureHtml = state.signatureHtml || defaultSignature;
+        var year = new Date().getFullYear();
+        var cellStyle =
+          "font-family:" +
+          previewFontStack +
+          ";font-size:14px;color:#161616;line-height:20px;padding:0 45px 0;";
+        return [
+          "<table role=\"presentation\" width=\"100%\" border=\"0\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#EFEFEF;margin:0;padding:0;\">",
+          "<tr><td align=\"center\">",
+          "<table role=\"presentation\" width=\"600\" border=\"0\" cellpadding=\"0\" cellspacing=\"0\" bgcolor=\"#EFEFEF\" style=\"max-width:100%;\">",
+          "<tr><td align=\"right\" style=\"font-family:" +
+            previewFontStack +
+            ";font-size:12px;color:#FFFFFF;line-height:36px;padding:10px;\"><a href=\"#\" style=\"color:#265dff;text-decoration:none;\">View as Web Page</a></td></tr>",
+          "</table>",
+          "<table role=\"presentation\" width=\"600\" border=\"0\" cellpadding=\"0\" cellspacing=\"0\" bgcolor=\"#393939\" style=\"background-color:#393939;max-width:100%;\">",
+          "<tr><td valign=\"top\" style=\"padding:30px;\"><a href=\"https://magmutual.com/\" target=\"_blank\"><img src=\"https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/MM_PrimaryLogo_Reversed.png\" alt=\"MagMutual\" width=\"200\" border=\"0\" style=\"display:block;\" /></a></td></tr>",
+          "</table>",
+          "<table role=\"presentation\" width=\"600\" border=\"0\" cellpadding=\"0\" cellspacing=\"0\" bgcolor=\"#FFFFFF\" style=\"max-width:100%;\">",
+          previewSpacerRow(20),
+          "<tr><td style=\"" +
+            cellStyle +
+            "\">" +
+            greeting +
+            "<br><br>" +
+            textBody +
+            "</td></tr>",
+          previewSpacerRow(20),
+          previewSpacerRow(20),
+          "<tr><td style=\"" +
+            cellStyle +
+            "\">" +
+            signatureHtml +
+            "</td></tr>",
+          previewSpacerRow(20),
+          previewSpacerRow(30),
+          previewSpacerRow(30),
+          "</table>",
+          "<table role=\"presentation\" width=\"600\" border=\"0\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:100%;\">",
+          previewSpacerRow(30),
+          "<tr><td style=\"font-size:9px;font-family:" +
+            previewFontStack +
+            ";line-height:12px;color:#808080;text-align:center;\">",
+          "<span style=\"text-decoration:underline;\">Unsubscribe</span> | <span style=\"text-decoration:underline;\">Manage Preferences</span><br>",
+          "Please do not reply to this email.<br><br>",
+          year +
+            " MagMutual Insurance Company. All rights reserved.<br>",
+          "</td></tr>",
+          previewSpacerRow(30),
+          previewSpacerRow(30),
+          "</table>",
+          "</td></tr>",
+          "</table>"
+        ].join("");
+      }
     }
   };
+
+  function rendererFieldsMatch(panelAttr, rendererKey) {
+    var tokens = String(panelAttr || "").split(/\s+/);
+    var i;
+    for (i = 0; i < tokens.length; i++) {
+      if (tokens[i] === rendererKey) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   global.SSTEmailPreview = {
     getRenderer: function (key) {
@@ -93,7 +181,9 @@
       }
       var rendererKey = val("step2PreviewRenderer") || "quick_send";
       var bodyVal =
-        rendererKey === "bg_header" ? val("step2BodyBg") : val("step2Body");
+        rendererKey === "bg_header" || rendererKey === "small_header"
+          ? val("step2BodyBg")
+          : val("step2Body");
       return {
         itemBaseName: val("step2ItemBaseName"),
         subject: val("step2EmailSubjectLine"),
@@ -127,7 +217,10 @@
     toggleRendererFields: function (rendererKey) {
       var panels = document.querySelectorAll("[data-renderer-fields]");
       panels.forEach(function (panel) {
-        var match = panel.getAttribute("data-renderer-fields") === rendererKey;
+        var match = rendererFieldsMatch(
+          panel.getAttribute("data-renderer-fields"),
+          rendererKey
+        );
         panel.style.display = match ? "block" : "none";
       });
     }
