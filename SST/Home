@@ -23,7 +23,6 @@
   SET @monthClicksOut = ""
   SET @monthUnsubOut = ""
   SET @monthBouncedOut = ""
-  SET @skipHomeHtml = "0"
   SET @homePerformanceJson = ""
   SET @homePerformanceJsonMode = IIF(RequestParameter("homePerformanceData") == "1", "1", "0")
   SET @specDeCountForCharts = "0"
@@ -1568,7 +1567,22 @@
       "}"
     );
   }
+  function stringifyPerformanceJson(payload) {
+    var raw;
+    if (typeof JSON !== "undefined" && typeof JSON.stringify === "function") {
+      raw = JSON.stringify(payload);
+    } else {
+      raw = Platform.Function.Stringify(payload);
+      raw = String(raw)
+        .replace(/\bTrue\b/g, "true")
+        .replace(/\bFalse\b/g, "false")
+        .replace(/\bNone\b/g, "null");
+    }
+    return raw;
+  }
   if (isPerformanceDataRequest()) {
+    var performanceJson = '{"ok":false,"error":"Could not load performance data."}';
+    try {
     var chartJson = buildSendLogChartJson();
     var sendLogObj = Platform.Function.ParseJSON(chartJson);
     var performancePayload = {
@@ -1591,15 +1605,18 @@
         bounced: splitPipeNumbersPerf(getPerformanceAmpVar("monthBouncedOut"))
       }
     };
-    var performanceJson = Platform.Function.Stringify(performancePayload);
-    Platform.Variable.SetValue("@skipHomeHtml", "1");
+    performanceJson = stringifyPerformanceJson(performancePayload);
+    } catch (perfEx) {
+      var perfMsg = perfEx.message != null ? String(perfEx.message) : String(perfEx);
+      performanceJson = '{"ok":false,"error":"' + escJsonSendLog(perfMsg) + '"}';
+    }
     Platform.Variable.SetValue("@homePerformanceJson", performanceJson);
   } else {
     setChartVar("sendLogChartJson", buildSendLogChartJson());
   }
 </script>
-%%[ IF @skipHomeHtml == "1" THEN ]%%
-%%=TreatAsContent(@homePerformanceJson)=%%
+%%[ IF @homePerformanceJsonMode == "1" THEN ]%%
+%%=v(@homePerformanceJson)=%%
 %%[ ELSE ]%%
 <title>Self Service Dashboard - Magmutual
 </title>
@@ -4037,9 +4054,19 @@
     var sep = base.indexOf('?') >= 0 ? '&' : '?';
     fetch(base + sep + 'homePerformanceData=1', { credentials: 'same-origin' })
       .then(function (response) {
-        return response.json();
+        return response.text();
       })
-      .then(function (data) {
+      .then(function (text) {
+        var trimmed = (text || '').replace(/^\uFEFF/, '').trim();
+        if (!trimmed || trimmed.charAt(0) !== '{') {
+          throw new Error('Performance data response was not JSON.');
+        }
+        var data;
+        try {
+          data = JSON.parse(trimmed);
+        } catch (parseErr) {
+          throw new Error('Could not parse performance data.');
+        }
         if (!data || !data.ok) {
           throw new Error((data && data.error) || 'Could not load performance data.');
         }
