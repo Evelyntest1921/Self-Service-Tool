@@ -1,10 +1,15 @@
 %%[ 
 VAR @errorFlag, @dataExists, @testCount
+VAR @surveysGridOk, @jaSurveysMarkup, @jaSurveysEmpty, @jaSurveysLoadError
 VAR @hubUrl, @journeyExitUrl, @calendarUrl, @surveyHomeUrl, @surveyAnalyticsUrl, @environment, @environmentSwitchUrl
 VAR @envDisplayName, @envDisplayEmail, @envAvatarLetter, @envSwitchLabel
 VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow
 SET @errorFlag = "false"
 SET @dataExists = "true"
+SET @surveysGridOk = "false"
+SET @jaSurveysMarkup = ""
+SET @jaSurveysEmpty = "1"
+SET @jaSurveysLoadError = ""
 SET @redirect = requestparameter("redirect")
 SET @hubUrl = "#"
 SET @journeyExitUrl = ""
@@ -66,6 +71,270 @@ ELSE
 ENDIF
 
 ]%%
+<script runat="server" language="javascript">
+  Platform.Load("Core", "1.1");
+  var SURVEYS_DE = "SST_SP_Surveys_Master_DE";
+  var RESPONSES_DE = "SST_SP_Survey_Responses_DE";
+  function setV(key, val) {
+    var s = val == null ? "" : String(val);
+    try {
+      Platform.Variable.SetValue(key, s);
+    } catch (e0) {}
+    try {
+      Platform.Variable.SetValue("@" + key, s);
+    } catch (e1) {}
+  }
+  function getAmpVar(name) {
+    var v = "";
+    try {
+      v = Platform.Variable.GetValue("@" + name);
+    } catch (e0) {}
+    if (v === null || v === undefined || String(v) === "") {
+      try {
+        v = Variable.GetValue(name);
+      } catch (e1) {}
+    }
+    if (v === null || v === undefined) {
+      return "";
+    }
+    return String(v);
+  }
+  function esc(s) {
+    if (s == null || s === undefined) {
+      return "";
+    }
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/"/g, "&quot;");
+  }
+  function lenArrayish(x) {
+    if (x == null) {
+      return -1;
+    }
+    if (typeof x.length === "number") {
+      return x.length;
+    }
+    return -1;
+  }
+  function coerceRows(raw) {
+    if (raw == null) {
+      return [];
+    }
+    var r = raw;
+    if (r.Results && typeof r.Results.length === "number") {
+      r = r.Results;
+    }
+    var n = lenArrayish(r);
+    if (n < 0) {
+      return [];
+    }
+    var out = [];
+    var i;
+    for (i = 0; i < n; i++) {
+      out.push(r[i]);
+    }
+    return out;
+  }
+  function fieldFromRow(r, names) {
+    var i, v;
+    if (!r) {
+      return "";
+    }
+    for (i = 0; i < names.length; i++) {
+      try {
+        v = r[names[i]];
+        if (v !== null && v !== undefined && String(v) !== "") {
+          return v;
+        }
+      } catch (rowEx) {}
+    }
+    return "";
+  }
+  function msFromSurveyRow(r) {
+    var raw = fieldFromRow(r, ["SurveyCreatedDate", "surveyCreatedDate"]);
+    if (raw === "") {
+      return 0;
+    }
+    try {
+      var t = new Date(String(raw)).getTime();
+      if (!isNaN(t) && t > 0) {
+        return t;
+      }
+    } catch (dateEx) {}
+    return 0;
+  }
+  function sortRowsBySurveyCreatedDate(rows) {
+    var i, j, tmp, mi, mj, idi, idj;
+    for (i = 0; i < rows.length; i++) {
+      for (j = i + 1; j < rows.length; j++) {
+        mi = msFromSurveyRow(rows[i]);
+        mj = msFromSurveyRow(rows[j]);
+        if (mj > mi) {
+          tmp = rows[i];
+          rows[i] = rows[j];
+          rows[j] = tmp;
+        } else if (mj === mi) {
+          idi = String(fieldFromRow(rows[i], ["SurveyID", "SurveyId"]));
+          idj = String(fieldFromRow(rows[j], ["SurveyID", "SurveyId"]));
+          if (idj > idi) {
+            tmp = rows[i];
+            rows[i] = rows[j];
+            rows[j] = tmp;
+          }
+        }
+      }
+    }
+    return rows;
+  }
+  function loadOpenCountsBySurveyId() {
+    var map = {};
+    var respRows, ri, rid, qid;
+    try {
+      respRows = coerceRows(DataExtension.Init(RESPONSES_DE).Rows.Retrieve());
+      for (ri = 0; ri < respRows.length; ri++) {
+        qid = String(fieldFromRow(respRows[ri], ["QuestionID", "QuestionId"]));
+        if (qid !== "SURVEY_OPEN") {
+          continue;
+        }
+        rid = String(fieldFromRow(respRows[ri], ["SurveyID", "SurveyId"]));
+        if (!rid) {
+          continue;
+        }
+        map[rid] = (map[rid] || 0) + 1;
+      }
+    } catch (openEx) {}
+    return map;
+  }
+  function surveyProgress(statusRaw, openCount) {
+    var status, labelClass, fillClass, label, width;
+    status = String(statusRaw == null ? "" : statusRaw).replace(/^\s+|\s+$/g, "");
+    if (status === "Draft") {
+      labelClass = "progress-percentage--draft";
+      fillClass = "progress-fill--draft";
+      label = "Draft";
+    } else if (status === "Completed") {
+      labelClass = "progress-percentage--ready";
+      fillClass = "progress-fill--ready";
+      label = "Completed";
+    } else {
+      labelClass = "progress-percentage--running";
+      fillClass = "progress-fill--running";
+      label = "Active";
+    }
+    if (openCount > 100) {
+      width = "100%";
+    } else if (openCount > 0) {
+      width = String(openCount) + "%";
+    } else {
+      width = "0%";
+    }
+    return {
+      labelClass: labelClass,
+      fillClass: fillClass,
+      label: label,
+      width: width
+    };
+  }
+  function formatSurveyCreated(r) {
+    var raw = fieldFromRow(r, ["SurveyCreatedDate", "surveyCreatedDate"]);
+    if (raw === "") {
+      return "";
+    }
+    try {
+      var formatted = Platform.Function.FormatDate(raw, "M/d/yyyy h:mm:ss a");
+      if (formatted !== null && formatted !== undefined && String(formatted) !== "") {
+        return String(formatted);
+      }
+    } catch (fmtEx) {}
+    return String(raw);
+  }
+  if (getAmpVar("dataExists") === "true") {
+    try {
+      var analyticsBase = getAmpVar("surveyAnalyticsUrl");
+      var surveyRows = coerceRows(DataExtension.Init(SURVEYS_DE).Rows.Retrieve());
+      sortRowsBySurveyCreatedDate(surveyRows);
+      var openCounts = loadOpenCountsBySurveyId();
+      if (!surveyRows.length) {
+        setV("surveysGridOk", "true");
+        setV("jaSurveysEmpty", "1");
+        setV("jaSurveysMarkup", "");
+        setV("jaSurveysLoadError", "");
+      } else {
+        var parts = [];
+        var si, sr, nm, sid, st, created, opens, prog, linkHref, actionHtml;
+        for (si = 0; si < surveyRows.length; si++) {
+          sr = surveyRows[si];
+          nm = String(fieldFromRow(sr, ["SurveyName", "surveyName"]));
+          if (!nm) {
+            nm = "Untitled survey";
+          }
+          sid = String(fieldFromRow(sr, ["SurveyID", "SurveyId"]));
+          st = String(fieldFromRow(sr, ["SurveyStatus", "surveyStatus"]));
+          if (!st) {
+            st = "Active";
+          }
+          created = formatSurveyCreated(sr);
+          opens = sid && openCounts[sid] ? openCounts[sid] : 0;
+          prog = surveyProgress(st, opens);
+          linkHref = "";
+          if (analyticsBase && sid) {
+            linkHref = analyticsBase + "?surveyid=" + encodeURIComponent(sid);
+          }
+          if (linkHref) {
+            actionHtml =
+              '<a href="' + esc(linkHref) + '" class="btn-secondary">Manage Survey</a>';
+          } else {
+            actionHtml =
+              '<span class="btn-secondary" style="opacity: 0.5; cursor: not-allowed;">Manage Survey</span>';
+          }
+          parts.push(
+            '<div class="survey-card">' +
+            '<div class="survey-header">' +
+            '<div class="survey-icon">📋</div>' +
+            '<div class="survey-status status-' + esc(st) + '">' + esc(st) + "</div>" +
+            "</div>" +
+            '<h3 class="survey-title">' + esc(nm) + "</h3>" +
+            '<div class="survey-meta">' +
+            '<span class="survey-id">ID: ' + esc(sid) + "</span>" +
+            '<span class="survey-date">' + esc(created) + "</span>" +
+            "</div>" +
+            '<div class="survey-progress">' +
+            '<div class="progress-info">' +
+            '<span class="progress-percentage ' + prog.labelClass + '">' + esc(prog.label) + "</span>" +
+            '<span class="progress-sent-count">' + esc(String(opens)) + " opens</span>" +
+            "</div>" +
+            '<div class="progress-bar">' +
+            '<div class="progress-fill ' + prog.fillClass + '" style="width:' + esc(prog.width) + ';"></div>' +
+            "</div>" +
+            "</div>" +
+            '<div class="survey-actions">' + actionHtml + "</div>" +
+            "</div>"
+          );
+        }
+        setV("jaSurveysMarkup", parts.join(""));
+        setV("jaSurveysEmpty", "0");
+        setV("surveysGridOk", "true");
+        setV("jaSurveysLoadError", "");
+      }
+    } catch (gridLoadEx) {
+      var errMsg = "Could not load surveys.";
+      try {
+        errMsg =
+          gridLoadEx.message != null && gridLoadEx.message !== ""
+            ? String(gridLoadEx.message)
+            : String(gridLoadEx);
+        if (errMsg.length > 400) {
+          errMsg = errMsg.substring(0, 400);
+        }
+      } catch (err2) {}
+      setV("jaSurveysLoadError", errMsg);
+      setV("surveysGridOk", "false");
+      setV("jaSurveysEmpty", "1");
+      setV("jaSurveysMarkup", "");
+    }
+  }
+</script>
 
 <title>Survey home | Self Service</title>
 <link rel="icon" href="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" type="image/png">
@@ -524,144 +793,55 @@ ENDIF
     </div>
     
     <div class="surveys-grid" id="surveysGrid">
-      %%[ IF @dataExists == "true" THEN ]%%
-      <script runat="server">
-        Platform.Load("Core", "1.1.1");
-        function surveyGridClean(val) {
-          if (val === null || val === undefined) {
-            return "";
-          }
-          return String(val).replace(/,/g, " ").replace(/\|/g, " ").replace(/\r|\n/g, " ").trim();
-        }
-        try {
-          var de = DataExtension.Init("SST_SP_Surveys_Master_DE");
-          var rows = de.Rows.Retrieve();
-          if (!rows) {
-            rows = [];
-          }
-          rows.sort(function (a, b) {
-            var ta = 0;
-            var tb = 0;
-            try {
-              ta = new Date(String(a.SurveyCreatedDate)).getTime();
-            } catch (e1) {}
-            try {
-              tb = new Date(String(b.SurveyCreatedDate)).getTime();
-            } catch (e2) {}
-            if (isNaN(ta)) {
-              ta = 0;
-            }
-            if (isNaN(tb)) {
-              tb = 0;
-            }
-            return tb - ta;
-          });
-          var rowParts = [];
-          for (var i = 0; i < rows.length; i++) {
-            var r = rows[i];
-            rowParts.push(
-              surveyGridClean(r.SurveyID) + "|" +
-              surveyGridClean(r.SurveyName) + "|" +
-              surveyGridClean(r.SurveyStatus) + "|" +
-              surveyGridClean(r.SurveyCreatedDate)
-            );
-          }
-          Variable.SetValue("@surveyGridPayload", rowParts.join(","));
-        } catch (gridErr) {
-          Variable.SetValue("@surveyGridPayload", "");
-        }
-      </script>
-      %%[ ENDIF ]%%
+      %%[ IF @dataExists == "false" THEN ]%%
       %%[
         VAR @rows, @rowCount, @i, @row, @name, @id, @status, @created, @responseCount, @surveyAnalyticsLink
         VAR @progLabelClass, @progFillClass, @progLabel, @progWidthPct
-        
-        IF @dataExists == "true" THEN
-          IF NOT Empty(@surveyGridPayload) THEN
-            SET @rows = BuildRowSetFromString(@surveyGridPayload, "SurveyID|SurveyName|SurveyStatus|SurveyCreatedDate")
-            SET @rowCount = RowCount(@rows)
+        SET @rowCount = 3
+        FOR @i = 1 TO @rowCount DO
+          IF @i == 1 THEN
+            SET @name = "Risk Management Training Q4 2024"
+            SET @id = "DEMO001"
+            SET @status = "Active"
+            SET @created = "2024-01-15"
+            SET @responseCount = 47
+          ELSEIF @i == 2 THEN
+            SET @name = "Annual Safety Assessment"
+            SET @id = "DEMO002"
+            SET @status = "Completed"
+            SET @created = "2024-01-10"
+            SET @responseCount = 89
           ELSE
-            SET @rows = LookupOrderedRows("SST_SP_Surveys_Master_DE", 500, "SurveyCreatedDate DESC", "SurveyStatus", "Active")
-            SET @rowCount = RowCount(@rows)
+            SET @name = "Quarterly Compliance Review"
+            SET @id = "DEMO003"
+            SET @status = "Draft"
+            SET @created = "2024-01-05"
+            SET @responseCount = 11
           ENDIF
-        ENDIF
-        
-        IF @dataExists == "false" THEN
-          SET @rowCount = 3
-        ENDIF
-        
-        IF @rowCount > 0 THEN
-          FOR @i = 1 TO @rowCount DO
-            IF @dataExists == "true" THEN
-              SET @row = Row(@rows, @i)
-              SET @name = Field(@row, "SurveyName")
-              SET @id = Field(@row, "SurveyID")
-              SET @status = Field(@row, "SurveyStatus")
-              SET @created = Field(@row, "SurveyCreatedDate")
-              
-              /* Get opens count for this specific survey where QuestionID = SURVEY_OPEN */
-              SET @opensRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @id)
-              SET @responseCount = 0
-              
-              /* Count only records where QuestionID = SURVEY_OPEN */
-              IF RowCount(@opensRows) > 0 THEN
-                VAR @k, @currentRow, @questionId
-                FOR @k = 1 TO RowCount(@opensRows) DO
-                  SET @currentRow = Row(@opensRows, @k)
-                  SET @questionId = Field(@currentRow, "QuestionID")
-                  
-                  IF @questionId == "SURVEY_OPEN" THEN
-                    SET @responseCount = Add(@responseCount, 1)
-                  ENDIF
-                NEXT @k
-              ENDIF
-             
-            ELSE
-              /* Demo data */
-              IF @i == 1 THEN
-                SET @name = "Risk Management Training Q4 2024"
-                SET @id = "DEMO001"
-                SET @status = "Active"
-                SET @created = "2024-01-15"
-                SET @responseCount = 47
-              ELSEIF @i == 2 THEN
-                SET @name = "Annual Safety Assessment"
-                SET @id = "DEMO002" 
-                SET @status = "Completed"
-                SET @created = "2024-01-10"
-                SET @responseCount = 89
-              ELSE
-                SET @name = "Quarterly Compliance Review"
-                SET @id = "DEMO003"
-                SET @status = "Draft"
-                SET @created = "2024-01-05"
-                SET @responseCount = 11
-              ENDIF
-            ENDIF
-            SET @surveyAnalyticsLink = ""
-            IF NOT Empty(@surveyAnalyticsUrl) AND NOT Empty(@id) THEN
-              SET @surveyAnalyticsLink = Concat(@surveyAnalyticsUrl, "?surveyid=", @id)
-            ENDIF
-            IF @status == "Draft" THEN
-              SET @progLabelClass = "progress-percentage--draft"
-              SET @progFillClass = "progress-fill--draft"
-              SET @progLabel = "Draft"
-            ELSEIF @status == "Completed" THEN
-              SET @progLabelClass = "progress-percentage--ready"
-              SET @progFillClass = "progress-fill--ready"
-              SET @progLabel = "Completed"
-            ELSE
-              SET @progLabelClass = "progress-percentage--running"
-              SET @progFillClass = "progress-fill--running"
-              SET @progLabel = "Active"
-            ENDIF
-            IF @responseCount > 100 THEN
-              SET @progWidthPct = "100%"
-            ELSEIF @responseCount > 0 THEN
-              SET @progWidthPct = Concat(@responseCount, "%")
-            ELSE
-              SET @progWidthPct = "0%"
-            ENDIF
+          SET @surveyAnalyticsLink = ""
+          IF NOT Empty(@surveyAnalyticsUrl) AND NOT Empty(@id) THEN
+            SET @surveyAnalyticsLink = Concat(@surveyAnalyticsUrl, "?surveyid=", @id)
+          ENDIF
+          IF @status == "Draft" THEN
+            SET @progLabelClass = "progress-percentage--draft"
+            SET @progFillClass = "progress-fill--draft"
+            SET @progLabel = "Draft"
+          ELSEIF @status == "Completed" THEN
+            SET @progLabelClass = "progress-percentage--ready"
+            SET @progFillClass = "progress-fill--ready"
+            SET @progLabel = "Completed"
+          ELSE
+            SET @progLabelClass = "progress-percentage--running"
+            SET @progFillClass = "progress-fill--running"
+            SET @progLabel = "Active"
+          ENDIF
+          IF @responseCount > 100 THEN
+            SET @progWidthPct = "100%"
+          ELSEIF @responseCount > 0 THEN
+            SET @progWidthPct = Concat(@responseCount, "%")
+          ELSE
+            SET @progWidthPct = "0%"
+          ENDIF
       ]%%
       <div class="survey-card">
         <div class="survey-header">
@@ -693,9 +873,7 @@ ENDIF
         </div>
       </div>
       %%[ NEXT @i ]%%
-      %%[ ENDIF ]%%
-      
-      %%[ IF @rowCount == 0 THEN ]%%
+      %%[ ELSEIF @surveysGridOk == "true" AND @jaSurveysEmpty == "1" THEN ]%%
       <div class="no-surveys-message">
         <div class="empty-state">
           <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
@@ -709,6 +887,17 @@ ENDIF
           </button>
         </div>
       </div>
+      %%[ ELSEIF @surveysGridOk == "true" THEN ]%%
+      %%=TreatAsContent(@jaSurveysMarkup)=%%
+      %%[ ELSE ]%%
+      %%[ IF NOT Empty(@jaSurveysLoadError) THEN ]%%
+      <div class="no-surveys-message" style="grid-column: 1 / -1; margin-bottom: 0;">
+        <div class="empty-state" style="padding: 16px 20px;">
+          <p style="margin: 0; font-size: 14px;">All Surveys could not be loaded.</p>
+          <p style="margin: 8px 0 0; font-size: 12px; opacity: 0.85;">%%=Replace(Replace(@jaSurveysLoadError,"\n"," "),"\r","")=%%</p>
+        </div>
+      </div>
+      %%[ ENDIF ]%%
       %%[ ENDIF ]%%
     </div>
 
