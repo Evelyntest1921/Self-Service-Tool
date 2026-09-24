@@ -198,20 +198,122 @@ ENDIF
     }
     return out;
   }
+  function fieldFromPropertyList(props, names) {
+    var pi, i, pname, v;
+    if (!props || typeof props.length !== "number") {
+      return "";
+    }
+    for (pi = 0; pi < props.length; pi++) {
+      pname = props[pi].Name != null ? props[pi].Name : props[pi].name;
+      if (!pname) {
+        continue;
+      }
+      for (i = 0; i < names.length; i++) {
+        if (String(pname).toLowerCase() === String(names[i]).toLowerCase()) {
+          v = props[pi].Value != null ? props[pi].Value : props[pi].value;
+          if (v !== null && v !== undefined && v !== "") {
+            return v;
+          }
+        }
+      }
+    }
+    return "";
+  }
   function fieldFromRow(r, names) {
-    var i, v;
-    if (!r) {
+    var i, n, v;
+    if (r == null) {
       return "";
     }
     for (i = 0; i < names.length; i++) {
+      n = names[i];
+      v = null;
       try {
-        v = r[names[i]];
-        if (v !== null && v !== undefined && String(v) !== "") {
-          return v;
-        }
-      } catch (rowEx) {}
+        v = Platform.Function.Field(r, n);
+      } catch (fe0) {}
+      if (v === null || v === undefined || v === "") {
+        try {
+          v = r[n];
+        } catch (fe1) {}
+      }
+      if (v !== null && v !== undefined && v !== "") {
+        return v;
+      }
+    }
+    v = fieldFromPropertyList(r.Properties, names);
+    if (v !== "") {
+      return v;
+    }
+    v = fieldFromPropertyList(r.Property, names);
+    if (v !== "") {
+      return v;
     }
     return "";
+  }
+  function coerceDeRows(raw) {
+    if (raw == null) {
+      return [];
+    }
+    var r = raw;
+    if (r.Results && typeof r.Results.length === "number") {
+      r = r.Results;
+    }
+    if (r.rows && typeof r.rows.length === "number") {
+      r = r.rows;
+    }
+    if (r.Rows && typeof r.Rows.length === "number") {
+      r = r.Rows;
+    }
+    var out = coerceRows(r);
+    if (out.length) {
+      return out;
+    }
+    if (r && typeof r === "object" && fieldFromRow(r, ["SurveyID", "SurveyId", "SurveyName"])) {
+      return [r];
+    }
+    return [];
+  }
+  function loadSurveyMasterRows() {
+    var rows = [];
+    try {
+      rows = coerceDeRows(DataExtension.Init(SURVEYS_DE).Rows.Retrieve());
+    } catch (deEx) {}
+    if (rows.length) {
+      return rows;
+    }
+    var statuses = ["Active", "Completed", "Draft"];
+    var seen = {};
+    var out = [];
+    var si, st, chunk, ci, row, sidKey;
+    for (si = 0; si < statuses.length; si++) {
+      st = statuses[si];
+      chunk = [];
+      try {
+        chunk = coerceRows(Platform.Function.LookupRows(SURVEYS_DE, "SurveyStatus", st));
+      } catch (lookupEx) {}
+      for (ci = 0; ci < chunk.length; ci++) {
+        row = chunk[ci];
+        sidKey = String(fieldFromRow(row, ["SurveyID", "SurveyId"])).toLowerCase();
+        if (sidKey && !seen[sidKey]) {
+          seen[sidKey] = true;
+          out.push(row);
+        }
+      }
+    }
+    if (out.length) {
+      return out;
+    }
+    try {
+      return coerceRows(
+        Platform.Function.LookupOrderedRows(
+          SURVEYS_DE,
+          500,
+          "SurveyCreatedDate DESC",
+          "SurveyStatus",
+          "Active"
+        )
+      );
+    } catch (orderedEx) {}
+    return [];
   }
   function msFromSurveyRow(r) {
     var raw = fieldFromRow(r, ["SurveyCreatedDate", "surveyCreatedDate"]);
@@ -253,7 +355,7 @@ ENDIF
     var map = {};
     var respRows, ri, rid, qid;
     try {
-      respRows = coerceRows(DataExtension.Init(RESPONSES_DE).Rows.Retrieve());
+      respRows = coerceDeRows(DataExtension.Init(RESPONSES_DE).Rows.Retrieve());
       for (ri = 0; ri < respRows.length; ri++) {
         qid = String(fieldFromRow(respRows[ri], ["QuestionID", "QuestionId"]));
         if (qid !== "SURVEY_OPEN") {
@@ -311,7 +413,7 @@ ENDIF
     } catch (fmtEx) {}
     return String(raw);
   }
-  if (getAmpVar("dataExists") === "true") {
+  if (getAmpVar("dataExists") !== "false") {
     try {
       var analyticsBase = getAmpVar("surveyAnalyticsUrl");
       var surveyHomeUrl = getAmpVar("surveyHomeUrl");
@@ -321,7 +423,7 @@ ENDIF
           surveysPage = parseSurveyPage(Request.GetQueryStringParameter("surveysPage"));
         } catch (surveysPageEx) {}
       }
-      var surveyRows = coerceRows(DataExtension.Init(SURVEYS_DE).Rows.Retrieve());
+      var surveyRows = loadSurveyMasterRows();
       sortRowsBySurveyCreatedDate(surveyRows);
       var openCounts = loadOpenCountsBySurveyId();
       var rowCount = surveyRows.length;
