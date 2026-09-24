@@ -37,34 +37,40 @@
       }
     },
     bg_header: {
-      fieldIds: ["step2Preheader", "step2Headline", "step2Body", "step2SurveyId"],
+      fieldIds: ["step2Preheader", "step2Headline", "step2BodyBg", "step2SurveyId"],
       render: function (state) {
         var headline = escapeHtml(state.headline || state.subject || "Your headline");
         var greeting = escapeHtml(state.greeting || "Hello,");
         var textBody = textToHtml(state.body || "");
         var signatureHtml = state.signatureHtml || defaultSignature;
-        var surveyId = encodeURIComponent(state.surveyId || "SURV_20260612_102301");
-        var surveyUrl =
-          "https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=" +
-          surveyId +
-          "&contact=" +
-          encodeURIComponent(state.contactId || "");
+        var templateName = String(state.templateEmailName || "").toLowerCase().trim();
+        var surveyBlock = "";
+        if (templateName === "survey") {
+          var surveyId = encodeURIComponent(state.surveyId || "SURV_20260612_102301");
+          var surveyUrl =
+            "https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=" +
+            surveyId +
+            "&contact=" +
+            encodeURIComponent(state.contactId || "");
+          surveyBlock =
+            "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr><td bgcolor=\"#0060F5\" style=\"background:#0060F5;\"><a href=\"" +
+            surveyUrl +
+            "\" target=\"_blank\" style=\"display:block;padding:10px 99px 10px 10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;text-decoration:none;\">Take Survey</a></td></tr></table>";
+        }
         return [
           "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#eaeaea;margin:0;padding:0;\">",
           "<tr><td align=\"center\">",
           "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#393939;max-width:100%;\">",
           "<tr><td style=\"padding:30px;\"><img src=\"https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/MM_PrimaryLogo_Reversed.png\" alt=\"MagMutual\" width=\"200\" border=\"0\" style=\"display:block;\"></td></tr>",
-          "<tr><td style=\"padding:20px 45px 30px;font-family:Arial,Helvetica,sans-serif;color:#ffffff;\"><h1 style=\"font-size:32px;line-height:36px;margin:0;color:#ffffff;\">" +
+          "<tr><td style=\"padding:20px 45px 50px;font-family:Arial,Helvetica,sans-serif;color:#ffffff;\"><p style=\"font-size:32px;line-height:36px;margin:0;color:#ffffff;\">" +
             headline +
-            "</h1></td></tr>",
+            "</p></td></tr>",
           "</table>",
           "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#ffffff;max-width:100%;\">",
-          "<tr><td style=\"padding:30px;font-family:Arial,Helvetica,sans-serif;color:#161616;font-size:14px;line-height:20px;\">",
+          "<tr><td style=\"padding:20px 45px 50px;font-family:Arial,Helvetica,sans-serif;color:#161616;font-size:14px;line-height:20px;\">",
           "<p style=\"margin:0 0 20px;\">" + greeting + "</p>",
           "<p style=\"margin:0 0 20px;\">" + textBody + "</p>",
-          "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr><td bgcolor=\"#0060F5\" style=\"background:#0060F5;\"><a href=\"" +
-            surveyUrl +
-            "\" target=\"_blank\" style=\"display:block;padding:10px 99px 10px 10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;text-decoration:none;\">Take Survey</a></td></tr></table>",
+          surveyBlock,
           signatureHtml,
           "</td></tr>",
           "</table>",
@@ -85,13 +91,17 @@
         var node = root.getElementById ? root.getElementById(id) : document.getElementById(id);
         return node ? node.value : "";
       }
+      var rendererKey = val("step2PreviewRenderer") || "quick_send";
+      var bodyVal =
+        rendererKey === "bg_header" ? val("step2BodyBg") : val("step2Body");
       return {
         itemBaseName: val("step2ItemBaseName"),
         subject: val("step2EmailSubjectLine"),
         preheader: val("step2Preheader"),
-        body: val("step2Body") || val("step2BodyBg"),
+        body: bodyVal,
         headline: val("step2Headline"),
         surveyId: val("step2SurveyId"),
+        templateEmailName: val("step2TemplateEmailName"),
         greeting: "Hello,",
         signatureHtml: defaultSignature
       };
