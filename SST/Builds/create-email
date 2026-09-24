@@ -1592,7 +1592,6 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
           <input type="hidden" name="previewFlow" value="1">
           <input type="hidden" name="emailRowId" id="step2EmailRowId" value="">
           <input type="hidden" name="itemBaseName" id="step2ItemBaseName" value="">
-          <input type="hidden" name="emailSubjectLine" id="step2EmailSubjectLine" value="">
           <input type="hidden" name="emailId" id="step2EmailId" value="">
           <input type="hidden" id="step2PreviewRenderer" value="quick_send">
           <input type="hidden" name="bodySlotKey" id="step2BodySlotKey" value="">
@@ -1605,6 +1604,10 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
           <div class="form-group">
             <label class="form-label" for="step2Preheader">Preheader</label>
             <input class="form-input" type="text" id="step2Preheader" name="emailPreheader" value="Preview preheader text">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="step2EmailSubjectLine">Subject line</label>
+            <input class="form-input" type="text" id="step2EmailSubjectLine" name="emailSubjectLine" value="" placeholder="Email subject">
           </div>
           <div class="renderer-field-panel" data-renderer-fields="quick_send" style="display:none;">
             <div class="form-group">
@@ -2382,7 +2385,7 @@ var step1 = document.getElementById('createEmailStep1');
 var step2 = document.getElementById('createEmailStep2');
 var subtitle = document.getElementById('createEmailSubtitle');
 var subtitleStep1Text = 'Name your email, set the subject line, and choose a template. If you see Next, you can preview and edit the message before it is saved in Content Builder. If you see Create email, the tool saves a copy of that template right away.';
-var subtitleStep2Text = 'Update the fields on the left and check the preview on the right. Use Get Attributes under the date in the preview header, choose a field such as First Name, and the personalization code is copied for you. Paste that code into the body or preheader where you want the value to appear, then click Create email.';
+var subtitleStep2Text = 'Update the fields on the left and check the preview on the right. Use Get Attributes under the date in the preview header and pick a field; the personalization code is inserted into the body for you. Adjust the text if needed, then click Create email.';
 if (nextBtn && step1Form) {
   nextBtn.addEventListener('click', function() {
     if (!step1Form.reportValidity()) return;
@@ -2464,42 +2467,53 @@ cards.forEach(function(card) {
 updateStep1Actions();
 var makerAttrSelect = document.getElementById('makerAttrSelect');
 var makerAttrCopyNotice = document.getElementById('makerAttrCopyNotice');
-function copyTextToClipboard(text, done) {
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(function() {
-      if (done) done(true);
-    }).catch(function() {
-      if (done) done(false);
-    });
-    return;
+function getActiveStep2BodyEl() {
+  var rendererEl = document.getElementById('step2PreviewRenderer');
+  var renderer = rendererEl ? rendererEl.value : 'quick_send';
+  if (renderer === 'bg_header' || renderer === 'small_header') {
+    return document.getElementById('step2BodyBg');
   }
-  try {
-    var ta = document.createElement('textarea');
-    ta.value = text;
-    ta.setAttribute('readonly', '');
-    ta.style.position = 'fixed';
-    ta.style.left = '-9999px';
-    document.body.appendChild(ta);
-    ta.select();
-    var ok = document.execCommand('copy');
-    document.body.removeChild(ta);
-    if (done) done(ok);
-  } catch (copyErr) {
-    if (done) done(false);
+  return document.getElementById('step2Body');
+}
+function appendAttributeCodeToBody(code) {
+  var bodyEl = getActiveStep2BodyEl();
+  if (!bodyEl || !code) {
+    return false;
   }
+  var current = bodyEl.value;
+  var separator = '';
+  if (current.length > 0) {
+    var last = current.charAt(current.length - 1);
+    if (last !== ' ' && last !== '\n' && last !== '\r') {
+      separator = ' ';
+    }
+  }
+  bodyEl.value = current + separator + code;
+  bodyEl.focus();
+  var end = bodyEl.value.length;
+  if (bodyEl.setSelectionRange) {
+    bodyEl.setSelectionRange(end, end);
+  }
+  refreshCreateEmailPreview();
+  return true;
 }
 if (makerAttrSelect) {
   makerAttrSelect.addEventListener('change', function() {
     var code = makerAttrSelect.value;
-    if (!code) return;
-    copyTextToClipboard(code, function(ok) {
-      if (makerAttrCopyNotice) {
-        makerAttrCopyNotice.textContent = ok ? 'Copied to clipboard' : 'Copy failed. Select the code from the list and copy manually.';
-        window.setTimeout(function() {
-          makerAttrCopyNotice.textContent = '';
-        }, 2500);
-      }
-    });
+    if (!code) {
+      return;
+    }
+    var selectedOption = makerAttrSelect.options[makerAttrSelect.selectedIndex];
+    var label = selectedOption ? selectedOption.text : 'Attribute';
+    var ok = appendAttributeCodeToBody(code);
+    if (makerAttrCopyNotice) {
+      makerAttrCopyNotice.textContent = ok
+        ? label + ' added to body'
+        : 'Could not add to body. Edit the body field on the left.';
+      window.setTimeout(function() {
+        makerAttrCopyNotice.textContent = '';
+      }, 2500);
+    }
     makerAttrSelect.value = '';
   });
 }
