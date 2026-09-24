@@ -1,6 +1,6 @@
 %%[ 
 VAR @errorFlag, @dataExists, @testCount
-VAR @surveysGridOk, @jaSurveysMarkup, @jaSurveysEmpty, @jaSurveysLoadError
+VAR @surveysGridOk, @jaSurveysMarkup, @jaSurveysEmpty, @jaSurveysLoadError, @surveysPage, @jaSurveysPagination
 VAR @hubUrl, @journeyExitUrl, @calendarUrl, @surveyHomeUrl, @surveyAnalyticsUrl, @environment, @environmentSwitchUrl
 VAR @envDisplayName, @envDisplayEmail, @envAvatarLetter, @envSwitchLabel
 VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow
@@ -10,7 +10,13 @@ SET @surveysGridOk = "false"
 SET @jaSurveysMarkup = ""
 SET @jaSurveysEmpty = "1"
 SET @jaSurveysLoadError = ""
+SET @surveysPage = "1"
+SET @jaSurveysPagination = ""
 SET @redirect = requestparameter("redirect")
+SET @surveysPage = Trim(RequestParameter("surveysPage"))
+IF Empty(@surveysPage) THEN
+  SET @surveysPage = "1"
+ENDIF
 SET @hubUrl = "#"
 SET @journeyExitUrl = ""
 SET @calendarUrl = ""
@@ -75,6 +81,62 @@ ENDIF
   Platform.Load("Core", "1.1");
   var SURVEYS_DE = "SST_SP_Surveys_Master_DE";
   var RESPONSES_DE = "SST_SP_Survey_Responses_DE";
+  var SURVEY_PAGE_SIZE = 20;
+  function parseSurveyPage(val) {
+    var page = parseInt(String(val || "1"), 10);
+    if (isNaN(page) || page < 1) {
+      return 1;
+    }
+    return page;
+  }
+  function surveyHomeUrlWithPage(homeUrl, page) {
+    var base = String(homeUrl || "");
+    if (!base) {
+      return "?surveysPage=" + page;
+    }
+    if (base.indexOf("?") >= 0) {
+      return base + "&surveysPage=" + page;
+    }
+    return base + "?surveysPage=" + page;
+  }
+  function renderSurveysPagination(homeUrl, page, totalPages, totalCount) {
+    if (totalPages <= 1) {
+      return "";
+    }
+    var parts = [
+      '<div class="browse-pagination">' +
+      '<div class="browse-pagination-inner">'
+    ];
+    if (page > 1) {
+      parts.push(
+        '<a href="' +
+        esc(surveyHomeUrlWithPage(homeUrl, page - 1)) +
+        '" class="filter-btn">Previous</a>'
+      );
+    } else {
+      parts.push('<span class="filter-btn browse-page-disabled">Previous</span>');
+    }
+    parts.push(
+      '<span class="browse-page-label">Page ' +
+      page +
+      " of " +
+      totalPages +
+      " (" +
+      totalCount +
+      " surveys)</span>"
+    );
+    if (page < totalPages) {
+      parts.push(
+        '<a href="' +
+        esc(surveyHomeUrlWithPage(homeUrl, page + 1)) +
+        '" class="filter-btn">Next</a>'
+      );
+    } else {
+      parts.push('<span class="filter-btn browse-page-disabled">Next</span>');
+    }
+    parts.push("</div></div>");
+    return parts.join("");
+  }
   function setV(key, val) {
     var s = val == null ? "" : String(val);
     try {
@@ -252,18 +314,40 @@ ENDIF
   if (getAmpVar("dataExists") === "true") {
     try {
       var analyticsBase = getAmpVar("surveyAnalyticsUrl");
+      var surveyHomeUrl = getAmpVar("surveyHomeUrl");
+      var surveysPage = parseSurveyPage(getAmpVar("surveysPage"));
+      if (!surveysPage || surveysPage === 1) {
+        try {
+          surveysPage = parseSurveyPage(Request.GetQueryStringParameter("surveysPage"));
+        } catch (surveysPageEx) {}
+      }
       var surveyRows = coerceRows(DataExtension.Init(SURVEYS_DE).Rows.Retrieve());
       sortRowsBySurveyCreatedDate(surveyRows);
       var openCounts = loadOpenCountsBySurveyId();
-      if (!surveyRows.length) {
+      var rowCount = surveyRows.length;
+      var totalPages = rowCount > 0 ? Math.ceil(rowCount / SURVEY_PAGE_SIZE) : 1;
+      if (surveysPage > totalPages) {
+        surveysPage = totalPages;
+      }
+      if (surveysPage < 1) {
+        surveysPage = 1;
+      }
+      setV("surveysPage", String(surveysPage));
+      if (!rowCount) {
         setV("surveysGridOk", "true");
         setV("jaSurveysEmpty", "1");
         setV("jaSurveysMarkup", "");
         setV("jaSurveysLoadError", "");
+        setV("jaSurveysPagination", "");
       } else {
+        var startIdx = (surveysPage - 1) * SURVEY_PAGE_SIZE;
+        var endIdx = surveysPage * SURVEY_PAGE_SIZE;
+        if (endIdx > rowCount) {
+          endIdx = rowCount;
+        }
         var parts = [];
         var si, sr, nm, sid, st, created, opens, prog, linkHref, actionHtml;
-        for (si = 0; si < surveyRows.length; si++) {
+        for (si = startIdx; si < endIdx; si++) {
           sr = surveyRows[si];
           nm = String(fieldFromRow(sr, ["SurveyName", "surveyName"]));
           if (!nm) {
@@ -316,6 +400,10 @@ ENDIF
         setV("jaSurveysEmpty", "0");
         setV("surveysGridOk", "true");
         setV("jaSurveysLoadError", "");
+        setV(
+          "jaSurveysPagination",
+          renderSurveysPagination(surveyHomeUrl, surveysPage, totalPages, rowCount)
+        );
       }
     } catch (gridLoadEx) {
       var errMsg = "Could not load surveys.";
@@ -332,6 +420,7 @@ ENDIF
       setV("surveysGridOk", "false");
       setV("jaSurveysEmpty", "1");
       setV("jaSurveysMarkup", "");
+      setV("jaSurveysPagination", "");
     }
   }
 </script>
@@ -898,6 +987,11 @@ ENDIF
         </div>
       </div>
       %%[ ENDIF ]%%
+      %%[ ENDIF ]%%
+    </div>
+    <div id="surveysPaginationSection">
+      %%[ IF @dataExists == "true" AND NOT Empty(@jaSurveysPagination) THEN ]%%
+      %%=TreatAsContent(@jaSurveysPagination)=%%
       %%[ ENDIF ]%%
     </div>
 
@@ -1689,6 +1783,31 @@ body {
   margin-bottom: 40px;
   width: 100%;
   align-items: stretch;
+}
+
+.browse-pagination {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 24px;
+  margin-top: 8px;
+}
+
+.browse-pagination-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.browse-page-label {
+  font-size: 14px;
+  color: var(--gray-600);
+}
+
+.browse-page-disabled {
+  opacity: 0.45;
+  pointer-events: none;
 }
 
 .survey-card {
