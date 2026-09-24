@@ -16,20 +16,28 @@ SET @surveyId = Trim(RequestParameter("surveyId"))
 SET @emailRowId = Trim(RequestParameter("emailRowId"))
 SET @previewFlow = Trim(RequestParameter("previewFlow"))
 SET @signatureChoice = Trim(RequestParameter("signatureChoice"))
+SET @customSenderParam = Trim(RequestParameter("customSender"))
 SET @signatureSlotKey = Trim(RequestParameter("signatureSlotKey"))
 SET @signatureSlotBlockName = "sst_signature_slot"
 SET @showBookingLinkParam = "false"
+SET @verifyCustomSenderMode = "0"
+SET @verifyCustomSenderJson = ""
 IF RequestParameter("showBookingLink") == "1" OR Lowercase(Trim(RequestParameter("showBookingLink"))) == "true" OR Lowercase(Trim(RequestParameter("showBookingLink"))) == "on" THEN
 SET @showBookingLinkParam = "true"
 ENDIF
 IF NOT Empty(@signatureChoice) AND @signatureChoice != "none" THEN
-IF @signatureChoice != "standard" AND @signatureChoice != "dm" THEN
+IF @signatureChoice != "standard" AND @signatureChoice != "dm" AND @signatureChoice != "custom_sender" THEN
 SET @signatureChoice = "none"
 SET @showBookingLinkParam = "false"
+SET @customSenderParam = ""
 ENDIF
+ENDIF
+IF @signatureChoice != "custom_sender" THEN
+SET @customSenderParam = ""
 ENDIF
 IF @signatureChoice == "none" OR Empty(@signatureChoice) THEN
 SET @showBookingLinkParam = "false"
+SET @customSenderParam = ""
 ENDIF
 SET @navHomeRow = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navHomeRow) > 0 THEN
@@ -199,6 +207,99 @@ ENDIF
 ]%%
 <script runat="server">
 Platform.Load("core","1");
+Platform.Variable.SetValue("@verifyCustomSenderMode", "0");
+function readRequestParam(name) {
+  var value = Platform.Request.GetQueryStringParameter(name);
+  if (value === null || value === undefined || value === "") {
+    value = Platform.Request.GetFormField(name);
+  }
+  return value ? String(value).replace(/^\s+|\s+$/g, "") : "";
+}
+function formatSenderAppointmentLink(raw) {
+  var link = String(raw || "").replace(/^\s+|\s+$/g, "");
+  if (!link) {
+    return "";
+  }
+  if (link.indexOf("http://") === 0 || link.indexOf("https://") === 0) {
+    return (
+      "https://cloud.go.magmutual.com/go-redirect-to-uat-link?url=" +
+      encodeURIComponent(link)
+    );
+  }
+  return link;
+}
+function lookupCustomSenderById(userId) {
+  var rows = Platform.Function.LookupRows("ent.User_Salesforce_1", "Id", userId);
+  if (rows && rows.length > 0) {
+    var row = rows[0];
+    return {
+      sendfromName: row.Name || "",
+      sendFromEmail: row.Email || "",
+      senderTitle: "",
+      signaturePhone: "",
+      hasLicense: "",
+      senderLicense: "",
+      appointmentLink: formatSenderAppointmentLink(row.Appointment_Link__c)
+    };
+  }
+  try {
+    var sfRows = Platform.Function.RetrieveSalesforceObjects(
+      "User",
+      "Name,Email,Title,Phone,Sales_License_Number__c,Appointment_Link__c",
+      "Id",
+      "=",
+      userId
+    );
+    if (sfRows && sfRows.length > 0) {
+      var sf = sfRows[0];
+      var license = sf.Sales_License_Number__c || "";
+      return {
+        sendfromName: sf.Name || "",
+        sendFromEmail: sf.Email || "",
+        senderTitle: sf.Title || "",
+        signaturePhone: sf.Phone || "",
+        hasLicense: license,
+        senderLicense: license,
+        appointmentLink: formatSenderAppointmentLink(sf.Appointment_Link__c)
+      };
+    }
+  } catch (lookupErr) {}
+  return null;
+}
+if (readRequestParam("verifyCustomSender") === "1") {
+  Platform.Variable.SetValue("@verifyCustomSenderMode", "1");
+  var verifyUserId = readRequestParam("userId");
+  var verifyPayload = { ok: false, error: "Enter a User ID." };
+  if (verifyUserId) {
+    var senderData = lookupCustomSenderById(verifyUserId);
+    if (senderData && (senderData.sendfromName || senderData.sendFromEmail)) {
+      verifyPayload = {
+        ok: true,
+        userId: verifyUserId,
+        sendfromName: senderData.sendfromName,
+        sendFromEmail: senderData.sendFromEmail,
+        senderTitle: senderData.senderTitle,
+        signaturePhone: senderData.signaturePhone,
+        hasLicense: senderData.hasLicense,
+        senderLicense: senderData.senderLicense,
+        appointmentLink: senderData.appointmentLink
+      };
+    } else {
+      verifyPayload = { ok: false, error: "User not found for that ID." };
+    }
+  }
+  Platform.Response.SetResponseHeader(
+    "Content-Type",
+    "application/json; charset=UTF-8"
+  );
+  Platform.Variable.SetValue(
+    "@verifyCustomSenderJson",
+    Platform.Function.Stringify(verifyPayload)
+  );
+}
+</script>
+<script runat="server">
+Platform.Load("core","1");
 var authOk = Variable.GetValue("authOk");
 var accessToken = Variable.GetValue("accessToken");
 var subdomain = Variable.GetValue("subdomain");
@@ -342,6 +443,7 @@ if (buttonSlotKey && surveyId && templateEmailName === "survey") {
 var signatureSlotKey = Platform.Variable.GetValue("@signatureSlotKey") || "";
 var signatureChoice = Platform.Variable.GetValue("@signatureChoice") || "";
 var showBookingLinkParam = Platform.Variable.GetValue("@showBookingLinkParam") || "false";
+var customSenderParam = Platform.Variable.GetValue("@customSenderParam") || "";
 if (
   signatureSlotKey &&
   signatureChoice !== "none" &&
@@ -350,13 +452,13 @@ if (
   applySlotHtmlContent(
     payload,
     signatureSlotKey,
-    buildSignatureSlotAmpContent(signatureChoice, showBookingLinkParam)
+    buildSignatureSlotAmpContent(signatureChoice, showBookingLinkParam, customSenderParam)
   );
 }
 }
-function signatureToggleStrings(choice, showBookingLink) {
+function signatureToggleStrings(choice, showBookingLink, customSenderId) {
 var key = String(choice || "").replace(/^\s+|\s+$/g, "").toLowerCase();
-if (key !== "standard" && key !== "dm") {
+if (key !== "standard" && key !== "dm" && key !== "custom_sender") {
   return null;
 }
 var bookingOn =
@@ -364,24 +466,29 @@ var bookingOn =
   showBookingLink === true ||
   showBookingLink === "1" ||
   showBookingLink === "on";
+var customSender = "";
+if (key === "custom_sender") {
+  customSender = String(customSenderId || "").replace(/^\s+|\s+$/g, "");
+}
 return {
   dmSignature: key === "dm" ? "true" : "false",
-  customSender: "",
+  customSender: customSender,
   showBookingLink: bookingOn ? "true" : "false"
 };
 }
-function buildSignatureSlotAmpContent(signatureChoice, showBookingLink) {
-var toggles = signatureToggleStrings(signatureChoice, showBookingLink);
+function buildSignatureSlotAmpContent(signatureChoice, showBookingLink, customSenderId) {
+var toggles = signatureToggleStrings(signatureChoice, showBookingLink, customSenderId);
 if (!toggles) {
   return "";
 }
+var safeCustomSender = String(toggles.customSender || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 return (
   "%%[" +
   'SET @dmSignature = "' +
   toggles.dmSignature +
   '" ' +
   'SET @customSender = "' +
-  toggles.customSender +
+  safeCustomSender +
   '" ' +
   'SET @showBookingLink = "' +
   toggles.showBookingLink +
@@ -611,6 +718,7 @@ if (sourceAsset.data && sourceAsset.data.email && sourceAsset.data.email.options
 applyTextSettings(payload, textContent);
 return payload;
 }
+if (Variable.GetValue("@verifyCustomSenderMode") != "1") {
 if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && deleteEmailId) {
 try {
   newEmailId = String(deleteEmailId);
@@ -788,6 +896,7 @@ try {
   step3bResult = " Step 3b SKIP - Email not duplicated: " + (e.message || String(e));
 }
 }
+}
 Platform.Variable.SetValue("@newEmailId", newEmailId);
 Platform.Variable.SetValue("@journeyEmailId", journeyEmailId);
 Platform.Variable.SetValue("@step3bResult", step3bResult);
@@ -823,6 +932,9 @@ UpsertDE(
 )
 ENDIF
 ]%%
+%%[ IF @verifyCustomSenderMode == "1" THEN ]%%
+%%=TreatAsContent(@verifyCustomSenderJson)=%%
+%%[ ELSE ]%%
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1057,6 +1169,28 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
  color: var(--gray-400);
  cursor: not-allowed;
  pointer-events: none;
+}
+.signature-custom-sender-wrap {
+ margin-top: 10px;
+}
+.signature-custom-sender-wrap.is-hidden {
+ display: none;
+}
+.signature-custom-sender-row {
+ align-items: flex-end;
+ display: flex;
+ gap: 10px;
+}
+.signature-custom-sender-row .form-input {
+ flex: 1;
+ min-width: 0;
+}
+.signature-custom-sender-verify-notice {
+ color: var(--text-secondary);
+ display: block;
+ font-size: 0.8125rem;
+ margin-top: 6px;
+ min-height: 1.25rem;
 }
 .maker-form-shell-head {
  padding: 28px 32px 0;
@@ -1639,7 +1773,16 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
               <option value="none">No Signature</option>
               <option value="standard">Standard Signature</option>
               <option value="dm">Distributed Marketing</option>
+              <option value="custom_sender">Custom Sender</option>
             </select>
+            <div class="signature-custom-sender-wrap is-hidden" id="step2CustomSenderWrap">
+              <label class="form-label" for="step2CustomSender">User ID</label>
+              <div class="signature-custom-sender-row">
+                <input class="form-input" type="text" id="step2CustomSender" name="customSender" value="" placeholder="Salesforce User ID" autocomplete="off">
+                <button type="button" class="maker-btn maker-btn--secondary" id="step2CustomSenderVerifyBtn">Verify</button>
+              </div>
+              <span class="signature-custom-sender-verify-notice" id="step2CustomSenderVerifyNotice" aria-live="polite"></span>
+            </div>
             <label class="signature-booking-toggle is-hidden is-disabled" id="step2ShowBookingLinkWrap" for="step2ShowBookingLink">
               <input type="checkbox" id="step2ShowBookingLink" name="showBookingLink" value="1" disabled>
               Include booking link
@@ -1848,7 +1991,14 @@ Your email is saved in Content Builder. Open the link below to review it or send
       sendFromEmail: "alex.morgan@magmutual.com",
       senderTitle: "Regional Underwriter",
       hasLicense: "LU-284719",
-      senderLicense: "LU-284719"
+      senderLicense: "LU-284719",
+      customSenderUserId: "0055g00000CS2026A",
+      customSenderName: "Jordan Ellis",
+      customSenderEmail: "jordan.ellis@magmutual.com",
+      customSenderTitle: "Physician Relations Consultant",
+      customSenderPhone: "(404) 555-0105",
+      customSenderLicense: "LU-618204",
+      customSenderAppointmentLink: "https://cloud.go.magmutual.com/go-redirect-to-uat-link?url=https%3A%2F%2Foutlook.office365.com%2Fbook%2Fjordan.ellis%40magmutual.com"
     },
     {
       previewEmail: "sofia.martinez@maternalcarega.example",
@@ -1874,7 +2024,14 @@ Your email is saved in Content Builder. Open the link below to review it or send
       sendFromEmail: "priya.shah@magmutual.com",
       senderTitle: "Senior Account Executive",
       hasLicense: "LU-391024",
-      senderLicense: "LU-391024"
+      senderLicense: "LU-391024",
+      customSenderUserId: "0055g00000CS2026B",
+      customSenderName: "Jordan Ellis",
+      customSenderEmail: "jordan.ellis@magmutual.com",
+      customSenderTitle: "Physician Relations Consultant",
+      customSenderPhone: "(404) 555-0105",
+      customSenderLicense: "LU-618204",
+      customSenderAppointmentLink: "https://cloud.go.magmutual.com/go-redirect-to-uat-link?url=https%3A%2F%2Foutlook.office365.com%2Fbook%2Fjordan.ellis%40magmutual.com"
     },
     {
       previewEmail: "claire.whitfield@peachtreeobgyn.example",
@@ -1900,7 +2057,14 @@ Your email is saved in Content Builder. Open the link below to review it or send
       sendFromEmail: "chris.dalton@magmutual.com",
       senderTitle: "Underwriting Specialist",
       hasLicense: "LU-502817",
-      senderLicense: "LU-502817"
+      senderLicense: "LU-502817",
+      customSenderUserId: "0055g00000CS2026C",
+      customSenderName: "Jordan Ellis",
+      customSenderEmail: "jordan.ellis@magmutual.com",
+      customSenderTitle: "Physician Relations Consultant",
+      customSenderPhone: "(404) 555-0105",
+      customSenderLicense: "LU-618204",
+      customSenderAppointmentLink: "https://cloud.go.magmutual.com/go-redirect-to-uat-link?url=https%3A%2F%2Foutlook.office365.com%2Fbook%2Fjordan.ellis%40magmutual.com"
     }
   ];
   function pickRandomPreviewSampleProfile() {
@@ -1931,7 +2095,7 @@ Your email is saved in Content Builder. Open the link below to review it or send
       if (!Object.prototype.hasOwnProperty.call(profile, key)) {
         continue;
       }
-      if (key === "previewEmail" || key === "contactId" || key === "appointmentLink") {
+      if (key === "previewEmail" || key === "contactId" || key === "appointmentLink" || key.indexOf("customSender") === 0) {
         continue;
       }
       out = out.replace(ampPersonalizationPattern(key), profile[key]);
@@ -1989,43 +2153,75 @@ Your email is saved in Content Builder. Open the link below to review it or send
     }
     return "Hello,";
   }
+  function previewSignatureSenderFields(profile, choice) {
+    profile = profile || getPreviewSampleProfile();
+    if (choice === "custom_sender" && global.sstVerifiedCustomSender) {
+      var verified = global.sstVerifiedCustomSender;
+      return {
+        sendfromName: verified.sendfromName || "",
+        senderTitle: verified.senderTitle || "",
+        sendFromEmail: verified.sendFromEmail || "",
+        signaturePhone: verified.signaturePhone || "",
+        license: verified.senderLicense || verified.hasLicense || "",
+        appointmentLink: verified.appointmentLink || ""
+      };
+    }
+    if (choice === "custom_sender") {
+      return {
+        sendfromName: profile.customSenderName || profile.sendfromName,
+        senderTitle: profile.customSenderTitle || profile.senderTitle,
+        sendFromEmail: profile.customSenderEmail || profile.sendFromEmail,
+        signaturePhone: profile.customSenderPhone || profile.signaturePhone,
+        license: profile.customSenderLicense || profile.senderLicense || profile.hasLicense,
+        appointmentLink: profile.customSenderAppointmentLink || profile.appointmentLink
+      };
+    }
+    return {
+      sendfromName: profile.sendfromName,
+      senderTitle: profile.senderTitle,
+      sendFromEmail: profile.sendFromEmail,
+      signaturePhone: profile.signaturePhone,
+      license: profile.senderLicense || profile.hasLicense,
+      appointmentLink: profile.appointmentLink
+    };
+  }
   function buildPreviewSignatureHtml(choice, showBookingLink, profile) {
     if (!choice || choice === "none") {
       return "";
     }
     profile = profile || getPreviewSampleProfile();
+    var sender = previewSignatureSenderFields(profile, choice);
     var chunks = [];
     chunks.push(
       "<p style=\"font-family: 'IBM Plex Sans', Arial, Helvetica, sans-serif; font-size:14px; color:#161616; line-height:20px; padding:0px 0px 0;\">"
     );
-    if (showBookingLink && profile.appointmentLink) {
+    if (showBookingLink && sender.appointmentLink) {
       chunks.push(
         "<a href=\"" +
-          escapeHtml(profile.appointmentLink) +
+          escapeHtml(sender.appointmentLink) +
           "\" target=\"_blank\" style=\"text-decoration:underline;\">Book time to meet with me</a><br /><br />"
       );
     }
     chunks.push("Best regards,<br /><br />");
-    if (profile.sendfromName) {
+    if (sender.sendfromName) {
       chunks.push(
         "<span style=\"font-style:italic; font-family: serif; font-size:20px;\">" +
-          escapeHtml(profile.sendfromName) +
+          escapeHtml(sender.sendfromName) +
           "</span><br />"
       );
     }
-    if (profile.senderTitle) {
-      chunks.push(escapeHtml(profile.senderTitle) + "<br />");
+    if (sender.senderTitle) {
+      chunks.push(escapeHtml(sender.senderTitle) + "<br />");
     }
     chunks.push("MagMutual Insurance<br />");
-    if (profile.sendFromEmail) {
-      chunks.push(escapeHtml(profile.sendFromEmail) + "<br />");
+    if (sender.sendFromEmail) {
+      chunks.push(escapeHtml(sender.sendFromEmail) + "<br />");
     }
-    if (profile.signaturePhone) {
-      chunks.push(escapeHtml(profile.signaturePhone) + "<br />");
+    if (sender.signaturePhone) {
+      chunks.push(escapeHtml(sender.signaturePhone) + "<br />");
     }
-    var license = profile.senderLicense || profile.hasLicense;
-    if (license) {
-      chunks.push(escapeHtml(license));
+    if (sender.license) {
+      chunks.push(escapeHtml(sender.license));
     }
     chunks.push("</p>");
     return chunks.join("");
@@ -2318,24 +2514,68 @@ function syncStep2FromStep1() {
     SSTEmailPreview.toggleRendererFields(renderer);
   }
   toggleTemplateFields(templateEmailName);
-  syncSignatureBookingToggle();
+  syncSignatureFieldVisibility();
   refreshCreateEmailPreview();
 }
-function syncSignatureBookingToggle() {
+function syncSignatureFieldVisibility() {
   var select = document.getElementById("step2SignatureChoice");
-  var wrap = document.getElementById("step2ShowBookingLinkWrap");
+  var bookingWrap = document.getElementById("step2ShowBookingLinkWrap");
   var cb = document.getElementById("step2ShowBookingLink");
-  if (!select || !wrap || !cb) return;
+  var customWrap = document.getElementById("step2CustomSenderWrap");
+  var customInput = document.getElementById("step2CustomSender");
+  if (!select) {
+    return;
+  }
   var choice = select.value || "none";
   if (choice === "none") {
-    wrap.classList.add("is-hidden");
-    wrap.classList.add("is-disabled");
-    cb.checked = false;
-    cb.disabled = true;
-  } else {
-    wrap.classList.remove("is-hidden");
-    wrap.classList.remove("is-disabled");
+    if (bookingWrap) {
+      bookingWrap.classList.add("is-hidden");
+      bookingWrap.classList.add("is-disabled");
+    }
+    if (cb) {
+      cb.checked = false;
+      cb.disabled = true;
+    }
+    if (customWrap) {
+      customWrap.classList.add("is-hidden");
+    }
+    if (customInput) {
+      customInput.value = "";
+    }
+    if (window.sstVerifiedCustomSender) {
+      window.sstVerifiedCustomSender = null;
+    }
+    var verifyNotice = document.getElementById("step2CustomSenderVerifyNotice");
+    if (verifyNotice) {
+      verifyNotice.textContent = "";
+    }
+    return;
+  }
+  if (bookingWrap) {
+    bookingWrap.classList.remove("is-hidden");
+    bookingWrap.classList.remove("is-disabled");
+  }
+  if (cb) {
     cb.disabled = false;
+  }
+  if (choice === "custom_sender") {
+    if (customWrap) {
+      customWrap.classList.remove("is-hidden");
+    }
+  } else {
+    if (customWrap) {
+      customWrap.classList.add("is-hidden");
+    }
+    if (customInput) {
+      customInput.value = "";
+    }
+    if (window.sstVerifiedCustomSender) {
+      window.sstVerifiedCustomSender = null;
+    }
+    verifyNotice = document.getElementById("step2CustomSenderVerifyNotice");
+    if (verifyNotice) {
+      verifyNotice.textContent = "";
+    }
   }
 }
 function syncStep2HiddenFieldsForPost() {
@@ -2424,21 +2664,96 @@ if (headlineEl) {
 var step2SignatureChoiceEl = document.getElementById("step2SignatureChoice");
 if (step2SignatureChoiceEl) {
   step2SignatureChoiceEl.addEventListener("change", function() {
-    syncSignatureBookingToggle();
+    syncSignatureFieldVisibility();
     refreshCreateEmailPreview();
+  });
+}
+var step2CustomSenderEl = document.getElementById("step2CustomSender");
+if (step2CustomSenderEl) {
+  step2CustomSenderEl.addEventListener("input", function() {
+    if (window.sstVerifiedCustomSender) {
+      window.sstVerifiedCustomSender = null;
+    }
+    var verifyNotice = document.getElementById("step2CustomSenderVerifyNotice");
+    if (verifyNotice) {
+      verifyNotice.textContent = "";
+    }
+    refreshCreateEmailPreview();
+  });
+}
+var step2CustomSenderVerifyBtn = document.getElementById("step2CustomSenderVerifyBtn");
+var step2CustomSenderVerifyNotice = document.getElementById("step2CustomSenderVerifyNotice");
+if (step2CustomSenderVerifyBtn && step2CustomSenderEl) {
+  step2CustomSenderVerifyBtn.addEventListener("click", function() {
+    var userId = step2CustomSenderEl.value.replace(/^\s+|\s+$/g, "");
+    if (!userId) {
+      if (step2CustomSenderVerifyNotice) {
+        step2CustomSenderVerifyNotice.textContent = "Enter a User ID first.";
+      }
+      return;
+    }
+    step2CustomSenderVerifyBtn.disabled = true;
+    if (step2CustomSenderVerifyNotice) {
+      step2CustomSenderVerifyNotice.textContent = "Verifying…";
+    }
+    var verifyUrl =
+      "?verifyCustomSender=1&userId=" + encodeURIComponent(userId);
+    fetch(verifyUrl, { credentials: "same-origin" })
+      .then(function(response) {
+        return response.json();
+      })
+      .then(function(data) {
+        if (data && data.ok) {
+          window.sstVerifiedCustomSender = data;
+          if (step2CustomSenderVerifyNotice) {
+            step2CustomSenderVerifyNotice.textContent =
+              "Verified: " + (data.sendfromName || data.sendFromEmail || userId);
+          }
+          refreshCreateEmailPreview();
+        } else {
+          window.sstVerifiedCustomSender = null;
+          if (step2CustomSenderVerifyNotice) {
+            step2CustomSenderVerifyNotice.textContent =
+              (data && data.error) || "Could not verify that User ID.";
+          }
+          refreshCreateEmailPreview();
+        }
+      })
+      .catch(function() {
+        window.sstVerifiedCustomSender = null;
+        if (step2CustomSenderVerifyNotice) {
+          step2CustomSenderVerifyNotice.textContent = "Verify request failed. Try again.";
+        }
+        refreshCreateEmailPreview();
+      })
+      .finally(function() {
+        step2CustomSenderVerifyBtn.disabled = false;
+      });
   });
 }
 var step2ShowBookingLinkEl = document.getElementById("step2ShowBookingLink");
 if (step2ShowBookingLinkEl) {
   step2ShowBookingLinkEl.addEventListener("change", refreshCreateEmailPreview);
 }
-syncSignatureBookingToggle();
+syncSignatureFieldVisibility();
 if (step2Form && step2Form.querySelector('#submitBtn')) {
   var btn = document.getElementById('submitBtn');
   var btnText = document.getElementById('btnText');
   var btnSpinner = document.getElementById('btnSpinner');
-  step2Form.addEventListener('submit', function() {
+  step2Form.addEventListener('submit', function(e) {
     syncStep2HiddenFieldsForPost();
+    var sigEl = document.getElementById('step2SignatureChoice');
+    var customSenderEl = document.getElementById('step2CustomSender');
+    if (
+      sigEl &&
+      sigEl.value === 'custom_sender' &&
+      customSenderEl &&
+      !customSenderEl.value.trim()
+    ) {
+      e.preventDefault();
+      window.alert('Enter a User ID for Custom Sender.');
+      return;
+    }
     btn.disabled = true;
     if (btnText) btnText.textContent = 'Creating...';
     if (btnSpinner) btnSpinner.style.display = 'inline-block';
@@ -2529,6 +2844,7 @@ if (showLogBtn && apiLog) {
 </script>
 </body>
 </html>
+%%[ ENDIF ]%%
 
 
 
