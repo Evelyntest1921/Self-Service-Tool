@@ -1519,20 +1519,6 @@
     }
     return out;
   }
-  function seriesToJsonKey(series, keyName) {
-    var labels = [];
-    var i;
-    for (i = 0; i < series.labels.length; i++) {
-      labels.push('"' + escJsonSendLog(series.labels[i]) + '"');
-    }
-    return (
-      '  "' + keyName + '": {\n' +
-      '    "labels": [' + labels.join(", ") + '],\n' +
-      '    "responses": [' + series.responses.join(", ") + '],\n' +
-      '    "hasData": ' + (series.hasData ? "true" : "false") + '\n' +
-      '  }'
-    );
-  }
   function getPerformanceAmpVar(name) {
     try {
       return Platform.Variable.GetValue("@" + name) || "";
@@ -1550,22 +1536,31 @@
     if (!raw) {
       return [];
     }
-    return String(raw).split("|").map(function (v) {
-      var n = parseInt(v, 10);
-      return isNaN(n) ? 0 : n;
-    });
+    var parts = String(raw).split("|");
+    var out = [];
+    var i, n;
+    for (i = 0; i < parts.length; i++) {
+      n = parseInt(parts[i], 10);
+      out.push(isNaN(n) ? 0 : n);
+    }
+    return out;
+  }
+  function sendLogSeriesToPeriod(series) {
+    return {
+      labels: series.labels,
+      responses: series.responses,
+      hasData: series.hasData
+    };
+  }
+  function buildSendLogChartObject() {
+    return {
+      "12months": sendLogSeriesToPeriod(loadSendLogSeries("sst_de_send_log_12_months")),
+      "6months": sendLogSeriesToPeriod(loadSendLogSeries("sst_de_send_log_6_months")),
+      "30days": sendLogSeriesToPeriod(loadSendLogSeries("sst_de_send_log_30_days"))
+    };
   }
   function buildSendLogChartJson() {
-    var s12 = loadSendLogSeries("sst_de_send_log_12_months");
-    var s6 = loadSendLogSeries("sst_de_send_log_6_months");
-    var s30 = loadSendLogSeries("sst_de_send_log_30_days");
-    return (
-      "{\n" +
-      seriesToJsonKey(s12, "12months") + ",\n" +
-      seriesToJsonKey(s6, "6months") + ",\n" +
-      seriesToJsonKey(s30, "30days") + "\n" +
-      "}"
-    );
+    return stringifyPerformanceJson(buildSendLogChartObject());
   }
   function stringifyPerformanceJson(payload) {
     var raw;
@@ -1583,11 +1578,9 @@
   if (isPerformanceDataRequest()) {
     var performanceJson = '{"ok":false,"error":"Could not load performance data."}';
     try {
-    var chartJson = buildSendLogChartJson();
-    var sendLogObj = Platform.Function.ParseJSON(chartJson);
     var performancePayload = {
       ok: true,
-      sendLog: sendLogObj,
+      sendLog: buildSendLogChartObject(),
       specialty: {
         deCount: getPerformanceAmpVar("specDeCountForCharts"),
         labels: splitPipeValues(getPerformanceAmpVar("specLabelsOut")),
