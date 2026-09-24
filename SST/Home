@@ -1556,18 +1556,20 @@
       return isNaN(n) ? 0 : n;
     });
   }
-  var emptySendLogChartJson =
-    '{"12months":{"labels":[],"responses":[],"hasData":false},"6months":{"labels":[],"responses":[],"hasData":false},"30days":{"labels":[],"responses":[],"hasData":false}}';
-  if (isPerformanceDataRequest()) {
+  function buildSendLogChartJson() {
     var s12 = loadSendLogSeries("sst_de_send_log_12_months");
     var s6 = loadSendLogSeries("sst_de_send_log_6_months");
     var s30 = loadSendLogSeries("sst_de_send_log_30_days");
-    var chartJson =
+    return (
       "{\n" +
       seriesToJsonKey(s12, "12months") + ",\n" +
       seriesToJsonKey(s6, "6months") + ",\n" +
       seriesToJsonKey(s30, "30days") + "\n" +
-      "}";
+      "}"
+    );
+  }
+  if (isPerformanceDataRequest()) {
+    var chartJson = buildSendLogChartJson();
     var sendLogObj = Platform.Function.ParseJSON(chartJson);
     var performancePayload = {
       ok: true,
@@ -1593,7 +1595,7 @@
     Platform.Variable.SetValue("@skipHomeHtml", "1");
     Platform.Variable.SetValue("@homePerformanceJson", performanceJson);
   } else {
-    setChartVar("sendLogChartJson", emptySendLogChartJson);
+    setChartVar("sendLogChartJson", buildSendLogChartJson());
   }
 </script>
 %%[ IF @skipHomeHtml == "1" THEN ]%%
@@ -1694,9 +1696,14 @@
         </div>
       </div>
     </div>
-    <div class="section-header">
+    <div class="section-header" id="homeEngagementPulseHeader">
       <h2>Engagement pulse
       </h2>
+      <div class="activity-filters">
+        <button class="activity-filter active" onclick="filterActivity('12months')" data-period="12months">12 months</button>
+        <button class="activity-filter" onclick="filterActivity('6months')" data-period="6months">6 months</button>
+        <button class="activity-filter" onclick="filterActivity('30days')" data-period="30days">30 days</button>
+      </div>
     </div>
     <!-- Statistics Cards -->
     <div class="stats-grid">
@@ -1803,7 +1810,7 @@
         </div>
       </div>
     </div>
-    <div class="chart-container home-engagement-chart" id="homeEngagementChartWrap" style="display: none;" aria-hidden="true">
+    <div class="chart-container home-engagement-chart" id="homeEngagementChartWrap">
       <div class="chart-header">
         <div class="chart-number">☈
         </div>
@@ -3704,6 +3711,7 @@
                            );
   document.addEventListener('DOMContentLoaded', function () {
     applyBuildTypeIcons();
+    initializeActivityChart();
     %%[ IF @browseMode == "1" THEN ]%%
     showAllJourneys();
     %%[ ENDIF ]%%
@@ -3917,7 +3925,16 @@
     var chartData = getSendLogChartData();
     if (!chartData) return;
     var periodData = chartData[period] || chartData['12months'];
+    renderEngagementTrendChart('activityChart', periodData);
     renderEngagementTrendChart('reportsChart', periodData);
+  }
+  function initializeActivityChart() {
+    var chartData = getSendLogChartData();
+    if (!chartData) return;
+    var header = document.getElementById('homeEngagementPulseHeader');
+    var period = header ? getActivePeriod(header) : '12months';
+    var periodData = chartData[period] || chartData['12months'];
+    renderEngagementTrendChart('activityChart', periodData);
   }
   function joinPipeValues(values) {
     if (!values || !values.length) {
@@ -4430,13 +4447,10 @@
                                   );
   }
   function filterActivity(period) {
-    document.querySelectorAll('#reportsSection .activity-filter').forEach(function (btn) {
+    document.querySelectorAll('.activity-filter').forEach(function (btn) {
       btn.classList.toggle('active', btn.getAttribute('data-period') === period);
     }
                                                          );
-    if (!window.homePerformanceChartPayload || !window.homePerformanceChartPayload.sendLog) {
-      return;
-    }
     updateEngagementTrendCharts(period);
   }
   function showAllJourneys() {
@@ -4465,6 +4479,10 @@
     document.getElementById('heroSection').style.display = 'flex';
     document.querySelector('.stats-grid').style.display = 'grid';
     document.querySelector('.section-header').style.display = 'flex';
+    var homeChartWrap = document.getElementById('homeEngagementChartWrap');
+    if (homeChartWrap) {
+      homeChartWrap.style.display = 'block';
+    }
     document.querySelectorAll('.nav-link').forEach(link => {
       link.classList.remove('active');
     }
