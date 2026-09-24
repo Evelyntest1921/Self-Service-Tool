@@ -500,22 +500,27 @@ ENDIF
     </script>
 
     <!-- All Surveys Section -->
-    <div class="section-header" id="allSurveysSection">
-      <h2>All Surveys</h2>
-      <div class="search-section">
-        <input class="search-input" type="text" placeholder="Search surveys..." id="surveySearch" onkeyup="searchSurveys()">
-        <button class="filter-btn" onclick="toggleFilter()">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/>
-          </svg>
-          Filter
-        </button>
+    <div class="section-header recent-builds-header" id="allSurveysSection">
+      <div class="recent-builds-header-left">
+        <h2>All Surveys</h2>
+      </div>
+      <div class="recent-builds-header-right">
+        <div class="search-section">
+          <input class="search-input" type="text" placeholder="Search surveys by name or ID..." id="surveySearch" onkeyup="searchSurveys()">
+          <button class="filter-btn" onclick="toggleFilter()">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/>
+            </svg>
+            Filter
+          </button>
+        </div>
       </div>
     </div>
     
-    <div class="surveys-grid">
+    <div class="surveys-grid" id="surveysGrid">
       %%[
         VAR @rows, @rowCount, @i, @row, @name, @id, @status, @created, @responseCount, @surveyAnalyticsLink
+        VAR @progLabelClass, @progFillClass, @progLabel, @progWidthPct
         
                 IF @dataExists == "true" THEN
         
@@ -581,6 +586,26 @@ ENDIF
             IF NOT Empty(@surveyAnalyticsUrl) AND NOT Empty(@id) THEN
               SET @surveyAnalyticsLink = Concat(@surveyAnalyticsUrl, "?surveyid=", @id)
             ENDIF
+            IF @status == "Draft" THEN
+              SET @progLabelClass = "progress-percentage--draft"
+              SET @progFillClass = "progress-fill--draft"
+              SET @progLabel = "Draft"
+            ELSEIF @status == "Completed" THEN
+              SET @progLabelClass = "progress-percentage--ready"
+              SET @progFillClass = "progress-fill--ready"
+              SET @progLabel = "Completed"
+            ELSE
+              SET @progLabelClass = "progress-percentage--running"
+              SET @progFillClass = "progress-fill--running"
+              SET @progLabel = "Active"
+            ENDIF
+            IF @responseCount > 100 THEN
+              SET @progWidthPct = "100%"
+            ELSEIF @responseCount > 0 THEN
+              SET @progWidthPct = Concat(@responseCount, "%")
+            ELSE
+              SET @progWidthPct = "0%"
+            ENDIF
       ]%%
       <div class="survey-card">
         <div class="survey-header">
@@ -596,11 +621,11 @@ ENDIF
         </div>
         <div class="survey-progress">
           <div class="progress-info">
-            <span>%%=v(@responseCount)=%% responses</span>
-            <span class="progress-percentage">%%=IIF(@responseCount > 0, FormatNumber(Multiply(Divide(@responseCount, 100), 100), 0), 0)=%%/100</span>
+            <span class="progress-percentage %%=v(@progLabelClass)=%%">%%=v(@progLabel)=%%</span>
+            <span class="progress-sent-count">%%=v(@responseCount)=%% opens</span>
           </div>
           <div class="progress-bar">
-            <div class="progress-fill" style="width: %%=IIF(@responseCount > 0, FormatNumber(Multiply(Divide(@responseCount, 100), 100), 0), 0)=%%%;"></div>
+            <div class="progress-fill %%=v(@progFillClass)=%%" style="width: %%=v(@progWidthPct)=%%;"></div>
           </div>
         </div>
         <div class="survey-actions">
@@ -609,11 +634,6 @@ ENDIF
           %%[ ELSE ]%%
           <span class="btn-secondary" style="opacity: 0.5; cursor: not-allowed;">View Analytics</span>
           %%[ ENDIF ]%%
-          <button class="btn-icon" title="More options">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
-            </svg>
-          </button>
         </div>
       </div>
       %%[ NEXT @i ]%%
@@ -1182,6 +1202,25 @@ body {
   color: var(--gray-900);
 }
 
+.recent-builds-header {
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.recent-builds-header-left {
+  flex: 1;
+  min-width: 200px;
+}
+
+.recent-builds-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .activity-filters {
   display: flex;
   gap: 8px;
@@ -1386,23 +1425,26 @@ body {
 
 /* Surveys Grid */
 .surveys-grid {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
   gap: 24px;
   margin-bottom: 40px;
   width: 100%;
+  align-items: stretch;
 }
 
 .survey-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   background: white;
   border-radius: 16px;
   padding: 24px;
   box-shadow: var(--shadow-sm);
   border: 1px solid var(--gray-200);
   transition: all 0.2s ease;
+  width: 100%;
   max-width: 400px;
-  flex: 0 0 auto;
-  width: 350px;
 }
 
 .survey-card:hover {
@@ -1420,13 +1462,12 @@ body {
 .survey-icon {
   width: 40px;
   height: 40px;
-  background: var(--gray-100);
-  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--gray-600);
-  font-size: 30;
+  color: #000000;
+  flex-shrink: 0;
+  font-size: 30px;
 }
 
 .survey-status {
@@ -1458,17 +1499,44 @@ body {
   color: var(--gray-900);
   margin-bottom: 12px;
   line-height: 1.3;
+  min-height: 2.6em;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  text-transform: capitalize;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .survey-meta {
   display: flex;
+  justify-content: space-between;
+  align-items: center;
   gap: 16px;
   margin-bottom: 16px;
   font-size: 12px;
   color: var(--gray-500);
+  text-transform: uppercase;
+}
+
+.survey-id {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+}
+
+.survey-date {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  text-align: right;
+  text-transform: none;
 }
 
 .survey-progress {
+  margin-top: auto;
   margin-bottom: 20px;
 }
 
@@ -1485,6 +1553,25 @@ body {
   color: var(--primary-color);
 }
 
+.progress-percentage--draft {
+  color: #6b7280;
+}
+
+.progress-percentage--running {
+  color: #059669;
+}
+
+.progress-percentage--ready {
+  color: var(--primary-color);
+}
+
+.progress-sent-count {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gray-500);
+  margin-left: auto;
+}
+
 .progress-bar {
   height: 6px;
   background: var(--gray-200);
@@ -1494,9 +1581,30 @@ body {
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(135deg, #000000fa 0%, #4be11a 100%);
   border-radius: 3px;
-  transition: width 0.3s ease;
+  transition: width 0.3s ease, background 0.3s ease;
+}
+
+.progress-fill--draft {
+  background: #9ca3af;
+}
+
+.progress-fill--running {
+  background: #10b981;
+  animation: progress-running-pulse 2s ease-in-out infinite;
+}
+
+.progress-fill--ready {
+  background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%);
+}
+
+@keyframes progress-running-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.72;
+  }
 }
 
 .survey-actions {
@@ -1824,7 +1932,7 @@ body {
   }
   
   .surveys-grid {
-    flex-wrap: wrap;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   }
 }
 
@@ -2265,7 +2373,7 @@ function updateMetricsForPeriod(period) {
 function showAllSurveys() {
   hideAllSections();
   document.getElementById('allSurveysSection').style.display = 'block';
-  document.querySelector('.surveys-grid').style.display = 'flex';
+  document.querySelector('.surveys-grid').style.display = 'grid';
   document.getElementById('breadcrumbSection').style.display = 'block';
   document.getElementById('allSurveysSection').scrollIntoView({ behavior: 'smooth' });
 }
