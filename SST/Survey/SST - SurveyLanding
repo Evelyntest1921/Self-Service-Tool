@@ -1,8 +1,8 @@
 %%[ 
 VAR @errorFlag, @dataExists, @testCount
-VAR @hubUrl, @journeyExitUrl, @calendarUrl, @surveyHomeUrl, @environment, @environmentSwitchUrl
+VAR @hubUrl, @journeyExitUrl, @calendarUrl, @surveyHomeUrl, @surveyAnalyticsUrl, @environment, @environmentSwitchUrl
 VAR @envDisplayName, @envDisplayEmail, @envAvatarLetter, @envSwitchLabel
-VAR @navRows, @navRow
+VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow
 SET @errorFlag = "false"
 SET @dataExists = "true"
 SET @redirect = requestparameter("redirect")
@@ -10,6 +10,7 @@ SET @hubUrl = "#"
 SET @journeyExitUrl = ""
 SET @calendarUrl = ""
 SET @surveyHomeUrl = ""
+SET @surveyAnalyticsUrl = ""
 SET @environment = ""
 SET @environmentSwitchUrl = ""
 SET @envDisplayName = ""
@@ -25,6 +26,17 @@ IF RowCount(@navRows) > 0 THEN
   SET @surveyHomeUrl = Trim(Field(@navRow,"ss_survey_home"))
   SET @environment = Trim(Lowercase(Field(@navRow,"environment")))
   SET @environmentSwitchUrl = Trim(Field(@navRow,"environment_switch"))
+ENDIF
+SET @surveyUrlRows = LookupRows("SST_SP_Survey_Url_DE","user","admin")
+IF RowCount(@surveyUrlRows) > 0 THEN
+  SET @surveyUrlRow = Row(@surveyUrlRows,1)
+  SET @surveyAnalyticsUrl = Trim(Field(@surveyUrlRow,"Analytics"))
+  IF Empty(@surveyAnalyticsUrl) THEN
+    SET @surveyAnalyticsUrl = Trim(Field(@surveyUrlRow,"analytics"))
+  ENDIF
+  IF Empty(@surveyHomeUrl) THEN
+    SET @surveyHomeUrl = Trim(Field(@surveyUrlRow,"dashboard"))
+  ENDIF
 ENDIF
 IF @environment == "uat" THEN
   SET @envDisplayName = "UAT"
@@ -503,7 +515,7 @@ ENDIF
     
     <div class="surveys-grid">
       %%[
-        VAR @rows, @rowCount, @i, @row, @name, @id, @status, @created, @responseCount
+        VAR @rows, @rowCount, @i, @row, @name, @id, @status, @created, @responseCount, @surveyAnalyticsLink
         
                 IF @dataExists == "true" THEN
         
@@ -565,6 +577,10 @@ ENDIF
                 SET @responseCount = 11
               ENDIF
             ENDIF
+            SET @surveyAnalyticsLink = ""
+            IF NOT Empty(@surveyAnalyticsUrl) AND NOT Empty(@id) THEN
+              SET @surveyAnalyticsLink = Concat(@surveyAnalyticsUrl, "?surveyid=", @id)
+            ENDIF
       ]%%
       <div class="survey-card">
         <div class="survey-header">
@@ -588,8 +604,11 @@ ENDIF
           </div>
         </div>
         <div class="survey-actions">
-          <!-- UPDATE THIS URL TO POINT TO YOUR SURVEY ANALYTICS CLOUDPAGE -->
-          <a href="https://cloud.go.magmutual.com/survey-analytics?surveyid=%%=v(@id)=%%" class="btn-secondary">View Analytics</a>
+          %%[ IF NOT Empty(@surveyAnalyticsLink) THEN ]%%
+          <a href="%%=v(@surveyAnalyticsLink)=%%" class="btn-secondary">View Analytics</a>
+          %%[ ELSE ]%%
+          <span class="btn-secondary" style="opacity: 0.5; cursor: not-allowed;">View Analytics</span>
+          %%[ ENDIF ]%%
           <button class="btn-icon" title="More options">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
               <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
