@@ -524,19 +524,69 @@ ENDIF
     </div>
     
     <div class="surveys-grid" id="surveysGrid">
+      %%[ IF @dataExists == "true" THEN ]%%
+      <script runat="server">
+        Platform.Load("Core", "1.1.1");
+        function surveyGridClean(val) {
+          if (val === null || val === undefined) {
+            return "";
+          }
+          return String(val).replace(/,/g, " ").replace(/\|/g, " ").replace(/\r|\n/g, " ").trim();
+        }
+        try {
+          var de = DataExtension.Init("SST_SP_Surveys_Master_DE");
+          var rows = de.Rows.Retrieve();
+          if (!rows) {
+            rows = [];
+          }
+          rows.sort(function (a, b) {
+            var ta = 0;
+            var tb = 0;
+            try {
+              ta = new Date(String(a.SurveyCreatedDate)).getTime();
+            } catch (e1) {}
+            try {
+              tb = new Date(String(b.SurveyCreatedDate)).getTime();
+            } catch (e2) {}
+            if (isNaN(ta)) {
+              ta = 0;
+            }
+            if (isNaN(tb)) {
+              tb = 0;
+            }
+            return tb - ta;
+          });
+          var rowParts = [];
+          for (var i = 0; i < rows.length; i++) {
+            var r = rows[i];
+            rowParts.push(
+              surveyGridClean(r.SurveyID) + "|" +
+              surveyGridClean(r.SurveyName) + "|" +
+              surveyGridClean(r.SurveyStatus) + "|" +
+              surveyGridClean(r.SurveyCreatedDate)
+            );
+          }
+          Variable.SetValue("@surveyGridPayload", rowParts.join(","));
+        } catch (gridErr) {
+          Variable.SetValue("@surveyGridPayload", "");
+        }
+      </script>
+      %%[ ENDIF ]%%
       %%[
         VAR @rows, @rowCount, @i, @row, @name, @id, @status, @created, @responseCount, @surveyAnalyticsLink
         VAR @progLabelClass, @progFillClass, @progLabel, @progWidthPct
         
-                IF @dataExists == "true" THEN
-        
-            SET @rows = LookupOrderedRows("SST_SP_Surveys_Master_DE", 0, "SurveyCreatedDate DESC")
+        IF @dataExists == "true" THEN
+          IF NOT Empty(@surveyGridPayload) THEN
+            SET @rows = BuildRowSetFromString(@surveyGridPayload, "SurveyID|SurveyName|SurveyStatus|SurveyCreatedDate")
             SET @rowCount = RowCount(@rows)
-        
+          ELSE
+            SET @rows = LookupOrderedRows("SST_SP_Surveys_Master_DE", 500, "SurveyCreatedDate DESC", "SurveyStatus", "Active")
+            SET @rowCount = RowCount(@rows)
+          ENDIF
         ENDIF
         
         IF @dataExists == "false" THEN
-          /* Demo data when data extensions don't exist */
           SET @rowCount = 3
         ENDIF
         
