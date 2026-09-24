@@ -17,18 +17,20 @@ SET @emailRowId = Trim(RequestParameter("emailRowId"))
 SET @previewFlow = Trim(RequestParameter("previewFlow"))
 SET @signatureChoice = Trim(RequestParameter("signatureChoice"))
 SET @signatureSlotKey = Trim(RequestParameter("signatureSlotKey"))
-SET @signatureContentBlockName = ""
+SET @signatureSlotBlockName = "sst_signature_slot"
+SET @showBookingLinkParam = "false"
+IF RequestParameter("showBookingLink") == "1" OR Lowercase(Trim(RequestParameter("showBookingLink"))) == "true" OR Lowercase(Trim(RequestParameter("showBookingLink"))) == "on" THEN
+SET @showBookingLinkParam = "true"
+ENDIF
 IF NOT Empty(@signatureChoice) AND @signatureChoice != "none" THEN
-SET @signatureValidateRows = LookupRows("bd_sst_email_perm_blocks","content_block_by_name",@signatureChoice)
-IF RowCount(@signatureValidateRows) > 0 THEN
-SET @signatureValidateRow = Row(@signatureValidateRows,1)
-IF Lowercase(Trim(Field(@signatureValidateRow,"type"))) == "signature" THEN
-SET @signatureContentBlockName = Trim(Field(@signatureValidateRow,"content_block_by_name"))
+IF @signatureChoice != "standard" AND @signatureChoice != "dm" THEN
+SET @signatureChoice = "none"
+SET @showBookingLinkParam = "false"
 ENDIF
 ENDIF
+IF @signatureChoice == "none" OR Empty(@signatureChoice) THEN
+SET @showBookingLinkParam = "false"
 ENDIF
-SET @signaturePermRows = LookupOrderedRows("bd_sst_email_perm_blocks",0,"block_label ASC","type","signature")
-SET @signaturePermCount = RowCount(@signaturePermRows)
 SET @navHomeRow = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navHomeRow) > 0 THEN
     SET @navBackHome = Row(@navHomeRow,1)
@@ -338,27 +340,55 @@ if (buttonSlotKey && surveyId && templateEmailName === "survey") {
   applySlotHtmlContent(payload, buttonSlotKey, wrapSurveyButtonHtmlForSlot(surveyId));
 }
 var signatureSlotKey = Platform.Variable.GetValue("@signatureSlotKey") || "";
-var signatureContentBlockName = Platform.Variable.GetValue("@signatureContentBlockName") || "";
 var signatureChoice = Platform.Variable.GetValue("@signatureChoice") || "";
+var showBookingLinkParam = Platform.Variable.GetValue("@showBookingLinkParam") || "false";
 if (
   signatureSlotKey &&
-  signatureContentBlockName &&
   signatureChoice !== "none" &&
   signatureChoice !== ""
 ) {
   applySlotHtmlContent(
     payload,
     signatureSlotKey,
-    buildSignatureSlotAmpContent(signatureContentBlockName)
+    buildSignatureSlotAmpContent(signatureChoice, showBookingLinkParam)
   );
 }
 }
-function buildSignatureSlotAmpContent(blockName) {
-var safeName = String(blockName || "").replace(/"/g, "");
-if (!safeName) {
+function signatureToggleStrings(choice, showBookingLink) {
+var key = String(choice || "").replace(/^\s+|\s+$/g, "").toLowerCase();
+if (key !== "standard" && key !== "dm") {
+  return null;
+}
+var bookingOn =
+  showBookingLink === "true" ||
+  showBookingLink === true ||
+  showBookingLink === "1" ||
+  showBookingLink === "on";
+return {
+  dmSignature: key === "dm" ? "true" : "false",
+  customSender: "",
+  showBookingLink: bookingOn ? "true" : "false"
+};
+}
+function buildSignatureSlotAmpContent(signatureChoice, showBookingLink) {
+var toggles = signatureToggleStrings(signatureChoice, showBookingLink);
+if (!toggles) {
   return "";
 }
-return '%%=ContentBlockByName("' + safeName + '")=%%';
+return (
+  "%%[" +
+  'SET @dmSignature = "' +
+  toggles.dmSignature +
+  '" ' +
+  'SET @customSender = "' +
+  toggles.customSender +
+  '" ' +
+  'SET @showBookingLink = "' +
+  toggles.showBookingLink +
+  '" ' +
+  "]%%" +
+  '%%=ContentBlockByName("sst_signature_slot")=%%'
+);
 }
 function normalizeTemplateEmailName(value) {
 return String(value || "").replace(/^\s+|\s+$/g, "").toLowerCase();
@@ -1005,6 +1035,29 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
  line-clamp: 3;
  overflow: hidden;
 }
+.signature-booking-toggle {
+ align-items: center;
+ color: var(--text-primary);
+ cursor: pointer;
+ display: flex;
+ font-size: 0.9375rem;
+ gap: 10px;
+ margin-top: 10px;
+}
+.signature-booking-toggle input {
+ accent-color: var(--gray-900);
+ height: 16px;
+ margin: 0;
+ width: 16px;
+}
+.signature-booking-toggle.is-hidden {
+ display: none;
+}
+.signature-booking-toggle.is-disabled {
+ color: var(--gray-400);
+ cursor: not-allowed;
+ pointer-events: none;
+}
 .maker-form-shell-head {
  padding: 28px 32px 0;
 }
@@ -1581,21 +1634,13 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
             <label class="form-label" for="step2SignatureChoice">Signature</label>
             <select class="form-input" id="step2SignatureChoice" name="signatureChoice">
               <option value="none">No Signature</option>
-%%[
-IF @signaturePermCount > 0 THEN
-  FOR @si = 1 TO @signaturePermCount DO
-    SET @sigPermRow = Row(@signaturePermRows,@si)
-    SET @sigPermLabel = Field(@sigPermRow,"block_label")
-    SET @sigPermBlockByName = Trim(Field(@sigPermRow,"content_block_by_name"))
-    IF NOT Empty(@sigPermBlockByName) THEN
-]%%
-              <option value="%%=v(@sigPermBlockByName)=%%">%%=v(@sigPermLabel)=%%</option>
-%%[
-    ENDIF
-  NEXT @si
-ENDIF
-]%%
+              <option value="standard">Standard Signature</option>
+              <option value="dm">Distributed Marketing</option>
             </select>
+            <label class="signature-booking-toggle is-hidden is-disabled" id="step2ShowBookingLinkWrap" for="step2ShowBookingLink">
+              <input type="checkbox" id="step2ShowBookingLink" name="showBookingLink" value="1" disabled>
+              Include booking link
+            </label>
           </div>
           <div class="step2-actions">
             <button type="button" class="maker-btn maker-btn--secondary" id="createEmailBackBtn">Back</button>
@@ -1607,7 +1652,7 @@ ENDIF
         </div>
         <section class="preview-panel" aria-label="Email preview">
           <div class="preview-header preview-header-outlook">
-            <div class="preview-outlook-avatar" aria-hidden="true">MM</div>
+            <div class="preview-outlook-avatar" id="previewOutlookAvatar" aria-hidden="true">SR</div>
             <div class="preview-outlook-body">
               <div class="preview-outlook-title-row">
                 <p class="preview-outlook-subject" id="previewSubject">Email subject</p>
@@ -1650,7 +1695,7 @@ SET @ampPct = '%%'
               </div>
               <p class="preview-outlook-snippet" id="previewPreheader"></p>
               <p class="preview-outlook-meta"><span class="preview-outlook-meta-label">From:</span> MagMutual Insurance &lt;noreply@magmutual.com&gt;</p>
-              <p class="preview-outlook-meta"><span class="preview-outlook-meta-label">To:</span> Sample recipient</p>
+              <p class="preview-outlook-meta"><span class="preview-outlook-meta-label">To:</span> <span id="previewToRecipient">Sample recipient</span></p>
             </div>
           </div>
           <iframe class="preview-frame" id="emailPreviewFrame" title="Email preview"></iframe>
@@ -1660,19 +1705,26 @@ SET @ampPct = '%%'
   </form>
   </div>
    </div>
-%%[
-IF @signaturePermCount > 0 THEN
-  FOR @si = 1 TO @signaturePermCount DO
-    SET @sigPermRow = Row(@signaturePermRows,@si)
-    SET @sigPermBlockByName = Trim(Field(@sigPermRow,"content_block_by_name"))
-    IF NOT Empty(@sigPermBlockByName) THEN
-]%%
-<div class="sig-preview-source" data-signature-choice="%%=v(@sigPermBlockByName)=%%" hidden aria-hidden="true" style="display:none;">%%=TreatAsContent(ContentBlockByName(@sigPermBlockByName))=%%</div>
-%%[
-    ENDIF
-  NEXT @si
-ENDIF
-]%%
+<div class="sig-preview-source" data-signature-choice="standard" data-show-booking-link="false" hidden aria-hidden="true" style="display:none;">%%[
+SET @dmSignature = "false"
+SET @customSender = ""
+SET @showBookingLink = "false"
+]%%%%=TreatAsContent(ContentBlockByName(@signatureSlotBlockName))=%%</div>
+<div class="sig-preview-source" data-signature-choice="standard" data-show-booking-link="true" hidden aria-hidden="true" style="display:none;">%%[
+SET @dmSignature = "false"
+SET @customSender = ""
+SET @showBookingLink = "true"
+]%%%%=TreatAsContent(ContentBlockByName(@signatureSlotBlockName))=%%</div>
+<div class="sig-preview-source" data-signature-choice="dm" data-show-booking-link="false" hidden aria-hidden="true" style="display:none;">%%[
+SET @dmSignature = "true"
+SET @customSender = ""
+SET @showBookingLink = "false"
+]%%%%=TreatAsContent(ContentBlockByName(@signatureSlotBlockName))=%%</div>
+<div class="sig-preview-source" data-signature-choice="dm" data-show-booking-link="true" hidden aria-hidden="true" style="display:none;">%%[
+SET @dmSignature = "true"
+SET @customSender = ""
+SET @showBookingLink = "true"
+]%%%%=TreatAsContent(ContentBlockByName(@signatureSlotBlockName))=%%</div>
 %%[ ELSE ]%%
    <div class="maker-form-shell">
      <div class="maker-form-shell-head">
@@ -1769,6 +1821,154 @@ Your email is saved in Content Builder. Open the link below to review it or send
   }
   var defaultSignature =
     "<p style=\"margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#161616;\">Best regards,<br><span style=\"font-style:italic;font-family:serif;font-size:20px;\">MagMutual</span><br>MagMutual Insurance</p>";
+  var sstPreviewSampleProfile = null;
+  var SST_PREVIEW_SAMPLE_PROFILES = [
+    {
+      previewEmail: "jordan.nguyen@peachtreesurgical.example",
+      contactId: "0035g00000A1B2C3D4E",
+      contactfirstname: "Jordan",
+      contactlastname: "Nguyen",
+      contactsalutation: "Dr.",
+      contactaccountname: "Peachtree Surgical Associates",
+      contactaccountid: "0015g00000X9Y8Z7W6V",
+      contactphone: "(404) 555-0182",
+      contactage: "42",
+      contactspecialty: "General Surgery",
+      contactTitle: "Chief of Surgery",
+      contactCity: "Atlanta",
+      contactState: "GA",
+      contactOwnerId: "0055g00000O1W2N3E4R",
+      contactRole: "Physician",
+      contactBirthdate: "March 15, 1983",
+      contactGender: "Female",
+      signaturePhone: "(404) 555-0199",
+      sendfromName: "Alex Morgan",
+      sendFromEmail: "alex.morgan@magmutual.com",
+      senderTitle: "Regional Underwriter",
+      hasLicense: "LU-284719"
+    },
+    {
+      previewEmail: "marcus.reed@lakesidefamily.example",
+      contactId: "0035g00000F5G6H7I8J",
+      contactfirstname: "Marcus",
+      contactlastname: "Reed",
+      contactsalutation: "Mr.",
+      contactaccountname: "Lakeside Family Medicine",
+      contactaccountid: "0015g00000K2L3M4N5P",
+      contactphone: "(912) 555-0144",
+      contactage: "38",
+      contactspecialty: "Family Medicine",
+      contactTitle: "Practice Administrator",
+      contactCity: "Savannah",
+      contactState: "GA",
+      contactOwnerId: "0055g00000Q7R8S9T0U",
+      contactRole: "Administrator",
+      contactBirthdate: "July 22, 1987",
+      contactGender: "Male",
+      signaturePhone: "(912) 555-0166",
+      sendfromName: "Priya Shah",
+      sendFromEmail: "priya.shah@magmutual.com",
+      senderTitle: "Senior Account Executive",
+      hasLicense: "LU-391024"
+    },
+    {
+      previewEmail: "elena.vasquez@northsideortho.example",
+      contactId: "0035g00000K9L0M1N2O",
+      contactfirstname: "Elena",
+      contactlastname: "Vasquez",
+      contactsalutation: "Dr.",
+      contactaccountname: "Northside Orthopedics",
+      contactaccountid: "0015g00000R3S4T5U6V",
+      contactphone: "(770) 555-0177",
+      contactage: "45",
+      contactspecialty: "Orthopedic Surgery",
+      contactTitle: "Partner",
+      contactCity: "Marietta",
+      contactState: "GA",
+      contactOwnerId: "0055g00000V1W2X3Y4Z",
+      contactRole: "Physician",
+      contactBirthdate: "November 3, 1980",
+      contactGender: "Female",
+      signaturePhone: "(770) 555-0188",
+      sendfromName: "Chris Dalton",
+      sendFromEmail: "chris.dalton@magmutual.com",
+      senderTitle: "Underwriting Specialist",
+      hasLicense: "LU-502817"
+    }
+  ];
+  function pickRandomPreviewSampleProfile() {
+    var idx = Math.floor(Math.random() * SST_PREVIEW_SAMPLE_PROFILES.length);
+    sstPreviewSampleProfile = SST_PREVIEW_SAMPLE_PROFILES[idx];
+    return sstPreviewSampleProfile;
+  }
+  function getPreviewSampleProfile() {
+    if (!sstPreviewSampleProfile) {
+      pickRandomPreviewSampleProfile();
+    }
+    return sstPreviewSampleProfile;
+  }
+  function applyPreviewPersonalization(text, profile) {
+    if (text == null || text === "") {
+      return text || "";
+    }
+    var out = String(text);
+    var key;
+    profile = profile || getPreviewSampleProfile();
+    for (key in profile) {
+      if (!Object.prototype.hasOwnProperty.call(profile, key)) {
+        continue;
+      }
+      if (key === "previewEmail" || key === "contactId") {
+        continue;
+      }
+      var escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      var pattern = new RegExp("%%=\\s*v\\s*\\(\\s*@" + escapedKey + "\\s*\\)\\s*=%%", "gi");
+      out = out.replace(pattern, profile[key]);
+    }
+    return out;
+  }
+  function previewStateWithSampleData(state) {
+    var profile = getPreviewSampleProfile();
+    var next = {};
+    var key;
+    for (key in state) {
+      if (Object.prototype.hasOwnProperty.call(state, key)) {
+        next[key] = state[key];
+      }
+    }
+    next.subject = applyPreviewPersonalization(state.subject, profile);
+    next.preheader = applyPreviewPersonalization(state.preheader, profile);
+    next.body = applyPreviewPersonalization(state.body, profile);
+    next.headline = applyPreviewPersonalization(state.headline, profile);
+    next.greeting = applyPreviewPersonalization(state.greeting, profile);
+    next.signatureHtml = applyPreviewPersonalization(state.signatureHtml, profile);
+    next.contactId = profile.contactId || state.contactId || "";
+    return next;
+  }
+  function formatPreviewRecipientLine(profile) {
+    profile = profile || getPreviewSampleProfile();
+    var nameParts = [];
+    if (profile.contactsalutation) {
+      nameParts.push(profile.contactsalutation);
+    }
+    if (profile.contactfirstname) {
+      nameParts.push(profile.contactfirstname);
+    }
+    if (profile.contactlastname) {
+      nameParts.push(profile.contactlastname);
+    }
+    var name = nameParts.join(" ").trim() || "Sample recipient";
+    var email = profile.previewEmail || "recipient@example.com";
+    return name + " <" + email + ">";
+  }
+  function previewRecipientInitials(profile) {
+    profile = profile || getPreviewSampleProfile();
+    var a = (profile.contactfirstname || "").charAt(0);
+    var b = (profile.contactlastname || "").charAt(0);
+    var joined = (a + b).toUpperCase();
+    return joined || "SR";
+  }
+  global.pickRandomPreviewSampleProfile = pickRandomPreviewSampleProfile;
   global.SSTEmailPreviewRegistry = {
     quick_send: {
       render: function (state) {
@@ -1902,20 +2102,29 @@ Your email is saved in Content Builder. Open the link below to review it or send
         var node = root.getElementById ? root.getElementById(id) : document.getElementById(id);
         return node ? node.value : "";
       }
-      function resolveSignaturePreviewHtml(choice) {
+      function isChecked(id) {
+        var node = root.getElementById ? root.getElementById(id) : document.getElementById(id);
+        return !!(node && node.checked);
+      }
+      function resolveSignaturePreviewHtml(choice, showBookingLink) {
         if (!choice || choice === "none") {
           return "";
         }
+        var booking = showBookingLink ? "true" : "false";
         var nodes = document.querySelectorAll(".sig-preview-source[data-signature-choice]");
         var i;
         for (i = 0; i < nodes.length; i++) {
-          if (nodes[i].getAttribute("data-signature-choice") === choice) {
+          if (
+            nodes[i].getAttribute("data-signature-choice") === choice &&
+            nodes[i].getAttribute("data-show-booking-link") === booking
+          ) {
             return nodes[i].innerHTML;
           }
         }
         return "";
       }
       var signatureChoice = val("step2SignatureChoice") || "none";
+      var showBookingLink = isChecked("step2ShowBookingLink");
       var rendererKey = val("step2PreviewRenderer") || "quick_send";
       var bodyVal =
         rendererKey === "bg_header" || rendererKey === "small_header"
@@ -1929,17 +2138,20 @@ Your email is saved in Content Builder. Open the link below to review it or send
         surveyId: val("step2SurveyId"),
         templateEmailName: val("step2TemplateEmailName"),
         signatureChoice: signatureChoice,
-        signatureHtml: resolveSignaturePreviewHtml(signatureChoice),
+        showBookingLink: showBookingLink,
+        signatureHtml: resolveSignaturePreviewHtml(signatureChoice, showBookingLink),
         greeting: "Hello,"
       };
     },
     update: function (rendererKey, state, ui) {
       var renderer = global.SSTEmailPreview.getRenderer(rendererKey);
+      var profile = getPreviewSampleProfile();
+      var displayState = previewStateWithSampleData(state);
       if (ui.subjectEl) {
-        ui.subjectEl.textContent = state.subject || "Email subject";
+        ui.subjectEl.textContent = displayState.subject || "Email subject";
       }
       if (ui.preheaderEl) {
-        ui.preheaderEl.textContent = state.preheader || "";
+        ui.preheaderEl.textContent = displayState.preheader || "";
       }
       if (ui.dateEl) {
         ui.dateEl.textContent = new Date().toLocaleString("en-US", {
@@ -1952,8 +2164,14 @@ Your email is saved in Content Builder. Open the link below to review it or send
           hour12: true
         });
       }
+      if (ui.toEl) {
+        ui.toEl.textContent = formatPreviewRecipientLine(profile);
+      }
+      if (ui.avatarEl) {
+        ui.avatarEl.textContent = previewRecipientInitials(profile);
+      }
       if (ui.frameEl) {
-        ui.frameEl.srcdoc = renderer.render(state);
+        ui.frameEl.srcdoc = renderer.render(displayState);
       }
     },
     toggleRendererFields: function (rendererKey) {
@@ -2016,6 +2234,9 @@ function toggleTemplateFields(templateEmailName) {
   });
 }
 function syncStep2FromStep1() {
+  if (window.pickRandomPreviewSampleProfile) {
+    window.pickRandomPreviewSampleProfile();
+  }
   var nameEl = document.getElementById('step1ItemBaseName');
   var subjectEl = document.getElementById('step1EmailSubjectLine');
   var name = nameEl ? nameEl.value.trim() : '';
@@ -2044,7 +2265,25 @@ function syncStep2FromStep1() {
     SSTEmailPreview.toggleRendererFields(renderer);
   }
   toggleTemplateFields(templateEmailName);
+  syncSignatureBookingToggle();
   refreshCreateEmailPreview();
+}
+function syncSignatureBookingToggle() {
+  var select = document.getElementById("step2SignatureChoice");
+  var wrap = document.getElementById("step2ShowBookingLinkWrap");
+  var cb = document.getElementById("step2ShowBookingLink");
+  if (!select || !wrap || !cb) return;
+  var choice = select.value || "none";
+  if (choice === "none") {
+    wrap.classList.add("is-hidden");
+    wrap.classList.add("is-disabled");
+    cb.checked = false;
+    cb.disabled = true;
+  } else {
+    wrap.classList.remove("is-hidden");
+    wrap.classList.remove("is-disabled");
+    cb.disabled = false;
+  }
 }
 function syncStep2HiddenFieldsForPost() {
   var rendererEl = document.getElementById('step2PreviewRenderer');
@@ -2079,6 +2318,8 @@ function refreshCreateEmailPreview() {
     subjectEl: document.getElementById('previewSubject'),
     preheaderEl: document.getElementById('previewPreheader'),
     dateEl: document.getElementById('previewDate'),
+    toEl: document.getElementById('previewToRecipient'),
+    avatarEl: document.getElementById('previewOutlookAvatar'),
     frameEl: document.getElementById('emailPreviewFrame')
   });
   syncStep2HiddenFieldsForPost();
@@ -2123,10 +2364,22 @@ if (headlineEl) {
     headlineEl.dataset.userEdited = '1';
   });
 }
-['step2Preheader','step2Body','step2BodyBg','step2Headline','step2SurveyId','step2EmailSubjectLine','step2SignatureChoice'].forEach(function(id) {
+['step2Preheader','step2Body','step2BodyBg','step2Headline','step2SurveyId','step2EmailSubjectLine'].forEach(function(id) {
   var node = document.getElementById(id);
   if (node) node.addEventListener('input', refreshCreateEmailPreview);
 });
+var step2SignatureChoiceEl = document.getElementById("step2SignatureChoice");
+if (step2SignatureChoiceEl) {
+  step2SignatureChoiceEl.addEventListener("change", function() {
+    syncSignatureBookingToggle();
+    refreshCreateEmailPreview();
+  });
+}
+var step2ShowBookingLinkEl = document.getElementById("step2ShowBookingLink");
+if (step2ShowBookingLinkEl) {
+  step2ShowBookingLinkEl.addEventListener("change", refreshCreateEmailPreview);
+}
+syncSignatureBookingToggle();
 if (step2Form && step2Form.querySelector('#submitBtn')) {
   var btn = document.getElementById('submitBtn');
   var btnText = document.getElementById('btnText');
