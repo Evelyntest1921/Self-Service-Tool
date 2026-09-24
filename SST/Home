@@ -23,6 +23,10 @@
   SET @monthClicksOut = ""
   SET @monthUnsubOut = ""
   SET @monthBouncedOut = ""
+  SET @skipHomeHtml = "0"
+  SET @homePerformanceJson = ""
+  SET @homePerformanceJsonMode = IIF(RequestParameter("homePerformanceData") == "1", "1", "0")
+  SET @specDeCountForCharts = "0"
   SET @browseMode = "0"
   SET @jaBrowseMarkup = ""
   SET @jaBrowsePagination = ""
@@ -182,6 +186,7 @@
       SET @jaBrowseError = "No SFMC_AUTH row for User=Admin."
     ENDIF
   ENDIF
+  IF @homePerformanceJsonMode == "1" THEN
   SET @specDE = "sst_de_specialty_log_12_months"
   SET @specMap = ""
   IF DataExtensionRowCount(@specDE) == 0 THEN
@@ -326,6 +331,8 @@
         SET @specTotOut = Concat(@specTotOut, "|", @specTot)
       ENDIF
     NEXT @specMapIdxOut
+  ENDIF
+  SET @specDeCountForCharts = DataExtensionRowCount(@specDE)
   ENDIF
 ]%%
 <script runat="server" language="javascript">
@@ -1165,6 +1172,14 @@
     var s = String(val);
     return s.length > 16 ? s.substring(0, 16) : s;
   }
+  function isPerformanceDataRequest() {
+    var v = Platform.Request.GetQueryStringParameter("homePerformanceData");
+    if (v === null || v === undefined || v === "") {
+      v = Platform.Request.GetFormField("homePerformanceData");
+    }
+    return String(v || "") === "1";
+  }
+  if (!isPerformanceDataRequest()) {
   if (!isBrowseMode()) {
     try {
       var hubUrl = Platform.Variable.GetValue("@hubUrl") || "";
@@ -1365,9 +1380,17 @@
       }
     }
   }
+  }
 </script>
 <script runat="server" language="javascript">
   Platform.Load("Core", "1.1");
+  function isPerformanceDataRequest() {
+    var v = Platform.Request.GetQueryStringParameter("homePerformanceData");
+    if (v === null || v === undefined || v === "") {
+      v = Platform.Request.GetFormField("homePerformanceData");
+    }
+    return String(v || "") === "1";
+  }
   function escJsonSendLog(v) {
     if (v == null || v === undefined) return "";
     return String(v).replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
@@ -1511,17 +1534,71 @@
       '  }'
     );
   }
-  var s12 = loadSendLogSeries("sst_de_send_log_12_months");
-  var s6 = loadSendLogSeries("sst_de_send_log_6_months");
-  var s30 = loadSendLogSeries("sst_de_send_log_30_days");
-  var chartJson =
+  function getPerformanceAmpVar(name) {
+    try {
+      return Platform.Variable.GetValue("@" + name) || "";
+    } catch (ampEx) {
+      return "";
+    }
+  }
+  function splitPipeValues(raw) {
+    if (!raw) {
+      return [];
+    }
+    return String(raw).split("|");
+  }
+  function splitPipeNumbersPerf(raw) {
+    if (!raw) {
+      return [];
+    }
+    return String(raw).split("|").map(function (v) {
+      var n = parseInt(v, 10);
+      return isNaN(n) ? 0 : n;
+    });
+  }
+  var emptySendLogChartJson =
+    '{"12months":{"labels":[],"responses":[],"hasData":false},"6months":{"labels":[],"responses":[],"hasData":false},"30days":{"labels":[],"responses":[],"hasData":false}}';
+  if (isPerformanceDataRequest()) {
+    var s12 = loadSendLogSeries("sst_de_send_log_12_months");
+    var s6 = loadSendLogSeries("sst_de_send_log_6_months");
+    var s30 = loadSendLogSeries("sst_de_send_log_30_days");
+    var chartJson =
       "{\n" +
       seriesToJsonKey(s12, "12months") + ",\n" +
       seriesToJsonKey(s6, "6months") + ",\n" +
       seriesToJsonKey(s30, "30days") + "\n" +
       "}";
-  setChartVar("sendLogChartJson", chartJson);
+    var sendLogObj = Platform.Function.ParseJSON(chartJson);
+    var performancePayload = {
+      ok: true,
+      sendLog: sendLogObj,
+      specialty: {
+        deCount: getPerformanceAmpVar("specDeCountForCharts"),
+        labels: splitPipeValues(getPerformanceAmpVar("specLabelsOut")),
+        opened: splitPipeNumbersPerf(getPerformanceAmpVar("specOpenOut")),
+        didNotOpen: splitPipeNumbersPerf(getPerformanceAmpVar("specDnoOut")),
+        bounced: splitPipeNumbersPerf(getPerformanceAmpVar("specBncOut")),
+        clicked: splitPipeNumbersPerf(getPerformanceAmpVar("specClkOut")),
+        totals: splitPipeNumbersPerf(getPerformanceAmpVar("specTotOut"))
+      },
+      openClick: {
+        labels: splitPipeValues(getPerformanceAmpVar("monthLabelsOut")),
+        opens: splitPipeNumbersPerf(getPerformanceAmpVar("monthOpensOut")),
+        clicks: splitPipeNumbersPerf(getPerformanceAmpVar("monthClicksOut")),
+        unsubscribed: splitPipeNumbersPerf(getPerformanceAmpVar("monthUnsubOut")),
+        bounced: splitPipeNumbersPerf(getPerformanceAmpVar("monthBouncedOut"))
+      }
+    };
+    var performanceJson = Platform.Function.Stringify(performancePayload);
+    Platform.Variable.SetValue("@skipHomeHtml", "1");
+    Platform.Variable.SetValue("@homePerformanceJson", performanceJson);
+  } else {
+    setChartVar("sendLogChartJson", emptySendLogChartJson);
+  }
 </script>
+%%[ IF @skipHomeHtml == "1" THEN ]%%
+%%=TreatAsContent(@homePerformanceJson)=%%
+%%[ ELSE ]%%
 <title>Self Service Dashboard - Magmutual
 </title>
 <link rel="icon" href="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" type="image/png">
@@ -1620,11 +1697,6 @@
     <div class="section-header">
       <h2>Engagement pulse
       </h2>
-      <div class="activity-filters">
-        <button class="activity-filter active" onclick="filterActivity('12months')" data-period="12months">12 months</button>
-        <button class="activity-filter" onclick="filterActivity('6months')" data-period="6months">6 months</button>
-        <button class="activity-filter" onclick="filterActivity('30days')" data-period="30days">30 days</button>
-      </div>
     </div>
     <!-- Statistics Cards -->
     <div class="stats-grid">
@@ -1731,7 +1803,7 @@
         </div>
       </div>
     </div>
-    <div class="chart-container home-engagement-chart" id="homeEngagementChartWrap">
+    <div class="chart-container home-engagement-chart" id="homeEngagementChartWrap" style="display: none;" aria-hidden="true">
       <div class="chart-header">
         <div class="chart-number">☈
         </div>
@@ -1849,6 +1921,12 @@
           <button class="activity-filter" onclick="filterActivity('30days')" data-period="30days">30 days</button>
         </div>
       </div>
+      <div class="reports-performance-loading-panel" id="reportsPerformanceLoading" aria-live="polite">
+        <div class="reports-performance-spinner" id="reportsPerformanceSpinner" aria-hidden="true"></div>
+        <p class="reports-performance-loading-title" id="reportsPerformanceLoadingTitle">Loading performance data</p>
+        <p class="reports-performance-loading-sub" id="reportsPerformanceLoadingSub">Fetching charts from Marketing Cloud. This may take a moment.</p>
+      </div>
+      <div id="reportsPerformanceCharts">
       <div class="chart-container">
         <div class="chart-header">
           <div class="chart-number">☈
@@ -1878,13 +1956,13 @@
         </div>
         <div class="chart-wrapper home-specialty-chart-wrapper">
           <canvas id="reportsSpecialtyChart"
-                  data-de-count="%%=DataExtensionRowCount(@specDE)=%%"
-                  data-labels="%%=v(@specLabelsOut)=%%"
-                  data-opened="%%=v(@specOpenOut)=%%"
-                  data-didnotopen="%%=v(@specDnoOut)=%%"
-                  data-bounced="%%=v(@specBncOut)=%%"
-                  data-clicked="%%=v(@specClkOut)=%%"
-                  data-totals="%%=v(@specTotOut)=%%">
+                  data-de-count=""
+                  data-labels=""
+                  data-opened=""
+                  data-didnotopen=""
+                  data-bounced=""
+                  data-clicked=""
+                  data-totals="">
           </canvas>
         </div>
       </div>
@@ -1905,13 +1983,14 @@
         </div>
         <div class="chart-wrapper">
           <canvas id="reportsOpenClickChart"
-                  data-labels="%%=v(@monthLabelsOut)=%%"
-                  data-opens="%%=v(@monthOpensOut)=%%"
-                  data-clicks="%%=v(@monthClicksOut)=%%"
-                  data-unsubscribed="%%=v(@monthUnsubOut)=%%"
-                  data-bounced="%%=v(@monthBouncedOut)=%%">
+                  data-labels=""
+                  data-opens=""
+                  data-clicks=""
+                  data-unsubscribed=""
+                  data-bounced="">
           </canvas>
         </div>
+      </div>
       </div>
     </div>
     <!-- Responses Section (Hidden by default) -->
@@ -2793,6 +2872,44 @@
   .filter-btn:hover {
     background: var(--gray-200);
   }
+  .reports-performance-loading-panel {
+    display: none;
+    text-align: center;
+    padding: 48px 24px 56px;
+    margin-bottom: 24px;
+  }
+  .reports-performance-loading-panel.is-active {
+    display: block;
+  }
+  .reports-performance-spinner {
+    width: 40px;
+    height: 40px;
+    margin: 0 auto 16px;
+    border: 3px solid var(--gray-200);
+    border-top-color: var(--gray-900);
+    border-radius: 50%;
+    animation: reportsPerformanceSpin 0.8s linear infinite;
+  }
+  @keyframes reportsPerformanceSpin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .reports-performance-loading-title {
+    margin: 0 0 8px;
+    font-size: 1.125rem;
+    font-weight: 700;
+    color: var(--gray-900);
+  }
+  .reports-performance-loading-sub {
+    margin: 0;
+    font-size: 14px;
+    color: var(--gray-500);
+    line-height: 1.5;
+  }
+  #reportsPerformanceCharts.is-hidden {
+    display: none;
+  }
   .chart-container {
     background: white;
     border: 1px solid var(--gray-200);
@@ -3542,7 +3659,6 @@
       }
                                   );
     }
-    initializeActivityChart();
   }
                            );
   function toggleJourneyBuilderPanel(ev) {
@@ -3602,6 +3718,9 @@
   let homeSpecialtyChart = null;
   let homeOpenClickChart = null;
   function getSendLogChartData() {
+    if (window.homePerformanceChartPayload && window.homePerformanceChartPayload.sendLog) {
+      return window.homePerformanceChartPayload.sendLog;
+    }
     var el = document.getElementById('activityChartData');
     if (!el) return null;
     try {
@@ -3798,8 +3917,121 @@
     var chartData = getSendLogChartData();
     if (!chartData) return;
     var periodData = chartData[period] || chartData['12months'];
-    renderEngagementTrendChart('activityChart', periodData);
     renderEngagementTrendChart('reportsChart', periodData);
+  }
+  function joinPipeValues(values) {
+    if (!values || !values.length) {
+      return '';
+    }
+    return values.join('|');
+  }
+  function applyHomePerformanceChartData(data) {
+    if (!data) {
+      return;
+    }
+    window.homePerformanceChartPayload = data;
+    var sendLogJson = data.sendLog ? JSON.stringify(data.sendLog) : '{}';
+    var activityDataEl = document.getElementById('activityChartData');
+    var reportsDataEl = document.getElementById('reportsChartData');
+    if (activityDataEl) {
+      activityDataEl.textContent = sendLogJson;
+    }
+    if (reportsDataEl) {
+      reportsDataEl.textContent = sendLogJson;
+    }
+    var specialty = data.specialty || {};
+    var specialtyCanvas = document.getElementById('reportsSpecialtyChart');
+    if (specialtyCanvas) {
+      specialtyCanvas.setAttribute('data-de-count', specialty.deCount != null ? String(specialty.deCount) : '');
+      specialtyCanvas.setAttribute('data-labels', joinPipeValues(specialty.labels));
+      specialtyCanvas.setAttribute('data-opened', joinPipeValues(specialty.opened));
+      specialtyCanvas.setAttribute('data-didnotopen', joinPipeValues(specialty.didNotOpen));
+      specialtyCanvas.setAttribute('data-bounced', joinPipeValues(specialty.bounced));
+      specialtyCanvas.setAttribute('data-clicked', joinPipeValues(specialty.clicked));
+      specialtyCanvas.setAttribute('data-totals', joinPipeValues(specialty.totals));
+    }
+    var openClick = data.openClick || {};
+    var openClickCanvas = document.getElementById('reportsOpenClickChart');
+    if (openClickCanvas) {
+      openClickCanvas.setAttribute('data-labels', joinPipeValues(openClick.labels));
+      openClickCanvas.setAttribute('data-opens', joinPipeValues(openClick.opens));
+      openClickCanvas.setAttribute('data-clicks', joinPipeValues(openClick.clicks));
+      openClickCanvas.setAttribute('data-unsubscribed', joinPipeValues(openClick.unsubscribed));
+      openClickCanvas.setAttribute('data-bounced', joinPipeValues(openClick.bounced));
+    }
+  }
+  function setReportsPerformanceLoadingState(mode, message) {
+    var panel = document.getElementById('reportsPerformanceLoading');
+    var charts = document.getElementById('reportsPerformanceCharts');
+    var spinner = document.getElementById('reportsPerformanceSpinner');
+    var title = document.getElementById('reportsPerformanceLoadingTitle');
+    var sub = document.getElementById('reportsPerformanceLoadingSub');
+    if (!panel) {
+      return;
+    }
+    if (mode === 'loading') {
+      panel.classList.add('is-active');
+      panel.classList.remove('is-error');
+      if (spinner) {
+        spinner.style.display = '';
+      }
+      if (title) {
+        title.textContent = 'Loading performance data';
+      }
+      if (sub) {
+        sub.textContent = message || 'Fetching charts from Marketing Cloud. This may take a moment.';
+      }
+      if (charts) {
+        charts.classList.add('is-hidden');
+      }
+    } else if (mode === 'ready') {
+      panel.classList.remove('is-active');
+      panel.classList.remove('is-error');
+      if (charts) {
+        charts.classList.remove('is-hidden');
+      }
+    } else if (mode === 'error') {
+      panel.classList.add('is-active');
+      panel.classList.add('is-error');
+      if (spinner) {
+        spinner.style.display = 'none';
+      }
+      if (title) {
+        title.textContent = 'Could not load performance data';
+      }
+      if (sub) {
+        sub.textContent = message || 'Try again in a moment.';
+      }
+      if (charts) {
+        charts.classList.add('is-hidden');
+      }
+    }
+  }
+  function ensureHomePerformanceChartData(done) {
+    if (window.homePerformanceChartPayload && window.homePerformanceChartPayload.sendLog) {
+      done(null);
+      return;
+    }
+    var dataEl = document.getElementById('homeHubUrlData');
+    var base = dataEl ? (dataEl.getAttribute('data-url') || '') : '';
+    if (!base) {
+      base = window.location.pathname;
+    }
+    var sep = base.indexOf('?') >= 0 ? '&' : '?';
+    fetch(base + sep + 'homePerformanceData=1', { credentials: 'same-origin' })
+      .then(function (response) {
+        return response.json();
+      })
+      .then(function (data) {
+        if (!data || !data.ok) {
+          throw new Error((data && data.error) || 'Could not load performance data.');
+        }
+        applyHomePerformanceChartData(data);
+        done(null);
+      })
+      .catch(function (err) {
+        done(err || new Error('Could not load performance data.'));
+      });
   }
   function splitPipeNumbers(raw) {
     if (!raw) return [];
@@ -3810,6 +4042,19 @@
                              );
   }
   function getSpecialtyChartData() {
+    if (window.homePerformanceChartPayload && window.homePerformanceChartPayload.specialty) {
+      var specialtyPayload = window.homePerformanceChartPayload.specialty;
+      if (specialtyPayload.labels && specialtyPayload.labels.length) {
+        return {
+          labels: specialtyPayload.labels,
+          opened: specialtyPayload.opened || [],
+          didNotOpen: specialtyPayload.didNotOpen || [],
+          bounced: specialtyPayload.bounced || [],
+          clicked: specialtyPayload.clicked || [],
+          totals: specialtyPayload.totals || []
+        };
+      }
+    }
     var canvas = document.getElementById('reportsSpecialtyChart');
     if (canvas) {
       var labelsRaw = canvas.getAttribute('data-labels');
@@ -3982,6 +4227,18 @@
                                   );
   }
   function getOpenClickChartData() {
+    if (window.homePerformanceChartPayload && window.homePerformanceChartPayload.openClick) {
+      var openClickPayload = window.homePerformanceChartPayload.openClick;
+      if (openClickPayload.labels && openClickPayload.labels.length) {
+        return {
+          labels: openClickPayload.labels,
+          opens: openClickPayload.opens || [],
+          clicks: openClickPayload.clicks || [],
+          unsubscribed: openClickPayload.unsubscribed || [],
+          bounced: openClickPayload.bounced || []
+        };
+      }
+    }
     var canvas = document.getElementById('reportsOpenClickChart');
     if (!canvas) return null;
     var labelsRaw = canvas.getAttribute('data-labels');
@@ -4172,16 +4429,14 @@
     }
                                   );
   }
-  function initializeActivityChart() {
-    var chartData = getSendLogChartData();
-    if (!chartData) return;
-    renderEngagementTrendChart('activityChart', chartData['12months']);
-  }
   function filterActivity(period) {
-    document.querySelectorAll('.activity-filter').forEach(function (btn) {
+    document.querySelectorAll('#reportsSection .activity-filter').forEach(function (btn) {
       btn.classList.toggle('active', btn.getAttribute('data-period') === period);
     }
                                                          );
+    if (!window.homePerformanceChartPayload || !window.homePerformanceChartPayload.sendLog) {
+      return;
+    }
     updateEngagementTrendCharts(period);
   }
   function showAllJourneys() {
@@ -4210,7 +4465,6 @@
     document.getElementById('heroSection').style.display = 'flex';
     document.querySelector('.stats-grid').style.display = 'grid';
     document.querySelector('.section-header').style.display = 'flex';
-    document.getElementById('homeEngagementChartWrap').style.display = 'block';
     document.querySelectorAll('.nav-link').forEach(link => {
       link.classList.remove('active');
     }
@@ -4218,22 +4472,35 @@
     document.querySelector('.nav-link:first-of-type').classList.add('active');
     window.scrollTo(0, 0);
   }
-  // Show Reports functionality
   function showReports() {
-    // Hide all sections first
     hideAllSections();
-    // Show reports section
-    document.getElementById('reportsSection').style.display = 'block';
-    // Update navigation active state
+    var reportsSection = document.getElementById('reportsSection');
+    if (reportsSection) {
+      reportsSection.style.display = 'block';
+    }
     document.querySelectorAll('.nav-link').forEach(link => {
       link.classList.remove('active');
     }
                                                   );
     document.querySelector('.nav-link[onclick*="showReports"]').classList.add('active');
-    // Initialize reports chart
-    initializeReportsChart();
-    // Scroll to top
     window.scrollTo(0, 0);
+    var hasCachedPayload = window.homePerformanceChartPayload && window.homePerformanceChartPayload.sendLog;
+    if (hasCachedPayload) {
+      setReportsPerformanceLoadingState('ready');
+      initializeReportsChart();
+      window.homePerformanceChartsInitialized = true;
+      return;
+    }
+    setReportsPerformanceLoadingState('loading');
+    ensureHomePerformanceChartData(function (err) {
+      if (err) {
+        setReportsPerformanceLoadingState('error', err.message || 'Could not load performance data.');
+        return;
+      }
+      setReportsPerformanceLoadingState('ready');
+      initializeReportsChart();
+      window.homePerformanceChartsInitialized = true;
+    });
   }
   // Show Responses functionality
   function showResponses() {
@@ -4336,6 +4603,7 @@
     renderSpecialtyChart();
     renderOpenClickChart();
   }
+  window.homePerformanceChartsInitialized = false;
   // Search responses functionality
   function searchResponses() {
     const searchInput = document.getElementById('responseSearch');
@@ -4424,3 +4692,4 @@
                      );
   }
 </script>
+%%[ ENDIF ]%%
