@@ -14,15 +14,11 @@ ENDIF
 SET @flow = "sbu"
 SET @hubUrl = ""
 SET @buildDetailUrl = ""
-SET @emailOnlyUrl = ""
-SET @quickSendSelfUrl = ""
-SET @useExternalEmailCreate = "1"
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
  SET @navRow = Row(@navRows,1)
  SET @hubUrl = Field(@navRow,"ss_home")
  SET @buildDetailUrl = Field(@navRow,"ss_edit")
- SET @emailOnlyUrl = Trim(Field(@navRow,"ss_email_only"))
 ENDIF
 SET @builderPageLabel = "Quick Send"
 SET @itemBaseName = Trim(RequestParameter("itemBaseName"))
@@ -87,13 +83,18 @@ ELSE
    SET @slugName = Replace(@slugName," ","_")
    SET @slugName = Replace(@slugName,".","_")
    SET @slugName = Replace(@slugName,"/","_")
-   SET @journeyName = Concat(@slugName,"_",@campaignName)
-   SET @eventName = Concat(@slugName,"_",@campaignName)
-   SET @emailName = Concat(@slugName,"_",@campaignName,"_Email")
+   SET @journeyName = @itemBaseName
+   SET @emailName = @slugName
+   SET @eventName = Concat(@slugName,"_EntryEvent")
  ELSE
-   SET @journeyName = Concat("QuickSend_",@campaignName)
-   SET @eventName = Concat("QuickSend_",@campaignName)
-   SET @emailName = Concat("QuickSend_",@campaignName,"_Email")
+   SET @campaignNameSafe = Replace(@campaignName,'"','')
+   SET @campaignNameSafe = Replace(@campaignNameSafe," | ","_")
+   SET @campaignNameSafe = Replace(@campaignNameSafe," ","_")
+   SET @campaignNameSafe = Replace(@campaignNameSafe,"|","_")
+   SET @dateStr = Concat(Format(Now(),"yyyy"),"_",Format(Now(),"MM"),"_",Format(Now(),"dd"))
+   SET @eventName = Concat(@campaignNameSafe,"_Auto_Created_",@dateStr)
+   SET @journeyName = Concat(@campaignNameSafe,"_Auto_Created_",@dateStr)
+   SET @emailName = Concat(@eventName,"_Email")
  ENDIF
 ENDIF
 IF Empty(@emailSubjectLine) THEN
@@ -435,7 +436,6 @@ var resultText = Variable.GetValue("resultText");
 var newEmailId = "";
 var journeyEmailId = "";
 var step3bResult = " Step 3b SKIP - Email not duplicated: Template fetch failed.";
-var useExternalEmailCreate = String(Platform.Variable.GetValue("@useExternalEmailCreate") || "").replace(/^\s+|\s+$/g, "");
 function cloneObject(obj) {
  if (!obj || typeof obj !== "object") return null;
  var json = Platform.Function.Stringify(obj);
@@ -651,11 +651,7 @@ function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preh
  applyTextSettings(payload, textContent);
  return payload;
 }
-if (useExternalEmailCreate == "1") {
- newEmailId = "";
- journeyEmailId = "";
- step3bResult = " Step 3b SKIP - Empty email activity will be configured on the journey.";
-} else if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && deleteEmailId) {
+if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && deleteEmailId) {
  try {
    newEmailId = String(deleteEmailId);
    var deleteUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + deleteEmailId;
@@ -840,38 +836,38 @@ ENDIF
 IF NOT Empty(@journeyEmailId) THEN
  SET @resultText = Concat(@resultText," Journey Email ID: ",@journeyEmailId)
 ENDIF
-IF @authOk == "true" AND @createEmailOnly != "1" THEN
+IF @authOk == "true" AND NOT Empty(@journeyEmailId) AND @createEmailOnly != "1" THEN
  SET @eventKey = Concat("APIEvent-",GUID())
-   SET @journeyNameForJson = Replace(@journeyName,'"','\"')
-   SET @journeyNameForJson = Replace(Replace(Replace(@journeyNameForJson,Char(10),' '),Char(13),' '),Char(9),' ')
-   SET @eventSchemaFields = '[{"name":"greeting","dataType":"Text","maxLength":"50","isNullable":true},{"name":"id","dataType":"Text","maxLength":"50","isNullable":false},{"name":"email","dataType":"EmailAddress","maxLength":"254","isNullable":false},{"name":"sfCampaignId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfCampaignMemberId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfQuickSendId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Account_Owner_Name","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Account_Owner_Email","dataType":"Text","maxLength":"50","isNullable":true},{"name":"firstName","dataType":"Text","maxLength":"50","isNullable":true},{"name":"lastName","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfUserId","dataType":"Text","maxLength":"50","isNullable":false},{"name":"journeyID","dataType":"Text","maxLength":"50","isNullable":false},{"name":"sfOrgId","dataType":"Text","maxLength":"50","isNullable":false},{"name":"smsValue","dataType":"Text","maxLength":"50","isNullable":true},{"name":"mobilePhone","dataType":"Text","maxLength":"50","isNullable":true},{"name":"EntryObjectId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"DateAdded","dataType":"Date","isNullable":true},{"name":"Role","dataType":"Text","maxLength":"50","isNullable":true},{"name":"OwnerId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Specialty","dataType":"Text","maxLength":"100","isNullable":true},{"name":"AccountName","dataType":"Text","maxLength":"255","isNullable":true},{"name":"State","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Designation","dataType":"Text","maxLength":"50","isNullable":true},{"name":"senderPhone","dataType":"Text","maxLength":"50","isNullable":true},{"name":"senderTitle","dataType":"Text","maxLength":"255","isNullable":true},{"name":"senderLicense","dataType":"Text","maxLength":"255","isNullable":true},{"name":"senderMobile","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Salutation","dataType":"Text","maxLength":"50","isNullable":true},{"name":"AppointmentLink","dataType":"Text","maxLength":"4000","isNullable":true},{"name":"type","dataType":"Text","maxLength":"50","isNullable":true,"defaultValue":"SST"}]'
-   SET @eventPayload = Concat('{"name":"',@journeyNameForJson,'","description":"","type":"APIEvent","mode":"Production","eventDefinitionKey":"',@eventKey,'","isVisibleInPicker":false,"schema":{"sendableCustomObjectField":"id","sendableSubscriberField":"SubscriberKey","fields":',@eventSchemaFields,'}}')
-   SET @eventUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/eventDefinitions")
-   SET @eventStatus = HTTPPost2(@eventUrl,"application/json",@eventPayload,false,@eventResponse,@eventResponseHeader,"Authorization",Concat("Bearer ",@accessToken))
-   IF @eventStatus == 200 OR @eventStatus == 201 THEN
-     SET @eventIdPattern = '"id":"([^"]+)"'
-     SET @eventDefId = RegExMatch(@eventResponse,@eventIdPattern,1)
-     IF NOT Empty(@eventDefId) THEN
-       SET @eventKeyPattern = '"eventDefinitionKey":"([^"]+)"'
-       SET @eventKeyFromResponse = RegExMatch(@eventResponse,@eventKeyPattern,1)
-       IF NOT Empty(@eventKeyFromResponse) THEN
-         SET @eventKey = @eventKeyFromResponse
-       ENDIF
-       SET @resultText = Concat(@resultText," Step 3 OK - API entry event created.")
-       SET @journeyUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/interactions")
-       SET @journeyKey = GUID()
-       SET @defaultEmailExpr = Concat('{{Event.',@eventKey,'."email"}}')
-       SET @defaultEmailEscaped = Replace(@defaultEmailExpr,'"','\"')
-     ELSE
-       SET @resultText = Concat(@resultText," Step 3 FAILED: eventDefinitions HTTP ",@eventStatus," id missing - ",@eventResponse)
-       SET @eventKey = ""
-       SET @eventDefId = ""
+ SET @journeyNameForJson = Replace(@journeyName,'"','\"')
+ SET @journeyNameForJson = Replace(Replace(Replace(@journeyNameForJson,Char(10),' '),Char(13),' '),Char(9),' ')
+ SET @eventSchemaFields = '[{"name":"greeting","dataType":"Text","maxLength":"50","isNullable":true},{"name":"id","dataType":"Text","maxLength":"50","isNullable":false},{"name":"email","dataType":"EmailAddress","maxLength":"254","isNullable":false},{"name":"sfCampaignId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfCampaignMemberId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfQuickSendId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Account_Owner_Name","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Account_Owner_Email","dataType":"Text","maxLength":"50","isNullable":true},{"name":"firstName","dataType":"Text","maxLength":"50","isNullable":true},{"name":"lastName","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfUserId","dataType":"Text","maxLength":"50","isNullable":false},{"name":"journeyID","dataType":"Text","maxLength":"50","isNullable":false},{"name":"sfOrgId","dataType":"Text","maxLength":"50","isNullable":false},{"name":"smsValue","dataType":"Text","maxLength":"50","isNullable":true},{"name":"mobilePhone","dataType":"Text","maxLength":"50","isNullable":true},{"name":"EntryObjectId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"DateAdded","dataType":"Date","isNullable":true},{"name":"Role","dataType":"Text","maxLength":"50","isNullable":true},{"name":"OwnerId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Specialty","dataType":"Text","maxLength":"100","isNullable":true},{"name":"AccountName","dataType":"Text","maxLength":"255","isNullable":true},{"name":"State","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Designation","dataType":"Text","maxLength":"50","isNullable":true},{"name":"senderPhone","dataType":"Text","maxLength":"50","isNullable":true},{"name":"senderTitle","dataType":"Text","maxLength":"255","isNullable":true},{"name":"senderLicense","dataType":"Text","maxLength":"255","isNullable":true},{"name":"senderMobile","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Salutation","dataType":"Text","maxLength":"50","isNullable":true},{"name":"AppointmentLink","dataType":"Text","maxLength":"4000","isNullable":true},{"name":"type","dataType":"Text","maxLength":"50","isNullable":true,"defaultValue":"SST"}]'
+ SET @eventPayload = Concat('{"name":"',@journeyNameForJson,'","description":"","type":"APIEvent","mode":"Production","eventDefinitionKey":"',@eventKey,'","isVisibleInPicker":false,"schema":{"sendableCustomObjectField":"id","sendableSubscriberField":"SubscriberKey","fields":',@eventSchemaFields,'}}')
+ SET @eventUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/eventDefinitions")
+ SET @eventStatus = HTTPPost2(@eventUrl,"application/json",@eventPayload,false,@eventResponse,@eventResponseHeader,"Authorization",Concat("Bearer ",@accessToken))
+ IF @eventStatus == 200 OR @eventStatus == 201 THEN
+   SET @eventIdPattern = '"id":"([^"]+)"'
+   SET @eventDefId = RegExMatch(@eventResponse,@eventIdPattern,1)
+   IF NOT Empty(@eventDefId) THEN
+     SET @eventKeyPattern = '"eventDefinitionKey":"([^"]+)"'
+     SET @eventKeyFromResponse = RegExMatch(@eventResponse,@eventKeyPattern,1)
+     IF NOT Empty(@eventKeyFromResponse) THEN
+       SET @eventKey = @eventKeyFromResponse
      ENDIF
+     SET @resultText = Concat(@resultText," Step 3 OK - API entry event created.")
+     SET @journeyUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/interactions")
+     SET @journeyKey = GUID()
+     SET @defaultEmailExpr = Concat('{{Event.',@eventKey,'."email"}}')
+     SET @defaultEmailEscaped = Replace(@defaultEmailExpr,'"','\"')
    ELSE
-     SET @resultText = Concat(@resultText," Step 3 FAILED: eventDefinitions HTTP ",@eventStatus," - ",@eventResponse)
+     SET @resultText = Concat(@resultText," Step 3 FAILED: eventDefinitions HTTP ",@eventStatus," id missing - ",@eventResponse)
      SET @eventKey = ""
      SET @eventDefId = ""
    ENDIF
+ ELSE
+   SET @resultText = Concat(@resultText," Step 3 FAILED: eventDefinitions HTTP ",@eventStatus," - ",@eventResponse)
+   SET @eventKey = ""
+   SET @eventDefId = ""
+ ENDIF
 ENDIF
 IF Empty(@cleanupNeeded) THEN
  SET @cleanupNeeded = "0"
@@ -1069,8 +1065,8 @@ var journeyDescription = Platform.Variable.GetValue("@journeyDescription") || ""
 var bccEmail = Platform.Variable.GetValue("@bccEmail") || "";
 var senderProfileId = Platform.Variable.GetValue("@senderProfileId") || "";
 var sendClassificationId = Platform.Variable.GetValue("@sendClassificationId") || "";
-var addTaskActivity = String(Platform.Variable.GetValue("@addTaskActivity") || Variable.GetValue("addTaskActivity") || "0").replace(/^\s+|\s+$/g, "");
-var addSTOActivity = String(Platform.Variable.GetValue("@addSTOActivity") || Variable.GetValue("addSTOActivity") || "0").replace(/^\s+|\s+$/g, "");
+var addTaskActivity = Platform.Variable.GetValue("@addTaskActivity") || "1";
+var addSTOActivity = Platform.Variable.GetValue("@addSTOActivity") || "0";
 var journeyResult = "";
 function jsonEscapeSbU(s) {
   if (s === null || s === undefined) {
@@ -1590,6 +1586,8 @@ function buildCmUpdateActivitySbU(opts) {
   };
   if (opts.taskNext) {
     cmOutcome.next = opts.taskNext;
+  } else {
+    cmOutcome.next = null;
   }
   return {
     id: randomGuidSbU(),
@@ -1688,8 +1686,7 @@ function buildCmUpdateActivitySbU(opts) {
       }
     },
     configurationArguments: {
-      applicationExtensionKey: "Salesforce_Activity_CampaignMember",
-      applicationExtensionId: "00000000-0000-0000-0000-000000000000"
+      applicationExtensionKey: "Salesforce_Activity_CampaignMember"
     },
     metaData: {
       isConfigured: true,
@@ -1778,221 +1775,12 @@ function buildCmUpdateActivitySbU(opts) {
     }
   };
 }
-function buildQuickSendTaskActivityJson(eventKeyValue, emailNameValue) {
-  var taskActivityKey = "XTASK-1";
-  var taskSubject = "Email Sent: " + (emailNameValue || "Email");
-  var taskDescription = "Email name: " + (emailNameValue || "Email");
-  var taskEvWho = '{{Event."' + eventKeyValue + '"."id"}}';
-  var taskEvOwn = '{{Event."' + eventKeyValue + '"."sfUserId"}}';
-  var taskActivityObj = {
-    id: randomGuidSbU(),
-    type: "SALESCLOUDACTIVITY",
-    key: taskActivityKey,
-    name: "Create Task Activity",
-    description: "",
-    outcomes: [{ key: randomGuidSbU(), arguments: {}, metaData: { invalid: false } }],
-    arguments: {
-      objectMap: {
-        objects: [
-          {
-            type: "Task",
-            subtype: null,
-            order: "1",
-            action: "Create",
-            lookup: null,
-            fields: [
-              { FieldName: "Subject", FieldLabel: "Subject", FieldValue: taskSubject, FieldValueLabel: taskSubject, Required: "false", FieldType: "combobox", MappingType: "Constant", Processor: "static" },
-              { FieldName: "WhoId", FieldLabel: "Name ID", FieldValue: taskEvWho, FieldValueLabel: "id", Required: "false", FieldType: "reference", MappingType: "Constant", Processor: "static", ReferenceObjectNames: ["CONTACT","LEAD"] },
-              { FieldName: "Description", FieldLabel: "Description", FieldValue: taskDescription, FieldValueLabel: taskDescription, Required: "false", FieldType: "textarea", MappingType: "Constant", Processor: "static" },
-              { FieldName: "ActivityDate", FieldLabel: "Due Date Only", FieldValue: "Date Contact Enters Activity", FieldValueLabel: "Date Contact Enters Activity", Required: "false", FieldType: "date", MappingType: "Constant", Processor: "dateContactEnters", FieldAdjustment: { SubProcessor: "dateAdjustment", Units: "Days", NumUnits: "0", TimeDirection: "after" } },
-              { FieldName: "Status", FieldLabel: "Status", FieldValue: "Completed", FieldValueLabel: "Completed", Required: "false", FieldType: "picklist", MappingType: "Constant", Processor: "static" },
-              { FieldName: "OwnerId", FieldLabel: "Assigned To ID", FieldValue: taskEvOwn, FieldValueLabel: "sfUserId", Required: "false", FieldType: "reference", MappingType: "Constant", Processor: "static", ReferenceObjectNames: ["GROUP","USER"] }
-            ]
-          }
-        ]
-      },
-      version: "1.0",
-      contactKey: "{{Context.ContactKey}}",
-      contactId: "{{Context.ContactId}}",
-      definitionId: "{{Context.DefinitionId}}",
-      activityId: "{{Activity.Id}}",
-      startActivityKey: "{{Context.StartActivityKey}}",
-      definitionInstanceId: "{{Context.DefinitionInstanceId}}",
-      requestObjectId: "{{Context.RequestObjectId}}"
-    },
-    configurationArguments: {
-      applicationExtensionKey: "Salesforce_Activity_Task",
-      applicationExtensionId: "00000000-0000-0000-0000-000000000000"
-    },
-    metaData: { isConfigured: true, expressionBuilderPrefix: "Task" }
-  };
-  return Platform.Function.Stringify(taskActivityObj);
-}
-function buildEmptyQuickSendEmailActivityJson(opts) {
-  var emailSubjectEscaped = jsonEscapeSbU(opts.emailSubjectLine || "Campaign Event");
-  var emailNameEscaped = jsonEscapeSbU(opts.emailName || "PreEventEmail1");
-  var tsDesc = jsonEscapeSbU(opts.emailName || "Journey Maker email");
-  var bccEsc = jsonEscapeSbU(opts.bccEmail || "");
-  var senderProfileIdEsc = jsonEscapeSbU(opts.senderProfileIdForJourney || "");
-  var sendClassificationIdEsc = jsonEscapeSbU(opts.sendClassificationIdForJourney || "");
-  var deliveryProfileIdEsc = jsonEscapeSbU(opts.deliveryProfileId || "");
-  var cmActivityKey = opts.cmActivityKey || "SALESCLOUDACTIVITY-2";
-  var emailArgs =
-    '{"activityId":"{{Activity.Id}}","definitionId":"{{Context.DefinitionId}}","emailSubjectDataBound":"' +
-    emailSubjectEscaped +
-    '","contactId":"{{Contact.Id}}","contactKey":"{{Contact.Key}}","emailAddress":"{{InteractionDefaults.Email}}","sourceCustomObjectId":"{{Contact.AddressInfo.Email.SourceCustomObjectId}}","sourceCustomObjectKey":"{{Contact.AddressInfo.Email.SourceCustomObjectKey}}","fieldType":"{{Contact.AddressInfo.Email.FieldType}}","eventData":"{{Event}}","obfuscationProperties":"{{InteractionDefaults.Email.ObfuscationProperties}}","customObjectKey":"","definitionInstanceId":"{{Context.DefinitionInstanceId}}"}';
-  return (
-    '{"type":"EMAILV2","key":"EMAILV2-1","name":"' +
-    emailNameEscaped +
-    '","outcomes":[{"next":"' +
-    cmActivityKey +
-    '","metaData":{"invalid":false}}],"arguments":' +
-    emailArgs +
-    ',"metaData":{"isConfigured":false,"sections":{}},"configurationArguments":{"isModified":false,"isSimulation":false,"fuelAgentRequested":true,"googleAnalyticsCampaignName":"","useLLTS":false,"isReconcilable":false,"triggeredSend":{"autoAddSubscribers":true,"autoUpdateSubscribers":true,"bccEmail":"' +
-    bccEsc +
-    '","categoryId":58374,"ccEmail":"","created":{"name":"","date":""},"domainExclusions":[],"dynamicEmailSubject":"' +
-    emailSubjectEscaped +
-    '","emailId":0,"emailSubject":"' +
-    emailSubjectEscaped +
-    '","description":"' +
-    tsDesc +
-    '","exclusionFilter":"","isSalesforceTracking":true,"isMultipart":true,"isSendLogging":true,"isStoppedOnJobError":false,"modified":{"name":"","date":""},"preHeader":"","priority":4,"replyToAddress":"","replyToDisplayName":"","sendClassificationId":"' +
-    sendClassificationIdEsc +
-    '","suppressTracking":false,"throttleOpens":"1/1/0001 12:00:00 AM","throttleCloses":"1/1/0001 12:00:00 AM","deliveryProfileId":"' +
-    deliveryProfileIdEsc +
-    '","senderProfileId":"' +
-    senderProfileIdEsc +
-    '","isTrackingClicks":true,"publicationListId":1132,"keyword":"","throttleLimit":0,"campaigns":[],"suppressionLists":[]},"applicationExtensionKey":"jb-email-activity"}}'
-  );
-}
-var useExternalEmailCreate = Platform.Variable.GetValue("@useExternalEmailCreate") || "";
-var externalHandoff = useExternalEmailCreate == "1" && Platform.Variable.GetValue("@createEmailOnly") != "1";
 if (
-  externalHandoff &&
-  journeyKey &&
-  journeyUrl &&
-  subdomain &&
-  accessToken &&
-  eventKey &&
-  apiEventTriggerJson &&
-  senderProfileId &&
-  sendClassificationId &&
-  !journeyEmailId
-) {
- try {
-   var shellScRow = lookupSendClassificationQs(sendClassificationId);
-   var shellSpRow = lookupSenderProfileQs(senderProfileId);
-   var shellSendClassificationIdForJourney =
-     wsRowIdForJourney(shellScRow) || trimQs(sendClassificationId);
-   var shellDeliveryProfileId = wsNestedIdForJourney(shellScRow, "DeliveryProfile");
-   var shellSenderProfileIdForJourney =
-     wsRowIdForJourney(shellSpRow) || trimQs(senderProfileId);
-   if (!shellSendClassificationIdForJourney) {
-     throw new Error("Send classification is required.");
-   }
-   var shellCmKey = "SALESCLOUDACTIVITY-2";
-   var shellTaskKey = "XTASK-1";
-   var shellEmailActivity = buildEmptyQuickSendEmailActivityJson({
-     emailSubjectLine: emailSubjectLine,
-     emailName: emailName,
-     bccEmail: bccEmail,
-     senderProfileIdForJourney: shellSenderProfileIdForJourney,
-     sendClassificationIdForJourney: shellSendClassificationIdForJourney,
-     deliveryProfileId: shellDeliveryProfileId,
-     cmActivityKey: shellCmKey
-   });
-   var shellCmObj = buildCmUpdateActivitySbU({
-     eventKey: eventKey,
-     campaignId: campaignId,
-     campaignLabel: campaignName,
-     taskNext: addTaskActivity == "1" ? shellTaskKey : null
-   });
-   var shellCmActivity = Platform.Function.Stringify(shellCmObj);
-   var shellActivitiesJson = shellEmailActivity + "," + shellCmActivity;
-   if (addTaskActivity == "1") {
-     shellActivitiesJson = shellActivitiesJson + "," + buildQuickSendTaskActivityJson(eventKey, emailName);
-   }
-   var shellTrig = Platform.Function.ParseJSON(apiEventTriggerJson);
-   shellTrig.outcomes = [{
-     key: randomGuidSbU(),
-     next: "EMAILV2-1",
-     arguments: {},
-     metaData: { invalid: false }
-   }];
-   var shellTriggerJson = Platform.Function.Stringify(shellTrig);
-   var shellJourneyNameEsc = jsonEscapeSbU(journeyName);
-   var shellJourneyDescEsc = jsonEscapeSbU(journeyDescription);
-   var shellPayload =
-     '{"name":"' +
-     shellJourneyNameEsc +
-     '","definitionType":"Multistep","channel":"","description":"' +
-     shellJourneyDescEsc +
-     '","version":1,"workflowApiVersion":1.0,"executionMode":"Production","entryMode":"MultipleEntries","key":"' +
-     journeyKey +
-     '","activities":[' +
-     shellActivitiesJson +
-     '],"notifiers":[],"metaData":{"disableEndWait":true,"dataSource":"ContactsModel","highThroughputSending":{"email":false}},"defaults":{"email":["' +
-     (defaultEmailEscaped || "") +
-     '"],"properties":{"analyticsTracking":{"enabled":true,"analyticsType":"google","urlDomainsToTrack":[]}}},"goals":[],"exits":[],"triggers":[' +
-     shellTriggerJson +
-     "]}";
-   var shellPostReq = new Script.Util.HttpRequest(journeyUrl);
-   shellPostReq.emptyContentHandling = 0;
-   shellPostReq.continueOnError = true;
-   shellPostReq.setHeader("Authorization", "Bearer " + accessToken);
-   shellPostReq.method = "POST";
-   shellPostReq.contentType = "application/json";
-   shellPostReq.postData = shellPayload;
-   var shellPostResp = shellPostReq.send();
-   var shellStatus = shellPostResp.statusCode;
-   var shellResponse = shellPostResp.content ? String(shellPostResp.content) : "";
-   if (shellStatus == 200 || shellStatus == 201) {
-     journeyResult = " Step 4 OK - Journey created with empty email activity.";
-     var shellIdMatch = shellResponse.match(/"id"\s*:\s*"?([^",}\s]+)"?/);
-     var shellJourneyId = shellIdMatch ? shellIdMatch[1] : "";
-     if (shellJourneyId) {
-       Platform.Variable.SetValue("@journeyId", shellJourneyId);
-       journeyResult = journeyResult + " Journey ID: " + shellJourneyId + " (draft).";
-       if (eventDefId && eventKey && eventDataExtensionId) {
-         var shellBind = configureJourneyEntryEvent({
-           oldEventKey: eventKey,
-           oldEventDefId: eventDefId,
-           dataExtensionId: eventDataExtensionId,
-           journeyId: shellJourneyId,
-           journeyUrl: journeyUrl,
-           journeyName: journeyName,
-           subdomain: subdomain,
-           accessToken: accessToken
-         });
-         journeyResult = journeyResult + shellBind.message;
-         if (shellBind.ok && shellBind.newEventKey && shellBind.newEventDefId) {
-           Platform.Variable.SetValue("@eventKey", shellBind.newEventKey);
-           Platform.Variable.SetValue("@eventDefId", shellBind.newEventDefId);
-           if (shellBind.newDataExtensionId) {
-             Platform.Variable.SetValue("@eventDataExtensionId", shellBind.newDataExtensionId);
-           }
-           Platform.Variable.SetValue(
-             "@defaultEmailEscaped",
-             ("{{Event." + shellBind.newEventKey + '.\"email\"}}').replace(/"/g, '\\"')
-           );
-         }
-       }
-     }
-   } else {
-     journeyResult = " Step 4 FAILED: HTTP " + shellStatus + " - " + shellResponse;
-     Platform.Variable.SetValue("@cleanupNeeded", "1");
-   }
- } catch (shellEx) {
-   journeyResult = " Step 4 FAILED: " + (shellEx.message || String(shellEx));
-   Platform.Variable.SetValue("@cleanupNeeded", "1");
- }
-} else if (
   journeyKey &&
   journeyUrl &&
   subdomain &&
   accessToken &&
   journeyEmailId &&
-  !externalHandoff &&
   eventKey &&
   apiEventTriggerJson &&
   senderProfileId &&
@@ -2024,14 +1812,10 @@ if (
      '","contactId":"{{Contact.Id}}","contactKey":"{{Contact.Key}}","emailAddress":"{{InteractionDefaults.Email}}","sourceCustomObjectId":"{{Contact.AddressInfo.Email.SourceCustomObjectId}}","sourceCustomObjectKey":"{{Contact.AddressInfo.Email.SourceCustomObjectKey}}","fieldType":"{{Contact.AddressInfo.Email.FieldType}}","eventData":"{{Event}}","obfuscationProperties":"{{InteractionDefaults.Email.ObfuscationProperties}}","customObjectKey":"","definitionInstanceId":"{{Context.DefinitionInstanceId}}"}';
    var emailNameEscaped = jsonEscapeSbU(emailName || "PreEventEmail1");
    var tsDesc = jsonEscapeSbU(emailName || "Journey Maker email");
-   var cmActivityKey = "SALESCLOUDACTIVITY-2";
-   var taskActivityKey = "XTASK-1";
    var emailActivity =
      '{"type":"EMAILV2","key":"EMAILV2-1","name":"' +
      emailNameEscaped +
-     '","outcomes":[{"next":"' +
-     cmActivityKey +
-     '","metaData":{"invalid":false}}],"arguments":' +
+     '","outcomes":[{"next":"SALESCLOUDACTIVITY-2","metaData":{"invalid":false}}],"arguments":' +
      emailArgs +
      ',"metaData":{"isConfigured":true,"sections":{}},"configurationArguments":{"isModified":false,"isSimulation":false,"fuelAgentRequested":true,"googleAnalyticsCampaignName":"","useLLTS":false,"isReconcilable":false,"triggeredSend":{"autoAddSubscribers":true,"autoUpdateSubscribers":true,"bccEmail":"' +
      bccEsc +
@@ -2049,16 +1833,14 @@ if (
      deliveryProfileIdEsc +
      '","senderProfileId":"' +
      senderProfileIdEsc +
-     '","isTrackingClicks":true,"publicationListId":1132,"keyword":"","throttleLimit":0,"campaigns":[],"suppressionLists":[]},"applicationExtensionKey":"jb-email-activity"}}';
+     '","isTrackingClicks":true,"publicationListId":1132},"applicationExtensionKey":"jb-email-activity"}}';
    var cmObj = buildCmUpdateActivitySbU({
      eventKey: eventKey,
      campaignId: campaignId,
      campaignLabel: campaignName,
-     taskNext: addTaskActivity == "1" ? taskActivityKey : null
+     taskNext: addTaskActivity == "1" ? "SALESCLOUDACTIVITY-8" : null
    });
    var cmActivity = Platform.Function.Stringify(cmObj);
-   var taskActivity = "";
-   if (addTaskActivity == "1") {
    var taskSubject = "Email Sent: " + (emailName || "Email");
    var taskDescription = "Email name: " + (emailName || "Email");
    var taskEvWho = '{{Event."' + eventKey + '"."id"}}';
@@ -2066,7 +1848,7 @@ if (
    var taskActivityObj = {
      id: randomGuidSbU(),
      type: "SALESCLOUDACTIVITY",
-     key: taskActivityKey,
+     key: "SALESCLOUDACTIVITY-8",
      name: "Create Task Activity",
      description: "",
      outcomes: [
@@ -2168,18 +1950,14 @@ if (
        requestObjectId: "{{Context.RequestObjectId}}"
      },
      configurationArguments: {
-       applicationExtensionKey: "Salesforce_Activity_Task",
-       applicationExtensionId: "00000000-0000-0000-0000-000000000000"
+       applicationExtensionKey: "Salesforce_Activity_Task"
      },
      metaData: {
        isConfigured: true,
        expressionBuilderPrefix: "Task"
      }
    };
-   taskActivity = Platform.Function.Stringify(taskActivityObj);
-   }
-   var stoActivity = "";
-   if (addSTOActivity == "1") {
+   var taskActivity = Platform.Function.Stringify(taskActivityObj);
    var stoActivityObj = {
   "id": randomGuidSbU(),
   "key": "STOWAIT-1",
@@ -2196,36 +1974,13 @@ if (
       }
     }
   ],
-  "arguments": {
-    "contactKey": "{{Context.ContactKey}}",
-    "contactTagsIn": "{{Interaction.STOWAIT-1.ContactTagsOut}}",
-    "scheduledExpireTimeIn": "{{Interaction.STOWAIT-1.ScheduledExpireTimeOut}}",
-    "jbActivityId": "{{Activity.Id}}",
-    "jbJourneyId": "{{Context.OriginalDefinitionId}}",
-    "jbJourneyVersion": "{{Context.VersionNumber}}",
-    "waitDefinitionId": "00000000-0000-0000-0000-000000000000",
-    "waitForEventId": "",
-    "executionMode": "{{Context.ExecutionMode}}",
-    "startActivityKey": "{{Context.StartActivityKey}}",
-    "waitQueueId": "{{Context.WaitQueueId}}"
-  },
+  "arguments": {},
   "configurationArguments": {
-    "applicationExtensionKey": "F828061A-5F0E-46A9-975E-18C414192D17",
     "params": {
       "slidingWindowHours": 4,
-      "enableRandomTime": false,
-      "nextActivity": {
-        "key": "EMAILV2-1",
-        "type": "EMAILV2"
-      },
-      "version": 2,
-      "definitionType": "Multistep"
+      "enableRandomTime": false
     },
-    "overrideDateTime": "0001-01-01T06:00:00Z",
-    "disableStoRestValidation": false,
-    "disableFollowedByEmailValidation": false,
-    "disableFollowedByPushNValidation": false,
-    "waitForEventKey": ""
+    "applicationExtensionKey": "F828061A-5F0E-46A9-975E-18C414192D17"
   },
   "metaData": {
     "backgroundColor": "#032e61",
@@ -2338,14 +2093,17 @@ if (
     }
   }
 };
-   stoActivity = Platform.Function.Stringify(stoActivityObj);
+   var stoActivity = Platform.Function.Stringify(stoActivityObj);
+   var activitiesJson = "";
+   if (addSTOActivity == "1") {
+    activitiesJson = stoActivity;
    }
-   var activitiesJson = emailActivity + "," + cmActivity;
+   activitiesJson = activitiesJson != ""
+    ? activitiesJson + "," + emailActivity
+    : emailActivity;
+   activitiesJson = activitiesJson + "," + cmActivity;
    if (addTaskActivity == "1") {
     activitiesJson = activitiesJson + "," + taskActivity;
-   }
-   if (addSTOActivity == "1") {
-    activitiesJson = stoActivity + "," + activitiesJson;
    }
    var journeyPayload =
      '{"name":"' +
@@ -2560,32 +2318,7 @@ if (finalDeExtId) {
 }
 </script>
 %%[
-IF @showForm == "false" AND @deleteRequested != "1" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@journeyId) AND @useExternalEmailCreate == "1" AND @createEmailOnly != "1" THEN
- SET @analyticsJourneyName = IIF(NOT Empty(@journeyName), @journeyName, @emailName)
- SET @analyticsJourneyId = @journeyId
- SET @analyticsJourneyType = @builderPageLabel
- SET @analyticsDeName = IIF(NOT Empty(@entryDeName), @entryDeName, IIF(NOT Empty(@deCustomerKey), @deCustomerKey, "N/A"))
- SET @analyticsDeId = IIF(NOT Empty(@deCustomerKey), @deCustomerKey, "N/A")
- SET @analyticsCampaignId = ""
- IF NOT Empty(@campaignId) AND Length(@campaignId) >= 15 THEN
-  SET @analyticsCampaignId = Substring(@campaignId,1,18)
- ENDIF
- SET @analyticsEmailId = IIF(NOT Empty(@newEmailId), @newEmailId, "pending")
- UpsertDE(
-  "Bd_journey_analytics",
-  1,
-  "journeyId",
-  Substring(@analyticsJourneyId,1,250),
-  "journeyName", Substring(@analyticsJourneyName,1,50),
-  "journeyType", Substring(@analyticsJourneyType,1,50),
-  "emailName", Substring(@emailName,1,50),
-  "emailId", Substring(@analyticsEmailId,1,50),
-  "deName", Substring(@analyticsDeName,1,200),
-  "deId", Substring(@analyticsDeId,1,50),
-  "campaignId", Substring(@analyticsCampaignId,1,18),
-  "updateDate", Now()
- )
-ELSEIF @showForm == "false" AND @deleteRequested != "1" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@newEmailId) AND @useExternalEmailCreate != "1" THEN
+IF @showForm == "false" AND @deleteRequested != "1" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@newEmailId) THEN
  SET @analyticsJourneyName = IIF(NOT Empty(@journeyName), @journeyName, @emailName)
  SET @analyticsJourneyId = IIF(NOT Empty(@journeyId), @journeyId, Concat("email:",@newEmailId))
  SET @analyticsJourneyType = @builderPageLabel
@@ -3008,7 +2741,6 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   border: 1px solid #e5e7eb;
 }
 .journey-preview .bg-light-blue { background: #e0f4fd; }
-.journey-preview .bg-wait { background: #ede9fe; }
 .journey-preview .bg-teal { background: #e0f7f5; }
 .journey-preview .bg-blue { background: #e3f1fd; }
 .journey-preview .bg-green { background: #e6f9e6; }
@@ -3243,7 +2975,9 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
        </div>
        <div class="question-header" style="margin-top: 24px;">
          <div class="question-number">7</div>
-         <div class="question-text">Choose Email Template</div>
+         <div class="question-text">Choose Email Template<br>
+         <p style="font-size:11px;">*For Quick Send/Distributed Marketing Use DM_QUICK_SEND_GUIDE</p>
+         </div>
        </div>
        <div class="email-cards">
          %%[ IF @templateConfigOk == "true" THEN
@@ -3254,7 +2988,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
              SET @cardEmailPreview = Field(@templateRow,"email_preview")
              SET @cardLabel = @cardEmailName
              IF Length(@cardLabel) > 10 THEN
-               SET @cardLabel = Concat(Substring(@cardLabel,1,10),"...")
+               SET @cardLabel = Concat(Substring(@cardLabel,1,20),"...")
              ENDIF
          ]%%
          <label class="email-card %%[ IF @emailId == @cardEmailId THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@cardEmailId)=%%">
