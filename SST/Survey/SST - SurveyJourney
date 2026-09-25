@@ -1415,17 +1415,41 @@ function applyBodyToSlotPreview(payload, slotKey, blockKey, bodyHtml) {
   slot.content = '<div data-type="block" data-key="' + blockKey + '"></div>';
  }
 }
+function surveyPayloadHasSlot(payload, slotKey) {
+ var htmlView;
+ var key = String(slotKey || "").replace(/^\s+|\s+$/g, "");
+ if (!payload || !payload.views || !key) {
+  return false;
+ }
+ htmlView = payload.views.html;
+ if (!htmlView) {
+  return false;
+ }
+ if (htmlView.slots && htmlView.slots[key] && typeof htmlView.slots[key] === "object") {
+  return true;
+ }
+ if (htmlView.template && htmlView.template.slots && htmlView.template.slots[key] && typeof htmlView.template.slots[key] === "object") {
+  return true;
+ }
+ return false;
+}
 function applySlotHtmlContentPreview(payload, slotKey, htmlContent) {
  var slotsForBlock;
  var blockKey;
  if (!slotKey || !htmlContent || !payload.views || !payload.views.html) {
   return;
  }
+ if (!surveyPayloadHasSlot(payload, slotKey)) {
+  return;
+ }
  slotsForBlock = payload.views.html.slots;
  if (!slotsForBlock || typeof slotsForBlock !== "object") {
   return;
  }
- blockKey = findBlockKeyInSlotPreview(slotsForBlock, slotKey) || "bodyblock1";
+ blockKey = findBlockKeyInSlotPreview(slotsForBlock, slotKey);
+ if (!blockKey) {
+  return;
+ }
  applyBodyToSlotPreview(payload, slotKey, blockKey, htmlContent);
 }
 function formatSurveyHeaderText(surveyName) {
@@ -1512,6 +1536,35 @@ function resolveSurveyLinkSubset() {
   return subset;
  }
  return masterName;
+}
+function getMissingSurveyTemplateSlotsMessage(payload) {
+ var missing;
+ var i;
+ var keysToCheck;
+ var key;
+ if (Platform.Variable.GetValue("@previewFlow") != "1" || !payload) {
+  return "";
+ }
+ keysToCheck = [
+  defaultSurveySlotKey(Platform.Variable.GetValue("@bodySlotKey"), ""),
+  defaultSurveySlotKey(Platform.Variable.GetValue("@headerSlotKey"), ""),
+  defaultSurveySlotKey(Platform.Variable.GetValue("@buttonSlotKey"), "")
+ ];
+ var signatureChoice = Platform.Variable.GetValue("@signatureChoice") || "none";
+ if (signatureChoice !== "none" && signatureChoice !== "") {
+  keysToCheck.push(defaultSurveySlotKey(Platform.Variable.GetValue("@signatureSlotKey"), ""));
+ }
+ missing = [];
+ for (i = 0; i < keysToCheck.length; i++) {
+  key = keysToCheck[i];
+  if (key && !surveyPayloadHasSlot(payload, key)) {
+   missing.push(key);
+  }
+ }
+ if (!missing.length) {
+  return "";
+ }
+ return " Step 3b SKIP - Email not created: Content Builder template is missing slot(s): " + missing.join(", ") + ". Add them to template asset " + String(Platform.Variable.GetValue("@templateAssetId") || Platform.Variable.GetValue("@sourceEmailId") || "") + ".";
 }
 function applySurveyEmailSlots(payload) {
  if (!payload || !payload.views) {
@@ -1853,28 +1906,17 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
      var debugPrefix = " Source assetType: " + assetTypeId + ". Has template ref: " + (sourceTemplate ? "yes" : "no") + ". Slot keys: " + (slotKeys.length ? slotKeys.join(",") : "none") + ".";
      var payloadDebug = "";
      if (assetTypeId === 4) {
-       var templateRef = buildTemplateReference(template, template.content || htmlContent, template.slots || htmlSlots);
-       var templateSlots = (template.slots && typeof template.slots === "object") ? cloneObject(template.slots) : cloneObject(htmlSlots || {});
-       payload = {
-         name: emailName,
-         channels: (template.channels && typeof template.channels === "object") ? cloneObject(template.channels) : { email: true, web: false },
-         views: {
-           subjectline: { content: subjectlineContent },
-           preheader: { content: preheaderContent },
-           html: {
-             template: templateRef,
-             content: template.content || htmlContent || "",
-             slots: templateSlots || {}
-           },
-           text: {}
-         }
-       };
-       setTemplateBasedEmailAssetType(payload);
-       applyTextSettings(payload, textContent);
-       ensure207ViewDefaults(payload);
-       if (template.category && template.category.id) {
-         payload.category = { id: template.category.id };
-       }
+       var type4TemplateRef = { id: template.id };
+       payload = buildCloned207Payload(
+         template,
+         emailName,
+         subjectlineContent,
+         preheaderContent,
+         textContent,
+         type4TemplateRef,
+         template,
+         htmlSlots
+       );
      } else if (assetTypeId === 207) {
        if (!sourceTemplate) {
          var deTemplateId = String(Platform.Variable.GetValue("@templateAssetId") || "").replace(/^\s+|\s+$/g, "");
@@ -1935,6 +1977,10 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          }
        };
        payloadDebug = truncateString(Platform.Function.Stringify(debugObj), 2500);
+       var missingTemplateSlotsMsg = getMissingSurveyTemplateSlotsMessage(payload);
+       if (missingTemplateSlotsMsg) {
+         step3bResult = missingTemplateSlotsMsg + debugPrefix + " Debug: " + payloadDebug;
+       } else {
        applySurveyEmailSlots(payload);
        var surveyIdForEmail = Platform.Variable.GetValue("@surveyId") || "";
        var surveyTakeUrlForEmail = Platform.Variable.GetValue("@surveyTakeUrl") || "";
@@ -1986,6 +2032,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          }
        } else {
          step3bResult = " Step 3b SKIP - Email not created: HTTP " + assetStatus + " - " + (assetResponse || "No response body.") + debugPrefix + " Debug: " + payloadDebug;
+       }
        }
      }
    } else {
