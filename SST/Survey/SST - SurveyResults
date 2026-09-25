@@ -2,9 +2,18 @@
 VAR @surveyId, @errorFlag, @deleteAction, @deleteSuccess, @deleteError
 VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow, @hubUrl, @surveyHomeUrl, @surveyStageUrl, @surveyAnalyticsUrl, @surveyTakeUrl, @environment, @contactTable
 VAR @journeyExitUrl, @calendarUrl, @environmentSwitchUrl, @envDisplayName, @envDisplayEmail, @envAvatarLetter, @envSwitchLabel
-VAR @jid, @editSurveyUrl, @surveyPreviewUrl, @surveyEmailLink, @surveyLinkTitle, @surveyNameEncoded
+VAR @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @JOURNEY_VIEW_URL, @HOME_URL, @editSidebarHtml, @detailRows, @detailRow, @isSurveyBuild, @buildNavContext, @buildNavActive, @dispSurveyId, @editSurveyUrl, @surveyPreviewUrl, @surveyEmailLink, @surveyLinkTitle, @surveyNameEncoded
 SET @surveyId = RequestParameter("surveyid")
 SET @jid = Trim(RequestParameter("journeyId"))
+SET @BUILD_PAGE_SELF = ""
+SET @PERFORMANCE_URL = ""
+SET @JOURNEY_VIEW_URL = ""
+SET @HOME_URL = ""
+SET @editSidebarHtml = ""
+SET @isSurveyBuild = "false"
+SET @buildNavContext = "false"
+SET @buildNavActive = "analytics"
+SET @dispSurveyId = Trim(@surveyId)
 SET @errorFlag = "false"
 SET @deleteAction = RequestParameter("deleteAction")
 SET @deleteSuccess = "false"
@@ -30,6 +39,10 @@ SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
   SET @navRow = Row(@navRows,1)
   SET @hubUrl = Field(@navRow,"ss_home")
+  SET @HOME_URL = Field(@navRow,"ss_home")
+  SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit")
+  SET @PERFORMANCE_URL = Field(@navRow,"ss_performance")
+  SET @JOURNEY_VIEW_URL = Field(@navRow,"ss_build_journey")
   SET @surveyHomeUrl = Trim(Field(@navRow,"ss_survey_home"))
   SET @journeyExitUrl = Trim(Field(@navRow,"ss_journey_exit"))
   SET @calendarUrl = Trim(Field(@navRow,"ss_email_calendar"))
@@ -61,9 +74,19 @@ IF RowCount(@surveyUrlRows) > 0 THEN
     SET @surveyHomeUrl = Trim(Field(@surveyUrlRow,"dashboard"))
   ENDIF
 ENDIF
+IF NOT Empty(@jid) THEN
+  SET @buildNavContext = "true"
+  SET @detailRows = LookupRows("Bd_journey_analytics","journeyId",@jid)
+  IF RowCount(@detailRows) > 0 THEN
+    IF IndexOf(Field(Row(@detailRows,1),"journeyType"),"Survey") > 0 THEN
+      SET @isSurveyBuild = "true"
+    ENDIF
+  ENDIF
+  SET @editSidebarHtml = ContentBlockByKey("sst_shell_edit_sidebar")
+ENDIF
 IF NOT Empty(@surveyStageUrl) AND NOT Empty(@surveyId) THEN
   SET @editSurveyUrl = Concat(@surveyStageUrl,"?mode=edit&surveyid=",@surveyId)
-  IF NOT Empty(@jid) THEN
+  IF @buildNavContext == "true" AND NOT Empty(@jid) THEN
     SET @editSurveyUrl = Concat(@editSurveyUrl,"&journeyId=",@jid)
   ENDIF
 ENDIF
@@ -167,9 +190,13 @@ ENDIF
     </style>
 </head>
 <body>
-%%[ SET @activeNav = "survey_home" ]%%
 <div class="dashboard-layout">
+  %%[ IF @buildNavContext == "true" AND NOT Empty(@editSidebarHtml) THEN ]%%
+  %%=TreatAsContent(@editSidebarHtml)=%%
+  %%[ ELSE ]%%
+  %%[ SET @activeNav = "survey_home" ]%%
   %%=ContentBlockByKey("sst_shell_sidebar")=%%
+  %%[ ENDIF ]%%
         <main class="main-content survey-analytics-page is-analytics-loading">
             <div class="survey-analytics-loading-panel" id="surveyAnalyticsLoadingPanel" aria-live="polite">
                 <div class="survey-analytics-loading-spinner" aria-hidden="true"></div>
