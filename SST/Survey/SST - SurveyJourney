@@ -813,7 +813,7 @@ function buildEmailSurveyHref(takeBase, surveyId, surveyName) {
    base +
    "?id=" +
    idPart +
-   "&contact=%%=v(@SubscriberKey)=%%&surveyName=" +
+   "&contact=%%=_subscriberkey=%%&surveyName=" +
    namePart
  );
 }
@@ -3209,10 +3209,44 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
   grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
   align-items: start;
 }
+.survey-journey-hub-form {
+  min-width: 0;
+}
 .preview-panel {
   border: 1px solid var(--border-color);
   background: #ffffff;
-  min-height: 420px;
+  min-width: 0;
+  position: sticky;
+  top: 16px;
+  align-self: start;
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.preview-frame-wrap {
+  flex: 1 1 auto;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  background: #efefef;
+}
+.preview-frame {
+  width: 100%;
+  height: auto;
+  min-height: 400px;
+  border: 0;
+  display: block;
+  vertical-align: top;
+}
+@media (max-width: 960px) {
+  .survey-journey-hub {
+    grid-template-columns: 1fr;
+  }
+  .preview-panel {
+    position: relative;
+    top: auto;
+    max-height: none;
+  }
 }
 .preview-header-outlook {
   display: flex;
@@ -3246,12 +3280,6 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
   font-size: 13px;
   color: #605e5c;
   margin: 4px 0 0;
-}
-.preview-frame {
-  width: 100%;
-  min-height: 360px;
-  border: 0;
-  display: block;
 }
 .step2-actions {
   display: flex;
@@ -3480,7 +3508,7 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
      <input type="hidden" id="step2TakeUrl" value="%%=v(@surveyTakeUrl)=%%">
      <div class="question-card">
        <div class="survey-journey-hub">
-         <div>
+         <div class="survey-journey-hub-form">
            <div class="question-header">
              <div class="question-number">4</div>
              <div class="question-text">Email preview</div>
@@ -3510,11 +3538,7 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
                <option value="dm">Distributed Marketing</option>
              </select>
            </div>
-           <p style="font-size:11px;color:#6b7280;margin-top:0;">Take Survey link uses survey ID plus the headline value above.</p>
-           <div class="form-group">
-             <label class="form-label" for="step2SurveyIdDisplay">Survey ID</label>
-             <input class="form-input" type="text" id="step2SurveyIdDisplay" readonly>
-           </div>
+           <p style="font-size:11px;color:#6b7280;margin-top:0;">Take Survey link includes survey ID, headline as surveyName, and a subscriber-key merge for contact at send.</p>
            <div class="form-group">
              <label class="form-label" for="step2InvitationPreview">Invitation link (at send)</label>
              <input class="form-input" type="text" id="step2InvitationPreview" readonly>
@@ -3535,7 +3559,9 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
                <p class="preview-outlook-snippet" id="previewPreheader"></p>
              </div>
            </div>
-           <iframe class="preview-frame" id="previewFrame" title="Email body preview"></iframe>
+           <div class="preview-frame-wrap">
+             <iframe class="preview-frame" id="previewFrame" title="Email body preview"></iframe>
+           </div>
          </section>
        </div>
      </div>
@@ -3624,7 +3650,12 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
  }
  function buildInvitationPreviewUrl(takeBase, surveyId, surveyName) {
   var base = String(takeBase || 'https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt').replace(/\/$/, '');
-  return base + '?id=' + encodeURIComponent(surveyId || '') + '&contact=%%=v(@SubscriberKey)=%%&surveyName=' + encodeURIComponent(surveyName || '');
+  return base + '?id=' + encodeURIComponent(surveyId || '') + '&contact=%%=_subscriberkey=%%&surveyName=' + encodeURIComponent(surveyName || '');
+ }
+ function signaturePreviewLabel(choice) {
+  if (choice === 'dm') return 'Distributed Marketing signature';
+  if (choice === 'standard') return 'Standard signature';
+  return '';
  }
  function renderSurveyPreview(state) {
   var headlineFormatted = escapeHtml(formatSurveyHeaderText(state.linkDisplayName || state.surveyName || ''));
@@ -3632,34 +3663,70 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
   var textBody = textToHtml(state.body || '');
   var linkName = state.linkDisplayName || state.surveyName || '';
   var surveyUrl = buildInvitationPreviewUrl(state.takeBase, state.surveyId, linkName);
-  var surveyBlock = '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="#0060F5" style="background:#0060F5;padding:10px 20px;"><a href="' + escapeHtml(surveyUrl) + '" target="_blank" style="font-family:\'IBM Plex Sans\',Arial,Helvetica,sans-serif;color:#FFFFFF;font-size:14px;text-decoration:none;">Take Survey</a></td></tr></table>';
+  var sigLabel = signaturePreviewLabel(state.signatureChoice);
+  var sigBlock = sigLabel
+   ? '<p style="margin:20px 0 0;font-family:\'IBM Plex Sans\',Arial,Helvetica,sans-serif;font-size:14px;color:#161616;">' + escapeHtml(sigLabel) + '</p>'
+   : '';
+  var buttonHtml =
+   '<a href="' + escapeHtml(surveyUrl) + '" style="font-family:\'IBM Plex Sans\',Arial,Helvetica,sans-serif;color:#FFFFFF;font-size:14px;line-height:20px;border-radius:30px;letter-spacing:0.5px;text-decoration:none;display:inline-block;background:#0060f5;padding:10px 20px;" target="_blank"><span style="color:#FFFFFF;">Take Survey</span></a>';
+  var heroBg = 'https://image.go.magmutual.com/lib/fe3411747364047e771073/m/1/662fb4a6-136a-4eaa-96d5-24ae513bb1bd.png';
   return [
-   '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#eaeaea;margin:0;padding:0;">',
-   '<tr><td align="center">',
-   '<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="background:#393939;max-width:100%;"><tr><td style="padding:30px;"><img src="https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/MM_PrimaryLogo_Reversed.png" alt="MagMutual" width="200" border="0" style="display:block;"></td></tr>',
-   '<tr><td style="padding:20px 45px 50px;font-family:Arial,Helvetica,sans-serif;color:#ffffff;"><p style="font-size:32px;line-height:36px;margin:0;color:#ffffff;">' + headlineFormatted + '</p></td></tr></table>',
-   '<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;max-width:100%;"><tr><td style="padding:20px 45px 50px;font-family:Arial,Helvetica,sans-serif;color:#161616;font-size:14px;line-height:20px;">',
-   '<p style="margin:0 0 20px;">' + greeting + '</p><p style="margin:0 0 20px;">' + textBody + '</p>' + surveyBlock,
-   '</td></tr></table></td></tr></table>'
+   '<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{margin:0;padding:0;background:#EFEFEF;}table{border-collapse:collapse;}</style></head><body style="margin:0;padding:0;background:#EFEFEF;">',
+   '<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0"><tr><td align="center">',
+   '<table role="presentation" width="600" border="0" cellpadding="0" cellspacing="0" style="max-width:100%;"><tr><td align="right" style="font-family:\'IBM Plex Sans\',Arial,sans-serif;font-size:12px;color:#808080;padding:10px;">View as Web Page</td></tr></table>',
+   '<table role="presentation" width="600" border="0" cellpadding="0" cellspacing="0" style="max-width:100%;background-color:#979292;background-image:url(' + heroBg + ');background-size:cover;background-position:right;">',
+   '<tr><td style="padding:30px;"><img src="https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/MM_PrimaryLogo_Reversed.png" alt="MagMutual" width="200" style="display:block;border:0;"></td></tr>',
+   '<tr><td style="font-family:\'IBM Plex Sans\',Arial,Helvetica,sans-serif;font-size:32px;color:#FFFFFF;line-height:36px;padding:0 45px 40px;">' + headlineFormatted + '</td></tr>',
+   '</table>',
+   '<table role="presentation" width="600" border="0" cellpadding="0" cellspacing="0" bgcolor="#FFFFFF" style="max-width:100%;">',
+   '<tr><td style="font-family:\'IBM Plex Sans\',Arial,Helvetica,sans-serif;font-size:14px;color:#161616;line-height:20px;padding:40px 45px 20px;">',
+   '<p style="margin:0 0 20px;">' + greeting + '</p>',
+   '<p style="margin:0 0 24px;">' + textBody + '</p>',
+   '<table role="presentation" border="0" cellpadding="0" cellspacing="0"><tr><td>' + buttonHtml + '</td></tr></table>',
+   sigBlock,
+   '</td></tr>',
+   '<tr><td style="font-family:\'IBM Plex Sans\',Arial,Helvetica,sans-serif;font-size:14px;color:#161616;line-height:20px;padding:0 45px 40px;">',
+   '<p style="margin:0 0 12px;">Your feedback is important—it helps us improve future offerings.</p>',
+   '</td></tr></table>',
+   '<table role="presentation" width="600" border="0" cellpadding="0" cellspacing="0" style="max-width:100%;"><tr><td style="font-size:9px;font-family:\'IBM Plex Sans\',Arial,sans-serif;line-height:12px;color:#808080;text-align:center;padding:30px 20px;">Unsubscribe · Please do not reply · MagMutual</td></tr></table>',
+   '</td></tr></table></body></html>'
   ].join('');
+ }
+ function resizePreviewFrame(frame) {
+  if (!frame) return;
+  function applyHeight() {
+   try {
+    var doc = frame.contentDocument || (frame.contentWindow && frame.contentWindow.document);
+    if (!doc || !doc.body) return;
+    var h = Math.max(doc.documentElement.scrollHeight, doc.body.scrollHeight, doc.documentElement.offsetHeight);
+    frame.style.height = Math.max(480, h + 8) + 'px';
+   } catch (resizeErr) {}
+  }
+  if (frame.contentWindow) {
+   frame.onload = applyHeight;
+  }
+  setTimeout(applyHeight, 50);
+  setTimeout(applyHeight, 250);
  }
  function syncPreview() {
   var subjectEl = document.getElementById('step2EmailSubjectLine');
   var preheaderEl = document.getElementById('step2Preheader');
   var bodyEl = document.getElementById('step2BodyBg');
   var headlineEl = document.getElementById('step2Headline');
-  var surveyIdEl = document.getElementById('step2SurveyIdDisplay');
+  var surveyIdField = document.getElementById('step2SurveyIdField');
   var surveyNameEl = document.getElementById('step2SurveyName');
+  var signatureEl = document.getElementById('step2SignatureChoice');
   var takeUrlEl = document.getElementById('step2TakeUrl');
   var invitePreviewEl = document.getElementById('step2InvitationPreview');
   var previewSubject = document.getElementById('previewSubject');
   var previewPreheader = document.getElementById('previewPreheader');
   var previewFrame = document.getElementById('previewFrame');
   var hiddenBody = document.getElementById('step2EmailBodyText');
-  var surveyId = surveyIdEl ? surveyIdEl.value.trim() : '';
+  var surveyId = surveyIdField ? surveyIdField.value.trim() : '';
   var masterSurveyName = surveyNameEl ? surveyNameEl.value.trim() : '';
   var linkDisplayName = headlineEl && headlineEl.value.trim() ? headlineEl.value.trim() : masterSurveyName;
   var takeBase = takeUrlEl ? takeUrlEl.value.trim() : '';
+  var signatureChoice = signatureEl ? signatureEl.value : 'none';
   var state = {
    subject: subjectEl ? subjectEl.value.trim() : '',
    preheader: preheaderEl ? preheaderEl.value.trim() : '',
@@ -3668,6 +3735,7 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
    surveyName: masterSurveyName,
    linkDisplayName: linkDisplayName,
    takeBase: takeBase,
+   signatureChoice: signatureChoice,
    greeting: 'Hello,'
   };
   if (hiddenBody && bodyEl) hiddenBody.value = bodyEl.value;
@@ -3676,7 +3744,10 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
   if (invitePreviewEl) {
    invitePreviewEl.value = surveyId ? buildInvitationPreviewUrl(takeBase, surveyId, linkDisplayName) : '';
   }
-  if (previewFrame) previewFrame.srcdoc = renderSurveyPreview(state);
+  if (previewFrame) {
+   previewFrame.srcdoc = renderSurveyPreview(state);
+   resizePreviewFrame(previewFrame);
+  }
  }
  var step1Form = document.getElementById('surveyJourneyStep1Form');
  var step2Form = document.getElementById('surveyJourneyStep2Form');
@@ -3761,7 +3832,6 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
    document.getElementById('step2SignatureSlotKey').value = card ? (card.getAttribute('data-signature-slot-key') || '1s336usuarzsignature') : '1s336usuarzsignature';
    document.getElementById('step2TemplateEmailName').value = 'survey';
    document.getElementById('step2SurveyIdField').value = surveySelect.value;
-   document.getElementById('step2SurveyIdDisplay').value = surveySelect.value;
    document.getElementById('step2SurveyName').value = surveyDisplayName;
    var subjectInput = document.getElementById('step2EmailSubjectLine');
    var headlineInput = document.getElementById('step2Headline');
