@@ -1479,6 +1479,60 @@ function minimizeNestedTemplateRefForPost(payload) {
   assetType: { id: 4, name: "template" }
  };
 }
+function clearSurveySlotBlockContent(slot) {
+ var blocks;
+ var keys;
+ var i;
+ if (!slot || !slot.blocks || typeof slot.blocks !== "object") {
+  return;
+ }
+ blocks = slot.blocks;
+ keys = objectKeys(blocks);
+ for (i = 0; i < keys.length; i++) {
+  if (blocks[keys[i]] && blocks[keys[i]].content !== undefined) {
+   blocks[keys[i]].content = "";
+  }
+ }
+}
+function ensureConfiguredSurveySlotsOnPayload(payload) {
+ var htmlView;
+ var slots;
+ var nested;
+ var bodyKey;
+ var headerKey;
+ var buttonKey;
+ var signatureKey;
+ var sampleSlot;
+ if (!payload || !payload.views || !payload.views.html) {
+  return;
+ }
+ htmlView = payload.views.html;
+ slots = htmlView.slots;
+ if (!slots || typeof slots !== "object") {
+  htmlView.slots = {};
+  slots = htmlView.slots;
+ }
+ bodyKey = defaultSurveySlotKey(Platform.Variable.GetValue("@bodySlotKey"), "");
+ headerKey = defaultSurveySlotKey(Platform.Variable.GetValue("@headerSlotKey"), "");
+ buttonKey = defaultSurveySlotKey(Platform.Variable.GetValue("@buttonSlotKey"), "");
+ signatureKey = defaultSurveySlotKey(Platform.Variable.GetValue("@signatureSlotKey"), "");
+ function addMissingSlot(key, sampleKey) {
+  if (!key || slots[key] || !sampleKey || !slots[sampleKey]) {
+   return;
+  }
+  sampleSlot = cloneObject(slots[sampleKey]);
+  clearSurveySlotBlockContent(sampleSlot);
+  slots[key] = sampleSlot;
+  nested = htmlView.template;
+  if (nested && nested.slots && typeof nested.slots === "object" && !nested.slots[key]) {
+   nested.slots[key] = cloneObject(sampleSlot);
+  }
+ }
+ addMissingSlot(bodyKey, headerKey);
+ addMissingSlot(headerKey, bodyKey);
+ addMissingSlot(buttonKey, bodyKey);
+ addMissingSlot(signatureKey, bodyKey);
+}
 function applySlotHtmlContentPreview(payload, slotKey, htmlContent) {
  var slotsForBlock;
  var blockKey;
