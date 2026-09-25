@@ -3,7 +3,21 @@ SET @createRequested = RequestParameter("create")
 SET @deleteRequested = IIF(RequestParameter("deleteEmail") == "1","1","0")
 SET @deleteEmailId = Trim(RequestParameter("deleteEmailId"))
 SET @campaignId = Trim(RequestParameter("campaignId"))
+SET @audienceSource = Lowercase(Trim(RequestParameter("audienceSource")))
+SET @sourceDataExtension = Trim(RequestParameter("sourceDataExtension"))
+IF Empty(@audienceSource) THEN
+ SET @audienceSource = "campaign"
+ENDIF
 SET @verifyCampaignRequested = IIF(RequestParameter("verifyCampaign") == "1","1","0")
+SET @previewFlow = Trim(RequestParameter("previewFlow"))
+SET @emailPreheader = Trim(RequestParameter("emailPreheader"))
+SET @emailBodyText = RequestParameter("emailBodyText")
+SET @bodySlotKey = Trim(RequestParameter("bodySlotKey"))
+SET @headerSlotKey = Trim(RequestParameter("headerSlotKey"))
+SET @buttonSlotKey = Trim(RequestParameter("buttonSlotKey"))
+SET @templateEmailName = Trim(RequestParameter("templateEmailName"))
+SET @emailHeadline = Trim(RequestParameter("emailHeadline"))
+SET @selectedSurveyId = Trim(RequestParameter("selectedSurveyId"))
 SET @emailId = RequestParameter("emailId")
 SET @emailSourceMode = Trim(RequestParameter("emailSourceMode"))
 SET @existingEmailId = Trim(RequestParameter("existingEmailId"))
@@ -59,7 +73,9 @@ IF @templateCount > 0 THEN
  SET @templateConfigOk = "true"
  SET @defaultEmailId = Trim(Field(Row(@templateRows,1),"email_id"))
 ENDIF
-IF Empty(@campaignId) OR Length(@campaignId) < 15 THEN
+IF @audienceSource == "dataextension" THEN
+ SET @createEmailOnly = "0"
+ELSEIF Empty(@campaignId) OR Length(@campaignId) < 15 THEN
  SET @createEmailOnly = "1"
 ELSE
  SET @createEmailOnly = "0"
@@ -98,7 +114,7 @@ SET @campaignVerifyShow = "0"
 SET @campaignVerifyStatus = ""
 SET @campaignVerifyMessage = ""
 SET @campaignVerifyListHtml = ""
-IF @verifyCampaignRequested == "1" THEN
+ IF @verifyCampaignRequested == "1" AND @audienceSource != "dataextension" THEN
  SET @campaignVerifyShow = "1"
  IF Empty(@campaignId) OR Length(@campaignId) < 15 THEN
   SET @campaignVerifyStatus = "invalid"
@@ -140,25 +156,46 @@ IF @verifyCampaignRequested == "1" THEN
  ENDIF
 ENDIF
 
-VAR @surveyName, @surveyDescription, @surveyId, @surveySaved, @emailOk
-SET @surveyName = Trim(RequestParameter("surveyName"))
-SET @surveyDescription = RequestParameter("surveyDescription")
-SET @surveyId = ""
+VAR @surveyName, @surveyDescription, @surveyId, @surveySaved, @emailOk, @surveyOptionsHtml, @activeSurveyCount
+SET @surveyName = ""
+SET @surveyDescription = ""
+SET @surveyId = @selectedSurveyId
 SET @surveySaved = "false"
 SET @emailOk = "false"
-IF NOT Empty(@createRequested) AND NOT EMPTY(@surveyName) THEN
-  IF Empty(@emailSubjectLine) THEN SET @emailSubjectLine = @surveyName ENDIF
-  SET @surveyId = Concat("SURV_", Format(Now(), "yyyyMMdd_HHmmss"))
-  SET @surveyNameSafe = Replace(@surveyName,'"','')
-  SET @surveyNameSafe = Replace(@surveyNameSafe," | ","_")
-  SET @surveyNameSafe = Replace(@surveyNameSafe,"|","_")
-  SET @surveyNameSafe = Replace(@surveyNameSafe," ","_")
-  SET @surveyNameSafe = Replace(@surveyNameSafe,".","_")
-  SET @surveyNameSafe = Replace(@surveyNameSafe,"/","_")
-  SET @dateStr = Concat(Format(Now(),"yyyy"),"_",Format(Now(),"MM"),"_",Format(Now(),"dd"))
-  SET @journeyName = Concat(@surveyNameSafe,"_SST_",@dateStr)
-  SET @eventName = @journeyName
-  SET @emailName = @journeyName
+SET @surveyOptionsHtml = ""
+SET @activeSurveyCount = 0
+SET @activeSurveyRows = LookupOrderedRows("SST_SP_Surveys_Master_DE",0,"SurveyName ASC","SurveyStatus","Active")
+SET @activeSurveyCount = RowCount(@activeSurveyRows)
+FOR @si = 1 TO @activeSurveyCount DO
+ SET @sRow = Row(@activeSurveyRows,@si)
+ SET @sId = Trim(Field(@sRow,"SurveyID"))
+ IF Empty(@sId) THEN
+  SET @sId = Trim(Field(@sRow,"SurveyId"))
+ ENDIF
+ SET @sName = Field(@sRow,"SurveyName")
+ SET @sNameEsc = Replace(@sName,'"','&quot;')
+ SET @sNameEsc = Replace(@sNameEsc,"<","&lt;")
+ SET @optSel = ""
+ IF @selectedSurveyId == @sId THEN
+  SET @optSel = " selected"
+  SET @surveyName = @sName
+  SET @surveyDescription = Field(@sRow,"SurveyDescription")
+ ENDIF
+ SET @surveyOptionsHtml = Concat(@surveyOptionsHtml,'<option value="',@sId,'"',@optSel,'>',@sNameEsc,'</option>')
+NEXT @si
+IF NOT Empty(@createRequested) AND NOT Empty(@selectedSurveyId) AND NOT Empty(@surveyName) THEN
+ IF Empty(@emailSubjectLine) THEN SET @emailSubjectLine = @surveyName ENDIF
+ SET @surveyId = @selectedSurveyId
+ SET @surveyNameSafe = Replace(@surveyName,'"','')
+ SET @surveyNameSafe = Replace(@surveyNameSafe," | ","_")
+ SET @surveyNameSafe = Replace(@surveyNameSafe,"|","_")
+ SET @surveyNameSafe = Replace(@surveyNameSafe," ","_")
+ SET @surveyNameSafe = Replace(@surveyNameSafe,".","_")
+ SET @surveyNameSafe = Replace(@surveyNameSafe,"/","_")
+ SET @dateStr = Concat(Format(Now(),"yyyy"),"_",Format(Now(),"MM"),"_",Format(Now(),"dd"))
+ SET @journeyName = Concat(@surveyNameSafe,"_SST_",@dateStr)
+ SET @eventName = @journeyName
+ SET @emailName = @journeyName
 ENDIF
 SET @authOk = "false"
 SET @step3bResult = ""
@@ -204,8 +241,14 @@ IF @showForm != "true" THEN
    IF @templateConfigOk != "true" THEN
      SET @resultText = "Step 0 FAILED: Missing email templates in bd_sst_email_templates (email_type=survey-template)."
    ELSE
-    IF @emailSourceMode == "existing" AND Empty(@existingEmailId) THEN
+    IF Empty(@selectedSurveyId) OR Empty(@surveyName) THEN
+      SET @resultText = "Select an active survey."
+    ELSEIF @audienceSource == "dataextension" THEN
+      SET @resultText = "Data Extension audience for Survey journey is not supported yet. Use Salesforce Campaign."
+    ELSEIF @emailSourceMode == "existing" AND Empty(@existingEmailId) THEN
       SET @resultText = "Enter the existing email name or Content Builder asset ID."
+    ELSEIF @audienceSource != "dataextension" AND @createEmailOnly != "1" AND (Empty(@campaignId) OR Length(@campaignId) < 15) THEN
+      SET @resultText = "Enter a valid Salesforce Campaign ID (15 or 18 characters)."
     ELSE
      SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
      SET @rowCount = RowCount(@authRow)
@@ -1209,6 +1252,146 @@ function debugPayloadSummary(debugPayload) {
    emailOptions: summarizeEmailOptions(debugPayload.data)
  };
 }
+function htmlSafePreview(value) {
+ return String(value || "")
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;");
+}
+function textBodyParagraphPreview(value) {
+ var safeValue = htmlSafePreview(value).replace(/\r\n|\r|\n/g, "<br>");
+ return "<p style=\"margin:0 0 18px;\">" + safeValue + "</p>";
+}
+function wrapBodyHtmlForSlotPreview(text) {
+ var lines = String(text || "").split(/\r\n|\r|\n/);
+ var html = "";
+ var i;
+ for (i = 0; i < lines.length; i++) {
+  if (lines[i] === "" && i === lines.length - 1) {
+   continue;
+  }
+  html += textBodyParagraphPreview(lines[i]);
+ }
+ if (!html) {
+  html = textBodyParagraphPreview("");
+ }
+ return html;
+}
+function findBlockKeyInSlotPreview(slots, slotKey) {
+ var slot;
+ var keys;
+ if (!slots || !slotKey) {
+  return "";
+ }
+ slot = slots[slotKey];
+ if (!slot || !slot.blocks || typeof slot.blocks !== "object") {
+  return "";
+ }
+ keys = objectKeys(slot.blocks);
+ if (!keys.length) {
+  return "";
+ }
+ return keys[0];
+}
+function applyBodyToSlotPreview(payload, slotKey, blockKey, bodyHtml) {
+ var htmlView;
+ var slots;
+ var slot;
+ if (!payload.views) {
+  payload.views = {};
+ }
+ if (!payload.views.html) {
+  payload.views.html = {};
+ }
+ htmlView = payload.views.html;
+ if (!htmlView.slots || typeof htmlView.slots !== "object") {
+  htmlView.slots = {};
+ }
+ slots = htmlView.slots;
+ if (!slots[slotKey] || typeof slots[slotKey] !== "object") {
+  slots[slotKey] = { content: "", blocks: {} };
+ }
+ slot = slots[slotKey];
+ if (!slot.blocks || typeof slot.blocks !== "object") {
+  slot.blocks = {};
+ }
+ if (!slot.blocks[blockKey] || typeof slot.blocks[blockKey] !== "object") {
+  slot.blocks[blockKey] = {
+   assetType: { id: 196, name: "textblock" }
+  };
+ }
+ slot.blocks[blockKey].content = bodyHtml;
+ if (!slot.content) {
+  slot.content = '<div data-type="block" data-key="' + blockKey + '"></div>';
+ }
+}
+function applySlotHtmlContentPreview(payload, slotKey, htmlContent) {
+ var slotsForBlock;
+ var blockKey;
+ if (!slotKey || !htmlContent || !payload.views || !payload.views.html) {
+  return;
+ }
+ slotsForBlock = payload.views.html.slots;
+ if (!slotsForBlock || typeof slotsForBlock !== "object") {
+  return;
+ }
+ blockKey = findBlockKeyInSlotPreview(slotsForBlock, slotKey) || "bodyblock1";
+ applyBodyToSlotPreview(payload, slotKey, blockKey, htmlContent);
+}
+function normalizeTemplateEmailNamePreview(value) {
+ return String(value || "").replace(/^\s+|\s+$/g, "").toLowerCase();
+}
+function wrapHeadlineHtmlForSlotPreview(text) {
+ return "<div style=\"font-size:32px;line-height:36px;margin:0;color:#ffffff;\">" + htmlSafePreview(text) + "</div>";
+}
+function wrapSurveyButtonHtmlForSlotPreview(surveyId) {
+ var href =
+  "https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=" +
+  encodeURIComponent(surveyId || "") +
+  "&contact=%%=v(@SubscriberKey)=%%";
+ return (
+  "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr><td bgcolor=\"#0060F5\" style=\"background:#0060F5;\"><a href=\"" +
+  href +
+  "\" target=\"_blank\" style=\"display:block;padding:10px 99px 10px 10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;text-decoration:none;\">Take Survey</a></td></tr></table>"
+ );
+}
+function applySurveyPreviewContent(payload) {
+ if (Platform.Variable.GetValue("@previewFlow") != "1") {
+  return;
+ }
+ var bodySlotKey = Platform.Variable.GetValue("@bodySlotKey") || "";
+ var emailBodyText = Platform.Variable.GetValue("@emailBodyText") || "";
+ var emailPreheader = Platform.Variable.GetValue("@emailPreheader") || "";
+ var headerSlotKey = Platform.Variable.GetValue("@headerSlotKey") || "";
+ var buttonSlotKey = Platform.Variable.GetValue("@buttonSlotKey") || "";
+ var emailHeadline = Platform.Variable.GetValue("@emailHeadline") || "";
+ var surveyIdVal = Platform.Variable.GetValue("@surveyId") || "";
+ var templateEmailName = normalizeTemplateEmailNamePreview(Platform.Variable.GetValue("@templateEmailName"));
+ var emailSubjectLineVal = Platform.Variable.GetValue("@emailSubjectLine") || "";
+ if (!payload || !payload.views) {
+  return;
+ }
+ if (emailSubjectLineVal) {
+  payload.views.subjectline = { content: String(emailSubjectLineVal) };
+ }
+ if (emailPreheader) {
+  payload.views.preheader = { content: String(emailPreheader) };
+ }
+ if (bodySlotKey && emailBodyText) {
+  applySlotHtmlContentPreview(payload, bodySlotKey, wrapBodyHtmlForSlotPreview(emailBodyText));
+ }
+ if (
+  headerSlotKey &&
+  emailHeadline &&
+  (templateEmailName === "large_header" || templateEmailName === "survey")
+ ) {
+  applySlotHtmlContentPreview(payload, headerSlotKey, wrapHeadlineHtmlForSlotPreview(emailHeadline));
+ }
+ if (buttonSlotKey && surveyIdVal && templateEmailName === "survey") {
+  applySlotHtmlContentPreview(payload, buttonSlotKey, wrapSurveyButtonHtmlForSlotPreview(surveyIdVal));
+ }
+}
 function postAssetPayload(subdomainValue, accessTokenValue, payload) {
  var result = { statusCode: 0, responseText: "" };
  var assetUrl = "https://" + subdomainValue + ".rest.marketingcloudapis.com/asset/v1/content/assets";
@@ -1582,6 +1765,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          }
        };
        payloadDebug = truncateString(Platform.Function.Stringify(debugObj), 2500);
+       applySurveyPreviewContent(payload);
        var surveyIdForEmail = Platform.Variable.GetValue("@surveyId") || "";
        var surveyTakeUrlForEmail = Platform.Variable.GetValue("@surveyTakeUrl") || "";
        var surveyNameForEmail = Platform.Variable.GetValue("@surveyName") || "";
@@ -1655,6 +1839,9 @@ IF NOT Empty(@journeyEmailId) THEN
  SET @resultText = Concat(@resultText," Journey Email ID: ",@journeyEmailId)
 ENDIF
 IF IndexOf(@step3bResult,"Step 3b OK - Email created") > 0 AND NOT Empty(@newEmailId) THEN
+ SET @emailOk = "true"
+ENDIF
+IF IndexOf(@step3bResult,"Step 3b OK - Existing email used") > 0 AND NOT Empty(@newEmailId) THEN
  SET @emailOk = "true"
 ENDIF
 IF @showForm == "false" AND @deleteRequested != "1" AND @authOk == "true" AND @emailOk != "true" THEN
@@ -2391,20 +2578,9 @@ if (sjEventDefId && sjSub && sjToken) {
 </script>
 %%[
 IF @showForm == "false" AND @deleteRequested != "1" AND @emailOk == "true" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@newEmailId) THEN
- IF NOT EMPTY(@surveyName) THEN
-  IF EMPTY(@surveyId) THEN
-   SET @surveyId = Concat("SURV_", Format(Now(), "yyyyMMdd_HHmmss"))
-  ENDIF
-  UPSERTDE(
-   "SST_SP_Surveys_Master_DE", 1, "SurveyID", @surveyId,
-   "SurveyName", @surveyName,
-   "SurveyStatus", "Active",
-   "SurveyCreatedDate", NOW(),
-   "SurveyDescription", Substring(@surveyDescription, 1, 500),
-   "SurveyTargetAudience", Substring(@campaignId, 1, 18)
-  )
+ IF NOT EMPTY(@surveyName) AND NOT EMPTY(@surveyId) THEN
   SET @surveySaved = "true"
-  SET @resultText = Concat(@resultText," Step 3c OK - Survey record created.")
+  SET @resultText = Concat(@resultText," Step 3c OK - Survey linked to journey.")
  ENDIF
  SET @analyticsJourneyName = IIF(NOT Empty(@journeyName), @journeyName, @emailName)
  SET @analyticsJourneyId = IIF(NOT Empty(@journeyId), @journeyId, Concat("email:",@newEmailId))
@@ -2953,6 +3129,63 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
   color: #b91c1c;
   font-size: 14px;
 }
+.create-step-hidden { display: none !important; }
+.survey-journey-hub {
+  display: grid;
+  gap: 24px;
+  grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
+  align-items: start;
+}
+.preview-panel {
+  border: 1px solid var(--border-color);
+  background: #ffffff;
+  min-height: 420px;
+}
+.preview-header-outlook {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px 20px;
+  background: #faf9f8;
+  border-bottom: 1px solid #edebe9;
+  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+.preview-outlook-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #0078d4;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.preview-outlook-subject {
+  font-weight: 600;
+  font-size: 15px;
+  margin: 0;
+  color: #323130;
+}
+.preview-outlook-snippet {
+  font-size: 13px;
+  color: #605e5c;
+  margin: 4px 0 0;
+}
+.preview-frame {
+  width: 100%;
+  min-height: 360px;
+  border: 0;
+  display: block;
+}
+.step2-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
 @media (max-width: 768px) {
   body { padding: 0; }
   .survey-title { font-size: 1.5rem; }
@@ -3011,33 +3244,49 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 17h2v-5H3v5zm8 5h2V6h-2v16zM13 9h8V7h-8v2zM3 5v4h14V5H3zm8 14h10v-2H11v2zM13 17h8v-2h-8v2z"/></svg>
       </div>
       <div class="maker-page-heading-text">
-        <h1 class="maker-page-title">Create Survey</h1>
+        <h1 class="maker-page-title">Create Survey Journey</h1>
       </div>
     </div>
-    <p class="maker-page-subtitle">Enter survey details, target audience, and sender configuration. Marketing Cloud assets are created first; add questions afterward from Edit Survey.</p>
+    <p class="maker-page-subtitle" id="surveyJourneySubtitle">Choose the survey and audience, then preview the invitation email before the journey is created in Marketing Cloud.</p>
     <div class="maker-form-shell">
-   <form method="post" action="" id="surveyForm">
+   <div id="surveyJourneyStep1">
+   <form method="post" action="" id="surveyJourneyStep1Form">
      <div class="question-card">
        <div class="question-header">
          <div class="question-number">1</div>
-         <div class="question-text">Survey Information</div>
+         <div class="question-text">Survey</div>
        </div>
        <div class="form-group">
-         <input type="text" class="textarea-control" name="surveyName" placeholder="Survey title" required>
-       </div>
-       <div class="form-group">
-         <textarea class="textarea-control" name="surveyDescription" placeholder="Describe the purpose and goals of this survey" rows="3"></textarea>
+         <label class="form-label" for="selectedSurveyId">Survey to send</label>
+         <select class="select-control" id="selectedSurveyId" name="selectedSurveyId" required>
+           <option value="">Select an active survey</option>
+           %%=TreatAsContent(@surveyOptionsHtml)=%%
+         </select>
+%%[ IF @activeSurveyCount == 0 THEN ]%%
+         <p class="form-alert" style="margin-top:10px;" role="alert">No active surveys in SST_SP_Surveys_Master_DE. Create a survey from Survey Home first.</p>
+%%[ ENDIF ]%%
        </div>
        <div class="question-header" style="margin-top: 24px;">
          <div class="question-number">2</div>
-         <div class="question-text">Target Audience</div>
+         <div class="question-text">Target audience</div>
+       </div>
+       <div class="form-group">
+         <label class="form-label" for="audienceSource">Audience source</label>
+         <select id="audienceSource" class="select-control" name="audienceSource">
+           <option value="campaign"%%[ IF @audienceSource != "dataextension" THEN ]%% selected%%[ ENDIF ]%%>Salesforce Campaign</option>
+           <option value="dataextension"%%[ IF @audienceSource == "dataextension" THEN ]%% selected%%[ ENDIF ]%%>Data Extension</option>
+         </select>
        </div>
        <div class="form-group campaign-id-group">
-         <div class="campaign-id-row">
-           <input type="text" class="textarea-control" id="campaignId" name="campaignId" value="%%=v(@campaignId)=%%" placeholder="e.g., Healthcare professionals, Risk managers — paste Salesforce Campaign ID (701WL00000pFzUEYA0)" required>
+         <div class="question-text" id="audienceSourceLabel" style="font-size:0.9375rem;margin-bottom:8px;">%%[ IF @audienceSource == "dataextension" THEN ]%%Source Data Extension name%%[ ELSE ]%%Salesforce Campaign ID%%[ ENDIF ]%%</div>
+         <div class="campaign-id-row" id="campaignSourceRow"%%[ IF @audienceSource == "dataextension" THEN ]%% style="display:none;"%%[ ENDIF ]%%>
+           <input type="text" class="textarea-control" id="campaignId" name="campaignId" value="%%=v(@campaignId)=%%" placeholder="e.g. 701WL00000pFzUEYA0"%%[ IF @audienceSource == "dataextension" THEN ]%% disabled%%[ ELSE ]%% required%%[ ENDIF ]%%>
            <button type="submit" name="verifyCampaign" value="1" class="submit-button campaign-verify-btn" formnovalidate>Verify</button>
          </div>
-%%[ IF @campaignVerifyShow == "1" THEN ]%%
+         <div class="campaign-id-row" id="deSourceRow"%%[ IF @audienceSource != "dataextension" THEN ]%% style="display:none;"%%[ ENDIF ]%%>
+           <input type="text" class="textarea-control" id="sourceDataExtension" name="sourceDataExtension" value="%%=v(@sourceDataExtension)=%%" placeholder="e.g. Audience_DE"%%[ IF @audienceSource == "dataextension" THEN ]%% required%%[ ELSE ]%% disabled%%[ ENDIF ]%%>
+         </div>
+%%[ IF @campaignVerifyShow == "1" AND @audienceSource != "dataextension" THEN ]%%
          <div class="campaign-verify-panel campaign-verify-panel--%%=v(@campaignVerifyStatus)=%%" role="status">
            <p class="campaign-verify-message">%%=v(@campaignVerifyMessage)=%%</p>
 %%[ IF @campaignVerifyStatus == "used" THEN ]%%
@@ -3045,6 +3294,7 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
 %%[ ENDIF ]%%
          </div>
 %%[ ENDIF ]%%
+         <p style="font-size:11px;color:#6b7280;margin-top:8px;" id="deAudienceNote"%%[ IF @audienceSource != "dataextension" THEN ]%% style="display:none;font-size:11px;color:#6b7280;margin-top:8px;"%%[ ENDIF ]%%>Data Extension entry for Survey journey is not supported yet. Use Salesforce Campaign.</p>
        </div>
        <div class="question-header" style="margin-top: 24px;">
          <div class="question-number">3</div>
@@ -3094,14 +3344,18 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
   FOR @ti = 1 TO @templateCount DO
     SET @templateRow = Row(@templateRows,@ti)
     SET @cardEmailId = Trim(Field(@templateRow,"email_id"))
+    SET @cardTemplateId = Trim(Field(@templateRow,"template_id"))
     SET @cardEmailName = Field(@templateRow,"email_name")
     SET @cardEmailPreview = Field(@templateRow,"email_preview")
+    SET @cardBodySlotKey = Trim(Field(@templateRow,"body_slot_key"))
+    SET @cardHeaderSlotKey = Trim(Field(@templateRow,"header_slot_key"))
+    SET @cardButtonSlotKey = Trim(Field(@templateRow,"button_slot_key"))
     SET @cardLabel = @cardEmailName
     IF Length(@cardLabel) > 10 THEN
       SET @cardLabel = Concat(Substring(@cardLabel,1,10),"...")
     ENDIF
 ]%%
-               <label class="email-card %%[ IF @emailId == @cardEmailId THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@cardEmailId)=%%">
+               <label class="email-card %%[ IF @emailId == @cardEmailId THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@cardEmailId)=%%" data-email-name="%%=v(@cardEmailName)=%%" data-body-slot-key="%%=v(@cardBodySlotKey)=%%" data-header-slot-key="%%=v(@cardHeaderSlotKey)=%%" data-button-slot-key="%%=v(@cardButtonSlotKey)=%%" data-preview-renderer="bg_header">
                  <input type="radio" name="emailId" value="%%=v(@cardEmailId)=%%" %%[ IF @emailId == @cardEmailId THEN ]%%checked%%[ ENDIF ]%%>
                  <img class="email-card-img" src="%%=v(@cardEmailPreview)=%%" alt="%%=v(@cardEmailName)=%%">
                  <div class="email-card-label">%%=v(@cardLabel)=%%</div>
@@ -3121,15 +3375,82 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
            <span>Add task activity</span>
          </label>
        </div>
-       <div class="submit-section">
-         <input type="hidden" name="create" value="1">
-         <button type="submit" class="submit-button" id="submitBtn">
-           <span id="btnText">Create Survey</span>
-           <span id="btnSpinner" class="spinner" style="display:none"></span>
-         </button>
+       <div class="submit-section" id="surveyJourneyNextActions">
+         <button type="button" class="submit-button" id="surveyJourneyNextBtn" %%[ IF @templateConfigOk != "true" OR @activeSurveyCount == 0 THEN ]%%disabled%%[ ENDIF ]%%>Next</button>
        </div>
      </div>
    </form>
+   </div>
+   <div id="surveyJourneyStep2" class="create-step-hidden">
+   <form method="post" action="" id="surveyJourneyStep2Form">
+     <input type="hidden" name="create" value="1">
+     <input type="hidden" name="previewFlow" value="1">
+     <input type="hidden" name="selectedSurveyId" id="step2SelectedSurveyId" value="">
+     <input type="hidden" name="audienceSource" id="step2AudienceSource" value="">
+     <input type="hidden" name="campaignId" id="step2CampaignId" value="">
+     <input type="hidden" name="sourceDataExtension" id="step2SourceDataExtension" value="">
+     <input type="hidden" name="senderProfileId" id="step2SenderProfileId" value="">
+     <input type="hidden" name="sendClassificationId" id="step2SendClassificationId" value="">
+     <input type="hidden" name="emailSourceMode" id="step2EmailSourceMode" value="">
+     <input type="hidden" name="existingEmailId" id="step2ExistingEmailId" value="">
+     <input type="hidden" name="emailId" id="step2EmailId" value="">
+     <input type="hidden" name="addTaskActivity" id="step2AddTaskActivity" value="">
+     <input type="hidden" name="bodySlotKey" id="step2BodySlotKey" value="">
+     <input type="hidden" name="headerSlotKey" id="step2HeaderSlotKey" value="">
+     <input type="hidden" name="buttonSlotKey" id="step2ButtonSlotKey" value="">
+     <input type="hidden" name="templateEmailName" id="step2TemplateEmailName" value="survey">
+     <input type="hidden" name="emailBodyText" id="step2EmailBodyText" value="">
+     <input type="hidden" name="emailHeadline" id="step2EmailHeadline" value="">
+     <input type="hidden" name="surveyId" id="step2SurveyIdField" value="">
+     <div class="question-card">
+       <div class="survey-journey-hub">
+         <div>
+           <div class="question-header">
+             <div class="question-number">4</div>
+             <div class="question-text">Email preview</div>
+           </div>
+           <div class="form-group">
+             <label class="form-label" for="step2Preheader">Preheader</label>
+             <input class="form-input" type="text" id="step2Preheader" name="emailPreheader" value="We would love your feedback">
+           </div>
+           <div class="form-group">
+             <label class="form-label" for="step2EmailSubjectLine">Subject line</label>
+             <input class="form-input" type="text" id="step2EmailSubjectLine" name="emailSubjectLine" value="" placeholder="Email subject">
+           </div>
+           <div class="form-group">
+             <label class="form-label" for="step2Headline">Headline</label>
+             <input class="form-input" type="text" id="step2Headline" value="Your feedback matters">
+           </div>
+           <div class="form-group">
+             <label class="form-label" for="step2BodyBg">Body</label>
+             <textarea class="form-textarea" id="step2BodyBg">We would appreciate your feedback. Please take a moment to complete our brief survey.</textarea>
+           </div>
+           <div class="form-group">
+             <label class="form-label" for="step2SurveyIdDisplay">Survey ID</label>
+             <input class="form-input" type="text" id="step2SurveyIdDisplay" readonly>
+           </div>
+           <div class="step2-actions">
+             <button type="button" class="maker-btn maker-btn--secondary" id="surveyJourneyBackBtn">Back</button>
+             <button type="submit" class="submit-button" id="submitBtn">
+               <span id="btnText">Create Journey</span>
+               <span id="btnSpinner" class="spinner" style="display:none"></span>
+             </button>
+           </div>
+         </div>
+         <section class="preview-panel" aria-label="Email preview">
+           <div class="preview-header-outlook">
+             <div class="preview-outlook-avatar" id="previewOutlookAvatar" aria-hidden="true">SR</div>
+             <div>
+               <p class="preview-outlook-subject" id="previewSubject">Email subject</p>
+               <p class="preview-outlook-snippet" id="previewPreheader"></p>
+             </div>
+           </div>
+           <iframe class="preview-frame" id="previewFrame" title="Email body preview"></iframe>
+         </section>
+       </div>
+     </div>
+   </form>
+   </div>
     </div>
 %%[ ELSE ]%%
     <div class="maker-page-heading">
@@ -3150,7 +3471,7 @@ Review the technical log below, adjust your inputs if needed, and try again.
 %%[ ELSEIF @createEmailOnly == "1" THEN ]%%
 Your email asset is in Content Builder. Use the link below when you are ready to edit or send tests.
 %%[ ELSE ]%%
-Your survey record is ready%%=IIF(@surveySaved == "true", Concat(" (", @surveyId, ")"), "")=%%. Your journey and email are in Marketing Cloud. Use Edit Survey to add questions, or open the links below.
+Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (survey ", @surveyId, ")"), "")=%%. Open the journey or edit survey questions from the links below.
 %%[ ENDIF ]%%
     </p>
     <div class="maker-form-shell">
@@ -3196,72 +3517,209 @@ Your survey record is ready%%=IIF(@surveySaved == "true", Concat(" (", @surveyId
   </main>
 </div>
 <script>
- var form = document.getElementById('surveyForm') || document.querySelector('form[method="post"]');
- if (form && form.querySelector('#submitBtn')) {
-   var btn = document.getElementById('submitBtn');
-   var btnText = document.getElementById('btnText');
-   var btnSpinner = document.getElementById('btnSpinner');
-   form.addEventListener('submit', function(e) {
-     var sourceModeEl = document.getElementById('emailSourceMode');
-     var existingIdEl = document.getElementById('existingEmailId');
-     if (sourceModeEl && sourceModeEl.value === 'existing') {
-       if (!existingIdEl || !existingIdEl.value.trim()) {
-         e.preventDefault();
-         window.alert('Enter the existing email name or Content Builder asset ID.');
-         return;
-       }
-     } else if (sourceModeEl && sourceModeEl.value === 'template') {
-       var selectedTemplate = form.querySelector('input[name="emailId"]:checked');
-       if (!selectedTemplate) {
-         e.preventDefault();
-         window.alert('Choose a survey email template.');
-         return;
-       }
-     }
-     btn.disabled = true;
-     if (btnText) btnText.textContent = 'Creating...';
-     if (btnSpinner) btnSpinner.style.display = 'inline-block';
-   });
+(function(){
+ function escapeHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+ }
+ function textToHtml(text) {
+  return escapeHtml(text).replace(/\r\n|\r|\n/g, '<br>');
+ }
+ function renderSurveyPreview(state) {
+  var headline = escapeHtml(state.headline || state.subject || 'Your headline');
+  var greeting = escapeHtml(state.greeting || 'Hello,');
+  var textBody = textToHtml(state.body || '');
+  var surveyId = encodeURIComponent(state.surveyId || '');
+  var surveyUrl = 'https://cloud.go.magmutual.com/MH1Fdf3gkpiWmvpt?id=' + surveyId + '&contact=SampleContact';
+  var surveyBlock = '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="#0060F5" style="background:#0060F5;"><a href="' + surveyUrl + '" target="_blank" style="display:block;padding:10px 99px 10px 10px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;text-decoration:none;">Take Survey</a></td></tr></table>';
+  return [
+   '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#eaeaea;margin:0;padding:0;">',
+   '<tr><td align="center">',
+   '<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="background:#393939;max-width:100%;"><tr><td style="padding:30px;"><img src="https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/MM_PrimaryLogo_Reversed.png" alt="MagMutual" width="200" border="0" style="display:block;"></td></tr>',
+   '<tr><td style="padding:20px 45px 50px;font-family:Arial,Helvetica,sans-serif;color:#ffffff;"><p style="font-size:32px;line-height:36px;margin:0;color:#ffffff;">' + headline + '</p></td></tr></table>',
+   '<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;max-width:100%;"><tr><td style="padding:20px 45px 50px;font-family:Arial,Helvetica,sans-serif;color:#161616;font-size:14px;line-height:20px;">',
+   '<p style="margin:0 0 20px;">' + greeting + '</p><p style="margin:0 0 20px;">' + textBody + '</p>' + surveyBlock,
+   '</td></tr></table></td></tr></table>'
+  ].join('');
+ }
+ function syncPreview() {
+  var subjectEl = document.getElementById('step2EmailSubjectLine');
+  var preheaderEl = document.getElementById('step2Preheader');
+  var headlineEl = document.getElementById('step2Headline');
+  var bodyEl = document.getElementById('step2BodyBg');
+  var surveyIdEl = document.getElementById('step2SurveyIdDisplay');
+  var previewSubject = document.getElementById('previewSubject');
+  var previewPreheader = document.getElementById('previewPreheader');
+  var previewFrame = document.getElementById('previewFrame');
+  var hiddenBody = document.getElementById('step2EmailBodyText');
+  var hiddenHeadline = document.getElementById('step2EmailHeadline');
+  var state = {
+   subject: subjectEl ? subjectEl.value.trim() : '',
+   preheader: preheaderEl ? preheaderEl.value.trim() : '',
+   headline: headlineEl ? headlineEl.value.trim() : '',
+   body: bodyEl ? bodyEl.value : '',
+   surveyId: surveyIdEl ? surveyIdEl.value.trim() : '',
+   greeting: 'Hello,'
+  };
+  if (hiddenBody && bodyEl) hiddenBody.value = bodyEl.value;
+  if (hiddenHeadline && headlineEl) hiddenHeadline.value = headlineEl.value;
+  if (previewSubject) previewSubject.textContent = state.subject || 'Email subject';
+  if (previewPreheader) previewPreheader.textContent = state.preheader || '';
+  if (previewFrame) previewFrame.srcdoc = renderSurveyPreview(state);
+ }
+ var step1Form = document.getElementById('surveyJourneyStep1Form');
+ var step2Form = document.getElementById('surveyJourneyStep2Form');
+ var step1 = document.getElementById('surveyJourneyStep1');
+ var step2 = document.getElementById('surveyJourneyStep2');
+ var nextBtn = document.getElementById('surveyJourneyNextBtn');
+ var backBtn = document.getElementById('surveyJourneyBackBtn');
+ function getSelectedTemplateCard() {
+  if (!step1Form) return null;
+  var checked = step1Form.querySelector('input[name="emailId"]:checked');
+  return checked ? checked.closest('.email-card') : null;
+ }
+ function syncAudienceSourceUi() {
+  var audienceSourceSelect = document.getElementById('audienceSource');
+  var campaignSourceRow = document.getElementById('campaignSourceRow');
+  var deSourceRow = document.getElementById('deSourceRow');
+  var audienceSourceLabel = document.getElementById('audienceSourceLabel');
+  var deAudienceNote = document.getElementById('deAudienceNote');
+  var campaignInput = document.getElementById('campaignId');
+  var deInput = document.getElementById('sourceDataExtension');
+  var mode = audienceSourceSelect ? audienceSourceSelect.value : 'campaign';
+  var isDe = mode === 'dataextension';
+  if (campaignSourceRow) campaignSourceRow.style.display = isDe ? 'none' : '';
+  if (deSourceRow) deSourceRow.style.display = isDe ? '' : 'none';
+  if (deAudienceNote) deAudienceNote.style.display = isDe ? 'block' : 'none';
+  if (campaignInput) {
+   campaignInput.disabled = isDe;
+   campaignInput.required = !isDe;
+  }
+  if (deInput) {
+   deInput.disabled = !isDe;
+   deInput.required = isDe;
+  }
+  if (audienceSourceLabel) {
+   audienceSourceLabel.textContent = isDe ? 'Source Data Extension name' : 'Salesforce Campaign ID';
+  }
+ }
+ if (nextBtn && step1Form && step2 && step1) {
+  nextBtn.addEventListener('click', function() {
+   var surveySelect = document.getElementById('selectedSurveyId');
+   if (!surveySelect || !surveySelect.value) {
+    window.alert('Select a survey.');
+    return;
+   }
+   var audienceSourceSelect = document.getElementById('audienceSource');
+   var audienceMode = audienceSourceSelect ? audienceSourceSelect.value : 'campaign';
+   if (audienceMode === 'dataextension') {
+    window.alert('Data Extension audience for Survey journey is not supported yet. Use Salesforce Campaign.');
+    return;
+   }
+   if (!step1Form.reportValidity()) return;
+   var sourceModeEl = document.getElementById('emailSourceMode');
+   var existingIdEl = document.getElementById('existingEmailId');
+   if (sourceModeEl && sourceModeEl.value === 'existing') {
+    if (!existingIdEl || !existingIdEl.value.trim()) {
+     window.alert('Enter the existing email name or Content Builder asset ID.');
+     return;
+    }
+   } else {
+    if (!getSelectedTemplateCard()) {
+     window.alert('Choose a survey email template.');
+     return;
+    }
+   }
+   var card = getSelectedTemplateCard();
+   var surveyOption = surveySelect.options[surveySelect.selectedIndex];
+   document.getElementById('step2SelectedSurveyId').value = surveySelect.value;
+   document.getElementById('step2AudienceSource').value = audienceMode;
+   document.getElementById('step2CampaignId').value = (document.getElementById('campaignId') || {}).value || '';
+   document.getElementById('step2SourceDataExtension').value = (document.getElementById('sourceDataExtension') || {}).value || '';
+   document.getElementById('step2SenderProfileId').value = (document.getElementById('senderProfileId') || {}).value || '';
+   document.getElementById('step2SendClassificationId').value = (document.getElementById('sendClassificationId') || {}).value || '';
+   document.getElementById('step2EmailSourceMode').value = sourceModeEl ? sourceModeEl.value : 'template';
+   document.getElementById('step2ExistingEmailId').value = existingIdEl ? existingIdEl.value : '';
+   document.getElementById('step2EmailId').value = sourceModeEl && sourceModeEl.value === 'existing' ? '' : (card ? card.getAttribute('data-email-id') : '');
+   var taskCb = step1Form.querySelector('input[name="addTaskActivity"]');
+   document.getElementById('step2AddTaskActivity').value = taskCb && taskCb.checked ? '1' : '0';
+   document.getElementById('step2BodySlotKey').value = card ? (card.getAttribute('data-body-slot-key') || '') : '';
+   document.getElementById('step2HeaderSlotKey').value = card ? (card.getAttribute('data-header-slot-key') || '') : '';
+   document.getElementById('step2ButtonSlotKey').value = card ? (card.getAttribute('data-button-slot-key') || '') : '';
+   var templateName = card ? (card.getAttribute('data-email-name') || 'survey') : 'survey';
+   document.getElementById('step2TemplateEmailName').value = templateName.toLowerCase().indexOf('survey') >= 0 ? 'survey' : templateName;
+   document.getElementById('step2SurveyIdField').value = surveySelect.value;
+   document.getElementById('step2SurveyIdDisplay').value = surveySelect.value;
+   var subjectInput = document.getElementById('step2EmailSubjectLine');
+   if (subjectInput && !subjectInput.value.trim()) {
+    subjectInput.value = surveyOption ? surveyOption.textContent.trim() : '';
+   }
+   step1.classList.add('create-step-hidden');
+   step2.classList.remove('create-step-hidden');
+   syncPreview();
+  });
+ }
+ if (backBtn && step1 && step2) {
+  backBtn.addEventListener('click', function() {
+   step2.classList.add('create-step-hidden');
+   step1.classList.remove('create-step-hidden');
+  });
+ }
+ ['step2Preheader','step2EmailSubjectLine','step2Headline','step2BodyBg'].forEach(function(id) {
+  var el = document.getElementById(id);
+  if (el) el.addEventListener('input', syncPreview);
+ });
+ if (step2Form && step2Form.querySelector('#submitBtn')) {
+  var btn = document.getElementById('submitBtn');
+  var btnText = document.getElementById('btnText');
+  var btnSpinner = document.getElementById('btnSpinner');
+  step2Form.addEventListener('submit', function() {
+   syncPreview();
+   btn.disabled = true;
+   if (btnText) btnText.textContent = 'Creating...';
+   if (btnSpinner) btnSpinner.style.display = 'inline-block';
+  });
+ }
+ var audienceSourceSelect = document.getElementById('audienceSource');
+ if (audienceSourceSelect) {
+  audienceSourceSelect.addEventListener('change', syncAudienceSourceUi);
+  syncAudienceSourceUi();
  }
  var showLogBtn = document.getElementById('showLogBtn');
  var apiLog = document.getElementById('apiLog');
  if (showLogBtn && apiLog) {
-   showLogBtn.onclick = function() {
-     apiLog.classList.toggle('is-visible');
-     showLogBtn.textContent = apiLog.classList.contains('is-visible') ? 'Hide log' : 'Show log';
-   };
+  showLogBtn.onclick = function() {
+   apiLog.classList.toggle('is-visible');
+   showLogBtn.textContent = apiLog.classList.contains('is-visible') ? 'Hide log' : 'Show log';
+  };
  }
  var senderPanel = document.getElementById('senderSettingsPanel');
  var senderToggle = document.getElementById('senderSettingsToggle');
  if (senderPanel && senderToggle) {
-   senderToggle.addEventListener('click', function() {
-     var isOpen = senderPanel.classList.toggle('is-open');
-     senderToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-   });
+  senderToggle.addEventListener('click', function() {
+   var isOpen = senderPanel.classList.toggle('is-open');
+   senderToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  });
  }
  var emailCards = document.querySelectorAll('.email-card');
  emailCards.forEach(function(card) {
-   card.addEventListener('click', function() {
-     emailCards.forEach(function(c) { c.classList.remove('selected'); });
-     card.classList.add('selected');
-     var radio = card.querySelector('input[type="radio"]');
-     if (radio) radio.checked = true;
-   });
+  card.addEventListener('click', function() {
+   emailCards.forEach(function(c) { c.classList.remove('selected'); });
+   card.classList.add('selected');
+   var radio = card.querySelector('input[type="radio"]');
+   if (radio) radio.checked = true;
+  });
  });
  var emailSourceModeEl = document.getElementById('emailSourceMode');
  var existingEmailIdGroup = document.getElementById('existingEmailIdGroup');
  var emailTemplateCardsWrap = document.getElementById('emailTemplateCardsWrap');
  if (emailSourceModeEl) {
-   emailSourceModeEl.addEventListener('change', function() {
-     var useExisting = emailSourceModeEl.value === 'existing';
-     if (existingEmailIdGroup) {
-       existingEmailIdGroup.style.display = useExisting ? 'block' : 'none';
-     }
-     if (emailTemplateCardsWrap) {
-       emailTemplateCardsWrap.style.display = useExisting ? 'none' : 'block';
-     }
-   });
+  emailSourceModeEl.addEventListener('change', function() {
+   var useExisting = emailSourceModeEl.value === 'existing';
+   if (existingEmailIdGroup) existingEmailIdGroup.style.display = useExisting ? 'block' : 'none';
+   if (emailTemplateCardsWrap) emailTemplateCardsWrap.style.display = useExisting ? 'none' : 'block';
+  });
  }
+})();
 </script>
 </body>
 </html>
