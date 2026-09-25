@@ -5,6 +5,11 @@ SET @deleteEmailId = Trim(RequestParameter("deleteEmailId"))
 SET @campaignId = Trim(RequestParameter("campaignId"))
 SET @verifyCampaignRequested = IIF(RequestParameter("verifyCampaign") == "1","1","0")
 SET @emailId = RequestParameter("emailId")
+SET @emailSourceMode = Trim(RequestParameter("emailSourceMode"))
+SET @existingEmailId = Trim(RequestParameter("existingEmailId"))
+IF Empty(@emailSourceMode) OR (@emailSourceMode != "existing" AND @emailSourceMode != "template") THEN
+ SET @emailSourceMode = "template"
+ENDIF
 SET @addTaskActivity = "1"
 SET @addSTOActivity = "0"
 IF NOT Empty(@createRequested) OR @verifyCampaignRequested == "1" OR NOT Empty(RequestParameter("addTaskActivity")) OR NOT Empty(RequestParameter("addSTOActivity")) THEN
@@ -189,7 +194,9 @@ IF @showForm != "true" THEN
    IF @templateConfigOk != "true" THEN
      SET @resultText = "Step 0 FAILED: Missing email templates in bd_sst_email_templates (email_type=template)."
    ELSE
-    IF @createEmailOnly != "1" AND Empty(@itemBaseName) THEN
+    IF @emailSourceMode == "existing" AND Empty(@existingEmailId) THEN
+      SET @resultText = "Enter the Content Builder email asset ID when using Existing email."
+    ELSEIF @createEmailOnly != "1" AND Empty(@itemBaseName) THEN
       SET @resultText = "Enter a Name. It drives the email asset name, entry event / DE name, and journey title."
     ELSE
      SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
@@ -199,7 +206,11 @@ IF @showForm != "true" THEN
        SET @clientId = Field(@row,"clientId")
        SET @clientSecret = Field(@row,"clientSecret")
        SET @subdomain = Field(@row,"subdomain")
-       SET @sourceEmailId = @emailId
+       IF @emailSourceMode == "existing" THEN
+         SET @sourceEmailId = @existingEmailId
+       ELSE
+         SET @sourceEmailId = @emailId
+       ENDIF
        IF NOT Empty(@clientId) AND NOT Empty(@clientSecret) AND NOT Empty(@subdomain) THEN
          SET @authUrl = Concat("https://",@subdomain,".auth.marketingcloudapis.com/v2/token")
          SET @accountId = Trim(Field(@row,"accountId"))
@@ -670,7 +681,38 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
  } catch (deleteEx) {
    step3bResult = " Step 3b FAILED - Email delete failed: " + (deleteEx.message || String(deleteEx));
  }
-} else if (authOk == "true" && accessToken && subdomain && emailName && sourceEmailId) {
+} else if (authOk == "true" && accessToken && subdomain && emailName) {
+ var emailSourceMode = String(Platform.Variable.GetValue("@emailSourceMode") || "template").replace(/^\s+|\s+$/g, "");
+ var existingEmailIdInput = String(Platform.Variable.GetValue("@existingEmailId") || "").replace(/^\s+|\s+$/g, "");
+ if (emailSourceMode == "existing" && existingEmailIdInput) {
+  try {
+   var existingFetch = fetchAssetById(existingEmailIdInput, subdomain, accessToken);
+   if (existingFetch.ok && existingFetch.asset) {
+    newEmailId = String(existingFetch.asset.id || existingEmailIdInput);
+    journeyEmailId = extractLegacyEmailId(existingFetch.asset);
+    if (!journeyEmailId) {
+     journeyEmailId = String(existingEmailIdInput);
+    }
+    step3bResult = " Step 3b OK - Existing email used (no duplicate).";
+   } else {
+    var legacyCandidate = parseInt(existingEmailIdInput, 10);
+    if (!isNaN(legacyCandidate) && legacyCandidate > 0) {
+     journeyEmailId = String(legacyCandidate);
+     newEmailId = String(existingEmailIdInput);
+     step3bResult = " Step 3b OK - Existing email legacy ID used (no duplicate).";
+    } else {
+     step3bResult =
+       " Step 3b FAILED - Could not load email asset " +
+       existingEmailIdInput +
+       " HTTP " +
+       existingFetch.statusCode +
+       ".";
+    }
+   }
+  } catch (existingEx) {
+   step3bResult = " Step 3b FAILED - Existing email lookup failed: " + (existingEx.message || String(existingEx));
+  }
+ } else if (sourceEmailId) {
  try {
    var templateUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + sourceEmailId;
    var getReq = new Script.Util.HttpRequest(templateUrl);
@@ -822,6 +864,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
    }
  } catch (e) {
    step3bResult = " Step 3b SKIP - Email not duplicated: " + (e.message || String(e));
+ }
  }
 }
 Platform.Variable.SetValue("@newEmailId", newEmailId);
@@ -2975,7 +3018,23 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
        </div>
        <div class="question-header" style="margin-top: 24px;">
          <div class="question-number">7</div>
-         <div class="question-text">Choose Email Template<br>
+         <div class="question-text">Email</div>
+       </div>
+       <div class="form-group">
+         <label class="form-label" for="emailSourceMode">Email source</label>
+         <select class="select-control" id="emailSourceMode" name="emailSourceMode">
+           <option value="template" %%[ IF @emailSourceMode != "existing" THEN ]%%selected%%[ ENDIF ]%%>Choose email template</option>
+           <option value="existing" %%[ IF @emailSourceMode == "existing" THEN ]%%selected%%[ ENDIF ]%%>Existing email</option>
+         </select>
+       </div>
+       <div class="form-group" id="existingEmailIdGroup"%%[ IF @emailSourceMode != "existing" THEN ]%% style="display:none;"%%[ ENDIF ]%%>
+         <label class="form-label" for="existingEmailId">Content Builder email asset ID</label>
+         <input type="text" class="textarea-control" id="existingEmailId" name="existingEmailId" value="%%=v(@existingEmailId)=%%" placeholder="e.g. 12345678">
+         <p style="font-size:11px;color:#6b7280;margin-top:6px;">Uses this email in the journey without creating a duplicate in Content Builder.</p>
+       </div>
+       <div id="emailTemplateCardsWrap"%%[ IF @emailSourceMode == "existing" THEN ]%% style="display:none;"%%[ ENDIF ]%%>
+       <div class="question-header" style="margin-top: 16px;">
+         <div class="question-text">Choose email template<br>
          <p style="font-size:11px;">*For Quick Send/Distributed Marketing Use DM_QUICK_SEND_GUIDE</p>
          </div>
        </div>
@@ -3000,6 +3059,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
          %%[ NEXT @ti ELSE ]%%
          <div class="maker-alert" role="alert">Template config missing in `bd_sst_email_templates` (email_type=template).</div>
          %%[ ENDIF ]%%
+       </div>
        </div>
        <div class="question-header" style="margin-top: 24px;">
          <div class="question-number">8</div>
@@ -3164,7 +3224,23 @@ Your journey and email are in Marketing Cloud. Open them below or return to the 
    var btn = document.getElementById('submitBtn');
    var btnText = document.getElementById('btnText');
    var btnSpinner = document.getElementById('btnSpinner');
-   form.addEventListener('submit', function() {
+   form.addEventListener('submit', function(e) {
+     var sourceModeEl = document.getElementById('emailSourceMode');
+     var existingIdEl = document.getElementById('existingEmailId');
+     if (sourceModeEl && sourceModeEl.value === 'existing') {
+       if (!existingIdEl || !existingIdEl.value.trim()) {
+         e.preventDefault();
+         window.alert('Enter the Content Builder email asset ID for Existing email.');
+         return;
+       }
+     } else if (sourceModeEl && sourceModeEl.value === 'template') {
+       var selectedTemplate = form.querySelector('input[name="emailId"]:checked');
+       if (!selectedTemplate) {
+         e.preventDefault();
+         window.alert('Choose an email template.');
+         return;
+       }
+     }
      btn.disabled = true;
      if (btnText) btnText.textContent = 'Creating...';
      if (btnSpinner) btnSpinner.style.display = 'inline-block';
@@ -3223,6 +3299,20 @@ Your journey and email are in Marketing Cloud. Open them below or return to the 
      card.querySelector('input[type="radio"]').checked = true;
    });
  });
+ var emailSourceModeEl = document.getElementById('emailSourceMode');
+ var existingEmailIdGroup = document.getElementById('existingEmailIdGroup');
+ var emailTemplateCardsWrap = document.getElementById('emailTemplateCardsWrap');
+ if (emailSourceModeEl) {
+   emailSourceModeEl.addEventListener('change', function() {
+     var useExisting = emailSourceModeEl.value === 'existing';
+     if (existingEmailIdGroup) {
+       existingEmailIdGroup.style.display = useExisting ? 'block' : 'none';
+     }
+     if (emailTemplateCardsWrap) {
+       emailTemplateCardsWrap.style.display = useExisting ? 'none' : 'block';
+     }
+   });
+ }
  var showLogBtn = document.getElementById('showLogBtn');
  var apiLog = document.getElementById('apiLog');
  if (showLogBtn && apiLog) {
