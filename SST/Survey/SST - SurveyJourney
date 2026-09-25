@@ -109,7 +109,7 @@ SET @journeyId = ""
 SET @templateConfigOk = "false"
 SET @templateCount = 0
 SET @defaultEmailId = ""
-SET @templateRows = LookupOrderedRows("bd_sst_email_templates",0,"email_id ASC","email_type","survey-template")
+SET @templateRows = LookupOrderedRows("bd_sst_email_templates",0,"email_id ASC","email_type","survey-template","email_name","survey")
 SET @templateCount = RowCount(@templateRows)
 IF @templateCount > 0 THEN
  SET @templateConfigOk = "true"
@@ -118,28 +118,20 @@ ENDIF
 IF Empty(@emailRowId) THEN
  SET @emailRowId = @emailId
 ENDIF
-IF @previewFlow == "1" AND NOT Empty(@emailRowId) AND (Empty(@bodySlotKey) OR Empty(@headerSlotKey) OR Empty(@buttonSlotKey) OR Empty(@signatureSlotKey) OR Empty(@templateEmailName) OR Empty(@templateAssetId)) THEN
- SET @slotKeyLookupRows = LookupRows("bd_sst_email_templates","email_id",@emailRowId)
- IF RowCount(@slotKeyLookupRows) > 0 THEN
-  SET @slotKeyLookupRow = Row(@slotKeyLookupRows,1)
-  IF Empty(@bodySlotKey) THEN
-   SET @bodySlotKey = Trim(Field(@slotKeyLookupRow,"body_slot_key"))
+IF @previewFlow == "1" THEN
+ SET @surveyConfigRows = LookupOrderedRows("bd_sst_email_templates",1,"email_id ASC","email_type","survey-template","email_name","survey")
+ IF RowCount(@surveyConfigRows) > 0 THEN
+  SET @surveyConfigRow = Row(@surveyConfigRows,1)
+  IF @emailSourceMode != "existing" THEN
+   SET @emailRowId = Trim(Field(@surveyConfigRow,"email_id"))
+   SET @emailId = @emailRowId
   ENDIF
-  IF Empty(@headerSlotKey) THEN
-   SET @headerSlotKey = Trim(Field(@slotKeyLookupRow,"header_slot_key"))
-  ENDIF
-  IF Empty(@buttonSlotKey) THEN
-   SET @buttonSlotKey = Trim(Field(@slotKeyLookupRow,"button_slot_key"))
-  ENDIF
-  IF Empty(@signatureSlotKey) THEN
-   SET @signatureSlotKey = Trim(Field(@slotKeyLookupRow,"signature_slot_key"))
-  ENDIF
-  IF Empty(@templateEmailName) THEN
-   SET @templateEmailName = Trim(Field(@slotKeyLookupRow,"email_name"))
-  ENDIF
-  IF Empty(@templateAssetId) THEN
-   SET @templateAssetId = Trim(Field(@slotKeyLookupRow,"template_id"))
-  ENDIF
+  SET @templateAssetId = Trim(Field(@surveyConfigRow,"template_id"))
+  SET @templateEmailName = Trim(Field(@surveyConfigRow,"email_name"))
+  SET @bodySlotKey = Trim(Field(@surveyConfigRow,"body_slot_key"))
+  SET @headerSlotKey = Trim(Field(@surveyConfigRow,"header_slot_key"))
+  SET @buttonSlotKey = Trim(Field(@surveyConfigRow,"button_slot_key"))
+  SET @signatureSlotKey = Trim(Field(@surveyConfigRow,"signature_slot_key"))
  ENDIF
 ENDIF
 IF @audienceSource == "dataextension" THEN
@@ -314,7 +306,7 @@ IF @showForm != "true" THEN
    ENDIF
  ELSE
    IF @templateConfigOk != "true" THEN
-     SET @resultText = "Step 0 FAILED: Missing email templates in bd_sst_email_templates (email_type=survey-template)."
+     SET @resultText = "Step 0 FAILED: Missing email templates in bd_sst_email_templates (email_type=survey-template, email_name=survey)."
    ELSE
     IF Empty(@journeyNameInput) THEN
       SET @resultText = "Enter a journey name."
@@ -338,8 +330,6 @@ IF @showForm != "true" THEN
        SET @subdomain = Field(@row,"subdomain")
        IF @emailSourceMode == "existing" THEN
          SET @sourceEmailId = @existingEmailId
-       ELSEIF NOT Empty(@templateAssetId) THEN
-         SET @sourceEmailId = @templateAssetId
        ELSE
          SET @sourceEmailId = @emailId
        ENDIF
@@ -4268,7 +4258,7 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
                  <div class="email-card-id">ID: %%=v(@cardEmailId)=%%</div>
                </label>
 %%[ NEXT @ti ELSE ]%%
-               <div class="maker-alert" role="alert">Template config missing in `bd_sst_email_templates` (email_type=survey-template).</div>
+               <div class="maker-alert" role="alert">Template config missing in `bd_sst_email_templates` (email_type=survey-template, email_name=survey).</div>
 %%[ ENDIF ]%%
              </div>
              </div>
@@ -4753,7 +4743,7 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
    var cardEmailName = card ? (card.getAttribute('data-email-name') || '') : '';
    document.getElementById('step2EmailRowId').value = sourceModeEl && sourceModeEl.value === 'existing' ? '' : cardEmailId;
    document.getElementById('step2TemplateAssetId').value = sourceModeEl && sourceModeEl.value === 'existing' ? '' : cardTemplateId;
-   document.getElementById('step2EmailId').value = sourceModeEl && sourceModeEl.value === 'existing' ? '' : (cardTemplateId || cardEmailId);
+   document.getElementById('step2EmailId').value = sourceModeEl && sourceModeEl.value === 'existing' ? '' : cardEmailId;
    var taskCb = step1Form.querySelector('input[name="addTaskActivity"]');
    document.getElementById('step2AddTaskActivity').value = taskCb && taskCb.checked ? '1' : '0';
    document.getElementById('step2BodySlotKey').value = card ? (card.getAttribute('data-body-slot-key') || '') : '';
