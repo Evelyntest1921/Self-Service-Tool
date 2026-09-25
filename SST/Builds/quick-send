@@ -17,21 +17,12 @@ SET @buildDetailUrl = ""
 SET @emailOnlyUrl = ""
 SET @quickSendSelfUrl = ""
 SET @useExternalEmailCreate = "1"
-SET @precreatedNewEmailId = Trim(RequestParameter("newEmailId"))
-SET @precreatedJourneyEmailId = Trim(RequestParameter("journeyEmailId"))
-SET @emailReady = Trim(RequestParameter("emailReady"))
-SET @savedEventDefId = Trim(RequestParameter("eventDefId"))
-SET @savedEventKey = Trim(RequestParameter("eventKey"))
-SET @savedEventDataExtensionId = Trim(RequestParameter("eventDataExtensionId"))
-SET @savedJourneyKey = Trim(RequestParameter("journeyKey"))
-SET @savedDefaultEmailEscaped = RequestParameter("defaultEmailEscaped")
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
  SET @navRow = Row(@navRows,1)
  SET @hubUrl = Field(@navRow,"ss_home")
  SET @buildDetailUrl = Field(@navRow,"ss_edit")
  SET @emailOnlyUrl = Trim(Field(@navRow,"ss_email_only"))
- SET @quickSendSelfUrl = Trim(Field(@navRow,"ss_quick_send"))
 ENDIF
 SET @builderPageLabel = "Quick Send"
 SET @itemBaseName = Trim(RequestParameter("itemBaseName"))
@@ -104,10 +95,6 @@ ELSE
    SET @eventName = Concat("QuickSend_",@campaignName)
    SET @emailName = Concat("QuickSend_",@campaignName,"_Email")
  ENDIF
-ENDIF
-IF @emailReady == "1" AND NOT Empty(@precreatedJourneyEmailId) AND NOT Empty(@savedEventDefId) AND NOT Empty(@campaignId) AND Length(@campaignId) >= 15 THEN
- SET @createRequested = "1"
- SET @showForm = "false"
 ENDIF
 IF Empty(@emailSubjectLine) THEN
  SET @emailSubjectLine = "Campaign Event"
@@ -448,8 +435,6 @@ var resultText = Variable.GetValue("resultText");
 var newEmailId = "";
 var journeyEmailId = "";
 var step3bResult = " Step 3b SKIP - Email not duplicated: Template fetch failed.";
-var precreatedJourneyEmailId = String(Platform.Variable.GetValue("@precreatedJourneyEmailId") || "").replace(/^\s+|\s+$/g, "");
-var precreatedNewEmailId = String(Platform.Variable.GetValue("@precreatedNewEmailId") || "").replace(/^\s+|\s+$/g, "");
 var useExternalEmailCreate = String(Platform.Variable.GetValue("@useExternalEmailCreate") || "").replace(/^\s+|\s+$/g, "");
 function cloneObject(obj) {
  if (!obj || typeof obj !== "object") return null;
@@ -666,14 +651,10 @@ function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preh
  applyTextSettings(payload, textContent);
  return payload;
 }
-if (useExternalEmailCreate == "1" && !precreatedJourneyEmailId && !precreatedNewEmailId) {
+if (useExternalEmailCreate == "1") {
  newEmailId = "";
  journeyEmailId = "";
- step3bResult = " Step 3b SKIP - Email will be created in Create Email flow.";
-} else if (precreatedJourneyEmailId && precreatedNewEmailId) {
- newEmailId = precreatedNewEmailId;
- journeyEmailId = precreatedJourneyEmailId;
- step3bResult = " Step 3b OK - Email created in Create Email flow.";
+ step3bResult = " Step 3b SKIP - Email will be added in Create Email.";
 } else if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && deleteEmailId) {
  try {
    newEmailId = String(deleteEmailId);
@@ -860,20 +841,7 @@ IF NOT Empty(@journeyEmailId) THEN
  SET @resultText = Concat(@resultText," Journey Email ID: ",@journeyEmailId)
 ENDIF
 IF @authOk == "true" AND @createEmailOnly != "1" THEN
- IF NOT Empty(@savedEventDefId) AND @emailReady == "1" AND NOT Empty(@precreatedJourneyEmailId) THEN
-   SET @eventDefId = @savedEventDefId
-   SET @eventKey = @savedEventKey
-   IF NOT Empty(@savedEventDataExtensionId) THEN
-     SET @eventDataExtensionId = @savedEventDataExtensionId
-   ENDIF
-   SET @journeyKey = @savedJourneyKey
-   IF NOT Empty(@savedDefaultEmailEscaped) THEN
-     SET @defaultEmailEscaped = @savedDefaultEmailEscaped
-   ENDIF
-   SET @journeyUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/interactions")
-   SET @resultText = Concat(@resultText," Step 3 OK - API entry event restored.")
- ELSEIF Empty(@precreatedJourneyEmailId) THEN
-   SET @eventKey = Concat("APIEvent-",GUID())
+ SET @eventKey = Concat("APIEvent-",GUID())
    SET @journeyNameForJson = Replace(@journeyName,'"','\"')
    SET @journeyNameForJson = Replace(Replace(Replace(@journeyNameForJson,Char(10),' '),Char(13),' '),Char(9),' ')
    SET @eventSchemaFields = '[{"name":"greeting","dataType":"Text","maxLength":"50","isNullable":true},{"name":"id","dataType":"Text","maxLength":"50","isNullable":false},{"name":"email","dataType":"EmailAddress","maxLength":"254","isNullable":false},{"name":"sfCampaignId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfCampaignMemberId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfQuickSendId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Account_Owner_Name","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Account_Owner_Email","dataType":"Text","maxLength":"50","isNullable":true},{"name":"firstName","dataType":"Text","maxLength":"50","isNullable":true},{"name":"lastName","dataType":"Text","maxLength":"50","isNullable":true},{"name":"sfUserId","dataType":"Text","maxLength":"50","isNullable":false},{"name":"journeyID","dataType":"Text","maxLength":"50","isNullable":false},{"name":"sfOrgId","dataType":"Text","maxLength":"50","isNullable":false},{"name":"smsValue","dataType":"Text","maxLength":"50","isNullable":true},{"name":"mobilePhone","dataType":"Text","maxLength":"50","isNullable":true},{"name":"EntryObjectId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"DateAdded","dataType":"Date","isNullable":true},{"name":"Role","dataType":"Text","maxLength":"50","isNullable":true},{"name":"OwnerId","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Specialty","dataType":"Text","maxLength":"100","isNullable":true},{"name":"AccountName","dataType":"Text","maxLength":"255","isNullable":true},{"name":"State","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Designation","dataType":"Text","maxLength":"50","isNullable":true},{"name":"senderPhone","dataType":"Text","maxLength":"50","isNullable":true},{"name":"senderTitle","dataType":"Text","maxLength":"255","isNullable":true},{"name":"senderLicense","dataType":"Text","maxLength":"255","isNullable":true},{"name":"senderMobile","dataType":"Text","maxLength":"50","isNullable":true},{"name":"Salutation","dataType":"Text","maxLength":"50","isNullable":true},{"name":"AppointmentLink","dataType":"Text","maxLength":"4000","isNullable":true},{"name":"type","dataType":"Text","maxLength":"50","isNullable":true,"defaultValue":"SST"}]'
@@ -904,7 +872,6 @@ IF @authOk == "true" AND @createEmailOnly != "1" THEN
      SET @eventKey = ""
      SET @eventDefId = ""
    ENDIF
- ENDIF
 ENDIF
 IF Empty(@cleanupNeeded) THEN
  SET @cleanupNeeded = "0"
@@ -1079,76 +1046,6 @@ if (
   Platform.Variable.SetValue("@eventDataExtensionId", "");
 }
 </script>
-%%[
-IF @showForm == "false" AND @deleteRequested != "1" AND @createEmailOnly != "1" AND @useExternalEmailCreate == "1" AND Empty(@precreatedJourneyEmailId) AND Empty(@savedEventDefId) AND NOT Empty(@emailOnlyUrl) AND NOT Empty(@quickSendSelfUrl) AND @authOk == "true" AND NOT Empty(@eventDefId) AND NOT Empty(@apiEventTriggerJson) AND IndexOf(@resultText,"FAILED") == 0 THEN
- SET @handoffReturnUrl = @quickSendSelfUrl
- IF IndexOf(@handoffReturnUrl, "?") > 0 THEN
-  SET @handoffQs = "&"
- ELSE
-  SET @handoffQs = "?"
- ENDIF
- IF NOT Empty(@campaignId) THEN
-  SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "campaignId=", URLEncode(@campaignId))
-  SET @handoffQs = "&"
- ENDIF
- IF NOT Empty(@itemBaseName) THEN
-  SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "itemBaseName=", URLEncode(@itemBaseName))
-  SET @handoffQs = "&"
- ENDIF
- IF NOT Empty(@emailSubjectLine) THEN
-  SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "emailSubjectLine=", URLEncode(@emailSubjectLine))
-  SET @handoffQs = "&"
- ENDIF
- IF NOT Empty(@journeyDescription) THEN
-  SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "journeyDescription=", URLEncode(@journeyDescription))
-  SET @handoffQs = "&"
- ENDIF
- IF NOT Empty(@bccEmail) THEN
-  SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "bccEmail=", URLEncode(@bccEmail))
-  SET @handoffQs = "&"
- ENDIF
- IF NOT Empty(@senderProfileId) THEN
-  SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "senderProfileId=", URLEncode(@senderProfileId))
-  SET @handoffQs = "&"
- ENDIF
- IF NOT Empty(@sendClassificationId) THEN
-  SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "sendClassificationId=", URLEncode(@sendClassificationId))
-  SET @handoffQs = "&"
- ENDIF
- IF @addTaskActivity == "1" THEN
-  SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "addTaskActivity=1")
-  SET @handoffQs = "&"
- ENDIF
- IF @addSTOActivity == "1" THEN
-  SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "addSTOActivity=1")
-  SET @handoffQs = "&"
- ENDIF
- SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "eventDefId=", URLEncode(@eventDefId))
- SET @handoffReturnUrl = Concat(@handoffReturnUrl, "&eventKey=", URLEncode(@eventKey))
- IF NOT Empty(@eventDataExtensionId) THEN
-  SET @handoffReturnUrl = Concat(@handoffReturnUrl, "&eventDataExtensionId=", URLEncode(@eventDataExtensionId))
- ENDIF
- IF NOT Empty(@journeyKey) THEN
-  SET @handoffReturnUrl = Concat(@handoffReturnUrl, "&journeyKey=", URLEncode(@journeyKey))
- ENDIF
- IF NOT Empty(@defaultEmailEscaped) THEN
-  SET @handoffReturnUrl = Concat(@handoffReturnUrl, "&defaultEmailEscaped=", URLEncode(@defaultEmailEscaped))
- ENDIF
- SET @handoffReturnUrl = Concat(@handoffReturnUrl, "&emailReady=1")
- IF IndexOf(@emailOnlyUrl, "?") > 0 THEN
-  SET @handoffDest = Concat(@emailOnlyUrl, "&flow=quick_send&returnUrl=", URLEncode(@handoffReturnUrl))
- ELSE
-  SET @handoffDest = Concat(@emailOnlyUrl, "?flow=quick_send&returnUrl=", URLEncode(@handoffReturnUrl))
- ENDIF
- IF NOT Empty(@itemBaseName) THEN
-  SET @handoffDest = Concat(@handoffDest, "&itemBaseName=", URLEncode(@itemBaseName))
- ENDIF
- IF NOT Empty(@emailSubjectLine) THEN
-  SET @handoffDest = Concat(@handoffDest, "&emailSubjectLine=", URLEncode(@emailSubjectLine))
- ENDIF
- Redirect(@handoffDest)
-ENDIF
-]%%
 <script runat="server">
 Platform.Load("core","1");
 var journeyKey = Platform.Variable.GetValue("@journeyKey") || "";
@@ -1881,12 +1778,165 @@ function buildCmUpdateActivitySbU(opts) {
     }
   };
 }
+function buildQuickSendTaskActivityJson(eventKeyValue, emailNameValue) {
+  var taskActivityKey = "XTASK-1";
+  var taskSubject = "Email Sent: " + (emailNameValue || "Email");
+  var taskDescription = "Email name: " + (emailNameValue || "Email");
+  var taskEvWho = '{{Event."' + eventKeyValue + '"."id"}}';
+  var taskEvOwn = '{{Event."' + eventKeyValue + '"."sfUserId"}}';
+  var taskActivityObj = {
+    id: randomGuidSbU(),
+    type: "SALESCLOUDACTIVITY",
+    key: taskActivityKey,
+    name: "Create Task Activity",
+    description: "",
+    outcomes: [{ key: randomGuidSbU(), arguments: {}, metaData: { invalid: false } }],
+    arguments: {
+      objectMap: {
+        objects: [
+          {
+            type: "Task",
+            subtype: null,
+            order: "1",
+            action: "Create",
+            lookup: null,
+            fields: [
+              { FieldName: "Subject", FieldLabel: "Subject", FieldValue: taskSubject, FieldValueLabel: taskSubject, Required: "false", FieldType: "combobox", MappingType: "Constant", Processor: "static" },
+              { FieldName: "WhoId", FieldLabel: "Name ID", FieldValue: taskEvWho, FieldValueLabel: "id", Required: "false", FieldType: "reference", MappingType: "Constant", Processor: "static", ReferenceObjectNames: ["CONTACT","LEAD"] },
+              { FieldName: "Description", FieldLabel: "Description", FieldValue: taskDescription, FieldValueLabel: taskDescription, Required: "false", FieldType: "textarea", MappingType: "Constant", Processor: "static" },
+              { FieldName: "ActivityDate", FieldLabel: "Due Date Only", FieldValue: "Date Contact Enters Activity", FieldValueLabel: "Date Contact Enters Activity", Required: "false", FieldType: "date", MappingType: "Constant", Processor: "dateContactEnters", FieldAdjustment: { SubProcessor: "dateAdjustment", Units: "Days", NumUnits: "0", TimeDirection: "after" } },
+              { FieldName: "Status", FieldLabel: "Status", FieldValue: "Completed", FieldValueLabel: "Completed", Required: "false", FieldType: "picklist", MappingType: "Constant", Processor: "static" },
+              { FieldName: "OwnerId", FieldLabel: "Assigned To ID", FieldValue: taskEvOwn, FieldValueLabel: "sfUserId", Required: "false", FieldType: "reference", MappingType: "Constant", Processor: "static", ReferenceObjectNames: ["GROUP","USER"] }
+            ]
+          }
+        ]
+      },
+      version: "1.0",
+      contactKey: "{{Context.ContactKey}}",
+      contactId: "{{Context.ContactId}}",
+      definitionId: "{{Context.DefinitionId}}",
+      activityId: "{{Activity.Id}}",
+      startActivityKey: "{{Context.StartActivityKey}}",
+      definitionInstanceId: "{{Context.DefinitionInstanceId}}",
+      requestObjectId: "{{Context.RequestObjectId}}"
+    },
+    configurationArguments: {
+      applicationExtensionKey: "Salesforce_Activity_Task",
+      applicationExtensionId: "00000000-0000-0000-0000-000000000000"
+    },
+    metaData: { isConfigured: true, expressionBuilderPrefix: "Task" }
+  };
+  return Platform.Function.Stringify(taskActivityObj);
+}
+var useExternalEmailCreate = Platform.Variable.GetValue("@useExternalEmailCreate") || "";
+var externalHandoff = useExternalEmailCreate == "1" && Platform.Variable.GetValue("@createEmailOnly") != "1";
 if (
+  externalHandoff &&
+  journeyKey &&
+  journeyUrl &&
+  subdomain &&
+  accessToken &&
+  eventKey &&
+  apiEventTriggerJson &&
+  senderProfileId &&
+  sendClassificationId &&
+  !journeyEmailId
+) {
+ try {
+   var shellCmKey = "SALESCLOUDACTIVITY-2";
+   var shellTaskKey = "XTASK-1";
+   var shellCmObj = buildCmUpdateActivitySbU({
+     eventKey: eventKey,
+     campaignId: campaignId,
+     campaignLabel: campaignName,
+     taskNext: addTaskActivity == "1" ? shellTaskKey : null
+   });
+   var shellCmActivity = Platform.Function.Stringify(shellCmObj);
+   var shellActivitiesJson = shellCmActivity;
+   if (addTaskActivity == "1") {
+     shellActivitiesJson = shellActivitiesJson + "," + buildQuickSendTaskActivityJson(eventKey, emailName);
+   }
+   var shellTrig = Platform.Function.ParseJSON(apiEventTriggerJson);
+   shellTrig.outcomes = [{
+     key: randomGuidSbU(),
+     next: shellCmKey,
+     arguments: {},
+     metaData: { invalid: false }
+   }];
+   var shellTriggerJson = Platform.Function.Stringify(shellTrig);
+   var shellJourneyNameEsc = jsonEscapeSbU(journeyName);
+   var shellJourneyDescEsc = jsonEscapeSbU(journeyDescription);
+   var shellPayload =
+     '{"name":"' +
+     shellJourneyNameEsc +
+     '","definitionType":"Multistep","channel":"","description":"' +
+     shellJourneyDescEsc +
+     '","version":1,"workflowApiVersion":1.0,"executionMode":"Production","entryMode":"MultipleEntries","key":"' +
+     journeyKey +
+     '","activities":[' +
+     shellActivitiesJson +
+     '],"notifiers":[],"metaData":{"disableEndWait":true,"dataSource":"ContactsModel","highThroughputSending":{"email":false}},"defaults":{"email":["' +
+     (defaultEmailEscaped || "") +
+     '"],"properties":{"analyticsTracking":{"enabled":true,"analyticsType":"google","urlDomainsToTrack":[]}}},"goals":[],"exits":[],"triggers":[' +
+     shellTriggerJson +
+     "]}";
+   var shellPostReq = new Script.Util.HttpRequest(journeyUrl);
+   shellPostReq.emptyContentHandling = 0;
+   shellPostReq.continueOnError = true;
+   shellPostReq.setHeader("Authorization", "Bearer " + accessToken);
+   shellPostReq.method = "POST";
+   shellPostReq.contentType = "application/json";
+   shellPostReq.postData = shellPayload;
+   var shellPostResp = shellPostReq.send();
+   var shellStatus = shellPostResp.statusCode;
+   var shellResponse = shellPostResp.content ? String(shellPostResp.content) : "";
+   if (shellStatus == 200 || shellStatus == 201) {
+     journeyResult = " Step 4 OK - Journey shell created (email pending).";
+     var shellIdMatch = shellResponse.match(/"id"\s*:\s*"?([^",}\s]+)"?/);
+     var shellJourneyId = shellIdMatch ? shellIdMatch[1] : "";
+     if (shellJourneyId) {
+       Platform.Variable.SetValue("@journeyId", shellJourneyId);
+       journeyResult = journeyResult + " Journey ID: " + shellJourneyId + " (draft).";
+       if (eventDefId && eventKey && eventDataExtensionId) {
+         var shellBind = configureJourneyEntryEvent({
+           oldEventKey: eventKey,
+           oldEventDefId: eventDefId,
+           dataExtensionId: eventDataExtensionId,
+           journeyId: shellJourneyId,
+           journeyUrl: journeyUrl,
+           journeyName: journeyName,
+           subdomain: subdomain,
+           accessToken: accessToken
+         });
+         journeyResult = journeyResult + shellBind.message;
+         if (shellBind.ok && shellBind.newEventKey && shellBind.newEventDefId) {
+           Platform.Variable.SetValue("@eventKey", shellBind.newEventKey);
+           Platform.Variable.SetValue("@eventDefId", shellBind.newEventDefId);
+           if (shellBind.newDataExtensionId) {
+             Platform.Variable.SetValue("@eventDataExtensionId", shellBind.newDataExtensionId);
+           }
+           Platform.Variable.SetValue(
+             "@defaultEmailEscaped",
+             ("{{Event." + shellBind.newEventKey + '.\"email\"}}').replace(/"/g, '\\"')
+           );
+         }
+       }
+     }
+   } else {
+     journeyResult = " Step 4 FAILED: HTTP " + shellStatus + " - " + shellResponse;
+     Platform.Variable.SetValue("@cleanupNeeded", "1");
+   }
+ } catch (shellEx) {
+   journeyResult = " Step 4 FAILED: " + (shellEx.message || String(shellEx));
+   Platform.Variable.SetValue("@cleanupNeeded", "1");
+ }
+} else if (
   journeyKey &&
   journeyUrl &&
   subdomain &&
   accessToken &&
   journeyEmailId &&
+  !externalHandoff &&
   eventKey &&
   apiEventTriggerJson &&
   senderProfileId &&
@@ -2454,7 +2504,70 @@ if (finalDeExtId) {
 }
 </script>
 %%[
-IF @showForm == "false" AND @deleteRequested != "1" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@newEmailId) THEN
+IF @showForm == "false" AND @deleteRequested != "1" AND @createEmailOnly != "1" AND @useExternalEmailCreate == "1" AND NOT Empty(@journeyId) AND NOT Empty(@emailOnlyUrl) AND IndexOf(@resultText,"FAILED") == 0 THEN
+ IF IndexOf(@emailOnlyUrl, "?") > 0 THEN
+  SET @handoffQs = "&"
+  SET @handoffDest = @emailOnlyUrl
+ ELSE
+  SET @handoffQs = "?"
+  SET @handoffDest = @emailOnlyUrl
+ ENDIF
+ SET @handoffDest = Concat(@handoffDest, @handoffQs, "flow=quick_send&journeyId=", URLEncode(@journeyId))
+ SET @handoffDest = Concat(@handoffDest, "&eventKey=", URLEncode(@eventKey))
+ SET @handoffDest = Concat(@handoffDest, "&eventDefId=", URLEncode(@eventDefId))
+ IF NOT Empty(@eventDataExtensionId) THEN
+  SET @handoffDest = Concat(@handoffDest, "&eventDataExtensionId=", URLEncode(@eventDataExtensionId))
+ ENDIF
+ IF NOT Empty(@defaultEmailEscaped) THEN
+  SET @handoffDest = Concat(@handoffDest, "&defaultEmailEscaped=", URLEncode(@defaultEmailEscaped))
+ ENDIF
+ IF NOT Empty(@campaignId) THEN
+  SET @handoffDest = Concat(@handoffDest, "&campaignId=", URLEncode(@campaignId))
+ ENDIF
+ IF NOT Empty(@campaignName) THEN
+  SET @handoffDest = Concat(@handoffDest, "&campaignName=", URLEncode(@campaignName))
+ ENDIF
+ IF NOT Empty(@journeyName) THEN
+  SET @handoffDest = Concat(@handoffDest, "&journeyName=", URLEncode(@journeyName))
+ ENDIF
+ IF NOT Empty(@emailName) THEN
+  SET @handoffDest = Concat(@handoffDest, "&emailName=", URLEncode(@emailName))
+ ENDIF
+ IF NOT Empty(@itemBaseName) THEN
+  SET @handoffDest = Concat(@handoffDest, "&itemBaseName=", URLEncode(@itemBaseName))
+ ENDIF
+ IF NOT Empty(@emailSubjectLine) THEN
+  SET @handoffDest = Concat(@handoffDest, "&emailSubjectLine=", URLEncode(@emailSubjectLine))
+ ENDIF
+ IF NOT Empty(@journeyDescription) THEN
+  SET @handoffDest = Concat(@handoffDest, "&journeyDescription=", URLEncode(@journeyDescription))
+ ENDIF
+ IF NOT Empty(@bccEmail) THEN
+  SET @handoffDest = Concat(@handoffDest, "&bccEmail=", URLEncode(@bccEmail))
+ ENDIF
+ IF NOT Empty(@senderProfileId) THEN
+  SET @handoffDest = Concat(@handoffDest, "&senderProfileId=", URLEncode(@senderProfileId))
+ ENDIF
+ IF NOT Empty(@sendClassificationId) THEN
+  SET @handoffDest = Concat(@handoffDest, "&sendClassificationId=", URLEncode(@sendClassificationId))
+ ENDIF
+ IF @addTaskActivity == "1" THEN
+  SET @handoffDest = Concat(@handoffDest, "&addTaskActivity=1")
+ ENDIF
+ IF @addSTOActivity == "1" THEN
+  SET @handoffDest = Concat(@handoffDest, "&addSTOActivity=1")
+ ENDIF
+ IF NOT Empty(@deCustomerKey) THEN
+  SET @handoffDest = Concat(@handoffDest, "&deCustomerKey=", URLEncode(@deCustomerKey))
+ ENDIF
+ IF NOT Empty(@entryDeName) THEN
+  SET @handoffDest = Concat(@handoffDest, "&entryDeName=", URLEncode(@entryDeName))
+ ENDIF
+ Redirect(@handoffDest)
+ENDIF
+]%%
+%%[
+IF @showForm == "false" AND @deleteRequested != "1" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@newEmailId) AND @useExternalEmailCreate != "1" THEN
  SET @analyticsJourneyName = IIF(NOT Empty(@journeyName), @journeyName, @emailName)
  SET @analyticsJourneyId = IIF(NOT Empty(@journeyId), @journeyId, Concat("email:",@newEmailId))
  SET @analyticsJourneyType = @builderPageLabel

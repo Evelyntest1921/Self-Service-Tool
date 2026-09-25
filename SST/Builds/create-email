@@ -46,9 +46,28 @@ IF RowCount(@navHomeRow) > 0 THEN
 ENDIF
 SET @builderPageLabel = "Create Email"
 SET @buildFlow = Trim(RequestParameter("flow"))
-SET @handoffReturnUrl = Trim(RequestParameter("returnUrl"))
+SET @qsJourneyId = Trim(RequestParameter("journeyId"))
+SET @qsEventKey = Trim(RequestParameter("eventKey"))
+SET @qsCampaignId = Trim(RequestParameter("campaignId"))
+SET @qsCampaignName = Trim(RequestParameter("campaignName"))
+SET @qsJourneyName = Trim(RequestParameter("journeyName"))
+SET @qsEmailName = Trim(RequestParameter("emailName"))
+SET @qsBccEmail = Trim(RequestParameter("bccEmail"))
+SET @qsSenderProfileId = Trim(RequestParameter("senderProfileId"))
+SET @qsSendClassificationId = Trim(RequestParameter("sendClassificationId"))
+SET @qsAddTaskActivity = Trim(RequestParameter("addTaskActivity"))
+SET @qsAddSTOActivity = Trim(RequestParameter("addSTOActivity"))
+SET @qsJourneyDescription = Trim(RequestParameter("journeyDescription"))
+SET @qsDeCustomerKey = Trim(RequestParameter("deCustomerKey"))
+SET @qsEntryDeName = Trim(RequestParameter("entryDeName"))
 SET @createEmailOnly = "1"
 SET @showForm = "true"
+IF @buildFlow == "quick_send" AND NOT Empty(@qsEmailName) AND Empty(@itemBaseName) THEN
+SET @itemBaseName = @qsEmailName
+ENDIF
+IF @buildFlow == "quick_send" AND NOT Empty(RequestParameter("emailSubjectLine")) AND Empty(@createRequested) THEN
+SET @emailSubjectLine = Trim(RequestParameter("emailSubjectLine"))
+ENDIF
 IF NOT Empty(@createRequested) OR @deleteRequested == "1" THEN
 SET @showForm = "false"
 ENDIF
@@ -911,19 +930,221 @@ ENDIF
 IF NOT Empty(@journeyEmailId) THEN
 SET @resultText = Concat(@resultText," Journey Email ID: ",@journeyEmailId)
 ENDIF
-IF @showForm == "false" AND @deleteRequested != "1" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@journeyEmailId) AND @buildFlow == "quick_send" AND NOT Empty(@handoffReturnUrl) THEN
-SET @returnDest = @handoffReturnUrl
-IF IndexOf(@returnDest, "?") > 0 THEN
-SET @returnQs = "&"
-ELSE
-SET @returnQs = "?"
-ENDIF
-SET @returnDest = Concat(@returnDest, @returnQs, "newEmailId=", URLEncode(@newEmailId), "&journeyEmailId=", URLEncode(@journeyEmailId))
-Redirect(@returnDest)
-ENDIF
 ]%%
+<script runat="server">
+Platform.Load("core","1");
+var buildFlow = Platform.Variable.GetValue("@buildFlow") || "";
+var qsJourneyId = Platform.Variable.GetValue("@qsJourneyId") || "";
+var journeyEmailId = Platform.Variable.GetValue("@journeyEmailId") || "";
+var authOk = Platform.Variable.GetValue("@authOk") || "";
+var subdomain = Platform.Variable.GetValue("@subdomain") || "";
+var accessToken = Platform.Variable.GetValue("@accessToken") || "";
+var resultText = Platform.Variable.GetValue("@resultText") || "";
+var journeyPatchResult = "";
+function jsonEscapeQs(s) {
+  if (s === null || s === undefined) return "";
+  return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+function trimQsVal(v) {
+  return String(v || "").replace(/^\s+|\s+$/g, "");
+}
+function wsRowIdQs(row) {
+  if (!row) return "";
+  if (row.ObjectID) return trimQsVal(row.ObjectID);
+  if (row.CustomerKey) return trimQsVal(row.CustomerKey);
+  return "";
+}
+function wsNestedIdQs(row, propName) {
+  if (!row) return "";
+  if (row[propName] && row[propName].ObjectID) return trimQsVal(row[propName].ObjectID);
+  if (row[propName] && row[propName].CustomerKey) return trimQsVal(row[propName].CustomerKey);
+  var flatObj = propName + ".ObjectID";
+  if (row[flatObj]) return trimQsVal(row[flatObj]);
+  var flatKey = propName + ".CustomerKey";
+  if (row[flatKey]) return trimQsVal(row[flatKey]);
+  return "";
+}
+function lookupSendClassificationQs(classificationId) {
+  if (!classificationId) return null;
+  try {
+    var prox = new Script.Util.WSProxy();
+    var props = ["Name", "CustomerKey", "ObjectID", "DeliveryProfile.CustomerKey", "DeliveryProfile.ObjectID"];
+    var cid = String(classificationId);
+    var byKey = prox.retrieve("SendClassification", props, { Property: "CustomerKey", SimpleOperator: "equals", Value: cid });
+    if (byKey && byKey.Results && byKey.Results.length) return byKey.Results[0];
+    var byObj = prox.retrieve("SendClassification", props, { Property: "ObjectID", SimpleOperator: "equals", Value: cid });
+    if (byObj && byObj.Results && byObj.Results.length) return byObj.Results[0];
+  } catch (scErr) {}
+  return null;
+}
+function lookupSenderProfileQs(profileId) {
+  if (!profileId) return null;
+  try {
+    var prox = new Script.Util.WSProxy();
+    var props = ["Name", "FromName", "FromAddress", "CustomerKey", "ObjectID"];
+    var pid = String(profileId);
+    var byKey = prox.retrieve("SenderProfile", props, { Property: "CustomerKey", SimpleOperator: "equals", Value: pid });
+    if (byKey && byKey.Results && byKey.Results.length) return byKey.Results[0];
+    var byObj = prox.retrieve("SenderProfile", props, { Property: "ObjectID", SimpleOperator: "equals", Value: pid });
+    if (byObj && byObj.Results && byObj.Results.length) return byObj.Results[0];
+  } catch (spErr) {}
+  return null;
+}
+if (
+  buildFlow == "quick_send" &&
+  qsJourneyId &&
+  journeyEmailId &&
+  authOk == "true" &&
+  subdomain &&
+  accessToken &&
+  resultText.indexOf("FAILED") == -1
+) {
+  try {
+    var journeyBaseUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/interactions";
+    var getUrl = journeyBaseUrl + "/" + encodeURIComponent(String(qsJourneyId)) + "?extras=all";
+    var getReq = new Script.Util.HttpRequest(getUrl);
+    getReq.setHeader("Authorization", "Bearer " + accessToken);
+    getReq.method = "GET";
+    getReq.continueOnError = true;
+    var getResp = getReq.send();
+    if (getResp.statusCode != 200 && getResp.statusCode != 201) {
+      journeyPatchResult = " Step 5 FAILED: journey GET HTTP " + getResp.statusCode + ".";
+    } else {
+      var jObj = Platform.Function.ParseJSON(String(getResp.content || "{}"));
+      var activities = jObj.activities || [];
+      var emailSubjectLine = Platform.Variable.GetValue("@emailSubjectLine") || "Campaign Event";
+      var qsEmailName = Platform.Variable.GetValue("@qsEmailName") || Platform.Variable.GetValue("@emailName") || "PreEventEmail1";
+      var bccEmail = Platform.Variable.GetValue("@qsBccEmail") || "";
+      var senderProfileId = Platform.Variable.GetValue("@qsSenderProfileId") || "";
+      var sendClassificationId = Platform.Variable.GetValue("@qsSendClassificationId") || "";
+      var scRow = lookupSendClassificationQs(sendClassificationId);
+      var spRow = lookupSenderProfileQs(senderProfileId);
+      var sendClassificationIdForJourney = wsRowIdQs(scRow) || trimQsVal(sendClassificationId);
+      var deliveryProfileId = wsNestedIdQs(scRow, "DeliveryProfile");
+      var senderProfileIdForJourney = wsRowIdQs(spRow) || trimQsVal(senderProfileId);
+      var emailIdNum = parseInt(String(journeyEmailId), 10);
+      if (isNaN(emailIdNum)) emailIdNum = 0;
+      var emailSubjectEscaped = jsonEscapeQs(emailSubjectLine);
+      var bccEsc = jsonEscapeQs(bccEmail);
+      var emailNameEscaped = jsonEscapeQs(qsEmailName);
+      var tsDesc = jsonEscapeQs(qsEmailName);
+      var senderProfileIdEsc = jsonEscapeQs(senderProfileIdForJourney);
+      var sendClassificationIdEsc = jsonEscapeQs(sendClassificationIdForJourney);
+      var deliveryProfileIdEsc = jsonEscapeQs(deliveryProfileId);
+      var cmActivityKey = "SALESCLOUDACTIVITY-2";
+      var emailArgs =
+        '{"activityId":"{{Activity.Id}}","definitionId":"{{Context.DefinitionId}}","emailSubjectDataBound":"' +
+        emailSubjectEscaped +
+        '","contactId":"{{Contact.Id}}","contactKey":"{{Contact.Key}}","emailAddress":"{{InteractionDefaults.Email}}","sourceCustomObjectId":"{{Contact.AddressInfo.Email.SourceCustomObjectId}}","sourceCustomObjectKey":"{{Contact.AddressInfo.Email.SourceCustomObjectKey}}","fieldType":"{{Contact.AddressInfo.Email.FieldType}}","eventData":"{{Event}}","obfuscationProperties":"{{InteractionDefaults.Email.ObfuscationProperties}}","customObjectKey":"","definitionInstanceId":"{{Context.DefinitionInstanceId}}"}';
+      var emailActObj = {
+        type: "EMAILV2",
+        key: "EMAILV2-1",
+        name: qsEmailName,
+        outcomes: [{ next: cmActivityKey, metaData: { invalid: false } }],
+        arguments: Platform.Function.ParseJSON(emailArgs),
+        metaData: { isConfigured: true, sections: {} },
+        configurationArguments: {
+          isModified: false,
+          isSimulation: false,
+          fuelAgentRequested: true,
+          googleAnalyticsCampaignName: "",
+          useLLTS: false,
+          isReconcilable: false,
+          triggeredSend: {
+            autoAddSubscribers: true,
+            autoUpdateSubscribers: true,
+            bccEmail: bccEmail,
+            categoryId: 58374,
+            ccEmail: "",
+            dynamicEmailSubject: emailSubjectLine,
+            emailId: emailIdNum,
+            emailSubject: emailSubjectLine,
+            description: qsEmailName,
+            isSalesforceTracking: true,
+            isMultipart: true,
+            isSendLogging: true,
+            isStoppedOnJobError: false,
+            priority: 4,
+            sendClassificationId: sendClassificationIdForJourney,
+            deliveryProfileId: deliveryProfileId,
+            senderProfileId: senderProfileIdForJourney,
+            isTrackingClicks: true,
+            publicationListId: 1132,
+            throttleLimit: 0,
+            campaigns: [],
+            suppressionLists: []
+          },
+          applicationExtensionKey: "jb-email-activity"
+        }
+      };
+      var newActivities = [emailActObj];
+      var ai;
+      for (ai = 0; ai < activities.length; ai++) {
+        newActivities.push(activities[ai]);
+      }
+      jObj.activities = newActivities;
+      if (jObj.triggers && jObj.triggers.length > 0) {
+        jObj.triggers[0].outcomes = [{
+          next: "EMAILV2-1",
+          arguments: {},
+          metaData: { invalid: false }
+        }];
+      }
+      var versionNum = jObj.version || 1;
+      var putUrl = journeyBaseUrl + "?versionNumber=" + encodeURIComponent(String(versionNum));
+      var putReq = new Script.Util.HttpRequest(putUrl);
+      putReq.setHeader("Authorization", "Bearer " + accessToken);
+      putReq.method = "PUT";
+      putReq.contentType = "application/json";
+      putReq.postData = Platform.Function.Stringify(jObj);
+      putReq.continueOnError = true;
+      var putResp = putReq.send();
+      if (putResp.statusCode == 200 || putResp.statusCode == 201) {
+        journeyPatchResult = " Step 5 OK - Email activity added to Quick Send journey.";
+        Platform.Variable.SetValue("@journeyId", qsJourneyId);
+      } else {
+        journeyPatchResult =
+          " Step 5 FAILED: journey PUT HTTP " +
+          putResp.statusCode +
+          " - " +
+          (putResp.content ? String(putResp.content) : "");
+      }
+    }
+  } catch (patchEx) {
+    journeyPatchResult = " Step 5 FAILED: " + (patchEx.message || String(patchEx));
+  }
+}
+Platform.Variable.SetValue("@journeyPatchResult", journeyPatchResult);
+if (journeyPatchResult) {
+  Platform.Variable.SetValue("@resultText", resultText + journeyPatchResult);
+}
+</script>
 %%[
-IF @showForm == "false" AND @deleteRequested != "1" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@newEmailId) AND @buildFlow != "quick_send" THEN
+IF @showForm == "false" AND @deleteRequested != "1" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@newEmailId) AND @buildFlow == "quick_send" AND NOT Empty(@qsJourneyId) THEN
+SET @analyticsJourneyName = IIF(NOT Empty(@qsJourneyName), @qsJourneyName, IIF(NOT Empty(@qsEmailName), @qsEmailName, @emailName))
+SET @analyticsJourneyId = @qsJourneyId
+SET @analyticsJourneyType = "Quick Send"
+SET @analyticsDeName = IIF(NOT Empty(@qsEntryDeName), @qsEntryDeName, IIF(NOT Empty(@qsDeCustomerKey), @qsDeCustomerKey, "N/A"))
+SET @analyticsDeId = IIF(NOT Empty(@qsDeCustomerKey), @qsDeCustomerKey, "N/A")
+SET @analyticsCampaignId = ""
+IF NOT Empty(@qsCampaignId) AND Length(@qsCampaignId) >= 15 THEN
+SET @analyticsCampaignId = Substring(@qsCampaignId,1,18)
+ENDIF
+UpsertDE(
+ "Bd_journey_analytics",
+ 1,
+ "journeyId",
+ Substring(@analyticsJourneyId,1,250),
+ "journeyName", Substring(@analyticsJourneyName,1,50),
+ "journeyType", Substring(@analyticsJourneyType,1,50),
+ "emailName", Substring(IIF(NOT Empty(@qsEmailName), @qsEmailName, @emailName),1,50),
+ "emailId", Substring(@newEmailId,1,50),
+ "deName", Substring(@analyticsDeName,1,200),
+ "deId", Substring(@analyticsDeId,1,50),
+ "campaignId", Substring(@analyticsCampaignId,1,18),
+ "updateDate", Now()
+)
+ELSEIF @showForm == "false" AND @deleteRequested != "1" AND IndexOf(@resultText,"FAILED") == 0 AND NOT Empty(@newEmailId) AND @buildFlow != "quick_send" THEN
 SET @analyticsJourneyName = @emailName
 SET @analyticsJourneyId = Concat("email:",@newEmailId)
 SET @analyticsJourneyType = @builderPageLabel
@@ -1619,7 +1840,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
      <div class="maker-page-heading">
        <div class="maker-page-heading-text">
          <h1 class="maker-page-title">Create Email</h1>
-         <p class="maker-page-subtitle" id="createEmailSubtitle">%%[ IF @buildFlow == "quick_send" THEN ]%%Entry event is ready. Build the email here, then you will return to finish the Quick Send journey.%%[ ELSE ]%%Name your email, set the subject line, and choose a template. If you see Next, you can preview and edit the message before it is saved in Content Builder. If you see Create email, the tool saves a copy of that template right away.%%[ ENDIF ]%%</p>
+         <p class="maker-page-subtitle" id="createEmailSubtitle">%%[ IF @buildFlow == "quick_send" THEN ]%%Your Quick Send journey shell is ready. Create the email here and it will be inserted into that journey automatically.%%[ ELSE ]%%Name your email, set the subject line, and choose a template. If you see Next, you can preview and edit the message before it is saved in Content Builder. If you see Create email, the tool saves a copy of that template right away.%%[ ENDIF ]%%</p>
        </div>
        <div class="maker-page-heading-icon" aria-hidden="true">
        <svg viewBox="0 0 512 512" fill="currentColor" aria-hidden="true"><path d="M415.576,234.791V0H95.381v237.89L47.925,258.77V512h416.15V259.04L415.576,234.791z M111.025,15.645h288.906v278.571 L256,383.316L111.025,293.57V15.645z M448.43,496.355H63.57V268.979l31.811-13.997v28.903l-5.368-3.323H72.435v15.645h13.127 L256,401.716l170.438-105.509h13.127v-15.645h-17.577l-6.411,3.969v-32.249l32.854,16.427V496.355z"/><polygon points="211.86,386.774 85.363,473.514 72.435,473.514 72.435,489.159 90.212,489.159 220.707,399.677"/><polygon points="426.636,473.514 300.14,386.774 291.293,399.677 421.788,489.159 439.565,489.159 439.565,473.514"/><path d="M293.889,77.376c-9.909-10.084-22.254-15.122-37.028-15.122c-14.774,0-27.402,5.242-37.885,15.726 c-10.484,10.484-15.726,23.134-15.726,37.951s4.98,27.162,14.933,37.021c9.953,9.866,22.313,14.802,37.085,14.802 c4.863,0,10.041-0.952,15.53-2.857c5.482-1.904,9.997-4.398,13.538-7.496l-5.445-9.422c-6.813,6.544-14.686,9.822-23.621,9.822 c-11.414,0-20.99-3.984-28.732-11.945c-7.736-7.961-11.61-17.936-11.61-29.925s4.115-22.269,12.345-30.856 c8.23-8.58,18.358-12.868,30.39-12.868c12.026,0,21.629,4.093,28.798,12.273c7.161,8.186,10.746,18.51,10.746,30.986 c0,5.751-0.908,10.528-2.719,14.33c-1.818,3.81-3.918,5.707-6.304,5.707c-2.653,0-3.984-2.21-3.984-6.63V86.536h-16.583v5.438 l-1.73-1.723c-1.062-1.148-2.829-2.32-5.308-3.519c-2.479-1.192-5.09-1.789-7.831-1.789c-8.135,0-14.708,2.988-19.703,8.957 c-5.002,5.969-7.496,13.312-7.496,22.029c0,8.717,2.763,15.9,8.289,21.564c5.533,5.663,12.032,8.492,19.513,8.492 c7.474,0,13.639-3.14,18.51-9.422c1.062,3.097,2.981,5.663,5.773,7.699c2.785,2.036,5.859,3.054,9.219,3.054 c6.551,0,11.836-2.944,15.864-8.826c4.021-5.881,6.035-13.69,6.035-23.425C308.75,100.03,303.792,87.467,293.889,77.376z M264.357,126.675c-2.254,3.054-5.33,4.581-9.219,4.581c-3.897,0-6.965-1.593-9.226-4.777c-2.254-3.184-3.38-6.921-3.38-11.211 s1.127-7.895,3.38-10.819c2.261-2.922,5.286-4.376,9.095-4.376c3.803,0,6.877,1.454,9.219,4.376 c2.348,2.922,3.519,6.595,3.519,11.015C267.745,119.893,266.619,123.63,264.357,126.675z"/><rect x="329.009" y="40.676" width="46.934" height="15.645"/><rect x="136.057" y="184.608" width="112.642" height="15.645"/><rect x="351.954" y="63.622" width="23.989" height="15.645"/><rect x="360.298" y="88.654" width="15.645" height="15.645"/><rect x="136.057" y="216.94" width="143.932" height="15.645"/><rect x="295.633" y="216.94" width="80.31" height="15.645"/><rect x="136.057" y="249.273" width="239.886" height="15.645"/><rect x="136.057" y="280.562" width="39.633" height="15.645"/><rect x="192.378" y="280.562" width="111.599" height="15.645"/><rect x="319.622" y="280.562" width="56.321" height="15.645"/><rect x="182.991" y="312.895" width="129.33" height="15.645"/><rect x="232.011" y="344.184" width="47.977" height="15.645"/><rect x="136.057" y="40.676" width="15.645" height="15.645"/><rect x="160.046" y="40.676" width="15.645" height="15.645"/><rect x="182.991" y="40.676" width="16.688" height="15.645"/></svg>
@@ -1629,7 +1850,20 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
   <div id="createEmailStep1">
   <form method="post" action="" id="createEmailStep1Form">
     <input type="hidden" name="flow" value="%%=v(@buildFlow)=%%">
-    <input type="hidden" name="returnUrl" value="%%=v(@handoffReturnUrl)=%%">
+    <input type="hidden" name="journeyId" value="%%=v(@qsJourneyId)=%%">
+    <input type="hidden" name="eventKey" value="%%=v(@qsEventKey)=%%">
+    <input type="hidden" name="campaignId" value="%%=v(@qsCampaignId)=%%">
+    <input type="hidden" name="campaignName" value="%%=v(@qsCampaignName)=%%">
+    <input type="hidden" name="journeyName" value="%%=v(@qsJourneyName)=%%">
+    <input type="hidden" name="emailName" value="%%=v(@qsEmailName)=%%">
+    <input type="hidden" name="bccEmail" value="%%=v(@qsBccEmail)=%%">
+    <input type="hidden" name="senderProfileId" value="%%=v(@qsSenderProfileId)=%%">
+    <input type="hidden" name="sendClassificationId" value="%%=v(@qsSendClassificationId)=%%">
+    <input type="hidden" name="addTaskActivity" value="%%=v(@qsAddTaskActivity)=%%">
+    <input type="hidden" name="addSTOActivity" value="%%=v(@qsAddSTOActivity)=%%">
+    <input type="hidden" name="journeyDescription" value="%%=v(@qsJourneyDescription)=%%">
+    <input type="hidden" name="deCustomerKey" value="%%=v(@qsDeCustomerKey)=%%">
+    <input type="hidden" name="entryDeName" value="%%=v(@qsEntryDeName)=%%">
     <div class="question-card">
       <div class="question-header">
         <div class="question-number">1</div>
@@ -1737,7 +1971,20 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
       <div class="hub-grid">
         <div>
           <input type="hidden" name="flow" value="%%=v(@buildFlow)=%%">
-          <input type="hidden" name="returnUrl" value="%%=v(@handoffReturnUrl)=%%">
+          <input type="hidden" name="journeyId" value="%%=v(@qsJourneyId)=%%">
+          <input type="hidden" name="eventKey" value="%%=v(@qsEventKey)=%%">
+          <input type="hidden" name="campaignId" value="%%=v(@qsCampaignId)=%%">
+          <input type="hidden" name="campaignName" value="%%=v(@qsCampaignName)=%%">
+          <input type="hidden" name="journeyName" value="%%=v(@qsJourneyName)=%%">
+          <input type="hidden" name="emailName" value="%%=v(@qsEmailName)=%%">
+          <input type="hidden" name="bccEmail" value="%%=v(@qsBccEmail)=%%">
+          <input type="hidden" name="senderProfileId" value="%%=v(@qsSenderProfileId)=%%">
+          <input type="hidden" name="sendClassificationId" value="%%=v(@qsSendClassificationId)=%%">
+          <input type="hidden" name="addTaskActivity" value="%%=v(@qsAddTaskActivity)=%%">
+          <input type="hidden" name="addSTOActivity" value="%%=v(@qsAddSTOActivity)=%%">
+          <input type="hidden" name="journeyDescription" value="%%=v(@qsJourneyDescription)=%%">
+          <input type="hidden" name="deCustomerKey" value="%%=v(@qsDeCustomerKey)=%%">
+          <input type="hidden" name="entryDeName" value="%%=v(@qsEntryDeName)=%%">
           <input type="hidden" name="create" value="1">
           <input type="hidden" name="previewFlow" value="1">
           <input type="hidden" name="emailRowId" id="step2EmailRowId" value="">
@@ -1897,7 +2144,7 @@ SET @showBookingLink = "true"
 %%[ IF IndexOf(@resultText,"FAILED") > 0 THEN ]%%
 Something went wrong. Review the log below, update your entries if needed, and try again.
 %%[ ELSE ]%%
-Your email is saved in Content Builder. Open the link below to review it or send a test.
+Your email is saved in Content Builder.%%[ IF @buildFlow == "quick_send" AND NOT Empty(@journeyId) THEN ]%% The Quick Send journey includes the email step.%%[ ENDIF ]%% Open the links below to review.
 %%[ ENDIF ]%%
            </p>
          </div>
@@ -1917,6 +2164,9 @@ Your email is saved in Content Builder. Open the link below to review it or send
        </dl>
        <div class="maker-result-actions">
          <a href="https://mc.s13.exacttarget.com/cloud/#app/Content%20Builder/" target="_blank" rel="noopener noreferrer" class="maker-btn maker-btn--secondary">Open Content Builder</a>
+%%[ IF @buildFlow == "quick_send" AND NOT Empty(@journeyId) THEN ]%%
+         <a href="https://mc.s13.exacttarget.com/cloud/#app/Journey%20Builder/%23%%=v(@journeyId)=%%/1" target="_blank" rel="noopener noreferrer" class="maker-btn maker-btn--primary">Open journey</a>
+%%[ ENDIF ]%%
 %%[ IF NOT Empty(@newEmailId) THEN ]%%
          <form method="post" action="" style="margin:0;display:inline">
            <input type="hidden" name="deleteEmail" value="1">
