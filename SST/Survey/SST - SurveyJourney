@@ -118,21 +118,38 @@ ENDIF
 IF Empty(@emailRowId) THEN
  SET @emailRowId = @emailId
 ENDIF
-IF @previewFlow == "1" THEN
- SET @surveyConfigRows = LookupOrderedRows("bd_sst_email_templates",1,"email_id ASC","email_type","survey-template","email_name","survey")
- IF RowCount(@surveyConfigRows) > 0 THEN
-  SET @surveyConfigRow = Row(@surveyConfigRows,1)
-  IF @emailSourceMode != "existing" THEN
-   SET @emailRowId = Trim(Field(@surveyConfigRow,"email_id"))
-   SET @emailId = @emailRowId
+IF Empty(@emailRowId) AND @templateCount > 0 THEN
+ SET @emailRowId = @defaultEmailId
+ENDIF
+IF @previewFlow == "1" AND NOT Empty(@emailRowId) AND (Empty(@bodySlotKey) OR Empty(@headerSlotKey) OR Empty(@buttonSlotKey) OR Empty(@signatureSlotKey) OR Empty(@templateEmailName)) THEN
+ SET @slotKeyLookupRows = LookupRows("bd_sst_email_templates","email_id",@emailRowId)
+ IF RowCount(@slotKeyLookupRows) > 0 THEN
+  SET @slotKeyLookupRow = Row(@slotKeyLookupRows,1)
+  IF Empty(@bodySlotKey) THEN
+   SET @bodySlotKey = Trim(Field(@slotKeyLookupRow,"body_slot_key"))
   ENDIF
-  SET @templateAssetId = Trim(Field(@surveyConfigRow,"template_id"))
-  SET @templateEmailName = Trim(Field(@surveyConfigRow,"email_name"))
-  SET @bodySlotKey = Trim(Field(@surveyConfigRow,"body_slot_key"))
-  SET @headerSlotKey = Trim(Field(@surveyConfigRow,"header_slot_key"))
-  SET @buttonSlotKey = Trim(Field(@surveyConfigRow,"button_slot_key"))
-  SET @signatureSlotKey = Trim(Field(@surveyConfigRow,"signature_slot_key"))
+  IF Empty(@headerSlotKey) THEN
+   SET @headerSlotKey = Trim(Field(@slotKeyLookupRow,"header_slot_key"))
+  ENDIF
+  IF Empty(@buttonSlotKey) THEN
+   SET @buttonSlotKey = Trim(Field(@slotKeyLookupRow,"button_slot_key"))
+  ENDIF
+  IF Empty(@signatureSlotKey) THEN
+   SET @signatureSlotKey = Trim(Field(@slotKeyLookupRow,"signature_slot_key"))
+  ENDIF
+  IF Empty(@templateEmailName) THEN
+   SET @templateEmailName = Trim(Field(@slotKeyLookupRow,"email_name"))
+  ENDIF
+  IF Empty(@templateAssetId) THEN
+   SET @templateAssetId = Trim(Field(@slotKeyLookupRow,"template_id"))
+  ENDIF
  ENDIF
+ENDIF
+IF @emailSourceMode != "existing" AND Empty(@emailId) AND NOT Empty(@templateAssetId) THEN
+ SET @emailId = @templateAssetId
+ENDIF
+IF @emailSourceMode != "existing" AND Empty(@emailId) AND NOT Empty(@emailRowId) THEN
+ SET @emailId = @emailRowId
 ENDIF
 IF @audienceSource == "dataextension" THEN
  SET @createEmailOnly = "0"
@@ -1405,41 +1422,17 @@ function applyBodyToSlotPreview(payload, slotKey, blockKey, bodyHtml) {
   slot.content = '<div data-type="block" data-key="' + blockKey + '"></div>';
  }
 }
-function surveyPayloadHasSlot(payload, slotKey) {
- var htmlView;
- var key = String(slotKey || "").replace(/^\s+|\s+$/g, "");
- if (!payload || !payload.views || !key) {
-  return false;
- }
- htmlView = payload.views.html;
- if (!htmlView) {
-  return false;
- }
- if (htmlView.slots && htmlView.slots[key] && typeof htmlView.slots[key] === "object") {
-  return true;
- }
- if (htmlView.template && htmlView.template.slots && htmlView.template.slots[key] && typeof htmlView.template.slots[key] === "object") {
-  return true;
- }
- return false;
-}
 function applySlotHtmlContentPreview(payload, slotKey, htmlContent) {
  var slotsForBlock;
  var blockKey;
  if (!slotKey || !htmlContent || !payload.views || !payload.views.html) {
   return;
  }
- if (!surveyPayloadHasSlot(payload, slotKey)) {
-  return;
- }
  slotsForBlock = payload.views.html.slots;
  if (!slotsForBlock || typeof slotsForBlock !== "object") {
   return;
  }
- blockKey = findBlockKeyInSlotPreview(slotsForBlock, slotKey);
- if (!blockKey) {
-  return;
- }
+ blockKey = findBlockKeyInSlotPreview(slotsForBlock, slotKey) || "bodyblock1";
  applyBodyToSlotPreview(payload, slotKey, blockKey, htmlContent);
 }
 function formatSurveyHeaderText(surveyName) {
@@ -1526,35 +1519,6 @@ function resolveSurveyLinkSubset() {
   return subset;
  }
  return masterName;
-}
-function getMissingSurveyTemplateSlotsMessage(payload) {
- var missing;
- var i;
- var keysToCheck;
- var key;
- if (Platform.Variable.GetValue("@previewFlow") != "1" || !payload) {
-  return "";
- }
- keysToCheck = [
-  defaultSurveySlotKey(Platform.Variable.GetValue("@bodySlotKey"), ""),
-  defaultSurveySlotKey(Platform.Variable.GetValue("@headerSlotKey"), ""),
-  defaultSurveySlotKey(Platform.Variable.GetValue("@buttonSlotKey"), "")
- ];
- var signatureChoice = Platform.Variable.GetValue("@signatureChoice") || "none";
- if (signatureChoice !== "none" && signatureChoice !== "") {
-  keysToCheck.push(defaultSurveySlotKey(Platform.Variable.GetValue("@signatureSlotKey"), ""));
- }
- missing = [];
- for (i = 0; i < keysToCheck.length; i++) {
-  key = keysToCheck[i];
-  if (key && !surveyPayloadHasSlot(payload, key)) {
-   missing.push(key);
-  }
- }
- if (!missing.length) {
-  return "";
- }
- return " Step 3b SKIP - Email not created: Content Builder template is missing slot(s): " + missing.join(", ") + ". Add them to template asset " + String(Platform.Variable.GetValue("@templateAssetId") || Platform.Variable.GetValue("@sourceEmailId") || "") + ".";
 }
 function applySurveyEmailSlots(payload) {
  if (!payload || !payload.views) {
@@ -1884,7 +1848,10 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
      var htmlView = sourceViews.html || {};
      var emailSubjectForAsset = Platform.Variable.GetValue("@emailSubjectLine") || "";
      var subjectlineContent = emailSubjectForAsset || ((sourceViews.subjectline && sourceViews.subjectline.content) ? sourceViews.subjectline.content : "Campaign Event");
-     var preheaderContent = (sourceViews.preheader && sourceViews.preheader.content) ? sourceViews.preheader.content : "";
+     var preheaderContent = Platform.Variable.GetValue("@emailPreheader") || "";
+     if (!preheaderContent && sourceViews.preheader && sourceViews.preheader.content) {
+      preheaderContent = sourceViews.preheader.content;
+     }
      var textContent = (sourceViews.text && sourceViews.text.content) ? sourceViews.text.content : "";
      var htmlContent = htmlView.content || template.content || "";
      var htmlSlots = (htmlView.slots && typeof htmlView.slots === "object") ? htmlView.slots : ((template.slots && typeof template.slots === "object") ? template.slots : {});
@@ -1896,24 +1863,28 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
      var debugPrefix = " Source assetType: " + assetTypeId + ". Has template ref: " + (sourceTemplate ? "yes" : "no") + ". Slot keys: " + (slotKeys.length ? slotKeys.join(",") : "none") + ".";
      var payloadDebug = "";
      if (assetTypeId === 4) {
-       var type4TemplateRef = { id: template.id };
-       payload = buildCloned207Payload(
-         template,
-         emailName,
-         subjectlineContent,
-         preheaderContent,
-         textContent,
-         type4TemplateRef,
-         template,
-         htmlSlots
-       );
-     } else if (assetTypeId === 207) {
-       if (!sourceTemplate) {
-         var deTemplateId = String(Platform.Variable.GetValue("@templateAssetId") || "").replace(/^\s+|\s+$/g, "");
-         if (deTemplateId) {
-           sourceTemplate = { id: deTemplateId };
+       var templateRef = buildTemplateReference(template, template.content || htmlContent, template.slots || htmlSlots);
+       var templateSlots = (template.slots && typeof template.slots === "object") ? cloneObject(template.slots) : cloneObject(htmlSlots || {});
+       payload = {
+         name: emailName,
+         assetType: { name: "htmlemail", id: 207 },
+         channels: (template.channels && typeof template.channels === "object") ? cloneObject(template.channels) : { email: true, web: false },
+         views: {
+           subjectline: { content: subjectlineContent },
+           preheader: { content: preheaderContent },
+           html: {
+             template: templateRef,
+             content: template.content || htmlContent || "",
+             slots: templateSlots || {}
+           },
+           text: {}
          }
+       };
+       applyTextSettings(payload, textContent);
+       if (template.category && template.category.id) {
+         payload.category = { id: template.category.id };
        }
+     } else if (assetTypeId === 207) {
        if (sourceTemplate) {
          var fetchedTemplate = fetchAssetById(sourceTemplate.id, subdomain, accessToken);
          if (fetchedTemplate.ok && fetchedTemplate.asset) {
@@ -1923,7 +1894,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
            step3bResult = " Step 3b SKIP - Email not created: Template asset fetch failed for template ID " + sourceTemplate.id + " with HTTP " + fetchedTemplate.statusCode + " - " + (fetchedTemplate.responseText || "No response body.") + debugPrefix;
          }
        } else {
-         step3bResult = " Step 3b SKIP - Email not created: Source asset is template-based email but views.html.template is missing and bd_sst_email_templates template_id is empty." + debugPrefix;
+         step3bResult = " Step 3b SKIP - Email not created: Source asset is template-based email but views.html.template is missing." + debugPrefix;
        }
      } else if (assetTypeId === 208) {
        payload = buildBasePayload(template, emailName, 208);
@@ -1967,10 +1938,6 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          }
        };
        payloadDebug = truncateString(Platform.Function.Stringify(debugObj), 2500);
-       var missingTemplateSlotsMsg = getMissingSurveyTemplateSlotsMessage(payload);
-       if (missingTemplateSlotsMsg) {
-         step3bResult = missingTemplateSlotsMsg + debugPrefix + " Debug: " + payloadDebug;
-       } else {
        applySurveyEmailSlots(payload);
        var surveyIdForEmail = Platform.Variable.GetValue("@surveyId") || "";
        var surveyTakeUrlForEmail = Platform.Variable.GetValue("@surveyTakeUrl") || "";
@@ -2022,7 +1989,6 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          }
        } else {
          step3bResult = " Step 3b SKIP - Email not created: HTTP " + assetStatus + " - " + (assetResponse || "No response body.") + debugPrefix + " Debug: " + payloadDebug;
-       }
        }
      }
    } else {
@@ -4743,7 +4709,7 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
    var cardEmailName = card ? (card.getAttribute('data-email-name') || '') : '';
    document.getElementById('step2EmailRowId').value = sourceModeEl && sourceModeEl.value === 'existing' ? '' : cardEmailId;
    document.getElementById('step2TemplateAssetId').value = sourceModeEl && sourceModeEl.value === 'existing' ? '' : cardTemplateId;
-   document.getElementById('step2EmailId').value = sourceModeEl && sourceModeEl.value === 'existing' ? '' : cardEmailId;
+   document.getElementById('step2EmailId').value = sourceModeEl && sourceModeEl.value === 'existing' ? '' : (cardTemplateId || cardEmailId);
    var taskCb = step1Form.querySelector('input[name="addTaskActivity"]');
    document.getElementById('step2AddTaskActivity').value = taskCb && taskCb.checked ? '1' : '0';
    document.getElementById('step2BodySlotKey').value = card ? (card.getAttribute('data-body-slot-key') || '') : '';
