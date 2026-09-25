@@ -5,6 +5,40 @@ SET @deleteEmailId = Trim(RequestParameter("deleteEmailId"))
 SET @campaignId = Trim(RequestParameter("campaignId"))
 SET @audienceSource = Lowercase(Trim(RequestParameter("audienceSource")))
 SET @sourceDataExtension = Trim(RequestParameter("sourceDataExtension"))
+SET @journeyNameInput = Trim(RequestParameter("journeyName"))
+SET @entryScheduleType = Trim(RequestParameter("entryScheduleType"))
+SET @entryScheduleRepeat = Trim(RequestParameter("entryScheduleRepeat"))
+SET @entryScheduleInterval = Trim(RequestParameter("entryScheduleInterval"))
+SET @entryScheduleOccurrences = Trim(RequestParameter("entryScheduleOccurrences"))
+SET @entryScheduleEnd = Trim(RequestParameter("entryScheduleEnd"))
+SET @entryScheduleEndDate = Trim(RequestParameter("entryScheduleEndDate"))
+SET @entryScheduleWeekdays = Trim(RequestParameter("entryScheduleWeekdays"))
+SET @entryContactEvaluation = Trim(RequestParameter("entryContactEvaluation"))
+SET @entryScheduleStart = Trim(RequestParameter("entryScheduleStart"))
+IF Empty(@entryScheduleType) THEN
+ SET @entryScheduleType = "runOnce"
+ENDIF
+IF @entryScheduleType != "runOnce" AND @entryScheduleType != "recurring" THEN
+ SET @entryScheduleType = "runOnce"
+ENDIF
+IF Empty(@entryScheduleRepeat) THEN
+ SET @entryScheduleRepeat = "daily"
+ENDIF
+IF @entryScheduleRepeat != "hourly" AND @entryScheduleRepeat != "daily" AND @entryScheduleRepeat != "weekdays" AND @entryScheduleRepeat != "weekly" AND @entryScheduleRepeat != "monthly" AND @entryScheduleRepeat != "yearly" THEN
+ SET @entryScheduleRepeat = "daily"
+ENDIF
+IF Empty(@entryScheduleInterval) THEN
+ SET @entryScheduleInterval = "1"
+ENDIF
+IF Empty(@entryScheduleOccurrences) THEN
+ SET @entryScheduleOccurrences = "2"
+ENDIF
+IF Empty(@entryScheduleEnd) OR (@entryScheduleEnd != "occurrences" AND @entryScheduleEnd != "endDate" AND @entryScheduleEnd != "never") THEN
+ SET @entryScheduleEnd = "occurrences"
+ENDIF
+IF Empty(@entryContactEvaluation) OR (@entryContactEvaluation != "all" AND @entryContactEvaluation != "newOnly") THEN
+ SET @entryContactEvaluation = "newOnly"
+ENDIF
 IF Empty(@audienceSource) THEN
  SET @audienceSource = "campaign"
 ENDIF
@@ -192,16 +226,22 @@ NEXT @si
 IF NOT Empty(@createRequested) AND NOT Empty(@selectedSurveyId) AND NOT Empty(@surveyName) THEN
  IF Empty(@emailSubjectLine) THEN SET @emailSubjectLine = @surveyName ENDIF
  SET @surveyId = @selectedSurveyId
- SET @surveyNameSafe = Replace(@surveyName,'"','')
- SET @surveyNameSafe = Replace(@surveyNameSafe," | ","_")
- SET @surveyNameSafe = Replace(@surveyNameSafe,"|","_")
- SET @surveyNameSafe = Replace(@surveyNameSafe," ","_")
- SET @surveyNameSafe = Replace(@surveyNameSafe,".","_")
- SET @surveyNameSafe = Replace(@surveyNameSafe,"/","_")
  SET @dateStr = Concat(Format(Now(),"yyyy"),"_",Format(Now(),"MM"),"_",Format(Now(),"dd"))
- SET @journeyName = Concat(@surveyNameSafe,"_SST_",@dateStr)
- SET @eventName = @journeyName
- SET @emailName = @journeyName
+ IF NOT Empty(@journeyNameInput) THEN
+  SET @journeyName = Substring(@journeyNameInput,1,80)
+  SET @eventName = @journeyName
+  SET @emailName = @journeyName
+ ELSE
+  SET @surveyNameSafe = Replace(@surveyName,'"','')
+  SET @surveyNameSafe = Replace(@surveyNameSafe," | ","_")
+  SET @surveyNameSafe = Replace(@surveyNameSafe,"|","_")
+  SET @surveyNameSafe = Replace(@surveyNameSafe," ","_")
+  SET @surveyNameSafe = Replace(@surveyNameSafe,".","_")
+  SET @surveyNameSafe = Replace(@surveyNameSafe,"/","_")
+  SET @journeyName = Concat(@surveyNameSafe,"_SST_",@dateStr)
+  SET @eventName = @journeyName
+  SET @emailName = @journeyName
+ ENDIF
 ENDIF
 SET @authOk = "false"
 SET @step3bResult = ""
@@ -247,10 +287,12 @@ IF @showForm != "true" THEN
    IF @templateConfigOk != "true" THEN
      SET @resultText = "Step 0 FAILED: Missing email templates in bd_sst_email_templates (email_type=survey-template)."
    ELSE
-    IF Empty(@selectedSurveyId) OR Empty(@surveyName) THEN
+    IF Empty(@journeyNameInput) THEN
+      SET @resultText = "Enter a journey name."
+    ELSEIF Empty(@selectedSurveyId) OR Empty(@surveyName) THEN
       SET @resultText = "Select an active survey."
-    ELSEIF @audienceSource == "dataextension" THEN
-      SET @resultText = "Data Extension audience for Survey journey is not supported yet. Use Salesforce Campaign."
+    ELSEIF @audienceSource == "dataextension" AND Empty(@sourceDataExtension) THEN
+      SET @resultText = "Enter the source Data Extension name or key."
     ELSEIF @emailSourceMode == "existing" AND Empty(@existingEmailId) THEN
       SET @resultText = "Enter the existing email name or Content Builder asset ID."
     ELSEIF @audienceSource != "dataextension" AND @createEmailOnly != "1" AND (Empty(@campaignId) OR Length(@campaignId) < 15) THEN
@@ -283,7 +325,7 @@ IF @showForm != "true" THEN
            IF NOT Empty(@accessToken) THEN
              SET @resultText = Concat("Step 1 OK. Step 2 OK - Auth success.")
              SET @authOk = "true"
-             IF @createEmailOnly != "1" THEN
+             IF @createEmailOnly != "1" AND @audienceSource != "dataextension" THEN
                SET @randomKey = Substring(Replace(GUID(),"-",""),1,32)
                SET @eventKey = Concat("SalesforceObj",@randomKey)
                SET @schemaFields = '[{"name":"CampaignMember:Id","dataType":"Text","isNullable":false,"maxLength":18,"length":18},{"name":"CampaignMember:Common:Id","dataType":"Text","isNullable":false,"maxLength":18},{"name":"CampaignMember:CampaignId","dataType":"Text","isNullable":true,"maxLength":18,"defaultValue":"'
@@ -1936,7 +1978,7 @@ ENDIF
 IF @showForm == "false" AND @deleteRequested != "1" AND @authOk == "true" AND @emailOk != "true" THEN
  SET @resultText = Concat(@resultText," Stopped: email was not created. Survey, entry event, and journey were skipped.")
 ENDIF
-IF @emailOk == "true" AND @authOk == "true" AND NOT Empty(@journeyEmailId) AND @createEmailOnly != "1" THEN
+IF @emailOk == "true" AND @authOk == "true" AND NOT Empty(@journeyEmailId) AND @createEmailOnly != "1" AND @audienceSource != "dataextension" THEN
  SET @eventUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/eventDefinitions")
  SET @eventPayload = Concat('{"isVisibleInPicker":false,"type":"SalesforceObjectTriggerV2","sourceApplicationExtensionId":"597D9E4A-1C0D-4225-86B2-0A1E864B7CA3","schema":{"sendableCustomObjectField":"CampaignMember:Common:Id","sendableSubscriberField":"_SubscriberKey","fields":',@schemaFields,'},"name":"',@eventName,'","mode":1,"eventDefinitionKey":"',@eventKey,'","arguments":{"useHighWatermark":false},"configurationArguments":{"applicationExtensionKey":"SalesforceObjectTriggerV2","ContactKey":"{\"relationshipIdName\":\"Id\",\"relationshipName\":\"Common\",\"isPolymorphic\":false,\"referenceObjectName\":\"Common\"}","ContactPersonType":"CampaignMember","evaluationCriteriaSummary":"Created","eventDataConfig":"{\"objects\":[{\"dePrefix\":\"CampaignMember:\",\"isPolymorphic\":false,\"relationshipName\":\"\",\"referenceObject\":\"\",\"relationshipIdName\":\"\",\"fields\":[\"Id\",\"CreatedDate\",\"Account_Owner__c\"]},{\"dePrefix\":\"CampaignMember:Common:\",\"isPolymorphic\":false,\"referenceObject\":\"Contacts and Leads\",\"relationshipName\":\"Common\",\"fields\":[\"Id\",\"Email\",\"HasOptedOutOfEmail\",\"FirstName\",\"Name\",\"LastName\",\"Title\",\"Salutation\"]},{\"dePrefix\":\"CampaignMember:Campaign:\",\"isPolymorphic\":false,\"referenceObject\":\"Campaign\",\"relationshipName\":\"Campaign\",\"fields\":[\"Name\",\"Id\"]},{\"dePrefix\":\"CampaignMember:Account:\",\"isPolymorphic\":false,\"referenceObject\":\"Account\",\"relationshipName\":\"Account\",\"fields\":[\"Id\",\"Name\",\"OwnerId\",\"Billing_State__c\"]}]}","eventDataSummary":"CampaignMember:Id; CampaignMember:CreatedDate; CampaignMember:Account_Owner__c; CampaignMember:Common:Id; CampaignMember:Common:Email; CampaignMember:Common:HasOptedOutOfEmail; CampaignMember:Common:FirstName; CampaignMember:Common:Name; CampaignMember:Common:LastName; CampaignMember:Common:Title; CampaignMember:Common:Salutation; CampaignMember:Campaign:Name; CampaignMember:Campaign:Id; CampaignMember:Account:Id; CampaignMember:Account:Name; CampaignMember:Account:OwnerId; CampaignMember:Account:Billing_State__c","objectAPIName":"CampaignMember","passThroughArgument":"{\"fields\":{\"ContactKey\":\"CampaignMember:Common:Id\",\"Email\":\"CampaignMember:Common:Email\",\"HasOptedOutOfEmail\":\"CampaignMember:Common:HasOptedOutOfEmail\"}}","primaryObjectFilterCriteria":"',@filterEscaped,'","primaryObjectFilterSummary":"CampaignMember:CampaignId EQUALS ',@campaignNameForJson,' (',@campaignId,')","relatedObjectFilterCriteria":"',@relatedEscaped,'","relatedObjectFilterSummary":"Common:Contacts and Leads:Id WASSET","salesforceTriggerCriteria":"Created","version":"3.0","whoToInject":"Contact ID/Lead ID (Contacts and Leads)"}}')
  SET @eventStatus = HTTPPost2(@eventUrl,"application/json",@eventPayload,false,@eventResponse,@eventResponseHeader,"Authorization",Concat("Bearer ",@accessToken))
@@ -1959,6 +2001,10 @@ IF @emailOk == "true" AND @authOk == "true" AND NOT Empty(@journeyEmailId) AND @
    SET @resultText = Concat(@resultText," Step 3 FAILED: HTTP ",@eventStatus," - ",@eventResponse)
    SET @cleanupNeeded = "1"
  ENDIF
+ENDIF
+IF @emailOk == "true" AND @authOk == "true" AND NOT Empty(@journeyEmailId) AND @createEmailOnly != "1" AND @audienceSource == "dataextension" THEN
+ SET @journeyKey = GUID()
+ SET @journeyUrl = Concat("https://",@subdomain,".rest.marketingcloudapis.com/interaction/v1/interactions")
 ENDIF
 IF Empty(@cleanupNeeded) THEN
  SET @cleanupNeeded = "0"
@@ -1984,6 +2030,474 @@ var senderProfileId = Platform.Variable.GetValue("@senderProfileId") || "";
 var sendClassificationId = Platform.Variable.GetValue("@sendClassificationId") || "";
 var createEmailOnly = Variable.GetValue("createEmailOnly");
 var journeyResult = "";
+
+function asStr(value) {
+  if (value === null || typeof value === "undefined") {
+    return "";
+  }
+  return String(value).replace(/^\s+|\s+$/g, "");
+}
+
+function firstMatch(text, pattern) {
+  try {
+    var match = String(text || "").match(pattern);
+    return match && match[1] ? match[1] : "";
+  } catch (matchEx) {
+    return "";
+  }
+}
+
+function firstDeRow(results) {
+  if (!results) {
+    return null;
+  }
+  if (typeof results.length === "number") {
+    return results.length > 0 ? results[0] : null;
+  }
+  if (results.ObjectID || results.CustomerKey || results.Name) {
+    return results;
+  }
+  return null;
+}
+
+function retrieveDe(prox, propertyName, propertyValue) {
+  var resp = prox.retrieve(
+    "DataExtension",
+    ["ObjectID", "CustomerKey", "Name", "IsSendable"],
+    {
+      Property: propertyName,
+      SimpleOperator: "equals",
+      Value: propertyValue
+    }
+  );
+  return firstDeRow(resp && resp.Results ? resp.Results : null);
+}
+
+function resolveDataExtension(prox, rawValue) {
+  var value = asStr(rawValue);
+  if (!value) {
+    return null;
+  }
+  var row = retrieveDe(prox, "CustomerKey", value);
+  if (!row) {
+    row = retrieveDe(prox, "Name", value);
+  }
+  if (!row) {
+    return null;
+  }
+  var sendable = asStr(row.IsSendable).toLowerCase();
+  return {
+    objectId: asStr(row.ObjectID),
+    customerKey: asStr(row.CustomerKey),
+    name: asStr(row.Name) || value,
+    isSendable: sendable !== "false" && sendable !== "0"
+  };
+}
+
+function pad2(num) {
+  var n = parseInt(num, 10);
+  if (isNaN(n)) {
+    return "00";
+  }
+  return n < 10 ? "0" + n : String(n);
+}
+
+function formatScheduleDateTimeFromDate(d) {
+  return (
+    d.getFullYear() +
+    "-" +
+    pad2(d.getMonth() + 1) +
+    "-" +
+    pad2(d.getDate()) +
+    "T" +
+    pad2(d.getHours()) +
+    ":" +
+    pad2(d.getMinutes()) +
+    ":00"
+  );
+}
+
+function parseScheduleStartParts(iso) {
+  var m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+  if (!m) {
+    return null;
+  }
+  return {
+    y: parseInt(m[1], 10),
+    mo: parseInt(m[2], 10) - 1,
+    d: parseInt(m[3], 10),
+    h: parseInt(m[4], 10),
+    mi: parseInt(m[5], 10)
+  };
+}
+
+function defaultScheduleStartDateTime() {
+  var d = new Date();
+  d.setDate(d.getDate() + 2);
+  d.setHours(0, 0, 0, 0);
+  return formatScheduleDateTimeFromDate(d);
+}
+
+function normalizeScheduleStart(raw) {
+  var value = asStr(raw);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value + "T00:00:00";
+  }
+  if (!value) {
+    return defaultScheduleStartDateTime();
+  }
+  if (value.indexOf("T") > 0) {
+    var datePart = value.substring(0, 10);
+    return datePart + "T00:00:00";
+  }
+  return defaultScheduleStartDateTime();
+}
+
+function ensureFutureScheduleStart(raw) {
+  var normalized = normalizeScheduleStart(raw);
+  var p = parseScheduleStartParts(normalized);
+  if (!p) {
+    return defaultScheduleStartDateTime();
+  }
+  var startDate = new Date(p.y, p.mo, p.d, p.h, p.mi, 0, 0);
+  var minStart = new Date();
+  minStart.setTime(minStart.getTime() + 2 * 60 * 60 * 1000);
+  if (startDate.getTime() <= minStart.getTime()) {
+    return defaultScheduleStartDateTime();
+  }
+  return normalized;
+}
+
+function parseWeeklyDayFlags(raw, startParts) {
+  var flags = [false, false, false, false, false, false, false];
+  var tokenMap = {
+    sun: 0,
+    sunday: 0,
+    mon: 1,
+    monday: 1,
+    tue: 2,
+    tues: 2,
+    tuesday: 2,
+    wed: 3,
+    wednesday: 3,
+    thu: 4,
+    thur: 4,
+    thurs: 4,
+    thursday: 4,
+    fri: 5,
+    friday: 5,
+    sat: 6,
+    saturday: 6
+  };
+  var tokens = asStr(raw).toLowerCase().split(/[,;\s]+/);
+  var i;
+  for (i = 0; i < tokens.length; i++) {
+    if (tokens[i] && tokenMap[tokens[i]] !== undefined) {
+      flags[tokenMap[tokens[i]]] = true;
+    }
+  }
+  var any = false;
+  for (i = 0; i < flags.length; i++) {
+    if (flags[i]) {
+      any = true;
+      break;
+    }
+  }
+  if (!any && startParts) {
+    flags[new Date(startParts.y, startParts.mo, startParts.d).getDay()] = true;
+  }
+  return flags;
+}
+
+function scheduleRepeatLabel(repeat) {
+  var r = asStr(repeat).toLowerCase();
+  if (r === "hourly") {
+    return "Hourly";
+  }
+  if (r === "weekdays") {
+    return "Weekdays";
+  }
+  if (r === "weekly") {
+    return "Weekly";
+  }
+  if (r === "monthly") {
+    return "Monthly";
+  }
+  if (r === "yearly") {
+    return "Yearly";
+  }
+  return "Daily";
+}
+
+var SCHEDULE_NEVER_END = "2099-12-31T23:59:00";
+var SCHEDULE_NEVER_YEAR_MIN = 2050;
+
+function normalizeScheduleEndDate(raw, startDateTime) {
+  var value = asStr(raw);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value + "T23:59:00";
+  }
+  if (value.indexOf("T") > 0) {
+    return value.substring(0, 10) + "T23:59:00";
+  }
+  var parts = parseScheduleStartParts(startDateTime);
+  if (parts) {
+    var d = new Date(parts.y, parts.mo, parts.d, 23, 59, 0, 0);
+    d.setFullYear(d.getFullYear() + 1);
+    return formatScheduleDateTimeFromDate(d).substring(0, 10) + "T23:59:00";
+  }
+  var d2 = new Date();
+  d2.setFullYear(d2.getFullYear() + 1);
+  return formatScheduleDateTimeFromDate(d2).substring(0, 10) + "T23:59:00";
+}
+
+function applyRecurringScheduleEnd(schedule, endMode, occurrences, endDateRaw, startDateTime) {
+  var mode = asStr(endMode).toLowerCase();
+  var occurVal = parseInt(asStr(occurrences) || "2", 10);
+  if (isNaN(occurVal) || occurVal < 1) {
+    occurVal = 2;
+  }
+  if (mode === "never") {
+    schedule.endType = "EndDate";
+    schedule.endDateTime = SCHEDULE_NEVER_END;
+    try {
+      delete schedule.occurrences;
+    } catch (endNeverEx) {}
+  } else if (mode === "enddate") {
+    schedule.endType = "EndDate";
+    schedule.endDateTime = normalizeScheduleEndDate(endDateRaw, startDateTime);
+    try {
+      delete schedule.occurrences;
+    } catch (endDateEx) {}
+  } else {
+    schedule.endType = "Occurrences";
+    schedule.occurrences = occurVal;
+    try {
+      delete schedule.endDateTime;
+    } catch (endOccEx) {}
+  }
+  return schedule;
+}
+
+function buildRecurringSchedule(
+  repeat,
+  interval,
+  scheduleStart,
+  endMode,
+  occurrences,
+  endDate,
+  weekdaysRaw
+) {
+  var easternTz = "Eastern Standard Time";
+  var weekdayKeys = [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday"
+  ];
+  var weekdayNames = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday"
+  ];
+  var startDateTime = ensureFutureScheduleStart(scheduleStart);
+  var parts = parseScheduleStartParts(startDateTime);
+  var repeatKey = asStr(repeat).toLowerCase();
+  var intervalVal = parseInt(asStr(interval) || "1", 10);
+  if (isNaN(intervalVal) || intervalVal < 1) {
+    intervalVal = 1;
+  }
+  var schedule = {
+    startDateTime: startDateTime,
+    timeZone: easternTz,
+    interval: intervalVal
+  };
+  applyRecurringScheduleEnd(
+    schedule,
+    endMode,
+    occurrences,
+    endDate,
+    startDateTime
+  );
+  var weekdayIndex = parts
+    ? new Date(parts.y, parts.mo, parts.d).getDay()
+    : 0;
+  if (repeatKey === "hourly") {
+    schedule.frequency = "Hourly";
+    schedule.recurrencePattern = "Interval";
+  } else if (repeatKey === "weekdays") {
+    schedule.frequency = "Daily";
+    schedule.recurrencePattern = "DailyEveryWeekDay";
+  } else if (repeatKey === "weekly") {
+    var flags = parseWeeklyDayFlags(weekdaysRaw, parts);
+    schedule.frequency = "Weekly";
+    schedule.recurrencePattern = "ByDay";
+    schedule.scheduledDayOfWeek = weekdayNames[weekdayIndex];
+    for (var w = 0; w < weekdayKeys.length; w++) {
+      schedule[weekdayKeys[w]] = flags[w];
+    }
+  } else if (repeatKey === "monthly") {
+    schedule.frequency = "Monthly";
+    schedule.recurrencePattern = "Interval";
+    schedule.scheduledDay = parts ? parts.d : 1;
+  } else if (repeatKey === "yearly") {
+    schedule.frequency = "Yearly";
+    schedule.recurrencePattern = "Interval";
+    schedule.scheduledDay = parts ? parts.d : 1;
+  } else {
+    schedule.frequency = "Daily";
+    schedule.recurrencePattern = "Interval";
+  }
+  return schedule;
+}
+
+function buildDeEntryEventPayload(
+  deMeta,
+  journeyName,
+  eventKey,
+  scheduleType,
+  scheduleRepeat,
+  scheduleStart,
+  scheduleInterval,
+  scheduleOccurrences,
+  scheduleEnd,
+  scheduleEndDate,
+  scheduleWeekdays,
+  contactEvaluation
+) {
+  var payload = {
+    name: journeyName + " entry",
+    description: "",
+    type: "EmailAudience",
+    mode: "Production",
+    eventDefinitionKey: eventKey,
+    dataExtensionId: deMeta.objectId,
+    dataExtensionName: deMeta.name,
+    isVisibleInPicker: false,
+    metaData: {
+      criteriaDescription: ""
+    }
+  };
+  var type = asStr(scheduleType).toLowerCase();
+  if (type === "recurring") {
+    payload.metaData.scheduleFlowMode = "Recurring";
+    payload.schedule = buildRecurringSchedule(
+      scheduleRepeat,
+      scheduleInterval,
+      scheduleStart,
+      scheduleEnd,
+      scheduleOccurrences,
+      scheduleEndDate,
+      scheduleWeekdays
+    );
+  } else {
+    payload.metaData.scheduleFlowMode = "Run Once";
+  }
+  return payload;
+}
+
+function postJson(url, token, payload) {
+  var req = new Script.Util.HttpRequest(url);
+  req.emptyContentHandling = 0;
+  req.continueOnError = true;
+  req.setHeader("Authorization", "Bearer " + token);
+  req.method = "POST";
+  req.contentType = "application/json";
+  req.postData = Platform.Function.Stringify(payload);
+  var resp = req.send();
+  return {
+    status: resp.statusCode,
+    body: resp.content ? String(resp.content) : ""
+  };
+}
+
+function createDeEntryEvent(
+  token,
+  subdomain,
+  journeyName,
+  deMeta,
+  scheduleType,
+  scheduleRepeat,
+  scheduleStart,
+  scheduleInterval,
+  scheduleOccurrences,
+  scheduleEnd,
+  scheduleEndDate,
+  scheduleWeekdays,
+  contactEvaluation
+) {
+  var eventKey = "DEAudience-" + Platform.Function.GUID();
+  var eventUrl =
+    "https://" + subdomain + ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions";
+  var eventResp = postJson(
+    eventUrl,
+    token,
+    buildDeEntryEventPayload(
+      deMeta,
+      journeyName,
+      eventKey,
+      scheduleType,
+      scheduleRepeat,
+      scheduleStart,
+      scheduleInterval,
+      scheduleOccurrences,
+      scheduleEnd,
+      scheduleEndDate,
+      scheduleWeekdays,
+      contactEvaluation
+    )
+  );
+  if (eventResp.status != 200 && eventResp.status != 201) {
+    return {
+      ok: false,
+      message:
+        "Could not attach the data extension: HTTP " +
+        eventResp.status +
+        " - " +
+        eventResp.body
+    };
+  }
+  var eventDefId = firstMatch(eventResp.body, /"id"\s*:\s*"?([^",}\s]+)"?/);
+  if (!eventDefId) {
+    return {
+      ok: false,
+      message: "Could not attach the data extension: no entry ID was returned."
+    };
+  }
+  return {
+    ok: true,
+    eventDefId: eventDefId,
+    eventKey: eventKey,
+    trigger: {
+      key: "TRIGGER",
+      name: "TRIGGER",
+      description: "",
+      type: "EmailAudience",
+      outcomes: [],
+      arguments: {},
+      configurationArguments: {},
+      metaData: {
+        sourceInteractionId: "00000000-0000-0000-0000-000000000000",
+        eventDefinitionId: eventDefId,
+        eventDefinitionKey: eventKey,
+        chainType: "None",
+        configurationRequired: false,
+        iconUrl: "/images/icon-data-extension.svg",
+        title: "Data Extension",
+        entrySourceGroupConfigUrl: "jb:///data/entry/audience/entrysourcegroupconfig.json"
+      }
+    }
+  };
+}
+
+
 function jsonEscapeCj(s) {
   if (s === null || s === undefined) return "";
   return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -2275,7 +2789,48 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
    var emailSubject = Platform.Variable.GetValue("@emailSubjectLine") || "Campaign Event";
    var emailSubjectEscaped = jsonEscapeCj(emailSubject);
    var journeyNameEscaped = jsonEscapeCj(journeyName || "");
-   var triggerWithOutcomes = '{"key":"TRIGGER","name":"TRIGGER","type":"SalesforceObjectTriggerV2","outcomes":[],"configurationArguments":' + triggerConfig + ',"metaData":' + triggerMeta + '}';
+   var audienceSourceCj = String(Platform.Variable.GetValue("@audienceSource") || "").toLowerCase();
+   var triggerWithOutcomes = "";
+   var defaultEmailForJourney = defaultEmailEscaped || "";
+   var journeyMetaScheduleState = "";
+   if (audienceSourceCj === "dataextension") {
+     var sourceDe = String(Platform.Variable.GetValue("@sourceDataExtension") || "");
+     var proxDe = new Script.Util.WSProxy();
+     var deMeta = resolveDataExtension(proxDe, sourceDe);
+     if (!deMeta || !deMeta.objectId) {
+       throw new Error('Could not find a data extension named or keyed "' + sourceDe + '".');
+     }
+     if (!deMeta.isSendable) {
+       throw new Error('Could not use "' + deMeta.name + '". That data extension is not sendable.');
+     }
+     var eventResult = createDeEntryEvent(
+       accessToken,
+       subdomain,
+       journeyName || "",
+       deMeta,
+       Platform.Variable.GetValue("@entryScheduleType") || "runOnce",
+       Platform.Variable.GetValue("@entryScheduleRepeat") || "daily",
+       Platform.Variable.GetValue("@entryScheduleStart") || "",
+       Platform.Variable.GetValue("@entryScheduleInterval") || "1",
+       Platform.Variable.GetValue("@entryScheduleOccurrences") || "2",
+       Platform.Variable.GetValue("@entryScheduleEnd") || "occurrences",
+       Platform.Variable.GetValue("@entryScheduleEndDate") || "",
+       Platform.Variable.GetValue("@entryScheduleWeekdays") || "",
+       Platform.Variable.GetValue("@entryContactEvaluation") || "newOnly"
+     );
+     if (!eventResult.ok) {
+       throw new Error(eventResult.message || "Could not create data extension entry event.");
+     }
+     Platform.Variable.SetValue("@eventDefId", eventResult.eventDefId || "");
+     triggerWithOutcomes = Platform.Function.Stringify(eventResult.trigger);
+     defaultEmailForJourney = jsonEscapeCj('{{Event.' + eventResult.eventKey + '."Email"}}');
+     journeyMetaScheduleState =
+       String(Platform.Variable.GetValue("@entryScheduleType") || "").toLowerCase() === "recurring"
+         ? "Scheduled"
+         : "No Schedule";
+   } else {
+     triggerWithOutcomes = '{"key":"TRIGGER","name":"TRIGGER","type":"SalesforceObjectTriggerV2","outcomes":[],"configurationArguments":' + triggerConfig + ',"metaData":' + triggerMeta + '}';
+   }
    var emailIdNum = journeyEmailId ? parseInt(String(journeyEmailId), 10) : 0;
    var emailArgs = '{"activityId":"{{Activity.Id}}","definitionId":"{{Context.DefinitionId}}","emailSubjectDataBound":"' + emailSubjectEscaped + '","contactId":"{{Contact.Id}}","contactKey":"{{Contact.Key}}","emailAddress":"{{InteractionDefaults.Email}}","sourceCustomObjectId":"{{Contact.AddressInfo.Email.SourceCustomObjectId}}","sourceCustomObjectKey":"{{Contact.AddressInfo.Email.SourceCustomObjectKey}}","fieldType":"{{Contact.AddressInfo.Email.FieldType}}","eventData":"{{Event}}","obfuscationProperties":"{{InteractionDefaults.Email.ObfuscationProperties}}","customObjectKey":"","definitionInstanceId":"{{Context.DefinitionInstanceId}}"}';
    var emailNameEscaped = jsonEscapeCj(emailName || "PreEventEmail1");
@@ -2409,19 +2964,34 @@ if (journeyKey && journeyUrl && subdomain && accessToken && journeyEmailId && se
    var eventKeyCj = Platform.Variable.GetValue("@eventKey") || "";
    var campaignIdCj = Platform.Variable.GetValue("@campaignId") || "";
    var campaignNameCj = Platform.Variable.GetValue("@campaignName") || campaignIdCj;
-   var cmNextKey = addTaskActivity == "1" ? "SALESCLOUDACTIVITY-1" : "";
-   var cmObj = buildCmUpdateActivityCj({
-     eventKey: eventKeyCj,
-     campaignId: campaignIdCj,
-     campaignLabel: campaignNameCj,
-     nextKey: cmNextKey
-   });
-   var cmActivity = Platform.Function.Stringify(cmObj);
-   var activitiesJson = emailActivity + "," + waitActivity + "," + cmActivity;
-   if (addTaskActivity == "1") {
-     activitiesJson = activitiesJson + "," + taskActivity;
+   var activitiesJson = "";
+   if (audienceSourceCj === "dataextension") {
+     var waitDe =
+       '{"type":"WAIT","key":"WAIT-1","name":"1 min","outcomes":[{"key":"END-WAIT-1","arguments":{},"metaData":{"invalid":false}}],"metaData":{"isConfigured":true,"isExtended":false,"waitType":"duration","guidanceCardKey":null,"uiType":"WAITBYDURATION"},"configurationArguments":{"waitDuration":1,"waitUnit":"MINUTES","timeZone":"America/New_York","specifiedTime":"00:00"}}';
+     activitiesJson = emailActivity + "," + waitDe;
+   } else {
+     var cmNextKey = addTaskActivity == "1" ? "SALESCLOUDACTIVITY-1" : "";
+     var cmObj = buildCmUpdateActivityCj({
+       eventKey: eventKeyCj,
+       campaignId: campaignIdCj,
+       campaignLabel: campaignNameCj,
+       nextKey: cmNextKey
+     });
+     var cmActivity = Platform.Function.Stringify(cmObj);
+     activitiesJson = emailActivity + "," + waitActivity + "," + cmActivity;
+     if (addTaskActivity == "1") {
+       activitiesJson = activitiesJson + "," + taskActivity;
+     }
    }
-   var journeyPayload = '{"name":"' + journeyNameEscaped + '","definitionType":"Multistep","channel":"","description":"","version":1,"workflowApiVersion":1.0,"entryMode":"OnceAndDone","key":"' + journeyKey + '","activities":[' + activitiesJson + '],"notifiers":[],"metaData":{"disableEndWait":true,"dataSource":"ContactsModel","highThroughputSending":{"email":false}},"defaults":{"email":["' + (defaultEmailEscaped || "") + '"],"properties":{"analyticsTracking":{"enabled":true,"analyticsType":"google","urlDomainsToTrack":[]}}},"goals":[],"exits":[],"triggers":[' + triggerWithOutcomes + ']}';
+   var journeyMetaJson =
+     '{"disableEndWait":true,"dataSource":"ContactsModel","highThroughputSending":{"email":false}}';
+   if (journeyMetaScheduleState) {
+     journeyMetaJson =
+       '{"disableEndWait":true,"dataSource":"ContactsModel","scheduleState":"' +
+       jsonEscapeCj(journeyMetaScheduleState) +
+       '","highThroughputSending":{"email":false}}';
+   }
+   var journeyPayload = '{"name":"' + journeyNameEscaped + '","definitionType":"Multistep","channel":"","description":"","version":1,"workflowApiVersion":1.0,"entryMode":"OnceAndDone","key":"' + journeyKey + '","activities":[' + activitiesJson + '],"notifiers":[],"metaData":' + journeyMetaJson + ',"defaults":{"email":["' + (defaultEmailForJourney || "") + '"],"properties":{"analyticsTracking":{"enabled":true,"analyticsType":"google","urlDomainsToTrack":[]}}},"goals":[],"exits":[],"triggers":[' + triggerWithOutcomes + ']}';
    var postReq = new Script.Util.HttpRequest(journeyUrl);
    postReq.emptyContentHandling = 0;
    postReq.continueOnError = true;
@@ -3022,6 +3592,33 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 .campaign-verify-list { margin: 8px 0 0 0; padding-left: 1.25rem; }
 .campaign-verify-list li { margin: 4px 0; }
 .campaign-verify-list a { color: inherit; font-weight: 600; }
+.schedule-section { display: none; margin-top: 8px; }
+.schedule-section.is-visible { display: block; }
+.schedule-radio-group { display: flex; flex-direction: column; gap: 10px; }
+.schedule-radio-option {
+ display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px;
+ border: 1px solid var(--border-color); border-radius: var(--radius-md); cursor: pointer;
+}
+.schedule-radio-option:has(input:checked) { border-color: var(--primary-color); background: rgba(99, 102, 241, 0.06); }
+.schedule-radio-option input { margin-top: 3px; }
+.schedule-radio-copy { display: flex; flex-direction: column; gap: 2px; }
+.schedule-radio-title { font-weight: 600; color: var(--text-primary); font-size: 0.9375rem; }
+.schedule-radio-hint { font-size: 0.8125rem; color: var(--text-secondary); }
+.recurring-fields { display: none; margin-top: 12px; padding: 16px; background: var(--bg-secondary); border-radius: var(--radius-md); border: 1px solid var(--border-color); }
+.recurring-fields.is-visible { display: block; }
+.recurring-fields label { display: block; font-size: 0.8125rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; }
+.recurring-fields .form-group:last-child { margin-bottom: 0; }
+.schedule-weekday-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.schedule-weekday-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--border-color); border-radius: var(--radius-md); font-size: 0.8125rem; cursor: pointer; }
+.schedule-weekday-chip input { margin: 0; }
+.schedule-weekday-panel { display: none; margin-top: 12px; }
+.schedule-weekday-panel.is-visible { display: block; }
+.schedule-eastern-note { font-size: 0.8125rem; color: var(--text-secondary); margin: 6px 0 0; }
+.schedule-end-group { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.schedule-end-option { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer; }
+.schedule-end-option input[type="radio"] { margin: 0; }
+.schedule-end-inline { width: auto; max-width: 120px; padding: 8px 10px; }
+.schedule-end-date { max-width: 180px; }
 .select-control, .textarea-control { width: 100%; padding: 12px 16px; border: 1px solid var(--border-color); border-radius: 0px); font-size: 1rem; background: var(--bg-primary); transition: all 0.2s ease; font-family: inherit; }
 textarea.textarea-control { min-height: 88px; resize: vertical; }
 .select-control:focus, .textarea-control:focus { outline: none; border-color: var(--primary-color); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1); }
@@ -3364,13 +3961,21 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
         <h1 class="maker-page-title">Create Survey Journey</h1>
       </div>
     </div>
-    <p class="maker-page-subtitle" id="surveyJourneySubtitle">Choose the survey and audience, then preview the invitation email before the journey is created in Marketing Cloud.</p>
+    <p class="maker-page-subtitle" id="surveyJourneySubtitle">Name the journey, choose survey and audience (Campaign or Data Extension entry), then preview the invitation email.</p>
     <div class="maker-form-shell">
    <div id="surveyJourneyStep1">
    <form method="post" action="" id="surveyJourneyStep1Form">
      <div class="question-card">
        <div class="question-header">
          <div class="question-number">1</div>
+         <div class="question-text">Name</div>
+       </div>
+       <div class="form-group">
+         <label class="form-label" for="journeyName">Journey name</label>
+         <input type="text" class="textarea-control" name="journeyName" id="journeyName" value="%%=v(@journeyNameInput)=%%" placeholder="e.g. Q3 survey invitation" required maxlength="80">
+       </div>
+       <div class="question-header" style="margin-top: 24px;">
+         <div class="question-number">2</div>
          <div class="question-text">Survey</div>
        </div>
        <div class="form-group">
@@ -3384,7 +3989,7 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
 %%[ ENDIF ]%%
        </div>
        <div class="question-header" style="margin-top: 24px;">
-         <div class="question-number">2</div>
+         <div class="question-number">3</div>
          <div class="question-text">Target audience</div>
        </div>
        <div class="form-group">
@@ -3411,10 +4016,107 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
 %%[ ENDIF ]%%
          </div>
 %%[ ENDIF ]%%
-         <p style="font-size:11px;color:#6b7280;margin-top:8px;" id="deAudienceNote"%%[ IF @audienceSource != "dataextension" THEN ]%% style="display:none;font-size:11px;color:#6b7280;margin-top:8px;"%%[ ENDIF ]%%>Data Extension entry for Survey journey is not supported yet. Use Salesforce Campaign.</p>
+      <div id="entryScheduleSection" class="schedule-section">
+        <div class="question-header" style="margin-top: 16px;">
+          <div class="question-number" aria-hidden="true" style="width:auto;height:auto;border:none;font-size:0.875rem;margin-right:8px;">—</div>
+          <div class="question-text" style="font-size:1rem;">Entry schedule</div>
+        </div>
+        <p class="schedule-radio-hint" style="margin: 0 0 12px 58px;">Applies when a data extension is the entry source. Choose the schedule mode; finish timing in Journey Builder.</p>
+        <div class="schedule-radio-group" style="margin-left: 58px;">
+          <label class="schedule-radio-option">
+            <input type="radio" name="entryScheduleType" value="runOnce" %%[ IF @entryScheduleType != "recurring" THEN ]%%checked%%[ ENDIF ]%%>
+            <span class="schedule-radio-copy">
+              <span class="schedule-radio-title">Run once</span>
+              <span class="schedule-radio-hint">One-time entry schedule. Set On activation or a specific start in Journey Builder.</span>
+            </span>
+          </label>
+          <label class="schedule-radio-option">
+            <input type="radio" name="entryScheduleType" value="recurring" %%[ IF @entryScheduleType == "recurring" THEN ]%%checked%%[ ENDIF ]%%>
+            <span class="schedule-radio-copy">
+              <span class="schedule-radio-title">Recurring</span>
+              <span class="schedule-radio-hint">Repeating entry schedule aligned with Journey Builder (Eastern Time).</span>
+            </span>
+          </label>
+        </div>
+        <div id="recurringScheduleFields" class="recurring-fields">
+          <div class="form-group">
+            <label for="entryScheduleRepeat">Repeat</label>
+            <select class="textarea-control" name="entryScheduleRepeat" id="entryScheduleRepeat">
+              <option value="hourly" %%[ IF @entryScheduleRepeat == "hourly" THEN ]%%selected%%[ ENDIF ]%%>Hourly</option>
+              <option value="daily" %%[ IF @entryScheduleRepeat == "daily" THEN ]%%selected%%[ ENDIF ]%%>Daily</option>
+              <option value="weekdays" %%[ IF @entryScheduleRepeat == "weekdays" THEN ]%%selected%%[ ENDIF ]%%>Weekdays</option>
+              <option value="weekly" %%[ IF @entryScheduleRepeat == "weekly" THEN ]%%selected%%[ ENDIF ]%%>Weekly</option>
+              <option value="monthly" %%[ IF @entryScheduleRepeat == "monthly" THEN ]%%selected%%[ ENDIF ]%%>Monthly</option>
+              <option value="yearly" %%[ IF @entryScheduleRepeat == "yearly" THEN ]%%selected%%[ ENDIF ]%%>Yearly</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="entryScheduleInterval">Every</label>
+            <input type="number" min="1" max="999" class="textarea-control" name="entryScheduleInterval" id="entryScheduleInterval" value="%%=v(@entryScheduleInterval)=%%">
+          </div>
+          <div id="weeklyDayPanel" class="schedule-weekday-panel">
+            <label>On the selected days</label>
+            <p class="schedule-eastern-note">Click the days contacts can enter the journey (weekly repeat).</p>
+            <div class="schedule-weekday-row">
+              <label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="sun"> Sun</label>
+              <label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="mon"> Mon</label>
+              <label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="tue"> Tue</label>
+              <label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="wed"> Wed</label>
+              <label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="thu"> Thu</label>
+              <label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="fri"> Fri</label>
+              <label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="sat"> Sat</label>
+            </div>
+            <input type="hidden" name="entryScheduleWeekdays" id="entryScheduleWeekdays" value="%%=v(@entryScheduleWeekdays)=%%">
+          </div>
+          <div class="form-group">
+            <label for="entryScheduleStart">Start date</label>
+            <input type="date" class="textarea-control" name="entryScheduleStart" id="entryScheduleStart" value="%%=IIF(Length(@entryScheduleStart)>=10,Substring(@entryScheduleStart,1,10),@entryScheduleStart)=%%">
+            <p class="schedule-eastern-note">Start time is always 12:00 AM in Eastern Time (US &amp; Canada).</p>
+          </div>
+          <div class="form-group">
+            <span class="schedule-radio-title">End</span>
+            <div class="schedule-end-group">
+              <label class="schedule-end-option">
+                <input type="radio" name="entryScheduleEnd" value="occurrences" %%[ IF @entryScheduleEnd != "endDate" AND @entryScheduleEnd != "never" THEN ]%%checked%%[ ENDIF ]%%>
+                <span>After</span>
+                <input type="number" min="1" max="9999" class="textarea-control schedule-end-inline" name="entryScheduleOccurrences" id="entryScheduleOccurrences" value="%%=v(@entryScheduleOccurrences)=%%">
+                <span>occurrence(s)</span>
+              </label>
+              <label class="schedule-end-option">
+                <input type="radio" name="entryScheduleEnd" value="endDate" %%[ IF @entryScheduleEnd == "endDate" THEN ]%%checked%%[ ENDIF ]%%>
+                <span>On date</span>
+                <input type="date" class="textarea-control schedule-end-inline schedule-end-date" name="entryScheduleEndDate" id="entryScheduleEndDate" value="%%=IIF(Length(@entryScheduleEndDate)>=10,Substring(@entryScheduleEndDate,1,10),@entryScheduleEndDate)=%%">
+              </label>
+              <label class="schedule-end-option">
+                <input type="radio" name="entryScheduleEnd" value="never" %%[ IF @entryScheduleEnd == "never" THEN ]%%checked%%[ ENDIF ]%%>
+                <span>Never</span>
+              </label>
+            </div>
+            <p class="schedule-eastern-note">On date uses 11:59 PM Eastern Time on the selected day. Never uses a far-future end date (Journey Builder equivalent).</p>
+          </div>
+          <div class="form-group">
+            <span class="schedule-radio-title">Contact evaluation</span>
+            <div class="schedule-radio-group" style="margin-top: 8px;">
+              <label class="schedule-radio-option">
+                <input type="radio" name="entryContactEvaluation" value="newOnly" %%[ IF @entryContactEvaluation != "all" THEN ]%%checked%%[ ENDIF ]%%>
+                <span class="schedule-radio-copy">
+                  <span class="schedule-radio-title">Evaluate new records only</span>
+                  <span class="schedule-radio-hint">Typical when new rows are appended without overwriting existing rows.</span>
+                </span>
+              </label>
+              <label class="schedule-radio-option">
+                <input type="radio" name="entryContactEvaluation" value="all" %%[ IF @entryContactEvaluation == "all" THEN ]%%checked%%[ ENDIF ]%%>
+                <span class="schedule-radio-copy">
+                  <span class="schedule-radio-title">Evaluate all records</span>
+                  <span class="schedule-radio-hint">Re-evaluates the full data extension on each run (slower).</span>
+                </span>
+              </label>
+            </div>
+          </div>
+        </div>
        </div>
        <div class="question-header" style="margin-top: 24px;">
-         <div class="question-number">3</div>
+         <div class="question-number">4</div>
          <div class="question-text">Sender Configurations</div>
        </div>
        <div class="sender-settings-panel" id="senderSettingsPanel">
@@ -3503,8 +4205,18 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
    <form method="post" action="" id="surveyJourneyStep2Form">
      <input type="hidden" name="create" value="1">
      <input type="hidden" name="previewFlow" value="1">
+     <input type="hidden" name="journeyName" id="step2JourneyName" value="">
      <input type="hidden" name="selectedSurveyId" id="step2SelectedSurveyId" value="">
      <input type="hidden" name="audienceSource" id="step2AudienceSource" value="">
+     <input type="hidden" name="entryScheduleType" id="step2EntryScheduleType" value="">
+     <input type="hidden" name="entryScheduleRepeat" id="step2EntryScheduleRepeat" value="">
+     <input type="hidden" name="entryScheduleInterval" id="step2EntryScheduleInterval" value="">
+     <input type="hidden" name="entryScheduleOccurrences" id="step2EntryScheduleOccurrences" value="">
+     <input type="hidden" name="entryScheduleEnd" id="step2EntryScheduleEnd" value="">
+     <input type="hidden" name="entryScheduleEndDate" id="step2EntryScheduleEndDate" value="">
+     <input type="hidden" name="entryScheduleWeekdays" id="step2EntryScheduleWeekdays" value="">
+     <input type="hidden" name="entryContactEvaluation" id="step2EntryContactEvaluation" value="">
+     <input type="hidden" name="entryScheduleStart" id="step2EntryScheduleStart" value="">
      <input type="hidden" name="campaignId" id="step2CampaignId" value="">
      <input type="hidden" name="sourceDataExtension" id="step2SourceDataExtension" value="">
      <input type="hidden" name="senderProfileId" id="step2SenderProfileId" value="">
@@ -3526,7 +4238,7 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
        <div class="survey-journey-hub">
          <div class="survey-journey-hub-form">
            <div class="question-header">
-             <div class="question-number">4</div>
+             <div class="question-number">5</div>
              <div class="question-text">Email preview</div>
            </div>
            <div class="form-group">
@@ -3849,19 +4561,47 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
   var checked = step1Form.querySelector('input[name="emailId"]:checked');
   return checked ? checked.closest('.email-card') : null;
  }
+
+ function copyValToHidden(sourceId, hiddenId) {
+  var src = document.getElementById(sourceId);
+  var hid = document.getElementById(hiddenId);
+  if (src && hid) hid.value = src.value;
+ }
+ function copyRadioToHidden(name, hiddenId) {
+  var nodes = document.querySelectorAll('input[name="' + name + '"]');
+  var hid = document.getElementById(hiddenId);
+  if (!hid) return;
+  for (var i = 0; i < nodes.length; i++) {
+   if (nodes[i].checked) {
+    hid.value = nodes[i].value;
+    return;
+   }
+  }
+ }
+ function copyStep1FieldsToStep2() {
+  copyValToHidden('journeyName', 'step2JourneyName');
+  copyValToHidden('sourceDataExtension', 'step2SourceDataExtension');
+  copyRadioToHidden('entryScheduleType', 'step2EntryScheduleType');
+  copyValToHidden('entryScheduleRepeat', 'step2EntryScheduleRepeat');
+  copyValToHidden('entryScheduleInterval', 'step2EntryScheduleInterval');
+  copyValToHidden('entryScheduleOccurrences', 'step2EntryScheduleOccurrences');
+  copyRadioToHidden('entryScheduleEnd', 'step2EntryScheduleEnd');
+  copyValToHidden('entryScheduleEndDate', 'step2EntryScheduleEndDate');
+  copyValToHidden('entryScheduleWeekdays', 'step2EntryScheduleWeekdays');
+  copyRadioToHidden('entryContactEvaluation', 'step2EntryContactEvaluation');
+  copyValToHidden('entryScheduleStart', 'step2EntryScheduleStart');
+ }
  function syncAudienceSourceUi() {
   var audienceSourceSelect = document.getElementById('audienceSource');
   var campaignSourceRow = document.getElementById('campaignSourceRow');
   var deSourceRow = document.getElementById('deSourceRow');
   var audienceSourceLabel = document.getElementById('audienceSourceLabel');
-  var deAudienceNote = document.getElementById('deAudienceNote');
   var campaignInput = document.getElementById('campaignId');
   var deInput = document.getElementById('sourceDataExtension');
   var mode = audienceSourceSelect ? audienceSourceSelect.value : 'campaign';
   var isDe = mode === 'dataextension';
   if (campaignSourceRow) campaignSourceRow.style.display = isDe ? 'none' : '';
   if (deSourceRow) deSourceRow.style.display = isDe ? '' : 'none';
-  if (deAudienceNote) deAudienceNote.style.display = isDe ? 'block' : 'none';
   if (campaignInput) {
    campaignInput.disabled = isDe;
    campaignInput.required = !isDe;
@@ -3871,7 +4611,10 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
    deInput.required = isDe;
   }
   if (audienceSourceLabel) {
-   audienceSourceLabel.textContent = isDe ? 'Source Data Extension name' : 'Salesforce Campaign ID';
+   audienceSourceLabel.textContent = isDe ? 'Source Data Extension name or key' : 'Salesforce Campaign ID';
+  }
+  if (typeof syncEntryScheduleUi === 'function') {
+   syncEntryScheduleUi();
   }
  }
  if (nextBtn && step1Form && step2 && step1) {
@@ -3884,8 +4627,11 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
    var audienceSourceSelect = document.getElementById('audienceSource');
    var audienceMode = audienceSourceSelect ? audienceSourceSelect.value : 'campaign';
    if (audienceMode === 'dataextension') {
-    window.alert('Data Extension audience for Survey journey is not supported yet. Use Salesforce Campaign.');
-    return;
+    var deVal = (document.getElementById('sourceDataExtension') || {}).value || '';
+    if (!String(deVal).trim()) {
+     window.alert('Enter the source Data Extension name or key.');
+     return;
+    }
    }
    if (!step1Form.reportValidity()) return;
    var sourceModeEl = document.getElementById('emailSourceMode');
@@ -3904,6 +4650,7 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
    var card = getSelectedTemplateCard();
    var surveyOption = surveySelect.options[surveySelect.selectedIndex];
    var surveyDisplayName = surveyOption ? surveyOption.textContent.trim() : '';
+   copyStep1FieldsToStep2();
    document.getElementById('step2SelectedSurveyId').value = surveySelect.value;
    document.getElementById('step2AudienceSource').value = audienceMode;
    document.getElementById('step2CampaignId').value = (document.getElementById('campaignId') || {}).value || '';
@@ -3960,6 +4707,97 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
    if (btnSpinner) btnSpinner.style.display = 'inline-block';
   });
  }
+
+ var entryDeInput = document.getElementById('sourceDataExtension');
+ var scheduleSection = document.getElementById('entryScheduleSection');
+ var recurringFields = document.getElementById('recurringScheduleFields');
+ var scheduleRadios = document.querySelectorAll('input[name="entryScheduleType"]');
+ var repeatSelect = document.getElementById('entryScheduleRepeat');
+ var weeklyDayPanel = document.getElementById('weeklyDayPanel');
+ var weekdayHidden = document.getElementById('entryScheduleWeekdays');
+ var weekdayChecks = document.querySelectorAll('.schedule-weekday-cb');
+ var endRadios = document.querySelectorAll('input[name="entryScheduleEnd"]');
+ var endDateInput = document.getElementById('entryScheduleEndDate');
+ var occurInput = document.getElementById('entryScheduleOccurrences');
+ function padLocal(n) { return n < 10 ? '0' + n : String(n); }
+ function futureDateString(daysAhead) {
+  var d = new Date();
+  d.setDate(d.getDate() + daysAhead);
+  return d.getFullYear() + '-' + padLocal(d.getMonth() + 1) + '-' + padLocal(d.getDate());
+ }
+ function syncWeekdayHidden() {
+  if (!weekdayHidden) return;
+  var parts = [];
+  for (var i = 0; i < weekdayChecks.length; i++) {
+   if (weekdayChecks[i].checked) parts.push(weekdayChecks[i].value);
+  }
+  weekdayHidden.value = parts.join(',');
+ }
+ function loadWeekdayChecksFromHidden() {
+  if (!weekdayHidden || !weekdayHidden.value) return;
+  var set = {};
+  var tokens = String(weekdayHidden.value).toLowerCase().split(/[,;\s]+/);
+  for (var t = 0; t < tokens.length; t++) { if (tokens[t]) set[tokens[t]] = true; }
+  for (var i = 0; i < weekdayChecks.length; i++) {
+   weekdayChecks[i].checked = !!set[weekdayChecks[i].value];
+  }
+ }
+ function selectedEndMode() {
+  for (var e = 0; e < endRadios.length; e++) {
+   if (endRadios[e].checked) return endRadios[e].value;
+  }
+  return 'occurrences';
+ }
+ function addYearsToDateKey(dateKey, years) {
+  if (!dateKey || dateKey.length < 10) return futureDateString(365);
+  var parts = dateKey.split('-');
+  return (parseInt(parts[0], 10) + years) + '-' + parts[1] + '-' + parts[2];
+ }
+ function syncEndInputsUi() {
+  var mode = selectedEndMode();
+  if (occurInput) occurInput.disabled = mode !== 'occurrences';
+  if (endDateInput) {
+   endDateInput.disabled = mode !== 'endDate';
+   if (mode === 'endDate' && !endDateInput.value) {
+    var startInput = document.getElementById('entryScheduleStart');
+    var base = startInput && startInput.value ? startInput.value : futureDateString(2);
+    endDateInput.value = addYearsToDateKey(base, 1);
+    endDateInput.min = base;
+   }
+  }
+ }
+ function syncEntryScheduleUi() {
+  var audienceMode = (document.getElementById('audienceSource') || {}).value;
+  var hasDe = audienceMode === 'dataextension' && entryDeInput && String(entryDeInput.value || '').replace(/^\s+|\s+$/g, '').length > 0;
+  if (scheduleSection) scheduleSection.classList.toggle('is-visible', !!hasDe);
+  var recurringSelected = false;
+  for (var i = 0; i < scheduleRadios.length; i++) {
+   if (scheduleRadios[i].checked && scheduleRadios[i].value === 'recurring') recurringSelected = true;
+  }
+  if (recurringFields) recurringFields.classList.toggle('is-visible', !!hasDe && recurringSelected);
+  var weeklySelected = repeatSelect && repeatSelect.value === 'weekly';
+  if (weeklyDayPanel) weeklyDayPanel.classList.toggle('is-visible', !!hasDe && recurringSelected && weeklySelected);
+  var startInput = document.getElementById('entryScheduleStart');
+  if (startInput) {
+   var minDate = futureDateString(2);
+   startInput.min = minDate;
+   if (!startInput.value) startInput.value = minDate;
+  }
+  syncWeekdayHidden();
+  syncEndInputsUi();
+ }
+ if (entryDeInput) {
+  entryDeInput.addEventListener('input', syncEntryScheduleUi);
+  entryDeInput.addEventListener('change', syncEntryScheduleUi);
+ }
+ for (var r = 0; r < scheduleRadios.length; r++) scheduleRadios[r].addEventListener('change', syncEntryScheduleUi);
+ if (repeatSelect) repeatSelect.addEventListener('change', syncEntryScheduleUi);
+ for (var w = 0; w < weekdayChecks.length; w++) weekdayChecks[w].addEventListener('change', syncWeekdayHidden);
+ for (var er = 0; er < endRadios.length; er++) endRadios[er].addEventListener('change', syncEndInputsUi);
+ var startForEnd = document.getElementById('entryScheduleStart');
+ if (startForEnd) startForEnd.addEventListener('change', syncEndInputsUi);
+ loadWeekdayChecksFromHidden();
+ syncEntryScheduleUi();
  var audienceSourceSelect = document.getElementById('audienceSource');
  if (audienceSourceSelect) {
   audienceSourceSelect.addEventListener('change', syncAudienceSourceUi);
