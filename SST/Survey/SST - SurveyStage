@@ -1,12 +1,10 @@
 %%[
-VAR @errorFlag, @dataExists, @testCount, @mode, @surveyId, @updated, @editSurveyName, @editSurveyStatus, @editSurveyDescription, @editSurveyTargetAudience, @editQuestions
-VAR @audienceSource, @editCampaignId, @editSourceDE
+VAR @errorFlag, @mode, @surveyId, @updated, @editSurveyName, @editSurveyStatus, @editSurveyDescription, @editSurveyTargetAudience, @editQuestions
 VAR @navRows, @navRow, @hubUrl, @surveyHomeUrl, @journeyExitUrl, @calendarUrl, @environment, @environmentSwitchUrl
 VAR @envDisplayName, @envDisplayEmail, @envAvatarLetter, @envSwitchLabel
 VAR @builderPageLabel, @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @SURVEY_STAGE_URL, @SURVEY_ANALYTICS_URL, @SURVEY_TAKE_URL, @surveyPreviewUrl
 VAR @detailRows, @detailRow, @isSurveyBuild, @buildNavContext, @buildNavActive, @surveyUrlRows, @surveyUrlRow, @redirectBase, @qPos, @redirectUrl
 SET @errorFlag = "false"
-SET @dataExists = "true"
 SET @mode = RequestParameter("mode")
 SET @surveyId = Trim(RequestParameter("surveyid"))
 IF Empty(@surveyId) THEN
@@ -36,9 +34,6 @@ SET @surveyPreviewUrl = ""
 SET @isSurveyBuild = "false"
 SET @buildNavContext = "false"
 SET @buildNavActive = "edit-survey"
-SET @audienceSource = "campaign"
-SET @editCampaignId = ""
-SET @editSourceDE = ""
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
   SET @navRow = Row(@navRows,1)
@@ -104,39 +99,8 @@ ENDIF
 
 
 
-/* Test data extension access - using SST_SP_Survey_Questions_DE */
-VAR @testAccess, @testAccessCount
-SET @testAccess = LookupRows("SST_SP_Survey_Questions_DE", "QuestionID", "TEST")
-SET @testAccessCount = RowCount(@testAccess)
-IF @testAccessCount >= 0 THEN
-  SET @dataExists = "true"
-ELSE
-  SET @dataExists = "false"
-ENDIF
-
-
-/* Additional test - try to get any record */
-VAR @anyRecord, @anyRecordCount
-SET @anyRecord = LookupRows("SST_SP_Survey_Questions_DE", "QuestionID", "")
-SET @anyRecordCount = RowCount(@anyRecord)
-
-
-/* Test with a specific field that we know exists */
-VAR @testField, @testFieldCount
-SET @testField = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", "")
-SET @testFieldCount = RowCount(@testField)
-
-
-/* Test with a wildcard approach */
-VAR @wildcardTest, @wildcardCount
-SET @wildcardTest = LookupRows("SST_SP_Survey_Questions_DE", "QuestionID", "*")
-SET @wildcardCount = RowCount(@wildcardTest)
-
-
-
-
 /* Handle form submission */
-VAR @submitted, @surveyName, @surveyDescription, @campaignId, @sourceDataExtension, @surveyTargetAudience
+VAR @submitted, @surveyName, @surveyDescription, @surveyTargetAudience
 SET @submitted = RequestParameter("submitted")
 
 
@@ -145,19 +109,9 @@ SET @submitted = RequestParameter("submitted")
 IF @submitted == "true" THEN
   SET @surveyName = RequestParameter("surveyName")
   SET @surveyDescription = RequestParameter("surveyDescription")
-  SET @audienceSource = Lowercase(Trim(RequestParameter("audienceSource")))
-  IF Empty(@audienceSource) THEN
-    SET @audienceSource = "campaign"
-  ENDIF
-  SET @campaignId = Trim(RequestParameter("campaignId"))
-  SET @sourceDataExtension = Trim(RequestParameter("sourceDataExtension"))
   SET @surveyTargetAudience = ""
-  IF @audienceSource == "dataextension" THEN
-    IF NOT Empty(@sourceDataExtension) THEN
-      SET @surveyTargetAudience = Concat("DE:", @sourceDataExtension)
-    ENDIF
-  ELSE
-    SET @surveyTargetAudience = @campaignId
+  IF @mode == "edit" AND NOT Empty(@surveyId) THEN
+    SET @surveyTargetAudience = Lookup("SST_SP_Surveys_Master_DE", "SurveyTargetAudience", "SurveyID", @surveyId)
   ENDIF
  
   /* Use existing SurveyID for edit mode, generate new one for create mode */
@@ -310,15 +264,6 @@ IF @mode == "edit" AND NOT Empty(@surveyId) THEN
   SET @editSurveyDescription = Lookup("SST_SP_Surveys_Master_DE", "SurveyDescription", "SurveyID", @surveyId)
   SET @editSurveyTargetAudience = Lookup("SST_SP_Surveys_Master_DE", "SurveyTargetAudience", "SurveyID", @surveyId)
   SET @editQuestions = LookupOrderedRows("SST_SP_Survey_Questions_DE", 0, "QuestionNumber ASC", "SurveyID", @surveyId)
-  IF NOT Empty(@editSurveyTargetAudience) THEN
-    IF IndexOf(@editSurveyTargetAudience, "DE:") == 1 THEN
-      SET @audienceSource = "dataextension"
-      SET @editSourceDE = Substring(@editSurveyTargetAudience, 4, 250)
-    ELSE
-      SET @audienceSource = "campaign"
-      SET @editCampaignId = @editSurveyTargetAudience
-    ENDIF
-  ENDIF
 ENDIF
 ]%%
 
@@ -1028,22 +973,6 @@ ENDIF
               <label class="form-label">Description</label>
               <textarea class="form-textarea" name="surveyDescription" placeholder="Describe the purpose and goals of this survey">%%=IIF(@mode == "edit", v(@editSurveyDescription), "")=%%</textarea>
             </div>
-            <div class="form-group">
-              <label class="form-label" for="audienceSource">Audience source</label>
-              <select id="audienceSource" class="form-select" name="audienceSource">
-                <option value="campaign"%%[ IF @audienceSource != "dataextension" THEN ]%% selected%%[ ENDIF ]%%>Salesforce Campaign</option>
-                <option value="dataextension"%%[ IF @audienceSource == "dataextension" THEN ]%% selected%%[ ENDIF ]%%>Data Extension</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label" id="audienceSourceValueLabel">%%[ IF @audienceSource == "dataextension" THEN ]%%Data Extension name%%[ ELSE ]%%Campaign ID%%[ ENDIF ]%%</label>
-              <div id="campaignSourceRow"%%[ IF @audienceSource == "dataextension" THEN ]%% style="display:none;"%%[ ENDIF ]%%>
-                <input type="text" class="form-input" id="campaignId" name="campaignId" placeholder="e.g. 701WL00000pFzUEYA0" value="%%=IIF(@mode == "edit", v(@editCampaignId), "")=%%"%%[ IF @audienceSource == "dataextension" THEN ]%% disabled%%[ ENDIF ]%%>
-              </div>
-              <div id="deSourceRow"%%[ IF @audienceSource != "dataextension" THEN ]%% style="display:none;"%%[ ENDIF ]%%>
-                <input type="text" class="form-input" id="sourceDataExtension" name="sourceDataExtension" placeholder="e.g. Audience_DE" value="%%=IIF(@mode == "edit", v(@editSourceDE), "")=%%"%%[ IF @audienceSource != "dataextension" THEN ]%% disabled%%[ ENDIF ]%%>
-              </div>
-            </div>
           </div>
         </div>
         <!-- Question Builder -->
@@ -1516,54 +1445,6 @@ ENDIF
     function previewSurvey() {
       alert('Save the survey first, then preview opens the live Take Survey page.');
     }
-
-    (function initAudienceSourceUi() {
-      var form = document.getElementById('surveyForm');
-      var audienceSourceSelect = document.getElementById('audienceSource');
-      var campaignSourceRow = document.getElementById('campaignSourceRow');
-      var deSourceRow = document.getElementById('deSourceRow');
-      var audienceSourceValueLabel = document.getElementById('audienceSourceValueLabel');
-      var campaignInput = document.getElementById('campaignId');
-      var deInput = document.getElementById('sourceDataExtension');
-      function syncAudienceSourceUi() {
-        var mode = audienceSourceSelect ? audienceSourceSelect.value : 'campaign';
-        var isDe = mode === 'dataextension';
-        if (campaignSourceRow) {
-          campaignSourceRow.style.display = isDe ? 'none' : '';
-        }
-        if (deSourceRow) {
-          deSourceRow.style.display = isDe ? '' : 'none';
-        }
-        if (campaignInput) {
-          campaignInput.disabled = isDe;
-        }
-        if (deInput) {
-          deInput.disabled = !isDe;
-        }
-        if (audienceSourceValueLabel) {
-          audienceSourceValueLabel.textContent = isDe ? 'Data Extension name' : 'Campaign ID';
-        }
-      }
-      if (audienceSourceSelect) {
-        audienceSourceSelect.addEventListener('change', syncAudienceSourceUi);
-        syncAudienceSourceUi();
-      }
-      if (form) {
-        form.addEventListener('submit', function () {
-          if (campaignInput) {
-            campaignInput.disabled = false;
-          }
-          if (deInput) {
-            deInput.disabled = false;
-          }
-          if (audienceSourceSelect && audienceSourceSelect.value === 'dataextension' && campaignInput) {
-            campaignInput.value = '';
-          } else if (deInput) {
-            deInput.value = '';
-          }
-        });
-      }
-    })();
 
     document.getElementById('surveyForm').addEventListener('submit', function(e) {
       const questions = document.querySelectorAll('.question-item');
