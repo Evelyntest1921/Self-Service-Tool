@@ -14,11 +14,19 @@ ENDIF
 SET @flow = "sbu"
 SET @hubUrl = ""
 SET @buildDetailUrl = ""
+SET @emailOnlyUrl = ""
+SET @quickSendSelfUrl = ""
+SET @useExternalEmailCreate = "1"
+SET @precreatedNewEmailId = Trim(RequestParameter("newEmailId"))
+SET @precreatedJourneyEmailId = Trim(RequestParameter("journeyEmailId"))
+SET @emailReady = Trim(RequestParameter("emailReady"))
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
  SET @navRow = Row(@navRows,1)
  SET @hubUrl = Field(@navRow,"ss_home")
  SET @buildDetailUrl = Field(@navRow,"ss_edit")
+ SET @emailOnlyUrl = Trim(Field(@navRow,"ss_email_only"))
+ SET @quickSendSelfUrl = Trim(Field(@navRow,"ss_quick_send"))
 ENDIF
 SET @builderPageLabel = "Quick Send"
 SET @itemBaseName = Trim(RequestParameter("itemBaseName"))
@@ -83,18 +91,76 @@ ELSE
    SET @slugName = Replace(@slugName," ","_")
    SET @slugName = Replace(@slugName,".","_")
    SET @slugName = Replace(@slugName,"/","_")
-   SET @journeyName = @itemBaseName
-   SET @emailName = @slugName
-   SET @eventName = Concat(@slugName,"_EntryEvent")
+   SET @journeyName = Concat(@slugName,"_",@campaignName)
+   SET @eventName = Concat(@slugName,"_",@campaignName)
+   SET @emailName = Concat(@slugName,"_",@campaignName,"_Email")
  ELSE
-   SET @campaignNameSafe = Replace(@campaignName,'"','')
-   SET @campaignNameSafe = Replace(@campaignNameSafe," | ","_")
-   SET @campaignNameSafe = Replace(@campaignNameSafe," ","_")
-   SET @campaignNameSafe = Replace(@campaignNameSafe,"|","_")
-   SET @dateStr = Concat(Format(Now(),"yyyy"),"_",Format(Now(),"MM"),"_",Format(Now(),"dd"))
-   SET @eventName = Concat(@campaignNameSafe,"_Auto_Created_",@dateStr)
-   SET @journeyName = Concat(@campaignNameSafe,"_Auto_Created_",@dateStr)
-   SET @emailName = Concat(@eventName,"_Email")
+   SET @journeyName = Concat("QuickSend_",@campaignName)
+   SET @eventName = Concat("QuickSend_",@campaignName)
+   SET @emailName = Concat("QuickSend_",@campaignName,"_Email")
+ ENDIF
+ENDIF
+IF @emailReady == "1" AND NOT Empty(@precreatedJourneyEmailId) AND NOT Empty(@campaignId) AND Length(@campaignId) >= 15 THEN
+ SET @createRequested = "1"
+ SET @showForm = "false"
+ENDIF
+IF NOT Empty(@createRequested) AND @verifyCampaignRequested != "1" AND @deleteRequested != "1" AND @createEmailOnly != "1" AND @useExternalEmailCreate == "1" AND Empty(@precreatedJourneyEmailId) THEN
+ IF NOT Empty(@emailOnlyUrl) AND NOT Empty(@quickSendSelfUrl) THEN
+   SET @handoffReturnUrl = @quickSendSelfUrl
+   IF IndexOf(@handoffReturnUrl, "?") > 0 THEN
+     SET @handoffQs = "&"
+   ELSE
+     SET @handoffQs = "?"
+   ENDIF
+   IF NOT Empty(@campaignId) THEN
+     SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "campaignId=", URLEncode(@campaignId))
+     SET @handoffQs = "&"
+   ENDIF
+   IF NOT Empty(@itemBaseName) THEN
+     SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "itemBaseName=", URLEncode(@itemBaseName))
+     SET @handoffQs = "&"
+   ENDIF
+   IF NOT Empty(@emailSubjectLine) THEN
+     SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "emailSubjectLine=", URLEncode(@emailSubjectLine))
+     SET @handoffQs = "&"
+   ENDIF
+   IF NOT Empty(@journeyDescription) THEN
+     SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "journeyDescription=", URLEncode(@journeyDescription))
+     SET @handoffQs = "&"
+   ENDIF
+   IF NOT Empty(@bccEmail) THEN
+     SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "bccEmail=", URLEncode(@bccEmail))
+     SET @handoffQs = "&"
+   ENDIF
+   IF NOT Empty(@senderProfileId) THEN
+     SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "senderProfileId=", URLEncode(@senderProfileId))
+     SET @handoffQs = "&"
+   ENDIF
+   IF NOT Empty(@sendClassificationId) THEN
+     SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "sendClassificationId=", URLEncode(@sendClassificationId))
+     SET @handoffQs = "&"
+   ENDIF
+   IF @addTaskActivity == "1" THEN
+     SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "addTaskActivity=1")
+     SET @handoffQs = "&"
+   ENDIF
+   IF @addSTOActivity == "1" THEN
+     SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "addSTOActivity=1")
+     SET @handoffQs = "&"
+   ENDIF
+   SET @handoffReturnUrl = Concat(@handoffReturnUrl, @handoffQs, "emailReady=1")
+   IF IndexOf(@emailOnlyUrl, "?") > 0 THEN
+     SET @handoffDest = Concat(@emailOnlyUrl, "&flow=quick_send&returnUrl=", URLEncode(@handoffReturnUrl))
+   ELSE
+     SET @handoffDest = Concat(@emailOnlyUrl, "?flow=quick_send&returnUrl=", URLEncode(@handoffReturnUrl))
+   ENDIF
+   IF NOT Empty(@itemBaseName) THEN
+     SET @handoffDest = Concat(@handoffDest, "&itemBaseName=", URLEncode(@itemBaseName))
+   ENDIF
+   IF NOT Empty(@emailSubjectLine) THEN
+     SET @handoffDest = Concat(@handoffDest, "&emailSubjectLine=", URLEncode(@emailSubjectLine))
+   ENDIF
+   Redirect(@handoffDest)
  ENDIF
 ENDIF
 IF Empty(@emailSubjectLine) THEN
@@ -436,6 +502,8 @@ var resultText = Variable.GetValue("resultText");
 var newEmailId = "";
 var journeyEmailId = "";
 var step3bResult = " Step 3b SKIP - Email not duplicated: Template fetch failed.";
+var precreatedJourneyEmailId = String(Platform.Variable.GetValue("@precreatedJourneyEmailId") || "").replace(/^\s+|\s+$/g, "");
+var precreatedNewEmailId = String(Platform.Variable.GetValue("@precreatedNewEmailId") || "").replace(/^\s+|\s+$/g, "");
 function cloneObject(obj) {
  if (!obj || typeof obj !== "object") return null;
  var json = Platform.Function.Stringify(obj);
@@ -651,7 +719,11 @@ function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preh
  applyTextSettings(payload, textContent);
  return payload;
 }
-if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && deleteEmailId) {
+if (precreatedJourneyEmailId && precreatedNewEmailId) {
+ newEmailId = precreatedNewEmailId;
+ journeyEmailId = precreatedJourneyEmailId;
+ step3bResult = " Step 3b OK - Email created in Create Email flow.";
+} else if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && deleteEmailId) {
  try {
    newEmailId = String(deleteEmailId);
    var deleteUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + deleteEmailId;
