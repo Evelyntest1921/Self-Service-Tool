@@ -5,6 +5,11 @@ SET @deleteEmailId = Trim(RequestParameter("deleteEmailId"))
 SET @campaignId = Trim(RequestParameter("campaignId"))
 SET @verifyCampaignRequested = IIF(RequestParameter("verifyCampaign") == "1","1","0")
 SET @emailId = RequestParameter("emailId")
+SET @emailSourceMode = Trim(RequestParameter("emailSourceMode"))
+SET @existingEmailId = Trim(RequestParameter("existingEmailId"))
+IF Empty(@emailSourceMode) OR (@emailSourceMode != "existing" AND @emailSourceMode != "template") THEN
+ SET @emailSourceMode = "template"
+ENDIF
 SET @senderProfileId = Trim(RequestParameter("senderProfileId"))
 SET @sendClassificationId = Trim(RequestParameter("sendClassificationId"))
 SET @addTaskActivity = IIF(RequestParameter("addTaskActivity") == "1","1","0")
@@ -174,6 +179,9 @@ IF @showForm != "true" THEN
    IF @templateConfigOk != "true" THEN
      SET @resultText = "Step 0 FAILED: Missing email templates in bd_sst_email_templates (email_type=template)."
    ELSE
+    IF @emailSourceMode == "existing" AND Empty(@existingEmailId) THEN
+      SET @resultText = "Enter the existing email name or Content Builder asset ID."
+    ELSE
      SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
      SET @rowCount = RowCount(@authRow)
      IF @rowCount > 0 THEN
@@ -181,7 +189,11 @@ IF @showForm != "true" THEN
        SET @clientId = Field(@row,"clientId")
        SET @clientSecret = Field(@row,"clientSecret")
        SET @subdomain = Field(@row,"subdomain")
-       SET @sourceEmailId = @emailId
+       IF @emailSourceMode == "existing" THEN
+         SET @sourceEmailId = @existingEmailId
+       ELSE
+         SET @sourceEmailId = @emailId
+       ENDIF
        IF NOT Empty(@clientId) AND NOT Empty(@clientSecret) AND NOT Empty(@subdomain) THEN
          SET @authUrl = Concat("https://",@subdomain,".auth.marketingcloudapis.com/v2/token")
          SET @accountId = Trim(Field(@row,"accountId"))
@@ -224,6 +236,7 @@ IF @showForm != "true" THEN
      ELSE
        SET @resultText = "Step 1 FAILED: No SFMC_AUTH row for User=Admin."
      ENDIF
+    ENDIF
    ENDIF
  ENDIF
 ENDIF
@@ -518,6 +531,125 @@ function fetchAssetById(assetId, subdomainValue, accessTokenValue) {
  }
  return result;
 }
+function isEmailContentAsset(assetObj) {
+ if (!assetObj || !assetObj.assetType || assetObj.assetType.id === undefined || assetObj.assetType.id === null) {
+  return false;
+ }
+ var typeId = parseInt(assetObj.assetType.id, 10);
+ return typeId === 207 || typeId === 208;
+}
+function normalizeEmailLookupValue(value) {
+ return String(value || "").replace(/^\s+|\s+$/g, "");
+}
+function fetchEmailAssetsByName(assetName, subdomainValue, accessTokenValue) {
+ var result = {
+  ok: false,
+  statusCode: 0,
+  responseText: "",
+  assets: [],
+  matchCount: 0
+ };
+ var trimmedName = normalizeEmailLookupValue(assetName);
+ if (!trimmedName || !subdomainValue || !accessTokenValue) {
+  return result;
+ }
+ try {
+  var odataName = trimmedName.replace(/'/g, "''");
+  var filterExpr = "name eq '" + odataName + "'";
+  var listUrl =
+   "https://" +
+   subdomainValue +
+   ".rest.marketingcloudapis.com/asset/v1/content/assets?$page=1&$pagesize=50&$filter=" +
+   encodeURIComponent(filterExpr);
+  var req = new Script.Util.HttpRequest(listUrl);
+  req.emptyContentHandling = 0;
+  req.retries = 2;
+  req.continueOnError = true;
+  req.setHeader("Authorization", "Bearer " + accessTokenValue);
+  req.method = "GET";
+  req.contentType = "application/json";
+  var resp = req.send();
+  result.statusCode = resp.statusCode;
+  result.responseText = resp.content ? String(resp.content) : "";
+  if ((resp.statusCode == 200 || resp.statusCode == 201) && result.responseText) {
+   var data = Platform.Function.ParseJSON(result.responseText);
+   var items = data && data.items ? data.items : [];
+   var trimmedLower = trimmedName.toLowerCase();
+   var matches = [];
+   var i;
+   for (i = 0; i < items.length; i++) {
+    var item = items[i];
+    if (!isEmailContentAsset(item)) {
+     continue;
+    }
+    var itemName = normalizeEmailLookupValue(item.name);
+    if (itemName.toLowerCase() === trimmedLower) {
+     matches.push(item);
+    }
+   }
+   result.assets = matches;
+   result.matchCount = matches.length;
+   result.ok = result.matchCount > 0;
+  }
+ } catch (searchErr) {
+  result.responseText = searchErr.message || String(searchErr);
+ }
+ return result;
+}
+function resolveExistingEmailReference(inputValue, subdomainValue, accessTokenValue) {
+ var ref = normalizeEmailLookupValue(inputValue);
+ var resolved = {
+  ok: false,
+  asset: null,
+  legacyId: "",
+  assetId: "",
+  message: ""
+ };
+ if (!ref) {
+  resolved.message = "Enter an existing email name or Content Builder asset ID.";
+  return resolved;
+ }
+ if (/^\d+$/.test(ref)) {
+  var byIdFetch = fetchAssetById(ref, subdomainValue, accessTokenValue);
+  if (byIdFetch.ok && byIdFetch.asset && isEmailContentAsset(byIdFetch.asset)) {
+   resolved.ok = true;
+   resolved.asset = byIdFetch.asset;
+   resolved.assetId = String(byIdFetch.asset.id || ref);
+   resolved.legacyId = extractLegacyEmailId(byIdFetch.asset);
+   return resolved;
+  }
+  var legacyCandidate = parseInt(ref, 10);
+  if (!isNaN(legacyCandidate) && legacyCandidate > 0) {
+   resolved.ok = true;
+   resolved.assetId = ref;
+   resolved.legacyId = String(legacyCandidate);
+   return resolved;
+  }
+  resolved.message =
+   "Could not load email asset ID " + ref + " (HTTP " + byIdFetch.statusCode + ").";
+  return resolved;
+ }
+ var byNameFetch = fetchEmailAssetsByName(ref, subdomainValue, accessTokenValue);
+ if (!byNameFetch.ok || byNameFetch.matchCount === 0) {
+  resolved.message =
+   "No email found with name \"" +
+   ref +
+   "\". Use the exact Content Builder name or paste the asset ID.";
+  return resolved;
+ }
+ if (byNameFetch.matchCount > 1) {
+  resolved.message =
+   "Multiple emails named \"" +
+   ref +
+   "\". Use the Content Builder asset ID instead.";
+  return resolved;
+ }
+ resolved.ok = true;
+ resolved.asset = byNameFetch.assets[0];
+ resolved.assetId = String(resolved.asset.id || "");
+ resolved.legacyId = extractLegacyEmailId(resolved.asset);
+ return resolved;
+}
 function extractLegacyEmailId(assetObj) {
  if (!assetObj || typeof assetObj !== "object") return "";
  var candidates = [
@@ -674,7 +806,31 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
  } catch (deleteEx) {
    step3bResult = " Step 3b FAILED - Email delete failed: " + (deleteEx.message || String(deleteEx));
  }
-} else if (authOk == "true" && accessToken && subdomain && emailName && sourceEmailId) {
+} else if (authOk == "true" && accessToken && subdomain && emailName) {
+ var emailSourceMode = String(Platform.Variable.GetValue("@emailSourceMode") || "template").replace(/^\s+|\s+$/g, "");
+ var existingEmailIdInput = String(Platform.Variable.GetValue("@existingEmailId") || "").replace(/^\s+|\s+$/g, "");
+ if (emailSourceMode == "existing" && existingEmailIdInput) {
+  try {
+   var existingResolved = resolveExistingEmailReference(existingEmailIdInput, subdomain, accessToken);
+   if (existingResolved.ok) {
+    if (existingResolved.asset) {
+     newEmailId = existingResolved.assetId || String(existingResolved.asset.id || "");
+     journeyEmailId = existingResolved.legacyId || extractLegacyEmailId(existingResolved.asset);
+    } else {
+     newEmailId = existingResolved.assetId;
+     journeyEmailId = existingResolved.legacyId;
+    }
+    if (!journeyEmailId && newEmailId) {
+     journeyEmailId = String(newEmailId);
+    }
+    step3bResult = " Step 3b OK - Existing email used (no duplicate).";
+   } else {
+    step3bResult = " Step 3b FAILED - " + (existingResolved.message || "Existing email could not be resolved.");
+   }
+  } catch (existingEx) {
+   step3bResult = " Step 3b FAILED - Existing email lookup failed: " + (existingEx.message || String(existingEx));
+  }
+ } else if (sourceEmailId) {
  try {
    var templateUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + sourceEmailId;
    var getReq = new Script.Util.HttpRequest(templateUrl);
@@ -826,6 +982,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
    }
  } catch (e) {
    step3bResult = " Step 3b SKIP - Email not duplicated: " + (e.message || String(e));
+ }
  }
 }
 Platform.Variable.SetValue("@newEmailId", newEmailId);
@@ -2155,6 +2312,22 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
        </div>
        <div class="question-header" style="margin-top: 24px;">
          <div class="question-number">5</div>
+         <div class="question-text">Email</div>
+       </div>
+       <div class="form-group">
+         <label class="form-label" for="emailSourceMode">Email source</label>
+         <select class="select-control" id="emailSourceMode" name="emailSourceMode">
+           <option value="template" %%[ IF @emailSourceMode != "existing" THEN ]%%selected%%[ ENDIF ]%%>Choose email template</option>
+           <option value="existing" %%[ IF @emailSourceMode == "existing" THEN ]%%selected%%[ ENDIF ]%%>Existing email</option>
+         </select>
+       </div>
+       <div class="form-group" id="existingEmailIdGroup"%%[ IF @emailSourceMode != "existing" THEN ]%% style="display:none;"%%[ ENDIF ]%%>
+         <label class="form-label" for="existingEmailId">Existing email name or asset ID</label>
+         <input type="text" class="textarea-control" id="existingEmailId" name="existingEmailId" value="%%=v(@existingEmailId)=%%" placeholder="e.g. My_Campaign_Email or 12345678">
+         <p style="font-size:11px;color:#6b7280;margin-top:6px;">Exact Content Builder email name, or numeric asset ID. No duplicate is created.</p>
+       </div>
+       <div id="emailTemplateCardsWrap"%%[ IF @emailSourceMode == "existing" THEN ]%% style="display:none;"%%[ ENDIF ]%%>
+       <div class="question-header" style="margin-top: 16px;">
          <div class="question-text">Choose Email Template</div>
        </div>
        <div class="email-cards">
@@ -2178,6 +2351,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
          %%[ NEXT @ti ELSE ]%%
          <div class="maker-alert" role="alert">Template config missing in `bd_sst_email_templates` (email_type=template).</div>
          %%[ ENDIF ]%%
+       </div>
        </div>
        <div class="question-header" style="margin-top: 24px;">
          <div class="question-number">6</div>
@@ -2342,7 +2516,23 @@ Your journey and email are in Marketing Cloud. Open them below or return to the 
    var btn = document.getElementById('submitBtn');
    var btnText = document.getElementById('btnText');
    var btnSpinner = document.getElementById('btnSpinner');
-   form.addEventListener('submit', function() {
+   form.addEventListener('submit', function(e) {
+     var sourceModeEl = document.getElementById('emailSourceMode');
+     var existingIdEl = document.getElementById('existingEmailId');
+     if (sourceModeEl && sourceModeEl.value === 'existing') {
+       if (!existingIdEl || !existingIdEl.value.trim()) {
+         e.preventDefault();
+         window.alert('Enter the existing email name or Content Builder asset ID.');
+         return;
+       }
+     } else if (sourceModeEl && sourceModeEl.value === 'template') {
+       var selectedTemplate = form.querySelector('input[name="emailId"]:checked');
+       if (!selectedTemplate) {
+         e.preventDefault();
+         window.alert('Choose an email template.');
+         return;
+       }
+     }
      btn.disabled = true;
      if (btnText) btnText.textContent = 'Creating...';
      if (btnSpinner) btnSpinner.style.display = 'inline-block';
@@ -2401,6 +2591,20 @@ Your journey and email are in Marketing Cloud. Open them below or return to the 
      card.querySelector('input[type="radio"]').checked = true;
    });
  });
+ var emailSourceModeEl = document.getElementById('emailSourceMode');
+ var existingEmailIdGroup = document.getElementById('existingEmailIdGroup');
+ var emailTemplateCardsWrap = document.getElementById('emailTemplateCardsWrap');
+ if (emailSourceModeEl) {
+   emailSourceModeEl.addEventListener('change', function() {
+     var useExisting = emailSourceModeEl.value === 'existing';
+     if (existingEmailIdGroup) {
+       existingEmailIdGroup.style.display = useExisting ? 'block' : 'none';
+     }
+     if (emailTemplateCardsWrap) {
+       emailTemplateCardsWrap.style.display = useExisting ? 'none' : 'block';
+     }
+   });
+ }
  var showLogBtn = document.getElementById('showLogBtn');
  var apiLog = document.getElementById('apiLog');
  if (showLogBtn && apiLog) {
