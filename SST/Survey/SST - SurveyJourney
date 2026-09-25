@@ -59,6 +59,8 @@ IF Empty(@signatureChoice) OR (@signatureChoice != "standard" AND @signatureChoi
 ENDIF
 SET @selectedSurveyId = Trim(RequestParameter("selectedSurveyId"))
 SET @emailId = RequestParameter("emailId")
+SET @emailRowId = Trim(RequestParameter("emailRowId"))
+SET @templateAssetId = Trim(RequestParameter("templateAssetId"))
 SET @emailSourceMode = Trim(RequestParameter("emailSourceMode"))
 SET @existingEmailId = Trim(RequestParameter("existingEmailId"))
 IF Empty(@emailSourceMode) OR (@emailSourceMode != "existing" AND @emailSourceMode != "template") THEN
@@ -112,6 +114,33 @@ SET @templateCount = RowCount(@templateRows)
 IF @templateCount > 0 THEN
  SET @templateConfigOk = "true"
  SET @defaultEmailId = Trim(Field(Row(@templateRows,1),"email_id"))
+ENDIF
+IF Empty(@emailRowId) THEN
+ SET @emailRowId = @emailId
+ENDIF
+IF @previewFlow == "1" AND NOT Empty(@emailRowId) AND (Empty(@bodySlotKey) OR Empty(@headerSlotKey) OR Empty(@buttonSlotKey) OR Empty(@signatureSlotKey) OR Empty(@templateEmailName) OR Empty(@templateAssetId)) THEN
+ SET @slotKeyLookupRows = LookupRows("bd_sst_email_templates","email_id",@emailRowId)
+ IF RowCount(@slotKeyLookupRows) > 0 THEN
+  SET @slotKeyLookupRow = Row(@slotKeyLookupRows,1)
+  IF Empty(@bodySlotKey) THEN
+   SET @bodySlotKey = Trim(Field(@slotKeyLookupRow,"body_slot_key"))
+  ENDIF
+  IF Empty(@headerSlotKey) THEN
+   SET @headerSlotKey = Trim(Field(@slotKeyLookupRow,"header_slot_key"))
+  ENDIF
+  IF Empty(@buttonSlotKey) THEN
+   SET @buttonSlotKey = Trim(Field(@slotKeyLookupRow,"button_slot_key"))
+  ENDIF
+  IF Empty(@signatureSlotKey) THEN
+   SET @signatureSlotKey = Trim(Field(@slotKeyLookupRow,"signature_slot_key"))
+  ENDIF
+  IF Empty(@templateEmailName) THEN
+   SET @templateEmailName = Trim(Field(@slotKeyLookupRow,"email_name"))
+  ENDIF
+  IF Empty(@templateAssetId) THEN
+   SET @templateAssetId = Trim(Field(@slotKeyLookupRow,"template_id"))
+  ENDIF
+ ENDIF
 ENDIF
 IF @audienceSource == "dataextension" THEN
  SET @createEmailOnly = "0"
@@ -295,6 +324,8 @@ IF @showForm != "true" THEN
       SET @resultText = "Enter the source Data Extension name or key."
     ELSEIF @emailSourceMode == "existing" AND Empty(@existingEmailId) THEN
       SET @resultText = "Enter the existing email name or Content Builder asset ID."
+    ELSEIF @emailSourceMode != "existing" AND @previewFlow == "1" AND (Empty(@bodySlotKey) OR Empty(@headerSlotKey) OR Empty(@buttonSlotKey) OR Empty(@signatureSlotKey)) THEN
+      SET @resultText = "Survey template config in bd_sst_email_templates is missing slot keys (body_slot_key, header_slot_key, button_slot_key, signature_slot_key)."
     ELSEIF @audienceSource != "dataextension" AND @createEmailOnly != "1" AND (Empty(@campaignId) OR Length(@campaignId) < 15) THEN
       SET @resultText = "Enter a valid Salesforce Campaign ID (15 or 18 characters)."
     ELSE
@@ -307,6 +338,8 @@ IF @showForm != "true" THEN
        SET @subdomain = Field(@row,"subdomain")
        IF @emailSourceMode == "existing" THEN
          SET @sourceEmailId = @existingEmailId
+       ELSEIF NOT Empty(@templateAssetId) THEN
+         SET @sourceEmailId = @templateAssetId
        ELSE
          SET @sourceEmailId = @emailId
        ENDIF
@@ -1485,10 +1518,10 @@ function applySurveyEmailSlots(payload) {
   return;
  }
  var previewFlow = Platform.Variable.GetValue("@previewFlow") == "1";
- var bodySlotKey = defaultSurveySlotKey(Platform.Variable.GetValue("@bodySlotKey"), "1s336usuarzbody");
- var headerSlotKey = defaultSurveySlotKey(Platform.Variable.GetValue("@headerSlotKey"), "1s336usuarzheader");
- var buttonSlotKey = defaultSurveySlotKey(Platform.Variable.GetValue("@buttonSlotKey"), "1s336usuarzbutton");
- var signatureSlotKey = defaultSurveySlotKey(Platform.Variable.GetValue("@signatureSlotKey"), "1s336usuarzsignature");
+ var bodySlotKey = defaultSurveySlotKey(Platform.Variable.GetValue("@bodySlotKey"), "");
+ var headerSlotKey = defaultSurveySlotKey(Platform.Variable.GetValue("@headerSlotKey"), "");
+ var buttonSlotKey = defaultSurveySlotKey(Platform.Variable.GetValue("@buttonSlotKey"), "");
+ var signatureSlotKey = defaultSurveySlotKey(Platform.Variable.GetValue("@signatureSlotKey"), "");
  var surveyIdVal = Platform.Variable.GetValue("@surveyId") || "";
  var emailHeadlineText = resolveSurveyEmailHeadline();
  var linkSurveyName = resolveSurveyLinkSubset();
@@ -1843,6 +1876,12 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          payload.category = { id: template.category.id };
        }
      } else if (assetTypeId === 207) {
+       if (!sourceTemplate) {
+         var deTemplateId = String(Platform.Variable.GetValue("@templateAssetId") || "").replace(/^\s+|\s+$/g, "");
+         if (deTemplateId) {
+           sourceTemplate = { id: deTemplateId };
+         }
+       }
        if (sourceTemplate) {
          var fetchedTemplate = fetchAssetById(sourceTemplate.id, subdomain, accessToken);
          if (fetchedTemplate.ok && fetchedTemplate.asset) {
@@ -1852,7 +1891,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
            step3bResult = " Step 3b SKIP - Email not created: Template asset fetch failed for template ID " + sourceTemplate.id + " with HTTP " + fetchedTemplate.statusCode + " - " + (fetchedTemplate.responseText || "No response body.") + debugPrefix;
          }
        } else {
-         step3bResult = " Step 3b SKIP - Email not created: Source asset is template-based email but views.html.template is missing." + debugPrefix;
+         step3bResult = " Step 3b SKIP - Email not created: Source asset is template-based email but views.html.template is missing and bd_sst_email_templates template_id is empty." + debugPrefix;
        }
      } else if (assetTypeId === 208) {
        payload = buildBasePayload(template, emailName, 208);
@@ -4175,7 +4214,7 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
       SET @cardLabel = Concat(Substring(@cardLabel,1,10),"...")
     ENDIF
 ]%%
-               <label class="email-card %%[ IF @emailId == @cardEmailId THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@cardEmailId)=%%" data-email-name="%%=v(@cardEmailName)=%%" data-body-slot-key="%%=v(@cardBodySlotKey)=%%" data-header-slot-key="%%=v(@cardHeaderSlotKey)=%%" data-button-slot-key="%%=v(@cardButtonSlotKey)=%%" data-signature-slot-key="%%=v(@cardSignatureSlotKey)=%%" data-preview-renderer="bg_header">
+               <label class="email-card %%[ IF @emailId == @cardEmailId THEN ]%%selected%%[ ENDIF ]%%" data-email-id="%%=v(@cardEmailId)=%%" data-template-id="%%=v(@cardTemplateId)=%%" data-email-name="%%=v(@cardEmailName)=%%" data-body-slot-key="%%=v(@cardBodySlotKey)=%%" data-header-slot-key="%%=v(@cardHeaderSlotKey)=%%" data-button-slot-key="%%=v(@cardButtonSlotKey)=%%" data-signature-slot-key="%%=v(@cardSignatureSlotKey)=%%" data-preview-renderer="bg_header">
                  <input type="radio" name="emailId" value="%%=v(@cardEmailId)=%%" %%[ IF @emailId == @cardEmailId THEN ]%%checked%%[ ENDIF ]%%>
                  <img class="email-card-img" src="%%=v(@cardEmailPreview)=%%" alt="%%=v(@cardEmailName)=%%">
                  <div class="email-card-label">%%=v(@cardLabel)=%%</div>
@@ -4225,12 +4264,14 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
      <input type="hidden" name="emailSourceMode" id="step2EmailSourceMode" value="">
      <input type="hidden" name="existingEmailId" id="step2ExistingEmailId" value="">
      <input type="hidden" name="emailId" id="step2EmailId" value="">
+     <input type="hidden" name="emailRowId" id="step2EmailRowId" value="">
+     <input type="hidden" name="templateAssetId" id="step2TemplateAssetId" value="">
      <input type="hidden" name="addTaskActivity" id="step2AddTaskActivity" value="">
      <input type="hidden" name="bodySlotKey" id="step2BodySlotKey" value="">
      <input type="hidden" name="headerSlotKey" id="step2HeaderSlotKey" value="">
      <input type="hidden" name="buttonSlotKey" id="step2ButtonSlotKey" value="">
      <input type="hidden" name="signatureSlotKey" id="step2SignatureSlotKey" value="">
-     <input type="hidden" name="templateEmailName" id="step2TemplateEmailName" value="survey">
+     <input type="hidden" name="templateEmailName" id="step2TemplateEmailName" value="">
      <input type="hidden" name="emailBodyText" id="step2EmailBodyText" value="">
      <input type="hidden" name="surveyId" id="step2SurveyIdField" value="">
      <input type="hidden" id="step2SurveyName" value="">
@@ -4660,14 +4701,19 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
    document.getElementById('step2SendClassificationId').value = (document.getElementById('sendClassificationId') || {}).value || '';
    document.getElementById('step2EmailSourceMode').value = sourceModeEl ? sourceModeEl.value : 'template';
    document.getElementById('step2ExistingEmailId').value = existingIdEl ? existingIdEl.value : '';
-   document.getElementById('step2EmailId').value = sourceModeEl && sourceModeEl.value === 'existing' ? '' : (card ? card.getAttribute('data-email-id') : '');
+   var cardEmailId = card ? (card.getAttribute('data-email-id') || '') : '';
+   var cardTemplateId = card ? (card.getAttribute('data-template-id') || '') : '';
+   var cardEmailName = card ? (card.getAttribute('data-email-name') || '') : '';
+   document.getElementById('step2EmailRowId').value = sourceModeEl && sourceModeEl.value === 'existing' ? '' : cardEmailId;
+   document.getElementById('step2TemplateAssetId').value = sourceModeEl && sourceModeEl.value === 'existing' ? '' : cardTemplateId;
+   document.getElementById('step2EmailId').value = sourceModeEl && sourceModeEl.value === 'existing' ? '' : (cardTemplateId || cardEmailId);
    var taskCb = step1Form.querySelector('input[name="addTaskActivity"]');
    document.getElementById('step2AddTaskActivity').value = taskCb && taskCb.checked ? '1' : '0';
-   document.getElementById('step2BodySlotKey').value = card ? (card.getAttribute('data-body-slot-key') || '1s336usuarzbody') : '1s336usuarzbody';
-   document.getElementById('step2HeaderSlotKey').value = card ? (card.getAttribute('data-header-slot-key') || '1s336usuarzheader') : '1s336usuarzheader';
-   document.getElementById('step2ButtonSlotKey').value = card ? (card.getAttribute('data-button-slot-key') || '1s336usuarzbutton') : '1s336usuarzbutton';
-   document.getElementById('step2SignatureSlotKey').value = card ? (card.getAttribute('data-signature-slot-key') || '1s336usuarzsignature') : '1s336usuarzsignature';
-   document.getElementById('step2TemplateEmailName').value = 'survey';
+   document.getElementById('step2BodySlotKey').value = card ? (card.getAttribute('data-body-slot-key') || '') : '';
+   document.getElementById('step2HeaderSlotKey').value = card ? (card.getAttribute('data-header-slot-key') || '') : '';
+   document.getElementById('step2ButtonSlotKey').value = card ? (card.getAttribute('data-button-slot-key') || '') : '';
+   document.getElementById('step2SignatureSlotKey').value = card ? (card.getAttribute('data-signature-slot-key') || '') : '';
+   document.getElementById('step2TemplateEmailName').value = cardEmailName;
    document.getElementById('step2SurveyIdField').value = surveySelect.value;
    document.getElementById('step2SurveyName').value = surveyDisplayName;
    var subjectInput = document.getElementById('step2EmailSubjectLine');
