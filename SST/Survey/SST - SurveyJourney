@@ -1426,19 +1426,17 @@ function applyBodyToSlotPreview(payload, slotKey, blockKey, bodyHtml) {
   htmlView.template.slots[slotKey] = cloneObject(slot);
  }
 }
-function minimizeNestedTemplateRefForPost(payload) {
+function syncSurveyHtmlTemplateForPost(payload) {
  var htmlView;
- var nested;
  var templateId;
  if (!payload || !payload.views || !payload.views.html) {
   return;
  }
  htmlView = payload.views.html;
- nested = htmlView.template;
- if (!nested || typeof nested !== "object") {
+ if (!htmlView.template || typeof htmlView.template !== "object") {
   return;
  }
- templateId = parseInt(nested.id, 10);
+ templateId = parseInt(htmlView.template.id, 10);
  if (isNaN(templateId)) {
   return;
  }
@@ -1942,7 +1940,6 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
      var debugPrefix = " Source assetType: " + assetTypeId + ". Has template ref: " + (sourceTemplate ? "yes" : "no") + ". Slot keys: " + (slotKeys.length ? slotKeys.join(",") : "none") + ".";
      var payloadDebug = "";
      if (assetTypeId === 4) {
-       var templateRef = buildTemplateReference(template, template.content || htmlContent, template.slots || htmlSlots);
        var templateSlots = (template.slots && typeof template.slots === "object") ? cloneObject(template.slots) : cloneObject(htmlSlots || {});
        payload = {
          name: emailName,
@@ -1952,7 +1949,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
            subjectline: { content: subjectlineContent },
            preheader: { content: preheaderContent },
            html: {
-             template: templateRef,
+             template: buildMinimalTemplateRef(template),
              content: template.content || htmlContent || "",
              slots: templateSlots || {}
            },
@@ -1960,9 +1957,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          }
        };
        applyTextSettings(payload, textContent);
-       if (template.category && template.category.id) {
-         payload.category = { id: template.category.id };
-       }
+       payload.category = { id: SST_EMAIL_CATEGORY_ID };
      } else if (assetTypeId === 207) {
        if (sourceTemplate) {
          var fetchedTemplate = fetchAssetById(sourceTemplate.id, subdomain, accessToken);
@@ -2030,7 +2025,8 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
            surveyNameForEmail
          );
        }
-       minimizeNestedTemplateRefForPost(payload);
+       syncSurveyHtmlTemplateForPost(payload);
+       payload = deepStripCreateFields(payload, false);
        var assetUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets";
        var postReq = new Script.Util.HttpRequest(assetUrl);
        postReq.emptyContentHandling = 0;
