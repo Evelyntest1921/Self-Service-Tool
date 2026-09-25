@@ -17,6 +17,7 @@ SET @headerSlotKey = Trim(RequestParameter("headerSlotKey"))
 SET @buttonSlotKey = Trim(RequestParameter("buttonSlotKey"))
 SET @templateEmailName = Trim(RequestParameter("templateEmailName"))
 SET @emailHeadline = Trim(RequestParameter("emailHeadline"))
+SET @emailSubset = Trim(RequestParameter("emailSubset"))
 SET @signatureChoice = Trim(RequestParameter("signatureChoice"))
 SET @signatureSlotKey = Trim(RequestParameter("signatureSlotKey"))
 IF Empty(@signatureChoice) OR (@signatureChoice != "standard" AND @signatureChoice != "dm" AND @signatureChoice != "none") THEN
@@ -1415,11 +1416,19 @@ function defaultSurveySlotKey(slotKey, fallbackKey) {
  }
  return fallbackKey;
 }
-function resolveSurveyLinkDisplayName() {
+function resolveSurveyEmailHeadline() {
  var headline = String(Platform.Variable.GetValue("@emailHeadline") || "").replace(/^\s+|\s+$/g, "");
  var masterName = String(Platform.Variable.GetValue("@surveyName") || "").replace(/^\s+|\s+$/g, "");
  if (headline) {
   return headline;
+ }
+ return masterName;
+}
+function resolveSurveyLinkSubset() {
+ var subset = String(Platform.Variable.GetValue("@emailSubset") || "").replace(/^\s+|\s+$/g, "");
+ var masterName = String(Platform.Variable.GetValue("@surveyName") || "").replace(/^\s+|\s+$/g, "");
+ if (subset) {
+  return subset;
  }
  return masterName;
 }
@@ -1433,13 +1442,14 @@ function applySurveyEmailSlots(payload) {
  var buttonSlotKey = defaultSurveySlotKey(Platform.Variable.GetValue("@buttonSlotKey"), "1s336usuarzbutton");
  var signatureSlotKey = defaultSurveySlotKey(Platform.Variable.GetValue("@signatureSlotKey"), "1s336usuarzsignature");
  var surveyIdVal = Platform.Variable.GetValue("@surveyId") || "";
- var linkDisplayName = resolveSurveyLinkDisplayName();
+ var emailHeadlineText = resolveSurveyEmailHeadline();
+ var linkSurveyName = resolveSurveyLinkSubset();
  var takeBase = Platform.Variable.GetValue("@surveyTakeUrl") || "";
- if (headerSlotKey && linkDisplayName) {
-  applySlotHtmlContentPreview(payload, headerSlotKey, wrapSurveyHeaderHtmlForSlot(linkDisplayName));
+ if (headerSlotKey && emailHeadlineText) {
+  applySlotHtmlContentPreview(payload, headerSlotKey, wrapSurveyHeaderHtmlForSlot(emailHeadlineText));
  }
  if (buttonSlotKey && surveyIdVal) {
-  var invitationHref = buildEmailSurveyHref(takeBase, surveyIdVal, linkDisplayName);
+  var invitationHref = buildEmailSurveyHref(takeBase, surveyIdVal, linkSurveyName);
   applySlotHtmlContentPreview(payload, buttonSlotKey, wrapSurveyInvitationButtonHtml(invitationHref));
  }
  if (!previewFlow) {
@@ -1841,7 +1851,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
        applySurveyEmailSlots(payload);
        var surveyIdForEmail = Platform.Variable.GetValue("@surveyId") || "";
        var surveyTakeUrlForEmail = Platform.Variable.GetValue("@surveyTakeUrl") || "";
-       var surveyNameForEmail = resolveSurveyLinkDisplayName();
+       var surveyNameForEmail = resolveSurveyLinkSubset();
        if (surveyIdForEmail && surveyTakeUrlForEmail) {
          payload = injectSurveyLinkIntoPayload(
            payload,
@@ -3524,7 +3534,12 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
            <div class="form-group">
              <label class="form-label" for="step2Headline">Headline</label>
              <input class="form-input" type="text" id="step2Headline" name="emailHeadline" value="" placeholder="Defaults to survey name">
-             <p style="font-size:11px;color:#6b7280;margin-top:6px;">Shown in the email header and passed as surveyName on the Take Survey link.</p>
+             <p style="font-size:11px;color:#6b7280;margin-top:6px;">Shown in the email header only.</p>
+           </div>
+           <div class="form-group">
+             <label class="form-label" for="step2Subset">Subset</label>
+             <input class="form-input" type="text" id="step2Subset" name="emailSubset" value="" placeholder="Defaults to survey name">
+             <p style="font-size:11px;color:#6b7280;margin-top:6px;">Passed as surveyName on the Take Survey link.</p>
            </div>
            <div class="form-group">
              <label class="form-label" for="step2BodyBg">Body</label>
@@ -3538,7 +3553,7 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
                <option value="dm">Distributed Marketing</option>
              </select>
            </div>
-           <p style="font-size:11px;color:#6b7280;margin-top:0;">Take Survey link includes survey ID, headline as surveyName, and a subscriber-key merge for contact at send.</p>
+           <p style="font-size:11px;color:#6b7280;margin-top:0;">Take Survey link includes survey ID, Subset as surveyName, and a subscriber-key merge for contact at send.</p>
            <div class="form-group">
              <label class="form-label" for="step2InvitationPreview">Invitation link (at send)</label>
              <input class="form-input" type="text" id="step2InvitationPreview" readonly>
@@ -3658,11 +3673,11 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
   return '';
  }
  function renderSurveyPreview(state) {
-  var headlineFormatted = escapeHtml(formatSurveyHeaderText(state.linkDisplayName || state.surveyName || ''));
+  var headlineFormatted = escapeHtml(formatSurveyHeaderText(state.emailHeadline || state.surveyName || ''));
   var greeting = escapeHtml(state.greeting || 'Hello,');
   var textBody = textToHtml(state.body || '');
-  var linkName = state.linkDisplayName || state.surveyName || '';
-  var surveyUrl = buildInvitationPreviewUrl(state.takeBase, state.surveyId, linkName);
+  var linkSurveyName = state.linkSurveyName || state.surveyName || '';
+  var surveyUrl = buildInvitationPreviewUrl(state.takeBase, state.surveyId, linkSurveyName);
   var sigLabel = signaturePreviewLabel(state.signatureChoice);
   var sigBlock = sigLabel
    ? '<p style="margin:20px 0 0;font-family:\'IBM Plex Sans\',Arial,Helvetica,sans-serif;font-size:14px;color:#161616;">' + escapeHtml(sigLabel) + '</p>'
@@ -3713,6 +3728,7 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
   var preheaderEl = document.getElementById('step2Preheader');
   var bodyEl = document.getElementById('step2BodyBg');
   var headlineEl = document.getElementById('step2Headline');
+  var subsetEl = document.getElementById('step2Subset');
   var surveyIdField = document.getElementById('step2SurveyIdField');
   var surveyNameEl = document.getElementById('step2SurveyName');
   var signatureEl = document.getElementById('step2SignatureChoice');
@@ -3724,7 +3740,8 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
   var hiddenBody = document.getElementById('step2EmailBodyText');
   var surveyId = surveyIdField ? surveyIdField.value.trim() : '';
   var masterSurveyName = surveyNameEl ? surveyNameEl.value.trim() : '';
-  var linkDisplayName = headlineEl && headlineEl.value.trim() ? headlineEl.value.trim() : masterSurveyName;
+  var emailHeadline = headlineEl && headlineEl.value.trim() ? headlineEl.value.trim() : masterSurveyName;
+  var linkSurveyName = subsetEl && subsetEl.value.trim() ? subsetEl.value.trim() : masterSurveyName;
   var takeBase = takeUrlEl ? takeUrlEl.value.trim() : '';
   var signatureChoice = signatureEl ? signatureEl.value : 'none';
   var state = {
@@ -3733,7 +3750,8 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
    body: bodyEl ? bodyEl.value : '',
    surveyId: surveyId,
    surveyName: masterSurveyName,
-   linkDisplayName: linkDisplayName,
+   emailHeadline: emailHeadline,
+   linkSurveyName: linkSurveyName,
    takeBase: takeBase,
    signatureChoice: signatureChoice,
    greeting: 'Hello,'
@@ -3742,7 +3760,7 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
   if (previewSubject) previewSubject.textContent = state.subject || 'Email subject';
   if (previewPreheader) previewPreheader.textContent = state.preheader || '';
   if (invitePreviewEl) {
-   invitePreviewEl.value = surveyId ? buildInvitationPreviewUrl(takeBase, surveyId, linkDisplayName) : '';
+   invitePreviewEl.value = surveyId ? buildInvitationPreviewUrl(takeBase, surveyId, linkSurveyName) : '';
   }
   if (previewFrame) {
    previewFrame.srcdoc = renderSurveyPreview(state);
@@ -3835,11 +3853,15 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
    document.getElementById('step2SurveyName').value = surveyDisplayName;
    var subjectInput = document.getElementById('step2EmailSubjectLine');
    var headlineInput = document.getElementById('step2Headline');
+   var subsetInput = document.getElementById('step2Subset');
    if (subjectInput && !subjectInput.value.trim()) {
     subjectInput.value = surveyDisplayName;
    }
    if (headlineInput) {
     headlineInput.value = surveyDisplayName;
+   }
+   if (subsetInput) {
+    subsetInput.value = surveyDisplayName;
    }
    step1.classList.add('create-step-hidden');
    step2.classList.remove('create-step-hidden');
@@ -3852,7 +3874,7 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
    step1.classList.remove('create-step-hidden');
   });
  }
- ['step2Preheader','step2EmailSubjectLine','step2Headline','step2BodyBg','step2SignatureChoice'].forEach(function(id) {
+ ['step2Preheader','step2EmailSubjectLine','step2Headline','step2Subset','step2BodyBg','step2SignatureChoice'].forEach(function(id) {
   var el = document.getElementById(id);
   if (el) el.addEventListener('input', syncPreview);
  });
