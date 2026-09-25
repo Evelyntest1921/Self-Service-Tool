@@ -1421,6 +1421,63 @@ function applyBodyToSlotPreview(payload, slotKey, blockKey, bodyHtml) {
  if (!slot.content) {
   slot.content = '<div data-type="block" data-key="' + blockKey + '"></div>';
  }
+ if (htmlView.template && htmlView.template.slots && htmlView.template.slots[slotKey] && typeof htmlView.template.slots[slotKey] === "object") {
+  htmlView.template.slots[slotKey] = cloneObject(slot);
+ }
+}
+function enrichPayloadSlotsFromEmailRowMaster(payload, emailRowIdValue, cloneSourceId, subdomain, accessToken) {
+ var emailRowId = String(emailRowIdValue || "").replace(/^\s+|\s+$/g, "");
+ var cloneId = String(cloneSourceId || "").replace(/^\s+|\s+$/g, "");
+ var rowFetch;
+ var rowAsset;
+ var rowHtml;
+ var rowSlots;
+ var nested;
+ if (!payload || !payload.views || !payload.views.html || !emailRowId || emailRowId === cloneId) {
+  return;
+ }
+ rowFetch = fetchAssetById(emailRowId, subdomain, accessToken);
+ if (!rowFetch.ok || !rowFetch.asset) {
+  return;
+ }
+ rowAsset = rowFetch.asset;
+ rowHtml = (rowAsset.views && rowAsset.views.html && typeof rowAsset.views.html === "object") ? rowAsset.views.html : {};
+ rowSlots = (rowHtml.slots && typeof rowHtml.slots === "object") ? rowHtml.slots : {};
+ if (!objectKeys(rowSlots).length) {
+  return;
+ }
+ payload.views.html.slots = cloneObject(rowSlots);
+ if (rowHtml.content) {
+  payload.views.html.content = rowHtml.content;
+ }
+ nested = payload.views.html.template;
+ if (nested && typeof nested === "object") {
+  nested.slots = cloneObject(rowSlots);
+  if (!nested.content && rowHtml.content) {
+   nested.content = rowHtml.content;
+  }
+ }
+}
+function minimizeNestedTemplateRefForPost(payload) {
+ var htmlView;
+ var nested;
+ var templateId;
+ if (!payload || !payload.views || !payload.views.html) {
+  return;
+ }
+ htmlView = payload.views.html;
+ nested = htmlView.template;
+ if (!nested || typeof nested !== "object") {
+  return;
+ }
+ templateId = parseInt(nested.id, 10);
+ if (isNaN(templateId)) {
+  return;
+ }
+ htmlView.template = {
+  id: templateId,
+  assetType: { id: 4, name: "template" }
+ };
 }
 function applySlotHtmlContentPreview(payload, slotKey, htmlContent) {
  var slotsForBlock;
@@ -1938,6 +1995,13 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          }
        };
        payloadDebug = truncateString(Platform.Function.Stringify(debugObj), 2500);
+       enrichPayloadSlotsFromEmailRowMaster(
+         payload,
+         Platform.Variable.GetValue("@emailRowId"),
+         sourceEmailId,
+         subdomain,
+         accessToken
+       );
        applySurveyEmailSlots(payload);
        var surveyIdForEmail = Platform.Variable.GetValue("@surveyId") || "";
        var surveyTakeUrlForEmail = Platform.Variable.GetValue("@surveyTakeUrl") || "";
@@ -1950,6 +2014,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
            surveyNameForEmail
          );
        }
+       minimizeNestedTemplateRefForPost(payload);
        var assetUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets";
        var postReq = new Script.Util.HttpRequest(assetUrl);
        postReq.emptyContentHandling = 0;
