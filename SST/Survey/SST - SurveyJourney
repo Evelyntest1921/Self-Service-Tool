@@ -1415,6 +1415,14 @@ function defaultSurveySlotKey(slotKey, fallbackKey) {
  }
  return fallbackKey;
 }
+function resolveSurveyLinkDisplayName() {
+ var headline = String(Platform.Variable.GetValue("@emailHeadline") || "").replace(/^\s+|\s+$/g, "");
+ var masterName = String(Platform.Variable.GetValue("@surveyName") || "").replace(/^\s+|\s+$/g, "");
+ if (headline) {
+  return headline;
+ }
+ return masterName;
+}
 function applySurveyEmailSlots(payload) {
  if (!payload || !payload.views) {
   return;
@@ -1425,13 +1433,13 @@ function applySurveyEmailSlots(payload) {
  var buttonSlotKey = defaultSurveySlotKey(Platform.Variable.GetValue("@buttonSlotKey"), "1s336usuarzbutton");
  var signatureSlotKey = defaultSurveySlotKey(Platform.Variable.GetValue("@signatureSlotKey"), "1s336usuarzsignature");
  var surveyIdVal = Platform.Variable.GetValue("@surveyId") || "";
- var surveyNameVal = Platform.Variable.GetValue("@surveyName") || "";
+ var linkDisplayName = resolveSurveyLinkDisplayName();
  var takeBase = Platform.Variable.GetValue("@surveyTakeUrl") || "";
- if (headerSlotKey && surveyNameVal) {
-  applySlotHtmlContentPreview(payload, headerSlotKey, wrapSurveyHeaderHtmlForSlot(surveyNameVal));
+ if (headerSlotKey && linkDisplayName) {
+  applySlotHtmlContentPreview(payload, headerSlotKey, wrapSurveyHeaderHtmlForSlot(linkDisplayName));
  }
  if (buttonSlotKey && surveyIdVal) {
-  var invitationHref = buildEmailSurveyHref(takeBase, surveyIdVal, surveyNameVal);
+  var invitationHref = buildEmailSurveyHref(takeBase, surveyIdVal, linkDisplayName);
   applySlotHtmlContentPreview(payload, buttonSlotKey, wrapSurveyInvitationButtonHtml(invitationHref));
  }
  if (!previewFlow) {
@@ -1833,7 +1841,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
        applySurveyEmailSlots(payload);
        var surveyIdForEmail = Platform.Variable.GetValue("@surveyId") || "";
        var surveyTakeUrlForEmail = Platform.Variable.GetValue("@surveyTakeUrl") || "";
-       var surveyNameForEmail = Platform.Variable.GetValue("@surveyName") || "";
+       var surveyNameForEmail = resolveSurveyLinkDisplayName();
        if (surveyIdForEmail && surveyTakeUrlForEmail) {
          payload = injectSurveyLinkIntoPayload(
            payload,
@@ -3486,6 +3494,11 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
              <input class="form-input" type="text" id="step2EmailSubjectLine" name="emailSubjectLine" value="" placeholder="Email subject">
            </div>
            <div class="form-group">
+             <label class="form-label" for="step2Headline">Headline</label>
+             <input class="form-input" type="text" id="step2Headline" name="emailHeadline" value="" placeholder="Defaults to survey name">
+             <p style="font-size:11px;color:#6b7280;margin-top:6px;">Shown in the email header and passed as surveyName on the Take Survey link.</p>
+           </div>
+           <div class="form-group">
              <label class="form-label" for="step2BodyBg">Body</label>
              <textarea class="form-textarea" id="step2BodyBg">We would appreciate your feedback. Please take a moment to complete our brief survey.</textarea>
            </div>
@@ -3497,7 +3510,7 @@ textarea.textarea-control { min-height: 88px; resize: vertical; }
                <option value="dm">Distributed Marketing</option>
              </select>
            </div>
-           <p style="font-size:11px;color:#6b7280;margin-top:0;">Header and Take Survey link are set from your chosen survey (not editable here).</p>
+           <p style="font-size:11px;color:#6b7280;margin-top:0;">Take Survey link uses survey ID plus the headline value above.</p>
            <div class="form-group">
              <label class="form-label" for="step2SurveyIdDisplay">Survey ID</label>
              <input class="form-input" type="text" id="step2SurveyIdDisplay" readonly>
@@ -3614,16 +3627,17 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
   return base + '?id=' + encodeURIComponent(surveyId || '') + '&contact=%%=v(@SubscriberKey)=%%&surveyName=' + encodeURIComponent(surveyName || '');
  }
  function renderSurveyPreview(state) {
-  var headline = escapeHtml(formatSurveyHeaderText(state.surveyName || state.subject || ''));
+  var headlineFormatted = escapeHtml(formatSurveyHeaderText(state.linkDisplayName || state.surveyName || ''));
   var greeting = escapeHtml(state.greeting || 'Hello,');
   var textBody = textToHtml(state.body || '');
-  var surveyUrl = buildInvitationPreviewUrl(state.takeBase, state.surveyId, state.surveyName);
+  var linkName = state.linkDisplayName || state.surveyName || '';
+  var surveyUrl = buildInvitationPreviewUrl(state.takeBase, state.surveyId, linkName);
   var surveyBlock = '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="#0060F5" style="background:#0060F5;padding:10px 20px;"><a href="' + escapeHtml(surveyUrl) + '" target="_blank" style="font-family:\'IBM Plex Sans\',Arial,Helvetica,sans-serif;color:#FFFFFF;font-size:14px;text-decoration:none;">Take Survey</a></td></tr></table>';
   return [
    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#eaeaea;margin:0;padding:0;">',
    '<tr><td align="center">',
    '<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="background:#393939;max-width:100%;"><tr><td style="padding:30px;"><img src="https://image.go.magmutual.com/lib/fe2f11747364047d731d72/m/1/MM_PrimaryLogo_Reversed.png" alt="MagMutual" width="200" border="0" style="display:block;"></td></tr>',
-   '<tr><td style="padding:20px 45px 50px;font-family:Arial,Helvetica,sans-serif;color:#ffffff;"><p style="font-size:32px;line-height:36px;margin:0;color:#ffffff;">' + headline + '</p></td></tr></table>',
+   '<tr><td style="padding:20px 45px 50px;font-family:Arial,Helvetica,sans-serif;color:#ffffff;"><p style="font-size:32px;line-height:36px;margin:0;color:#ffffff;">' + headlineFormatted + '</p></td></tr></table>',
    '<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;max-width:100%;"><tr><td style="padding:20px 45px 50px;font-family:Arial,Helvetica,sans-serif;color:#161616;font-size:14px;line-height:20px;">',
    '<p style="margin:0 0 20px;">' + greeting + '</p><p style="margin:0 0 20px;">' + textBody + '</p>' + surveyBlock,
    '</td></tr></table></td></tr></table>'
@@ -3633,6 +3647,7 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
   var subjectEl = document.getElementById('step2EmailSubjectLine');
   var preheaderEl = document.getElementById('step2Preheader');
   var bodyEl = document.getElementById('step2BodyBg');
+  var headlineEl = document.getElementById('step2Headline');
   var surveyIdEl = document.getElementById('step2SurveyIdDisplay');
   var surveyNameEl = document.getElementById('step2SurveyName');
   var takeUrlEl = document.getElementById('step2TakeUrl');
@@ -3642,14 +3657,16 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
   var previewFrame = document.getElementById('previewFrame');
   var hiddenBody = document.getElementById('step2EmailBodyText');
   var surveyId = surveyIdEl ? surveyIdEl.value.trim() : '';
-  var surveyName = surveyNameEl ? surveyNameEl.value.trim() : '';
+  var masterSurveyName = surveyNameEl ? surveyNameEl.value.trim() : '';
+  var linkDisplayName = headlineEl && headlineEl.value.trim() ? headlineEl.value.trim() : masterSurveyName;
   var takeBase = takeUrlEl ? takeUrlEl.value.trim() : '';
   var state = {
    subject: subjectEl ? subjectEl.value.trim() : '',
    preheader: preheaderEl ? preheaderEl.value.trim() : '',
    body: bodyEl ? bodyEl.value : '',
    surveyId: surveyId,
-   surveyName: surveyName,
+   surveyName: masterSurveyName,
+   linkDisplayName: linkDisplayName,
    takeBase: takeBase,
    greeting: 'Hello,'
   };
@@ -3657,7 +3674,7 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
   if (previewSubject) previewSubject.textContent = state.subject || 'Email subject';
   if (previewPreheader) previewPreheader.textContent = state.preheader || '';
   if (invitePreviewEl) {
-   invitePreviewEl.value = surveyId ? buildInvitationPreviewUrl(takeBase, surveyId, surveyName) : '';
+   invitePreviewEl.value = surveyId ? buildInvitationPreviewUrl(takeBase, surveyId, linkDisplayName) : '';
   }
   if (previewFrame) previewFrame.srcdoc = renderSurveyPreview(state);
  }
@@ -3747,8 +3764,12 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
    document.getElementById('step2SurveyIdDisplay').value = surveySelect.value;
    document.getElementById('step2SurveyName').value = surveyDisplayName;
    var subjectInput = document.getElementById('step2EmailSubjectLine');
+   var headlineInput = document.getElementById('step2Headline');
    if (subjectInput && !subjectInput.value.trim()) {
-    subjectInput.value = surveyOption ? surveyOption.textContent.trim() : '';
+    subjectInput.value = surveyDisplayName;
+   }
+   if (headlineInput) {
+    headlineInput.value = surveyDisplayName;
    }
    step1.classList.add('create-step-hidden');
    step2.classList.remove('create-step-hidden');
@@ -3761,7 +3782,7 @@ Your survey journey is in Marketing Cloud%%=IIF(NOT Empty(@surveyId), Concat(" (
    step1.classList.remove('create-step-hidden');
   });
  }
- ['step2Preheader','step2EmailSubjectLine','step2BodyBg','step2SignatureChoice'].forEach(function(id) {
+ ['step2Preheader','step2EmailSubjectLine','step2Headline','step2BodyBg','step2SignatureChoice'].forEach(function(id) {
   var el = document.getElementById(id);
   if (el) el.addEventListener('input', syncPreview);
  });
