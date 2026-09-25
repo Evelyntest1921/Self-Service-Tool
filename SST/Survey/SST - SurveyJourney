@@ -1422,82 +1422,6 @@ function applyBodyToSlotPreview(payload, slotKey, blockKey, bodyHtml) {
  if (!slot.content) {
   slot.content = '<div data-type="block" data-key="' + blockKey + '"></div>';
  }
- if (htmlView.template && htmlView.template.slots && htmlView.template.slots[slotKey] && typeof htmlView.template.slots[slotKey] === "object") {
-  htmlView.template.slots[slotKey] = cloneObject(slot);
- }
-}
-function syncSurveyHtmlTemplateForPost(payload) {
- var htmlView;
- var templateId;
- if (!payload || !payload.views || !payload.views.html) {
-  return;
- }
- htmlView = payload.views.html;
- if (!htmlView.template || typeof htmlView.template !== "object") {
-  return;
- }
- templateId = parseInt(htmlView.template.id, 10);
- if (isNaN(templateId)) {
-  return;
- }
- htmlView.template = {
-  id: templateId,
-  assetType: { id: 4, name: "template" }
- };
-}
-function clearSurveySlotBlockContent(slot) {
- var blocks;
- var keys;
- var i;
- if (!slot || !slot.blocks || typeof slot.blocks !== "object") {
-  return;
- }
- blocks = slot.blocks;
- keys = objectKeys(blocks);
- for (i = 0; i < keys.length; i++) {
-  if (blocks[keys[i]] && blocks[keys[i]].content !== undefined) {
-   blocks[keys[i]].content = "";
-  }
- }
-}
-function ensureConfiguredSurveySlotsOnPayload(payload) {
- var htmlView;
- var slots;
- var nested;
- var bodyKey;
- var headerKey;
- var buttonKey;
- var signatureKey;
- var sampleSlot;
- if (!payload || !payload.views || !payload.views.html) {
-  return;
- }
- htmlView = payload.views.html;
- slots = htmlView.slots;
- if (!slots || typeof slots !== "object") {
-  htmlView.slots = {};
-  slots = htmlView.slots;
- }
- bodyKey = defaultSurveySlotKey(Platform.Variable.GetValue("@bodySlotKey"), "");
- headerKey = defaultSurveySlotKey(Platform.Variable.GetValue("@headerSlotKey"), "");
- buttonKey = defaultSurveySlotKey(Platform.Variable.GetValue("@buttonSlotKey"), "");
- signatureKey = defaultSurveySlotKey(Platform.Variable.GetValue("@signatureSlotKey"), "");
- function addMissingSlot(key, sampleKey) {
-  if (!key || slots[key] || !sampleKey || !slots[sampleKey]) {
-   return;
-  }
-  sampleSlot = cloneObject(slots[sampleKey]);
-  clearSurveySlotBlockContent(sampleSlot);
-  slots[key] = sampleSlot;
-  nested = htmlView.template;
-  if (nested && nested.slots && typeof nested.slots === "object" && !nested.slots[key]) {
-   nested.slots[key] = cloneObject(sampleSlot);
-  }
- }
- addMissingSlot(bodyKey, headerKey);
- addMissingSlot(headerKey, bodyKey);
- addMissingSlot(buttonKey, bodyKey);
- addMissingSlot(signatureKey, bodyKey);
 }
 function applySlotHtmlContentPreview(payload, slotKey, htmlContent) {
  var slotsForBlock;
@@ -1598,40 +1522,40 @@ function resolveSurveyLinkSubset() {
  return masterName;
 }
 function applySurveyEmailSlots(payload) {
+ if (Platform.Variable.GetValue("@previewFlow") != "1") {
+  return;
+ }
  if (!payload || !payload.views) {
   return;
  }
- var previewFlow = Platform.Variable.GetValue("@previewFlow") == "1";
- var bodySlotKey = defaultSurveySlotKey(Platform.Variable.GetValue("@bodySlotKey"), "");
- var headerSlotKey = defaultSurveySlotKey(Platform.Variable.GetValue("@headerSlotKey"), "");
- var buttonSlotKey = defaultSurveySlotKey(Platform.Variable.GetValue("@buttonSlotKey"), "");
- var signatureSlotKey = defaultSurveySlotKey(Platform.Variable.GetValue("@signatureSlotKey"), "");
+ var bodySlotKey = Platform.Variable.GetValue("@bodySlotKey") || "";
+ var emailBodyText = Platform.Variable.GetValue("@emailBodyText") || "";
+ var emailPreheader = Platform.Variable.GetValue("@emailPreheader") || "";
+ var headerSlotKey = Platform.Variable.GetValue("@headerSlotKey") || "";
+ var buttonSlotKey = Platform.Variable.GetValue("@buttonSlotKey") || "";
+ var signatureSlotKey = Platform.Variable.GetValue("@signatureSlotKey") || "";
+ var signatureChoice = Platform.Variable.GetValue("@signatureChoice") || "none";
+ var emailSubjectLineVal = Platform.Variable.GetValue("@emailSubjectLine") || "";
  var surveyIdVal = Platform.Variable.GetValue("@surveyId") || "";
+ var templateEmailName = String(Platform.Variable.GetValue("@templateEmailName") || "").replace(/^\s+|\s+$/g, "").toLowerCase();
  var emailHeadlineText = resolveSurveyEmailHeadline();
  var linkSurveyName = resolveSurveyLinkSubset();
  var takeBase = Platform.Variable.GetValue("@surveyTakeUrl") || "";
- if (headerSlotKey && emailHeadlineText) {
-  applySlotHtmlContentPreview(payload, headerSlotKey, wrapSurveyHeaderHtmlForSlot(emailHeadlineText));
- }
- if (buttonSlotKey && surveyIdVal) {
-  var invitationHref = buildEmailSurveyHref(takeBase, surveyIdVal, linkSurveyName);
-  applySlotHtmlContentPreview(payload, buttonSlotKey, wrapSurveyInvitationButtonHtml(invitationHref));
- }
- if (!previewFlow) {
-  return;
- }
- var emailBodyText = Platform.Variable.GetValue("@emailBodyText") || "";
- var emailPreheader = Platform.Variable.GetValue("@emailPreheader") || "";
- var emailSubjectLineVal = Platform.Variable.GetValue("@emailSubjectLine") || "";
- var signatureChoice = Platform.Variable.GetValue("@signatureChoice") || "none";
- if (emailSubjectLineVal) {
-  payload.views.subjectline = { content: String(emailSubjectLineVal) };
- }
  if (emailPreheader) {
   payload.views.preheader = { content: String(emailPreheader) };
  }
  if (bodySlotKey && emailBodyText) {
   applySlotHtmlContentPreview(payload, bodySlotKey, wrapBodyHtmlForSlotPreview(emailBodyText));
+ }
+ if (headerSlotKey && emailHeadlineText && templateEmailName === "survey") {
+  applySlotHtmlContentPreview(payload, headerSlotKey, wrapSurveyHeaderHtmlForSlot(emailHeadlineText));
+ }
+ if (buttonSlotKey && surveyIdVal && templateEmailName === "survey") {
+  var invitationHref = buildEmailSurveyHref(takeBase, surveyIdVal, linkSurveyName);
+  applySlotHtmlContentPreview(payload, buttonSlotKey, wrapSurveyInvitationButtonHtml(invitationHref));
+ }
+ if (emailSubjectLineVal) {
+  payload.views.subjectline = { content: String(emailSubjectLineVal) };
  }
  if (signatureSlotKey && signatureChoice !== "none" && signatureChoice !== "") {
   var signatureHtml = buildSignatureSlotAmpContentSurvey(signatureChoice);
@@ -1940,6 +1864,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
      var debugPrefix = " Source assetType: " + assetTypeId + ". Has template ref: " + (sourceTemplate ? "yes" : "no") + ". Slot keys: " + (slotKeys.length ? slotKeys.join(",") : "none") + ".";
      var payloadDebug = "";
      if (assetTypeId === 4) {
+       var templateRef = buildTemplateReference(template, template.content || htmlContent, template.slots || htmlSlots);
        var templateSlots = (template.slots && typeof template.slots === "object") ? cloneObject(template.slots) : cloneObject(htmlSlots || {});
        payload = {
          name: emailName,
@@ -1949,7 +1874,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
            subjectline: { content: subjectlineContent },
            preheader: { content: preheaderContent },
            html: {
-             template: buildMinimalTemplateRef(template),
+             template: templateRef,
              content: template.content || htmlContent || "",
              slots: templateSlots || {}
            },
@@ -1957,7 +1882,9 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          }
        };
        applyTextSettings(payload, textContent);
-       payload.category = { id: SST_EMAIL_CATEGORY_ID };
+       if (template.category && template.category.id) {
+         payload.category = { id: template.category.id };
+       }
      } else if (assetTypeId === 207) {
        if (sourceTemplate) {
          var fetchedTemplate = fetchAssetById(sourceTemplate.id, subdomain, accessToken);
@@ -2012,21 +1939,7 @@ if (deleteRequested == "1" && authOk == "true" && accessToken && subdomain && de
          }
        };
        payloadDebug = truncateString(Platform.Function.Stringify(debugObj), 2500);
-       ensureConfiguredSurveySlotsOnPayload(payload);
        applySurveyEmailSlots(payload);
-       var surveyIdForEmail = Platform.Variable.GetValue("@surveyId") || "";
-       var surveyTakeUrlForEmail = Platform.Variable.GetValue("@surveyTakeUrl") || "";
-       var surveyNameForEmail = resolveSurveyLinkSubset();
-       if (surveyIdForEmail && surveyTakeUrlForEmail) {
-         payload = injectSurveyLinkIntoPayload(
-           payload,
-           surveyTakeUrlForEmail,
-           surveyIdForEmail,
-           surveyNameForEmail
-         );
-       }
-       syncSurveyHtmlTemplateForPost(payload);
-       payload = deepStripCreateFields(payload, false);
        var assetUrl = "https://" + subdomain + ".rest.marketingcloudapis.com/asset/v1/content/assets";
        var postReq = new Script.Util.HttpRequest(assetUrl);
        postReq.emptyContentHandling = 0;
