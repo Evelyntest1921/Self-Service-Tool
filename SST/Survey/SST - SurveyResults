@@ -3,9 +3,10 @@ VAR @surveyId, @errorFlag, @deleteAction, @deleteSuccess, @deleteError
 VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow, @hubUrl, @surveyHomeUrl, @surveyStageUrl, @surveyAnalyticsUrl, @surveyTakeUrl, @environment, @contactTable
 VAR @journeyExitUrl, @calendarUrl, @environmentSwitchUrl, @envDisplayName, @envDisplayEmail, @envAvatarLetter, @envSwitchLabel
 VAR @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @JOURNEY_VIEW_URL, @HOME_URL, @editSidebarHtml, @detailRows, @detailRow, @isSurveyBuild, @buildNavContext, @buildNavActive, @dispSurveyId, @editSurveyUrl, @surveyPreviewUrl, @surveyEmailLink, @surveyLinkTitle, @surveyNameEncoded
-VAR @textExpandQ, @textUiPage, @textNavBase
+VAR @textExpandQ, @textUiPage, @textNavBase, @textFocus
 SET @surveyId = RequestParameter("surveyid")
 SET @jid = Trim(RequestParameter("journeyId"))
+SET @textFocus = RequestParameter("textFocus")
 SET @textExpandQ = Trim(RequestParameter("textQ"))
 SET @textUiPage = Trim(RequestParameter("textPage"))
 IF EMPTY(@textUiPage) THEN SET @textUiPage = 1 ENDIF
@@ -149,6 +150,81 @@ ENDIF
 
 
 
+%%[ IF @textFocus == "1" THEN
+VAR @focusQuestionId, @focusQuestionText, @focusResponseCount, @textPageSize, @textGlobalFirst, @textItemsRendered
+VAR @textTargetIdx, @textDePageNum, @textDeThreshold, @textOffsetInPage, @textRowInPage
+VAR @textBatchRows, @textBatchLoadedPage, @textResponse, @textTotalUiPages, @textLocalUiPage, @textPrevPage, @textNextPage
+SET @focusQuestionId = Trim(RequestParameter("textQ"))
+SET @textUiPage = Trim(RequestParameter("textPage"))
+IF EMPTY(@textUiPage) OR @textUiPage < 1 THEN SET @textUiPage = 1 ENDIF
+SET @focusQuestionText = Lookup("SST_SP_Survey_Questions_DE", "QuestionText", "SurveyID", @surveyId, "QuestionID", @focusQuestionId)
+SET @focusResponseCount = Lookup("SST_SP_Analytics_Answers", "TextResponseCount", "SurveyID", @surveyId, "QuestionID", @focusQuestionId)
+IF EMPTY(@focusResponseCount) THEN SET @focusResponseCount = 0 ENDIF
+SET @textPageSize = 20
+SET @textLocalUiPage = @textUiPage
+SET @textTotalUiPages = 1
+IF @focusResponseCount > 0 THEN
+SET @textTotalUiPages = Divide(@focusResponseCount, @textPageSize)
+IF Multiply(@textTotalUiPages, @textPageSize) < @focusResponseCount THEN
+SET @textTotalUiPages = Add(@textTotalUiPages, 1)
+ENDIF
+ENDIF
+IF @textLocalUiPage > @textTotalUiPages THEN SET @textLocalUiPage = @textTotalUiPages ENDIF
+IF @textLocalUiPage < 1 THEN SET @textLocalUiPage = 1 ENDIF
+]%%
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"></head><body>
+<div id="text-focus-fragment" data-question-id="%%=v(@focusQuestionId)=%%" data-current-page="%%=v(@textLocalUiPage)=%%" data-total-pages="%%=v(@textTotalUiPages)=%%" data-response-count="%%=v(@focusResponseCount)=%%">
+<div class="text-focus-list">
+%%[
+IF @focusResponseCount > 0 THEN
+SET @textGlobalFirst = Add(Multiply(Subtract(@textLocalUiPage, 1), @textPageSize), 1)
+SET @textItemsRendered = 0
+SET @textTargetIdx = @textGlobalFirst
+SET @textBatchLoadedPage = 0
+WHILE @textItemsRendered < @textPageSize AND @textTargetIdx <= @focusResponseCount DO
+SET @textDePageNum = 1
+SET @textDeThreshold = 500
+WHILE @textTargetIdx > @textDeThreshold DO
+SET @textDePageNum = Add(@textDePageNum, 1)
+SET @textDeThreshold = Add(@textDeThreshold, 500)
+ENDWHILE
+SET @textOffsetInPage = Mod(Subtract(@textTargetIdx, 1), 500)
+SET @textRowInPage = Add(@textOffsetInPage, 1)
+IF @textDePageNum != @textBatchLoadedPage THEN
+SET @textBatchLoadedPage = @textDePageNum
+SET @textBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @focusQuestionId, "PageNumber", @textDePageNum)
+ENDIF
+IF @textRowInPage <= RowCount(@textBatchRows) THEN
+SET @textResponse = Field(Row(@textBatchRows, @textRowInPage), "Response")
+IF NOT EMPTY(@textResponse) THEN
+SET @textItemsRendered = Add(@textItemsRendered, 1)
+]%%
+<div class="text-response-item"><div class="text-response-content"><span class="text-response-text">"%%=v(@textResponse)=%%"</span></div></div>
+%%[
+ENDIF
+ENDIF
+SET @textTargetIdx = Add(@textTargetIdx, 1)
+ENDWHILE
+ENDIF
+]%%
+</div>
+<div class="text-responses-expanded-footer">
+<div class="text-responses-pagination">
+<span class="text-responses-page-info">Page %%=v(@textLocalUiPage)=%% of %%=v(@textTotalUiPages)=%%</span>
+<div class="text-responses-page-buttons">
+%%[ IF @textLocalUiPage > 1 THEN ]%%
+<button type="button" class="btn-secondary text-responses-page-btn" data-text-page-action="prev">Previous</button>
+%%[ ENDIF ]%%
+%%[ IF @textLocalUiPage < @textTotalUiPages THEN ]%%
+<button type="button" class="btn-secondary text-responses-page-btn" data-text-page-action="next">Next</button>
+%%[ ENDIF ]%%
+</div>
+</div>
+</div>
+</div>
+</body></html>
+%%[ ELSE ]%%
 <!-- Modern Survey Analytics Detail Page -->
 <!DOCTYPE html>
 <html lang="en">
@@ -346,6 +422,18 @@ ENDIF
                 <p class="survey-analytics-loading-title">Loading survey</p>
                 <p class="survey-analytics-loading-sub">Fetching survey results and charts. This may take a moment.</p>
             </div>
+            <div id="textFocusConfig" style="display:none" data-fetch-base="%%=v(@textNavBase)=%%"></div>
+            <div id="textQuestionFocusView" class="text-question-focus-view" style="display:none">
+                <div class="text-focus-toolbar">
+                    <button type="button" class="btn-secondary text-focus-back-btn" onclick="closeTextQuestionFocus()">Back to question analysis</button>
+                </div>
+                <div class="text-focus-header">
+                    <h1 id="textFocusQuestionTitle"></h1>
+                    <p id="textFocusQuestionMeta" class="text-focus-meta"></p>
+                </div>
+                <div id="textFocusBody" class="text-focus-body"></div>
+            </div>
+            <div id="surveyAnalyticsMainWrap">
             <!-- Survey Header with Breadcrumb -->
             <div class="survey-header">
                 <div class="breadcrumb-section">
@@ -807,64 +895,9 @@ ENDIF
                             <div class="text-responses-section">
                                 <h4>Text Responses (%%=v(@responseCount)=%%)</h4>
                                 %%[
-                                VAR @isTextExpanded, @textPreviewLimit, @textPageSize, @textGlobalFirst, @textItemsRendered
-                                VAR @textTargetIdx, @textDePageNum, @textDeThreshold, @textOffsetInPage, @textRowInPage
-                                VAR @textBatchRows, @textBatchLoadedPage, @textResponse, @textTotalUiPages, @textPrevPage, @textNextPage
-                                VAR @textNavUrl, @textShowLessUrl, @textLocalUiPage, @textPreviewIdx
-                                SET @isTextExpanded = "false"
-                                IF @textExpandQ == @questionId THEN SET @isTextExpanded = "true" ENDIF
+                                VAR @textPreviewLimit, @textPreviewIdx, @textBatchRows, @textResponse, @textItemsRendered
                                 SET @textPreviewLimit = 5
-                                SET @textPageSize = 10
-                                SET @textLocalUiPage = 1
-                                IF @isTextExpanded == "true" THEN SET @textLocalUiPage = @textUiPage ENDIF
-                                IF EMPTY(@textLocalUiPage) OR @textLocalUiPage < 1 THEN SET @textLocalUiPage = 1 ENDIF
-                                SET @textTotalUiPages = 1
                                 IF @responseCount > 0 THEN
-                                SET @textTotalUiPages = Divide(@responseCount, @textPageSize)
-                                IF Multiply(@textTotalUiPages, @textPageSize) < @responseCount THEN
-                                SET @textTotalUiPages = Add(@textTotalUiPages, 1)
-                                ENDIF
-                                ENDIF
-                                IF @textLocalUiPage > @textTotalUiPages THEN SET @textLocalUiPage = @textTotalUiPages ENDIF
-                                SET @textPrevPage = Subtract(@textLocalUiPage, 1)
-                                SET @textNextPage = Add(@textLocalUiPage, 1)
-                                SET @textNavUrl = Concat(@textNavBase, "&textQ=", @questionId, "&textPage=")
-                                SET @textShowLessUrl = @textNavBase
-                                IF @responseCount > 0 THEN
-                                IF @isTextExpanded == "true" THEN
-                                SET @textGlobalFirst = Add(Multiply(Subtract(@textLocalUiPage, 1), @textPageSize), 1)
-                                SET @textItemsRendered = 0
-                                SET @textTargetIdx = @textGlobalFirst
-                                SET @textBatchLoadedPage = 0
-                                WHILE @textItemsRendered < @textPageSize AND @textTargetIdx <= @responseCount DO
-                                SET @textDePageNum = 1
-                                SET @textDeThreshold = 500
-                                WHILE @textTargetIdx > @textDeThreshold DO
-                                SET @textDePageNum = Add(@textDePageNum, 1)
-                                SET @textDeThreshold = Add(@textDeThreshold, 500)
-                                ENDWHILE
-                                SET @textOffsetInPage = Mod(Subtract(@textTargetIdx, 1), 500)
-                                SET @textRowInPage = Add(@textOffsetInPage, 1)
-                                IF @textDePageNum != @textBatchLoadedPage THEN
-                                SET @textBatchLoadedPage = @textDePageNum
-                                SET @textBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @questionId, "PageNumber", @textDePageNum)
-                                ENDIF
-                                IF @textRowInPage <= RowCount(@textBatchRows) THEN
-                                SET @textResponse = Field(Row(@textBatchRows, @textRowInPage), "Response")
-                                IF NOT EMPTY(@textResponse) THEN
-                                SET @textItemsRendered = Add(@textItemsRendered, 1)
-                                ]%%
-                                <div class="text-response-item">
-                                    <div class="text-response-content">
-                                        <span class="text-response-text">"%%=v(@textResponse)=%%"</span>
-                                    </div>
-                                </div>
-                                %%[
-                                ENDIF
-                                ENDIF
-                                SET @textTargetIdx = Add(@textTargetIdx, 1)
-                                ENDWHILE
-                                ELSE
                                 SET @textBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @questionId, "PageNumber", 1)
                                 SET @textItemsRendered = 0
                                 FOR @textPreviewIdx = 1 TO RowCount(@textBatchRows) DO
@@ -882,7 +915,6 @@ ENDIF
                                 ENDIF
                                 ENDIF
                                 NEXT @textPreviewIdx
-                                ENDIF
                                 ELSE
                                 ]%%
                                 <div class="text-response-item">
@@ -893,25 +925,9 @@ ENDIF
                                 %%[
                                 ENDIF
                                 ]%%
-                                %%[ IF @responseCount > @textPreviewLimit AND @isTextExpanded == "false" THEN ]%%
+                                %%[ IF @responseCount > @textPreviewLimit THEN ]%%
                                 <div class="text-responses-actions">
-                                    <a class="btn-secondary" href="%%=Concat(@textNavUrl, "1")=%%#question-%%=v(@questionId)=%%">View all responses (%%=v(@responseCount)=%%)</a>
-                                </div>
-                                %%[ ENDIF ]%%
-                                %%[ IF @isTextExpanded == "true" AND @responseCount > 0 THEN ]%%
-                                <div class="text-responses-expanded-footer">
-                                    <div class="text-responses-pagination">
-                                        <span class="text-responses-page-info">Page %%=v(@textLocalUiPage)=%% of %%=v(@textTotalUiPages)=%%</span>
-                                        <div class="text-responses-page-buttons">
-                                            %%[ IF @textLocalUiPage > 1 THEN ]%%
-                                            <a class="btn-secondary text-responses-page-btn" href="%%=Concat(@textNavUrl, @textPrevPage)=%%#question-%%=v(@questionId)=%%">Previous</a>
-                                            %%[ ENDIF ]%%
-                                            %%[ IF @textLocalUiPage < @textTotalUiPages THEN ]%%
-                                            <a class="btn-secondary text-responses-page-btn" href="%%=Concat(@textNavUrl, @textNextPage)=%%#question-%%=v(@questionId)=%%">Next</a>
-                                            %%[ ENDIF ]%%
-                                        </div>
-                                    </div>
-                                    <a class="btn-secondary text-responses-collapse" href="%%=v(@textShowLessUrl)=%%#question-%%=v(@questionId)=%%">Show less</a>
+                                    <button type="button" class="btn-secondary text-view-all-btn" data-question-id="%%=v(@questionId)=%%" data-response-count="%%=v(@responseCount)=%%" onclick="openTextQuestionFocus(this.getAttribute('data-question-id'), this.getAttribute('data-response-count')); return false;">View all responses (%%=v(@responseCount)=%%)</button>
                                 </div>
                                 %%[ ENDIF ]%%
                             </div>
@@ -1548,6 +1564,7 @@ ENDIF
         </div>
     </div>
     %%[ ENDIF ]%%
+            </div>
     <footer class="maker-main-footer">
       <span>Self Service</span>
       <div class="maker-main-footer-end">
@@ -2692,6 +2709,46 @@ ENDIF
             align-items: center;
         }
 
+        .text-question-focus-view {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            padding: 24px 32px 32px;
+            overflow: auto;
+        }
+
+        .text-focus-toolbar {
+            margin-bottom: 20px;
+        }
+
+        .text-focus-header h1 {
+            margin: 0 0 8px;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--gray-900);
+        }
+
+        .text-focus-meta {
+            margin: 0 0 24px;
+            color: var(--gray-600);
+            font-size: 14px;
+        }
+
+        .text-focus-body .text-focus-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .main-content.survey-analytics-page.text-focus-active #surveyAnalyticsMainWrap {
+            display: none !important;
+        }
+
+        .main-content.survey-analytics-page.text-focus-active #textQuestionFocusView {
+            display: flex !important;
+        }
+
 
         /* Multiple Choice Response Styling */
         .answer-option .option-label {
@@ -3731,6 +3788,94 @@ ENDIF
 
 
     <script>
+        var textQuestionFocusState = {
+            questionId: '',
+            page: 1,
+            totalPages: 1,
+            responseCount: 0
+        };
+
+        function getTextFocusFetchUrl(questionId, page) {
+            var cfg = document.getElementById('textFocusConfig');
+            var base = cfg ? (cfg.getAttribute('data-fetch-base') || '') : '';
+            return base + '&textFocus=1&textQ=' + encodeURIComponent(questionId) + '&textPage=' + encodeURIComponent(String(page));
+        }
+
+        function bindTextFocusPagination() {
+            var body = document.getElementById('textFocusBody');
+            if (!body) return;
+            body.querySelectorAll('[data-text-page-action]').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    var action = btn.getAttribute('data-text-page-action');
+                    var nextPage = textQuestionFocusState.page;
+                    if (action === 'prev') nextPage -= 1;
+                    if (action === 'next') nextPage += 1;
+                    if (nextPage < 1) nextPage = 1;
+                    if (nextPage > textQuestionFocusState.totalPages) nextPage = textQuestionFocusState.totalPages;
+                    loadTextQuestionFocusPage(nextPage);
+                });
+            });
+        }
+
+        function loadTextQuestionFocusPage(page) {
+            var mainEl = document.querySelector('.main-content.survey-analytics-page');
+            var body = document.getElementById('textFocusBody');
+            if (!body || !textQuestionFocusState.questionId) return;
+            body.setAttribute('aria-busy', 'true');
+            body.innerHTML = '<p class="text-focus-meta">Loading responses…</p>';
+            fetch(getTextFocusFetchUrl(textQuestionFocusState.questionId, page), { credentials: 'same-origin' })
+                .then(function (res) { return res.text(); })
+                .then(function (html) {
+                    var doc = new DOMParser().parseFromString(html, 'text/html');
+                    var frag = doc.getElementById('text-focus-fragment');
+                    if (!frag) {
+                        body.innerHTML = '<p class="text-focus-meta">Unable to load responses.</p>';
+                        return;
+                    }
+                    textQuestionFocusState.page = parseInt(frag.getAttribute('data-current-page') || '1', 10);
+                    textQuestionFocusState.totalPages = parseInt(frag.getAttribute('data-total-pages') || '1', 10);
+                    textQuestionFocusState.responseCount = parseInt(frag.getAttribute('data-response-count') || '0', 10);
+                    body.innerHTML = frag.innerHTML;
+                    body.removeAttribute('aria-busy');
+                    var meta = document.getElementById('textFocusQuestionMeta');
+                    if (meta) {
+                        meta.textContent = textQuestionFocusState.responseCount + ' text responses · Page ' + textQuestionFocusState.page + ' of ' + textQuestionFocusState.totalPages;
+                    }
+                    bindTextFocusPagination();
+                    if (mainEl) mainEl.scrollTop = 0;
+                })
+                .catch(function () {
+                    body.innerHTML = '<p class="text-focus-meta">Unable to load responses.</p>';
+                    body.removeAttribute('aria-busy');
+                });
+        }
+
+        function openTextQuestionFocus(questionId, responseCount) {
+            var mainEl = document.querySelector('.main-content.survey-analytics-page');
+            var card = document.getElementById('question-' + questionId);
+            var titleEl = card ? card.querySelector('h3') : null;
+            var titleNode = document.getElementById('textFocusQuestionTitle');
+            if (titleNode) {
+                titleNode.textContent = titleEl ? titleEl.textContent.trim() : 'Question';
+            }
+            textQuestionFocusState.questionId = questionId;
+            textQuestionFocusState.page = 1;
+            textQuestionFocusState.responseCount = parseInt(responseCount || '0', 10);
+            if (mainEl) {
+                mainEl.classList.add('text-focus-active');
+                mainEl.scrollTop = 0;
+            }
+            loadTextQuestionFocusPage(1);
+        }
+
+        function closeTextQuestionFocus() {
+            var mainEl = document.querySelector('.main-content.survey-analytics-page');
+            if (mainEl) {
+                mainEl.classList.remove('text-focus-active');
+            }
+            textQuestionFocusState.questionId = '';
+        }
+
         function confirmDelete() {
             var surveyName = '%%=v(@surveyName)=%%';
             return confirm('Are you sure you want to delete "' + surveyName + '"? This action cannot be undone and will permanently remove all survey data, questions, and responses.');
@@ -4988,3 +5133,4 @@ ENDIF
     </script>
 </body>
 </html>
+%%[ ENDIF ]%%
