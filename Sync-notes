@@ -1,86 +1,6 @@
 SST_SP_Analytics_Answers
 
 
-WITH QuestionOpts AS (
-    SELECT
-        q.SurveyID,
-        q.QuestionID,
-        q.SurveyName,
-        q.QuestionNumber,
-        q.QuestionText,
-        q.QuestionType,
-        q.Options,
-        q.Required,
-        q.OrderIndex,
-        q.CreatedDate,
-        CASE
-            WHEN q.Options IS NULL OR LTRIM(RTRIM(q.Options)) = '' THEN NULL
-            WHEN CHARINDEX('|', q.Options) = 0 THEN LTRIM(RTRIM(q.Options))
-            ELSE LTRIM(RTRIM(SUBSTRING(q.Options, 1, CHARINDEX('|', q.Options) - 1)))
-        END AS Opt1Val,
-        CASE
-            WHEN q.Options IS NULL OR CHARINDEX('|', q.Options) = 0 THEN NULL
-            ELSE LTRIM(RTRIM(SUBSTRING(
-                q.Options,
-                CHARINDEX('|', q.Options) + 1,
-                CASE
-                    WHEN CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) = 0
-                    THEN LEN(q.Options) - CHARINDEX('|', q.Options)
-                    ELSE CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) - CHARINDEX('|', q.Options) - 1
-                END
-            )))
-        END AS Opt2Val,
-        CASE
-            WHEN q.Options IS NULL
-                OR CHARINDEX('|', q.Options) = 0
-                OR CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) = 0
-            THEN NULL
-            ELSE LTRIM(RTRIM(SUBSTRING(
-                q.Options,
-                CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1,
-                CASE
-                    WHEN CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) = 0
-                    THEN LEN(q.Options) - CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1)
-                    ELSE CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1)
-                         - CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) - 1
-                END
-            )))
-        END AS Opt3Val,
-        CASE
-            WHEN q.Options IS NULL
-                OR CHARINDEX('|', q.Options) = 0
-                OR CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) = 0
-                OR CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) = 0
-            THEN NULL
-            ELSE LTRIM(RTRIM(SUBSTRING(
-                q.Options,
-                CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) + 1,
-                CASE
-                    WHEN CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) + 1) = 0
-                    THEN LEN(q.Options) - CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1)
-                    ELSE CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) + 1)
-                         - CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) - 1
-                END
-            )))
-        END AS Opt4Val,
-        CASE
-            WHEN q.Options IS NULL
-                OR CHARINDEX('|', q.Options) = 0
-                OR CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) = 0
-                OR CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) = 0
-                OR CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) + 1) = 0
-            THEN NULL
-            ELSE LTRIM(RTRIM(SUBSTRING(
-                q.Options,
-                CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) + 1) + 1,
-                LEN(q.Options)
-            )))
-        END AS Opt5Val
-    FROM SST_SP_Survey_Questions_DE q
-    WHERE q.SurveyID IS NOT NULL
-      AND q.QuestionID IS NOT NULL
-)
-
 SELECT
     q.SurveyID,
     q.QuestionID,
@@ -125,36 +45,80 @@ SELECT
 
     SUM(CASE
         WHEN q.QuestionType IN ('yesno', 'likert', 'rating', 'multiple')
-         AND q.Opt1Val IS NOT NULL
-         AND LTRIM(RTRIM(r.Response)) = q.Opt1Val
+         AND q.Options IS NOT NULL
+         AND LTRIM(RTRIM(q.Options)) <> ''
+         AND LTRIM(RTRIM(r.Response)) = LTRIM(RTRIM(
+            CASE
+                WHEN CHARINDEX('|', q.Options) = 0 THEN q.Options
+                ELSE SUBSTRING(q.Options, 1, CHARINDEX('|', q.Options) - 1)
+            END
+         ))
         THEN 1 ELSE 0
     END) AS Opt1_Count,
 
     SUM(CASE
         WHEN q.QuestionType IN ('yesno', 'likert', 'rating', 'multiple')
-         AND q.Opt2Val IS NOT NULL
-         AND LTRIM(RTRIM(r.Response)) = q.Opt2Val
+         AND CHARINDEX('|', q.Options) > 0
+         AND LTRIM(RTRIM(r.Response)) = LTRIM(RTRIM(
+            SUBSTRING(
+                q.Options,
+                CHARINDEX('|', q.Options) + 1,
+                CASE
+                    WHEN CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) = 0
+                    THEN LEN(q.Options) - CHARINDEX('|', q.Options)
+                    ELSE CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) - CHARINDEX('|', q.Options) - 1
+                END
+            )
+         ))
         THEN 1 ELSE 0
     END) AS Opt2_Count,
 
     SUM(CASE
         WHEN q.QuestionType IN ('yesno', 'likert', 'rating', 'multiple')
-         AND q.Opt3Val IS NOT NULL
-         AND LTRIM(RTRIM(r.Response)) = q.Opt3Val
+         AND CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) > 0
+         AND LTRIM(RTRIM(r.Response)) = LTRIM(RTRIM(
+            SUBSTRING(
+                q.Options,
+                CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1,
+                CASE
+                    WHEN CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) = 0
+                    THEN LEN(q.Options) - CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1)
+                    ELSE CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1)
+                         - CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) - 1
+                END
+            )
+         ))
         THEN 1 ELSE 0
     END) AS Opt3_Count,
 
     SUM(CASE
         WHEN q.QuestionType IN ('yesno', 'likert', 'rating', 'multiple')
-         AND q.Opt4Val IS NOT NULL
-         AND LTRIM(RTRIM(r.Response)) = q.Opt4Val
+         AND CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) > 0
+         AND LTRIM(RTRIM(r.Response)) = LTRIM(RTRIM(
+            SUBSTRING(
+                q.Options,
+                CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) + 1,
+                CASE
+                    WHEN CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) + 1) = 0
+                    THEN LEN(q.Options) - CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1)
+                    ELSE CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) + 1)
+                         - CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) - 1
+                END
+            )
+         ))
         THEN 1 ELSE 0
     END) AS Opt4_Count,
 
     SUM(CASE
         WHEN q.QuestionType IN ('yesno', 'likert', 'rating', 'multiple')
-         AND q.Opt5Val IS NOT NULL
-         AND LTRIM(RTRIM(r.Response)) = q.Opt5Val
+         AND CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) + 1) > 0
+         AND LTRIM(RTRIM(r.Response)) = LTRIM(RTRIM(
+            SUBSTRING(
+                q.Options,
+                CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) + 1) + 1,
+                LEN(q.Options)
+            )
+         ))
         THEN 1 ELSE 0
     END) AS Opt5_Count,
 
@@ -168,7 +132,7 @@ SELECT
     MIN(r.LastUpdated) AS FirstActivityDate,
     MAX(r.LastUpdated) AS LatestActivityDate
 
-FROM QuestionOpts q
+FROM SST_SP_Survey_Questions_DE q
 
 LEFT JOIN SST_SP_Survey_Responses_DE r
     ON r.SurveyID = q.SurveyID
@@ -184,6 +148,9 @@ LEFT JOIN (
     GROUP BY SurveyID
 ) s
     ON s.SurveyID = q.SurveyID
+
+WHERE q.SurveyID IS NOT NULL
+  AND q.QuestionID IS NOT NULL
 
 GROUP BY
     q.SurveyID,
