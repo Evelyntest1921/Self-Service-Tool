@@ -3,8 +3,14 @@ VAR @surveyId, @errorFlag, @deleteAction, @deleteSuccess, @deleteError
 VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow, @hubUrl, @surveyHomeUrl, @surveyStageUrl, @surveyAnalyticsUrl, @surveyTakeUrl, @environment, @contactTable
 VAR @journeyExitUrl, @calendarUrl, @environmentSwitchUrl, @envDisplayName, @envDisplayEmail, @envAvatarLetter, @envSwitchLabel
 VAR @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @JOURNEY_VIEW_URL, @HOME_URL, @editSidebarHtml, @detailRows, @detailRow, @isSurveyBuild, @buildNavContext, @buildNavActive, @dispSurveyId, @editSurveyUrl, @surveyPreviewUrl, @surveyEmailLink, @surveyLinkTitle, @surveyNameEncoded
+VAR @textExpandQ, @textUiPage, @textNavBase
 SET @surveyId = RequestParameter("surveyid")
 SET @jid = Trim(RequestParameter("journeyId"))
+SET @textExpandQ = Trim(RequestParameter("textQ"))
+SET @textUiPage = Trim(RequestParameter("textPage"))
+IF EMPTY(@textUiPage) THEN SET @textUiPage = 1 ENDIF
+SET @textNavBase = Concat(RequestParameter("PAGEURL"), "?surveyid=", @surveyId)
+IF NOT EMPTY(@jid) THEN SET @textNavBase = Concat(@textNavBase, "&journeyId=", @jid) ENDIF
 SET @BUILD_PAGE_SELF = ""
 SET @PERFORMANCE_URL = ""
 SET @JOURNEY_VIEW_URL = ""
@@ -681,11 +687,10 @@ ENDIF
 
 
                     /* Count responses for this question */
-                    VAR @responseCount, @yesCount, @noCount, @textResponses, @otherResponses
+                    VAR @responseCount, @yesCount, @noCount, @otherResponses
                     SET @responseCount = 0
                     SET @yesCount = 0
                     SET @noCount = 0
-                    SET @textResponses = ""
                     SET @otherResponses = ""
 
 
@@ -699,16 +704,6 @@ ENDIF
                     IF EMPTY(@responseCount) THEN SET @responseCount = 0 ENDIF
                     IF EMPTY(@yesCount) THEN SET @yesCount = 0 ENDIF
                     IF EMPTY(@noCount) THEN SET @noCount = 0 ENDIF
-                    IF @questionType == "text" AND @responseCount > 0 THEN
-                    FOR @i = 1 TO @count DO
-                    SET @responseRow = Row(@responses, @i)
-                    SET @responseQuestionID = Field(@responseRow, "QuestionID")
-                    SET @response = Field(@responseRow, "Response")
-                    IF @responseQuestionID == @questionId AND NOT EMPTY(@response) THEN
-                    SET @textResponses = Concat(@textResponses, "|", @response)
-                    ENDIF
-                    NEXT
-                    ENDIF
                     ELSE
                     FOR @i = 1 TO @count DO
                     SET @responseRow = Row(@responses, @i)
@@ -721,9 +716,7 @@ ENDIF
                     ELSEIF @response == "No" THEN
                     SET @noCount = Add(@noCount, 1)
                     ELSE
-                    IF @questionType == "text" THEN
-                    SET @textResponses = Concat(@textResponses, "|", @response)
-                    ELSE
+                    IF @questionType != "text" THEN
                     SET @otherResponses = Concat(@otherResponses, "|", @response)
                     ENDIF
                     ENDIF
@@ -733,7 +726,7 @@ ENDIF
                     ]%%
 
 
-                    <div class="question-card">
+                    <div class="question-card" id="question-%%=v(@questionId)=%%">
                         <div class="question-header">
                             <span class="question-number">%%=Format(@q, "00")=%%</span>
                             <div class="question-content">
@@ -806,50 +799,117 @@ ENDIF
 
 
                             %%[ ELSEIF @questionType == "text" THEN ]%%
-                            <!-- Text Questions - Show actual responses -->
                             <div class="text-responses-section">
                                 <h4>Text Responses (%%=v(@responseCount)=%%)</h4>
-                                %%[ IF NOT EMPTY(@textResponses) THEN
-                                VAR @textArray, @textCount, @k
-                                SET @textArray = BuildRowSetFromString(@textResponses, "|")
-                                SET @textCount = RowCount(@textArray)
-
-
-                                /* Render first 5 responses lazily */
-                                FOR @k = 1 TO @textCount DO
-                                IF @k <= 5 THEN SET @textResponse=Field(Row(@textArray, @k), 1) IF NOT
-                                    EMPTY(@textResponse) THEN ]%% <div class="text-response-item">
+                                %%[
+                                VAR @isTextExpanded, @textPreviewLimit, @textPageSize, @textGlobalFirst, @textItemsRendered
+                                VAR @textTargetIdx, @textDePageNum, @textDeThreshold, @textOffsetInPage, @textRowInPage
+                                VAR @textBatchRows, @textBatchLoadedPage, @textResponse, @textTotalUiPages, @textPrevPage, @textNextPage
+                                VAR @textNavUrl, @textShowLessUrl, @textLocalUiPage, @textPreviewIdx
+                                SET @isTextExpanded = "false"
+                                IF @textExpandQ == @questionId THEN SET @isTextExpanded = "true" ENDIF
+                                SET @textPreviewLimit = 5
+                                SET @textPageSize = 10
+                                SET @textLocalUiPage = 1
+                                IF @isTextExpanded == "true" THEN SET @textLocalUiPage = @textUiPage ENDIF
+                                IF EMPTY(@textLocalUiPage) OR @textLocalUiPage < 1 THEN SET @textLocalUiPage = 1 ENDIF
+                                SET @textTotalUiPages = 1
+                                IF @responseCount > 0 THEN
+                                SET @textTotalUiPages = Divide(@responseCount, @textPageSize)
+                                IF Multiply(@textTotalUiPages, @textPageSize) < @responseCount THEN
+                                SET @textTotalUiPages = Add(@textTotalUiPages, 1)
+                                ENDIF
+                                ENDIF
+                                IF @textLocalUiPage > @textTotalUiPages THEN SET @textLocalUiPage = @textTotalUiPages ENDIF
+                                SET @textPrevPage = Subtract(@textLocalUiPage, 1)
+                                SET @textNextPage = Add(@textLocalUiPage, 1)
+                                SET @textNavUrl = Concat(@textNavBase, "&textQ=", @questionId, "&textPage=")
+                                SET @textShowLessUrl = @textNavBase
+                                IF @responseCount > 0 THEN
+                                IF @isTextExpanded == "true" THEN
+                                SET @textGlobalFirst = Add(Multiply(Subtract(@textLocalUiPage, 1), @textPageSize), 1)
+                                SET @textItemsRendered = 0
+                                SET @textTargetIdx = @textGlobalFirst
+                                SET @textBatchLoadedPage = 0
+                                WHILE @textItemsRendered < @textPageSize AND @textTargetIdx <= @responseCount DO
+                                SET @textDePageNum = 1
+                                SET @textDeThreshold = 500
+                                WHILE @textTargetIdx > @textDeThreshold DO
+                                SET @textDePageNum = Add(@textDePageNum, 1)
+                                SET @textDeThreshold = Add(@textDeThreshold, 500)
+                                ENDWHILE
+                                SET @textOffsetInPage = Mod(Subtract(@textTargetIdx, 1), 500)
+                                SET @textRowInPage = Add(@textOffsetInPage, 1)
+                                IF @textDePageNum != @textBatchLoadedPage THEN
+                                SET @textBatchLoadedPage = @textDePageNum
+                                SET @textBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @questionId, "PageNumber", @textDePageNum)
+                                ENDIF
+                                IF @textRowInPage <= RowCount(@textBatchRows) THEN
+                                SET @textResponse = Field(Row(@textBatchRows, @textRowInPage), "Response")
+                                IF NOT EMPTY(@textResponse) THEN
+                                SET @textItemsRendered = Add(@textItemsRendered, 1)
+                                ]%%
+                                <div class="text-response-item">
                                     <div class="text-response-content">
                                         <span class="text-response-text">"%%=v(@textResponse)=%%"</span>
                                     </div>
-                            </div>
-                            %%[ ENDIF
-                            ENDIF
-                            NEXT @k ]%%
-
-
-                            <!-- Hidden raw data for modal population -->
-                            <span id="text-raw-%%=v(@questionId)=%%" class="text-responses-raw"
-                                style="display:none;">%%=v(@textResponses)=%%</span>
-
-
-                            %%[ IF @textCount > 5 THEN ]%%
-                            <div style="margin-top:12px;">
-                                <button class="btn-secondary"
-                                    onclick="openTextResponsesModal('%%=v(@questionId)=%%', %%=v(@textCount)=%%)">View
-                                    all responses (%%=v(@textCount)=%%)</button>
-                            </div>
-                            %%[ ENDIF ]%%
-
-
-                            %%[ ELSE ]%%
-                            <div class="text-response-item">
-                                <div class="text-response-content">
-                                    <span class="text-response-text">No text responses recorded</span>
                                 </div>
+                                %%[
+                                ENDIF
+                                ENDIF
+                                SET @textTargetIdx = Add(@textTargetIdx, 1)
+                                ENDWHILE
+                                ELSE
+                                SET @textBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @questionId, "PageNumber", 1)
+                                SET @textItemsRendered = 0
+                                FOR @textPreviewIdx = 1 TO RowCount(@textBatchRows) DO
+                                IF @textItemsRendered < @textPreviewLimit THEN
+                                SET @textResponse = Field(Row(@textBatchRows, @textPreviewIdx), "Response")
+                                IF NOT EMPTY(@textResponse) THEN
+                                SET @textItemsRendered = Add(@textItemsRendered, 1)
+                                ]%%
+                                <div class="text-response-item">
+                                    <div class="text-response-content">
+                                        <span class="text-response-text">"%%=v(@textResponse)=%%"</span>
+                                    </div>
+                                </div>
+                                %%[
+                                ENDIF
+                                ENDIF
+                                NEXT @textPreviewIdx
+                                ENDIF
+                                ELSE
+                                ]%%
+                                <div class="text-response-item">
+                                    <div class="text-response-content">
+                                        <span class="text-response-text">No text responses recorded</span>
+                                    </div>
+                                </div>
+                                %%[
+                                ENDIF
+                                ]%%
+                                %%[ IF @responseCount > @textPreviewLimit AND @isTextExpanded == "false" THEN ]%%
+                                <div class="text-responses-actions">
+                                    <a class="btn-secondary" href="%%=Concat(@textNavUrl, "1")=%%#question-%%=v(@questionId)=%%">View all responses (%%=v(@responseCount)=%%)</a>
+                                </div>
+                                %%[ ENDIF ]%%
+                                %%[ IF @isTextExpanded == "true" AND @responseCount > 0 THEN ]%%
+                                <div class="text-responses-expanded-footer">
+                                    <div class="text-responses-pagination">
+                                        <span class="text-responses-page-info">Page %%=v(@textLocalUiPage)=%% of %%=v(@textTotalUiPages)=%%</span>
+                                        <div class="text-responses-page-buttons">
+                                            %%[ IF @textLocalUiPage > 1 THEN ]%%
+                                            <a class="btn-secondary text-responses-page-btn" href="%%=Concat(@textNavUrl, @textPrevPage)=%%#question-%%=v(@questionId)=%%">Previous</a>
+                                            %%[ ENDIF ]%%
+                                            %%[ IF @textLocalUiPage < @textTotalUiPages THEN ]%%
+                                            <a class="btn-secondary text-responses-page-btn" href="%%=Concat(@textNavUrl, @textNextPage)=%%#question-%%=v(@questionId)=%%">Next</a>
+                                            %%[ ENDIF ]%%
+                                        </div>
+                                    </div>
+                                    <a class="btn-secondary text-responses-collapse" href="%%=v(@textShowLessUrl)=%%#question-%%=v(@questionId)=%%">Show less</a>
+                                </div>
+                                %%[ ENDIF ]%%
                             </div>
-                            %%[ ENDIF ]%%
-                        </div>
 
 
                         %%[ ELSEIF @questionType == "likert" OR @questionType == "rating" OR @questionType ==
@@ -2589,6 +2649,44 @@ ENDIF
             flex: 1;
         }
 
+        .text-responses-actions {
+            margin-top: 12px;
+        }
+
+        .text-responses-expanded-footer {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--gray-200);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .text-responses-pagination {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .text-responses-page-info {
+            font-size: 13px;
+            color: var(--gray-600);
+        }
+
+        .text-responses-page-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .text-responses-page-btn,
+        .text-responses-collapse {
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+        }
+
 
         /* Multiple Choice Response Styling */
         .answer-option .option-label {
@@ -3628,146 +3726,6 @@ ENDIF
 
 
     <script>
-        // Modal styles
-        const modalStyles = document.createElement('style');
-        modalStyles.textContent = `
-          .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 2000; }
-          .modal-overlay.show { display: flex; }
-          .modal-header { padding: 16px 20px; border-bottom: 1px solid var(--gray-200); display: flex; align-items: center; justify-content: space-between; }
-          .modal-header h3 { margin: 0; font-size: 18px; font-weight: 600; }
-          .modal-close { background: transparent; border: none; font-size: 22px; cursor: pointer; line-height: 1; }
-          .modal-toolbar { padding: 12px 20px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--gray-200); }
-          .modal-counter { color: var(--gray-600); font-size: 13px; }
-          .modal-list { padding: 16px 20px; overflow: auto; flex: 1; display: grid; gap: 12px; }
-          .modal-footer { padding: 12px 20px; border-top: 1px solid var(--gray-200); display: flex; gap: 8px; justify-content: flex-end; }
-        `;
-        document.head.appendChild(modalStyles);
-        // Modal for viewing all text responses
-        function openTextResponsesModal(questionId, totalCount) {
-            const rawEl = document.getElementById('text-raw-' + questionId);
-            const raw = rawEl ? rawEl.textContent : '';
-            const responses = raw ? raw.split('|').filter(r => r && r.trim()) : [];
-
-
-            ensureModal();
-            const modal = document.getElementById('textResponsesModal');
-            const list = document.getElementById('textModalList');
-            const search = document.getElementById('textModalSearch');
-            const counter = document.getElementById('textModalCounter');
-
-
-            // state
-            modal.dataset.questionId = questionId;
-            modal.dataset.loaded = '0';
-            modal.dataset.pageSize = '20';
-            modal.dataset.all = JSON.stringify(responses);
-
-
-            // reset
-            list.innerHTML = '';
-            search.value = '';
-            counter.textContent = totalCount + ' responses';
-
-
-            // initial render
-            loadMoreTextModalItems();
-
-
-            modal.classList.add('show');
-            document.body.style.overflow = 'hidden';
-        }
-
-
-        function closeTextResponsesModal() {
-            const modal = document.getElementById('textResponsesModal');
-            if (!modal) return;
-            modal.classList.remove('show');
-            document.body.style.overflow = '';
-        }
-
-
-        function ensureModal() {
-            if (document.getElementById('textResponsesModal')) return;
-            const modal = document.createElement('div');
-            modal.id = 'textResponsesModal';
-            modal.className = 'modal-overlay';
-            modal.innerHTML = `
-                <div class="modal-dialog">
-                    <div class="modal-header">
-                        <h3>All Text Responses</h3>
-                        <button class="modal-close" onclick="closeTextResponsesModal()">×</button>
-                    </div>
-                    <div class="modal-toolbar">
-                        <input id="textModalSearch" type="text" class="search-input" placeholder="Search responses..." oninput="filterTextModalItems()" />
-                        <span id="textModalCounter" class="modal-counter"></span>
-                    </div>
-                    <div id="textModalList" class="modal-list"></div>
-                    <div class="modal-footer">
-                        <button class="btn-secondary" onclick="loadMoreTextModalItems()">Load more</button>
-                        <button class="btn-edit" onclick="closeTextResponsesModal()">Close</button>
-                    </div>
-                </div>`;
-            document.body.appendChild(modal);
-            modal.addEventListener('click', (e) => {
-                if (e.target === modal) closeTextResponsesModal();
-            });
-        }
-
-
-        function filterTextModalItems() {
-            const modal = document.getElementById('textResponsesModal');
-            if (!modal) return;
-            const search = document.getElementById('textModalSearch').value.toLowerCase();
-            const all = JSON.parse(modal.dataset.all || '[]');
-            const list = document.getElementById('textModalList');
-            const counter = document.getElementById('textModalCounter');
-
-
-            const filtered = search ? all.filter(t => (t || '').toLowerCase().includes(search)) : all;
-            counter.textContent = filtered.length + ' responses';
-            list.innerHTML = '';
-
-
-            // reset loaded state for filtered set
-            modal.dataset.loaded = '0';
-            modal.dataset.filtered = JSON.stringify(filtered);
-            loadMoreTextModalItems();
-        }
-
-
-        function loadMoreTextModalItems() {
-            const modal = document.getElementById('textResponsesModal');
-            if (!modal) return;
-            const pageSize = parseInt(modal.dataset.pageSize || '20', 10);
-            const already = parseInt(modal.dataset.loaded || '0', 10);
-            const list = document.getElementById('textModalList');
-
-
-            const filtered = modal.dataset.filtered ? JSON.parse(modal.dataset.filtered) : JSON.parse(modal.dataset.all || '[]');
-            const next = filtered.slice(already, already + pageSize);
-
-
-            next.forEach(txt => {
-                if (!txt || !txt.trim()) return;
-                const item = document.createElement('div');
-                item.className = 'text-response-item';
-                item.innerHTML = `<div class="text-response-content"><span class="text-response-text">"${escapeHtml(txt)}"</span></div>`;
-                list.appendChild(item);
-            });
-
-
-            modal.dataset.loaded = String(already + next.length);
-        }
-
-
-        function escapeHtml(str) {
-            return String(str)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#39;');
-        }
         function confirmDelete() {
             var surveyName = '%%=v(@surveyName)=%%';
             return confirm('Are you sure you want to delete "' + surveyName + '"? This action cannot be undone and will permanently remove all survey data, questions, and responses.');
