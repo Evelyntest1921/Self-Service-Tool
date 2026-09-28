@@ -1,43 +1,217 @@
 sst-analytics-per-course
-sst-analytics-per-course
-Properties
-Records
- 
-External Key
-sst-analytics-per-course
-Created
-09/28/2026, 3:14 PM
-Modified
-09/28/2026, 3:18 PM
-Location
-Survey Data Change Location
-Type
-Standard
-Used for Sending
 
-No
+External Key: sst-analytics-per-course
+PK: surveyId + CourseName (both Required)
 
-Used for Testing
+DE attributes (must match query column names exactly):
+surveyId
+CourseName
+OpenedSurvey
+UniqueRespondents
+CompletedSurvey
+CompletionRatePct
+FirstActivityDate
+LastActivityDate
+TotalActivity
 
-No
+CloudPage: add DE to same collection as other SST survey DEs.
 
-Root Data
+AMPscript (when wiring Survey Results):
+LookupRows("sst-analytics-per-course", "surveyId", @surveyId)
+DeleteData("sst-analytics-per-course", "surveyId", @surveyId)
+Field(@row, "TotalActivity") not TotalResponses
+Field(@row, "CompletedSurvey") not CompletedResponses
+Do not use LookupRows(..., "SurveyID", ...) — DE column is surveyId
 
-Use as root
-CONTROL SETTINGSDelete Data Extension PermissionsAllow users to delete this data extensionAttribute PermissionsAllow users to modify existing and add additional attributes in this data extensionDATA RETENTIONTurned Off
-2
-Records
- 
-Last Refreshed
+Query Activity target: sst-analytics-per-course (overwrite). Last Refreshed must update after run.
 
-Never
-Attributes
- surveyId		50	Yes	
- CourseName		250	Yes	
- OpenedSurvey		50	Yes	
- UniqueRespondents		50	Yes	
- CompletedSurvey		50	Yes	
- CompletionRatePct		50	Yes	
- FirstActivityDate			Yes	
- LastActivityDate			Yes	
- TotalActivity		50	Yes
+
+SELECT
+    r.SurveyID AS surveyId,
+    LTRIM(RTRIM(r.CourseName)) AS CourseName,
+    COUNT(DISTINCT CASE WHEN r.QuestionID = 'SURVEY_OPEN' THEN r.Contact END) AS OpenedSurvey,
+    COUNT(DISTINCT CASE WHEN r.QuestionID != 'SURVEY_OPEN' THEN r.Contact END) AS UniqueRespondents,
+    COUNT(DISTINCT CASE WHEN r.Status = 'Completed' THEN r.Contact END) AS CompletedSurvey,
+    CAST(
+        COUNT(DISTINCT CASE WHEN r.Status = 'Completed' THEN r.Contact END) * 100.0
+        / NULLIF(COUNT(DISTINCT CASE WHEN r.QuestionID != 'SURVEY_OPEN' THEN r.Contact END), 0)
+    AS DECIMAL(5, 2)) AS CompletionRatePct,
+    MIN(r.LastUpdated) AS FirstActivityDate,
+    MAX(r.LastUpdated) AS LastActivityDate,
+    SUM(CASE WHEN r.QuestionID != 'SURVEY_OPEN' THEN 1 ELSE 0 END) AS TotalActivity
+FROM SST_SP_Survey_Responses_DE r
+WHERE r.SurveyID IS NOT NULL
+  AND r.CourseName IS NOT NULL
+  AND LTRIM(RTRIM(r.CourseName)) <> ''
+GROUP BY
+    r.SurveyID,
+    LTRIM(RTRIM(r.CourseName))
+
+
+SST_SP_Analytics_Answers
+
+
+SELECT
+    q.SurveyID,
+    q.QuestionID,
+    q.SurveyName,
+    q.QuestionNumber,
+    q.QuestionText,
+    q.QuestionType,
+    q.Options,
+    q.Required,
+    q.OrderIndex,
+    q.CreatedDate,
+
+    COUNT(DISTINCT CASE
+        WHEN r.Response IS NOT NULL AND LTRIM(RTRIM(r.Response)) <> ''
+        THEN r.Contact
+    END) AS UniqueRespondents,
+
+    ISNULL(s.OpenedSurvey, 0) AS OpenedSurvey,
+    ISNULL(s.CompletedSurvey, 0) AS CompletedSurvey,
+    COUNT(r.ResponsePK) AS TotalActivity,
+
+    CAST(
+        ISNULL(s.CompletedSurvey, 0) * 100.0
+        / NULLIF(s.OpenedSurvey, 0)
+    AS DECIMAL(5, 2)) AS CompletionRatePct,
+
+    CAST(AVG(
+        CASE
+            WHEN q.QuestionType = 'rating' AND LTRIM(RTRIM(r.Response)) = 'Poor' THEN 1.0
+            WHEN q.QuestionType = 'rating' AND LTRIM(RTRIM(r.Response)) = 'Fair' THEN 2.0
+            WHEN q.QuestionType = 'rating' AND LTRIM(RTRIM(r.Response)) = 'Good' THEN 3.0
+            WHEN q.QuestionType = 'rating' AND LTRIM(RTRIM(r.Response)) = 'Very Good' THEN 4.0
+            WHEN q.QuestionType = 'rating' AND LTRIM(RTRIM(r.Response)) = 'Excellent' THEN 5.0
+            WHEN q.QuestionType = 'likert' AND LTRIM(RTRIM(r.Response)) = 'Strongly Disagree' THEN 1.0
+            WHEN q.QuestionType = 'likert' AND LTRIM(RTRIM(r.Response)) = 'Disagree' THEN 2.0
+            WHEN q.QuestionType = 'likert' AND LTRIM(RTRIM(r.Response)) = 'Neutral' THEN 3.0
+            WHEN q.QuestionType = 'likert' AND LTRIM(RTRIM(r.Response)) = 'Agree' THEN 4.0
+            WHEN q.QuestionType = 'likert' AND LTRIM(RTRIM(r.Response)) = 'Strongly Agree' THEN 5.0
+            ELSE NULL
+        END
+    ) AS DECIMAL(4, 2)) AS AverageScore,
+
+    SUM(CASE
+        WHEN q.QuestionType IN ('yesno', 'likert', 'rating', 'multiple')
+         AND q.Options IS NOT NULL
+         AND LTRIM(RTRIM(q.Options)) <> ''
+         AND LTRIM(RTRIM(r.Response)) = LTRIM(RTRIM(
+            CASE
+                WHEN CHARINDEX('|', q.Options) = 0 THEN q.Options
+                ELSE SUBSTRING(q.Options, 1, CHARINDEX('|', q.Options) - 1)
+            END
+         ))
+        THEN 1 ELSE 0
+    END) AS Opt1_Count,
+
+    SUM(CASE
+        WHEN q.QuestionType IN ('yesno', 'likert', 'rating', 'multiple')
+         AND CHARINDEX('|', q.Options) > 0
+         AND LTRIM(RTRIM(r.Response)) = LTRIM(RTRIM(
+            SUBSTRING(
+                q.Options,
+                CHARINDEX('|', q.Options) + 1,
+                CASE
+                    WHEN CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) = 0
+                    THEN LEN(q.Options) - CHARINDEX('|', q.Options)
+                    ELSE CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) - CHARINDEX('|', q.Options) - 1
+                END
+            )
+         ))
+        THEN 1 ELSE 0
+    END) AS Opt2_Count,
+
+    SUM(CASE
+        WHEN q.QuestionType IN ('yesno', 'likert', 'rating', 'multiple')
+         AND CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) > 0
+         AND LTRIM(RTRIM(r.Response)) = LTRIM(RTRIM(
+            SUBSTRING(
+                q.Options,
+                CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1,
+                CASE
+                    WHEN CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) = 0
+                    THEN LEN(q.Options) - CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1)
+                    ELSE CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1)
+                         - CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) - 1
+                END
+            )
+         ))
+        THEN 1 ELSE 0
+    END) AS Opt3_Count,
+
+    SUM(CASE
+        WHEN q.QuestionType IN ('yesno', 'likert', 'rating', 'multiple')
+         AND CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) > 0
+         AND LTRIM(RTRIM(r.Response)) = LTRIM(RTRIM(
+            SUBSTRING(
+                q.Options,
+                CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) + 1,
+                CASE
+                    WHEN CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) + 1) = 0
+                    THEN LEN(q.Options) - CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1)
+                    ELSE CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) + 1)
+                         - CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) - 1
+                END
+            )
+         ))
+        THEN 1 ELSE 0
+    END) AS Opt4_Count,
+
+    SUM(CASE
+        WHEN q.QuestionType IN ('yesno', 'likert', 'rating', 'multiple')
+         AND CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) + 1) > 0
+         AND LTRIM(RTRIM(r.Response)) = LTRIM(RTRIM(
+            SUBSTRING(
+                q.Options,
+                CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options, CHARINDEX('|', q.Options) + 1) + 1) + 1) + 1,
+                LEN(q.Options)
+            )
+         ))
+        THEN 1 ELSE 0
+    END) AS Opt5_Count,
+
+    SUM(CASE
+        WHEN q.QuestionType = 'text'
+         AND r.Response IS NOT NULL
+         AND LTRIM(RTRIM(r.Response)) <> ''
+        THEN 1 ELSE 0
+    END) AS TextResponseCount,
+
+    MIN(r.LastUpdated) AS FirstActivityDate,
+    MAX(r.LastUpdated) AS LatestActivityDate
+
+FROM SST_SP_Survey_Questions_DE q
+
+LEFT JOIN SST_SP_Survey_Responses_DE r
+    ON r.SurveyID = q.SurveyID
+   AND r.QuestionID = q.QuestionID
+
+LEFT JOIN (
+    SELECT
+        SurveyID,
+        COUNT(DISTINCT Contact) AS OpenedSurvey,
+        COUNT(DISTINCT CASE WHEN Status = 'Completed' THEN Contact END) AS CompletedSurvey
+    FROM SST_SP_Survey_Responses_DE
+    WHERE SurveyID IS NOT NULL
+    GROUP BY SurveyID
+) s
+    ON s.SurveyID = q.SurveyID
+
+WHERE q.SurveyID IS NOT NULL
+  AND q.QuestionID IS NOT NULL
+
+GROUP BY
+    q.SurveyID,
+    q.QuestionID,
+    q.SurveyName,
+    q.QuestionNumber,
+    q.QuestionText,
+    q.QuestionType,
+    q.Options,
+    q.Required,
+    q.OrderIndex,
+    q.CreatedDate,
+    s.OpenedSurvey,
+    s.CompletedSurvey
