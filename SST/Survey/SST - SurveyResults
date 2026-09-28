@@ -151,9 +151,8 @@ ENDIF
 
 
 %%[ IF NOT EMPTY(@textFocus) AND @textFocus != "0" THEN
-VAR @focusQuestionId, @focusQuestionText, @focusResponseCount, @textPageSize, @textGlobalFirst, @textItemsRendered
-VAR @textTargetIdx, @textDePageNum, @textDeThreshold, @textOffsetInPage, @textRowInPage, @textDePageKey
-VAR @textBatchRows, @textBatchLoadedPage, @textResponse, @textTotalUiPages, @textLocalUiPage, @textPrevPage, @textNextPage, @textFragNav
+VAR @focusQuestionId, @focusQuestionText, @focusResponseCount, @textPageSize, @textItemsRendered
+VAR @textDePageKey, @textBatchRows, @textResponse, @textTotalUiPages, @textLocalUiPage, @textPrevPage, @textNextPage, @textFragNav, @textRowIdx
 SET @focusQuestionId = Trim(RequestParameter("textQ"))
 SET @textUiPage = Trim(RequestParameter("textPage"))
 IF EMPTY(@textUiPage) OR @textUiPage < 1 THEN SET @textUiPage = 1 ENDIF
@@ -192,35 +191,16 @@ a.btn-secondary{display:inline-block;padding:8px 14px;border:1px solid #d1d5db;b
 <div class="text-focus-list">
 %%[
 IF @focusResponseCount > 0 THEN
-SET @textGlobalFirst = Add(Multiply(Subtract(@textLocalUiPage, 1), @textPageSize), 1)
-SET @textItemsRendered = 0
-SET @textTargetIdx = @textGlobalFirst
-SET @textBatchLoadedPage = 0
-WHILE @textItemsRendered < @textPageSize AND @textTargetIdx <= @focusResponseCount DO
-SET @textDePageNum = 1
-SET @textDeThreshold = 500
-WHILE @textTargetIdx > @textDeThreshold DO
-SET @textDePageNum = Add(@textDePageNum, 1)
-SET @textDeThreshold = Add(@textDeThreshold, 500)
-ENDWHILE
-SET @textOffsetInPage = Mod(Subtract(@textTargetIdx, 1), 500)
-SET @textRowInPage = Add(@textOffsetInPage, 1)
-IF @textDePageNum != @textBatchLoadedPage THEN
-SET @textBatchLoadedPage = @textDePageNum
-SET @textDePageKey = Concat("", @textDePageNum)
+SET @textDePageKey = Concat("", @textLocalUiPage)
 SET @textBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @focusQuestionId, "PageNumber", @textDePageKey)
-ENDIF
-IF @textRowInPage <= RowCount(@textBatchRows) THEN
-SET @textResponse = Field(Row(@textBatchRows, @textRowInPage), "Response")
+FOR @textRowIdx = 1 TO RowCount(@textBatchRows) DO
+SET @textResponse = Field(Row(@textBatchRows, @textRowIdx), "Response")
 IF NOT EMPTY(@textResponse) THEN
-SET @textItemsRendered = Add(@textItemsRendered, 1)
 ]%%
 <div class="text-response-item"><div class="text-response-content"><span class="text-response-text">"%%=v(@textResponse)=%%"</span></div></div>
 %%[
 ENDIF
-ENDIF
-SET @textTargetIdx = Add(@textTargetIdx, 1)
-ENDWHILE
+NEXT @textRowIdx
 ENDIF
 ]%%
 </div>

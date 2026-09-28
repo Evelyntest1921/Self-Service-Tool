@@ -1,8 +1,19 @@
+SST_SP_Survey_Responses_DE — PageNumber batch (20 rows = 1 UI page)
+
+Survey Results text focus: LookupRows(SurveyID, QuestionID, PageNumber) where PageNumber equals UI page (1, 2, 3…).
+
+Problems with the old global batch query:
+- ROW_NUMBER and MAX(PageNumber) were across the whole DE, not per SurveyID + QuestionID.
+- ON 1=1 join applied one MaxPage to every survey/question.
+- UI page math assumed 500-row batches; your query already uses 20.
+
+Use this incremental batch (new rows only, PageNumber IS NULL). Output feeds your update step (ResponsePK key).
+
 SELECT
     n.ResponsePK,
     CAST(
-        m.MaxPage + ((m.CurrentBatchCount + n.NewRowNum - 1) / 20)
-    AS INT) AS [PageNumber],
+        (ISNULL(pc.ExistingCount, 0) + n.NewRowNum - 1) / 20 + 1
+    AS INT) AS PageNumber,
     n.Contact,
     n.SurveyID,
     n.QuestionID,
@@ -16,7 +27,10 @@ SELECT
 FROM (
     SELECT
         ResponsePK,
-        ROW_NUMBER() OVER (ORDER BY LastUpdated ASC, Contact, SurveyID, QuestionNumber) AS NewRowNum,
+        ROW_NUMBER() OVER (
+            PARTITION BY SurveyID, QuestionID
+            ORDER BY LastUpdated ASC, ResponsePK
+        ) AS NewRowNum,
         Contact,
         SurveyID,
         QuestionID,
@@ -29,16 +43,21 @@ FROM (
         CourseName
     FROM SST_SP_Survey_Responses_DE
     WHERE PageNumber IS NULL
+      AND Response IS NOT NULL
+      AND LTRIM(RTRIM(Response)) <> ''
 ) n
-INNER JOIN (
+LEFT JOIN (
     SELECT
-        ISNULL(p.MaxPage, 1) AS MaxPage,
-        ISNULL(COUNT(s.ResponsePK), 0) AS CurrentBatchCount
-    FROM (
-        SELECT MAX(PageNumber) AS MaxPage
-        FROM SST_SP_Survey_Responses_DE
-    ) p
-    LEFT JOIN SST_SP_Survey_Responses_DE s
-        ON s.PageNumber = p.MaxPage
-    GROUP BY p.MaxPage
-) m ON 1 = 1
+        SurveyID,
+        QuestionID,
+        COUNT(1) AS ExistingCount
+    FROM SST_SP_Survey_Responses_DE
+    WHERE PageNumber IS NOT NULL
+    GROUP BY SurveyID, QuestionID
+) pc
+    ON pc.SurveyID = n.SurveyID
+   AND pc.QuestionID = n.QuestionID
+
+Optional: add AND QuestionType = 'text' in the inner WHERE if only text rows should be paged.
+
+After changing batch logic, re-run batch for rows already numbered wrong, or clear PageNumber and re-batch per question.
