@@ -121,6 +121,9 @@ DeleteData("SST_SP_Surveys_Master_DE", "SurveyID", @surveyId)
 DeleteData("SST_SP_Analytics_Answers", "SurveyID", @surveyId)
 
 
+DeleteData("sst-analytics-per-course", "SurveyID", @surveyId)
+
+
 SET @deleteSuccess = "true"
 CATCH
 SET @deleteError = "An error occurred while deleting the survey. Please try again."
@@ -371,14 +374,18 @@ ENDIF
 
                 %%[
                 VAR @responses, @count, @surveyName, @surveyStatus, @analyticsCount, @analyticsRows
+                VAR @courseAnalyticsRows, @courseAnalyticsCount
 
 
                 SET @responses = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId)
                 SET @count = RowCount(@responses)
                 SET @analyticsCount = 0
+                SET @courseAnalyticsCount = 0
                 IF NOT EMPTY(@surveyId) THEN
                 SET @analyticsRows = LookupRows("SST_SP_Analytics_Answers", "SurveyID", @surveyId)
                 SET @analyticsCount = RowCount(@analyticsRows)
+                SET @courseAnalyticsRows = LookupRows("sst-analytics-per-course", "SurveyID", @surveyId)
+                SET @courseAnalyticsCount = RowCount(@courseAnalyticsRows)
                 ENDIF
 
 
@@ -1116,20 +1123,21 @@ ENDIF
 
 
     <!-- Course Analytics Section -->
-    %%[ IF @count > 0 THEN ]%%
+    %%[ IF @count > 0 OR @courseAnalyticsCount > 0 THEN ]%%
     <div id="responsesSection" class="responses-section" style="display: none;">
         %%[
-        /* Process course-level analytics */
-        VAR @courseData, @courseNames, @courseStats, @courseCount, @i, @j, @currentCourse, @courseResponses, @courseCompleted, @uniqueContacts, @courseContacts
-        
-        /* Get unique course names from responses */
+        VAR @courseData, @courseNames, @courseCount, @i, @j, @currentCourse, @courseResponses, @courseCompleted
+        VAR @courseUniqueRespondents, @courseCompletionRate, @courseContacts, @courseRow, @courseName
+        VAR @completionRate, @percentRaw, @questions, @contact, @status, @k
+
+        IF @courseAnalyticsCount > 0 THEN
+        SET @courseCount = @courseAnalyticsCount
+        ELSE
         SET @courseNames = ""
         FOR @i = 1 TO @count DO
         SET @row = Row(@responses, @i)
         SET @courseName = Field(@row, "CourseName")
         SET @questionId = Field(@row, "QuestionID")
-        
-        /* Skip survey open tracking and empty course names */
         IF @questionId != "SURVEY_OPEN" AND NOT EMPTY(@courseName) THEN
         IF IndexOf(@courseNames, @courseName) == 0 THEN
         IF EMPTY(@courseNames) THEN
@@ -1140,13 +1148,12 @@ ENDIF
         ENDIF
         ENDIF
         NEXT @i
-        
-        /* Count courses */
         IF NOT EMPTY(@courseNames) THEN
         SET @courseData = BuildRowSetFromString(@courseNames, "|")
         SET @courseCount = RowCount(@courseData)
         ELSE
         SET @courseCount = 0
+        ENDIF
         ENDIF
         ]%%
         
@@ -1170,29 +1177,36 @@ ENDIF
             <!-- Chart data from course analytics -->
             <div id="courseChartData" style="display: none;">
                 %%[
-                /* Generate chart data for course responses */
-                VAR @chartLabels, @chartData, @chartColors, @k
                 SET @chartLabels = ""
                 SET @chartData = ""
-                SET @chartColors = ""
-                
-                /* Sort courses by response count (descending) */
+                IF @courseAnalyticsCount > 0 THEN
+                FOR @k = 1 TO @courseAnalyticsCount DO
+                SET @courseRow = Row(@courseAnalyticsRows, @k)
+                SET @currentCourse = Field(@courseRow, "CourseName")
+                IF @currentCourse != "Open_Log" THEN
+                SET @courseResponses = Field(@courseRow, "TotalResponses")
+                IF EMPTY(@courseResponses) THEN SET @courseResponses = 0 ENDIF
+                IF EMPTY(@chartLabels) THEN
+                SET @chartLabels = @currentCourse
+                SET @chartData = @courseResponses
+                ELSE
+                SET @chartLabels = Concat(@chartLabels, "|", @currentCourse)
+                SET @chartData = Concat(@chartData, "|", @courseResponses)
+                ENDIF
+                ENDIF
+                NEXT @k
+                ELSE
                 FOR @k = 1 TO @courseCount DO
                 SET @currentCourse = Field(Row(@courseData, @k), 1)
                 SET @courseResponses = 0
-                
-                /* Count responses for this course */
                 FOR @j = 1 TO @count DO
                 SET @row = Row(@responses, @j)
                 SET @courseName = Field(@row, "CourseName")
                 SET @questionId = Field(@row, "QuestionID")
-                
                 IF @courseName == @currentCourse AND @questionId != "SURVEY_OPEN" THEN
                 SET @courseResponses = Add(@courseResponses, 1)
                 ENDIF
                 NEXT @j
-                
-                /* Build chart data */
                 IF EMPTY(@chartLabels) THEN
                 SET @chartLabels = @currentCourse
                 SET @chartData = @courseResponses
@@ -1201,6 +1215,7 @@ ENDIF
                 SET @chartData = Concat(@chartData, "|", @courseResponses)
                 ENDIF
                 NEXT @k
+                ENDIF
                 ]%%
                 <span id="courseChartLabels">%%=v(@chartLabels)=%%</span>
                 <span id="courseChartValues">%%=v(@chartData)=%%</span>
@@ -1216,67 +1231,24 @@ ENDIF
             
             <div class="course-cards-grid">
                 %%[
-                /* Ensure questions are loaded for completion checks */
-                VAR @questions
-                SET @questions = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId)
-                SET @questionCount = RowCount(@questions)
-
-                FOR @i = 1 TO @courseCount DO
-                SET @currentCourse = Field(Row(@courseData, @i), 1)
-                SET @courseResponses = 0
-                SET @courseCompleted = 0
-                SET @courseContacts = ""
-                
-                /* Calculate metrics for this course */
-                FOR @j = 1 TO @count DO
-                SET @row = Row(@responses, @j)
-                SET @courseName = Field(@row, "CourseName")
-                SET @contact = Field(@row, "Contact")
-                SET @questionId = Field(@row, "QuestionID")
-                SET @status = Field(@row, "Status")
-                
-                IF @courseName == @currentCourse AND @questionId != "SURVEY_OPEN" THEN
-                SET @courseResponses = Add(@courseResponses, 1)
-                
-                /* Track unique contacts */
-                IF IndexOf(@courseContacts, @contact) == 0 THEN
-                IF EMPTY(@courseContacts) THEN
-                SET @courseContacts = @contact
+                IF @courseAnalyticsCount > 0 THEN
+                FOR @i = 1 TO @courseAnalyticsCount DO
+                SET @courseRow = Row(@courseAnalyticsRows, @i)
+                SET @currentCourse = Field(@courseRow, "CourseName")
+                IF @currentCourse != "Open_Log" THEN
+                SET @courseResponses = Field(@courseRow, "TotalResponses")
+                SET @courseUniqueRespondents = Field(@courseRow, "UniqueRespondents")
+                SET @courseCompletionRate = Field(@courseRow, "CompletionRatePct")
+                SET @courseCompleted = Field(@courseRow, "CompletedResponses")
+                IF EMPTY(@courseResponses) THEN SET @courseResponses = 0 ENDIF
+                IF EMPTY(@courseUniqueRespondents) THEN SET @courseUniqueRespondents = 0 ENDIF
+                IF EMPTY(@courseCompletionRate) THEN
+                SET @courseCompletionRate = 0
                 ELSE
-                SET @courseContacts = Concat(@courseContacts, "|", @contact)
+                SET @courseCompletionRate = FormatNumber(@courseCompletionRate, 0)
                 ENDIF
-                ENDIF
-                
-                /* Count completed responses */
-                IF @status == "Completed" THEN
-                SET @courseCompleted = Add(@courseCompleted, 1)
-                ENDIF
-                ENDIF
-                NEXT @j
-                
-                /* Count unique contacts */
-                IF NOT EMPTY(@courseContacts) THEN
-                SET @uniqueContacts = RowCount(BuildRowSetFromString(@courseContacts, "|"))
-                ELSE
-                SET @uniqueContacts = 0
-                ENDIF
-                
-                /* Calculate completion rate as aggregate: courseResponses / (questionCount * uniqueContacts) */
-                VAR @completionRate, @percentRaw
-                IF @uniqueContacts > 0 AND @questionCount > 0 THEN
-                  SET @percentRaw = Multiply(Divide(@courseResponses, Multiply(@questionCount, @uniqueContacts)), 100)
-                  IF @percentRaw > 100 THEN
-                    SET @percentRaw = 100
-                  ENDIF
-                  IF @percentRaw < 0 THEN
-                    SET @percentRaw = 0
-                  ENDIF
-                  SET @completionRate = FormatNumber(@percentRaw, 0)
-                ELSE
-                  SET @completionRate = 0
-                ENDIF
+                IF EMPTY(@courseCompleted) THEN SET @courseCompleted = 0 ENDIF
                 ]%%
-                
                 <div class="course-card" onclick="filterByCourse('%%=v(@currentCourse)=%%')">
                     <div class="course-card-header">
                         <div class="course-title-section">
@@ -1295,11 +1267,11 @@ ENDIF
                             <span class="metric-label">Total Responses</span>
                         </div>
                         <div class="metric-item">
-                            <span class="metric-value">%%=v(@uniqueContacts)=%%</span>
+                            <span class="metric-value">%%=v(@courseUniqueRespondents)=%%</span>
                             <span class="metric-label">Unique Respondents</span>
                         </div>
                         <div class="metric-item">
-                            <span class="metric-value">%%=v(@completionRate)=%%%</span>
+                            <span class="metric-value">%%=Concat(@courseCompletionRate, '%')=%%</span>
                             <span class="metric-label">Completion Rate</span>
                         </div>
                         <div class="metric-item">
@@ -1308,7 +1280,84 @@ ENDIF
                         </div>
                     </div>
                 </div>
-                %%[ NEXT @i ]%%
+                %%[ ENDIF
+                NEXT @i
+                ELSE
+                SET @questions = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId)
+                SET @questionCount = RowCount(@questions)
+                FOR @i = 1 TO @courseCount DO
+                SET @currentCourse = Field(Row(@courseData, @i), 1)
+                SET @courseResponses = 0
+                SET @courseCompleted = 0
+                SET @courseContacts = ""
+                FOR @j = 1 TO @count DO
+                SET @row = Row(@responses, @j)
+                SET @courseName = Field(@row, "CourseName")
+                SET @contact = Field(@row, "Contact")
+                SET @questionId = Field(@row, "QuestionID")
+                SET @status = Field(@row, "Status")
+                IF @courseName == @currentCourse AND @questionId != "SURVEY_OPEN" THEN
+                SET @courseResponses = Add(@courseResponses, 1)
+                IF IndexOf(@courseContacts, @contact) == 0 THEN
+                IF EMPTY(@courseContacts) THEN
+                SET @courseContacts = @contact
+                ELSE
+                SET @courseContacts = Concat(@courseContacts, "|", @contact)
+                ENDIF
+                ENDIF
+                IF @status == "Completed" THEN
+                SET @courseCompleted = Add(@courseCompleted, 1)
+                ENDIF
+                ENDIF
+                NEXT @j
+                IF NOT EMPTY(@courseContacts) THEN
+                SET @courseUniqueRespondents = RowCount(BuildRowSetFromString(@courseContacts, "|"))
+                ELSE
+                SET @courseUniqueRespondents = 0
+                ENDIF
+                IF @courseUniqueRespondents > 0 AND @questionCount > 0 THEN
+                SET @percentRaw = Multiply(Divide(@courseResponses, Multiply(@questionCount, @courseUniqueRespondents)), 100)
+                IF @percentRaw > 100 THEN SET @percentRaw = 100 ENDIF
+                IF @percentRaw < 0 THEN SET @percentRaw = 0 ENDIF
+                SET @courseCompletionRate = FormatNumber(@percentRaw, 0)
+                ELSE
+                SET @courseCompletionRate = 0
+                ENDIF
+                ]%%
+                <div class="course-card" onclick="filterByCourse('%%=v(@currentCourse)=%%')">
+                    <div class="course-card-header">
+                        <div class="course-title-section">
+                            <svg class="course-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 2L2 7L12 12L22 7L12 2Z"/>
+                                <path d="M2 17L12 22L22 17"/>
+                                <path d="M2 12L12 17L22 12"/>
+                            </svg>
+                            <h3 class="course-name">%%=v(@currentCourse)=%%</h3>
+                        </div>
+                        <div class="course-status-indicator"></div>
+                    </div>
+                    <div class="course-metrics-horizontal">
+                        <div class="metric-item">
+                            <span class="metric-value">%%=v(@courseResponses)=%%</span>
+                            <span class="metric-label">Total Responses</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-value">%%=v(@courseUniqueRespondents)=%%</span>
+                            <span class="metric-label">Unique Respondents</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-value">%%=Concat(@courseCompletionRate, '%')=%%</span>
+                            <span class="metric-label">Completion Rate</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-value">%%=v(@courseCompleted)=%%</span>
+                            <span class="metric-label">Completed</span>
+                        </div>
+                    </div>
+                </div>
+                %%[ NEXT @i
+                ENDIF
+                ]%%
             </div>
         </div>
         %%[ ENDIF ]%%
