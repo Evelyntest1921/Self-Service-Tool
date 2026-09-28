@@ -118,6 +118,9 @@ DeleteData("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId)
 DeleteData("SST_SP_Surveys_Master_DE", "SurveyID", @surveyId)
 
 
+DeleteData("SST_SP_Analytics_Answers", "SurveyID", @surveyId)
+
+
 SET @deleteSuccess = "true"
 CATCH
 SET @deleteError = "An error occurred while deleting the survey. Please try again."
@@ -368,11 +371,20 @@ ENDIF
 
                 %%[
                 VAR @responses, @count, @surveyName, @surveyStatus
+                VAR @analyticsRows, @analyticsCount, @questionCount
 
 
-                /* Get responses from new SST_SP_Survey_Responses_DE */
                 SET @responses = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId)
                 SET @count = RowCount(@responses)
+
+
+                SET @analyticsRows = LookupOrderedRows("SST_SP_Analytics_Answers", 500, "OrderIndex", "SurveyID", @surveyId)
+                SET @analyticsCount = RowCount(@analyticsRows)
+                IF @analyticsCount > 0 THEN
+                SET @questionCount = @analyticsCount
+                ELSE
+                SET @questionCount = RowCount(LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId))
+                ENDIF
 
 
 
@@ -464,15 +476,25 @@ ENDIF
 
             <!-- Survey Overview Metrics -->
             %%[
-            VAR @uniqueContacts, @openedCount, @completedCount
+            VAR @uniqueContacts, @openedCount, @completedCount, @surveyTotalActivity, @analyticsFirst
 
 
-            /* Count unique contacts */
             SET @uniqueContacts = 0
+            SET @openedCount = 0
+            SET @completedCount = 0
+            SET @surveyTotalActivity = 0
+
+
+            IF @analyticsCount > 0 THEN
+            SET @analyticsFirst = Row(@analyticsRows, 1)
+            SET @openedCount = Field(@analyticsFirst, "OpenedSurvey")
+            SET @completedCount = Field(@analyticsFirst, "CompletedSurvey")
+            SET @uniqueContacts = Field(@analyticsFirst, "OpenedSurvey")
+            FOR @i = 1 TO @analyticsCount DO
+            SET @surveyTotalActivity = Add(@surveyTotalActivity, Field(Row(@analyticsRows, @i), "TotalActivity"))
+            NEXT @i
+            ELSE
             SET @contactSet = ""
-            SET @responsesNoOpens = Subtract(@count, @uniqueContacts)
-
-
             FOR @i = 1 TO @count DO
             SET @row = Row(@responses, @i)
             SET @contact = Field(@row, "Contact")
@@ -480,33 +502,21 @@ ENDIF
             SET @contactSet = Concat(@contactSet, "|", @contact)
             SET @uniqueContacts = Add(@uniqueContacts, 1)
             ENDIF
-            NEXT
-
-
-            /* Count survey opens */
-            SET @openedCount = 0
-            
-            
+            NEXT @i
             FOR @i = 1 TO @count DO
             SET @row = Row(@responses, @i)
-            SET @questionId = Field(@row, "QuestionID")
-            IF @questionId == "SURVEY_OPEN" THEN
+            IF Field(@row, "QuestionID") == "SURVEY_OPEN" THEN
             SET @openedCount = Add(@openedCount, 1)
             ENDIF
-            NEXT
-
-
-            /* Count completed surveys */
-            
-            SET @completedCount = 0
+            NEXT @i
             FOR @i = 1 TO @count DO
             SET @row = Row(@responses, @i)
-            SET @status = Field(@row, "Status")
-            IF @status == "Completed" THEN
+            IF Field(@row, "Status") == "Completed" THEN
             SET @completedCount = Add(@completedCount, 1)
-            SET @completedCount = @openedCount
             ENDIF
-            NEXT
+            NEXT @i
+            SET @surveyTotalActivity = @count
+            ENDIF
             ]%%
 
 
@@ -514,7 +524,7 @@ ENDIF
 
             <!-- Survey Analytics Section (Default View) -->
             <div id="surveyAnalyticsSection">
-                %%[ IF @count > 0 THEN ]%%
+                %%[ IF @count > 0 OR @analyticsCount > 0 THEN ]%%
                 <div class="analytics-view-bar">
                     <div class="view-toggle">
                         <button type="button" class="toggle-btn active" data-view="chart">Chart View</button>
@@ -576,7 +586,7 @@ ENDIF
                             </svg>
                         </div>
                         <div class="metric-content">
-                            <div class="metric-value">%%=Add(@openedCount, @completedCount)=%%</div>
+                            <div class="metric-value">%%=v(@surveyTotalActivity)=%%</div>
                             <div class="metric-label">Total Activity</div>
                             <div class="metric-trend">All activity detected</div>
                         </div>
@@ -593,106 +603,64 @@ ENDIF
 
 
                 <!-- Question Analysis Section -->
-                %%[ IF @count > 0 THEN ]%%
+                %%[ IF @analyticsCount > 0 THEN ]%%
                 <div class="questions-section">
                     <div class="section-header">
                         <h2>Question Analysis</h2>
                     </div>
 
 
-                    %%[
-                    /* Get questions from SST_SP_Survey_Questions_DE */
-                    VAR @questions, @questionCount
-                    SET @questions = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId)
-                    SET @questionCount = RowCount(@questions)
-
-
-                    /* Debug: Check if questions exist */
-                    IF @questionCount == 0 THEN
-                    SET @debugMessage = "No questions found in SST_SP_Survey_Questions_DE for SurveyID: " + @surveyId
-                    ELSE
-                    SET @debugMessage = "Found " + @questionCount + " questions"
-                    ENDIF
-                    ]%%
-
-
-                    %%[ IF @questionCount > 0 THEN ]%%
-
-
-                    <!-- Debug Info 
-      <div style="background: #f0f0f0; padding: 10px; margin: 10px 0; border-radius: 5px; font-family: monospace; font-size: 12px;">
-        <strong>Debug Info:</strong><br>
-        Survey ID: %%=v(@surveyId)=%%<br>
-        Questions Found: %%=v(@questionCount)=%%<br>
-        Responses Found: %%=v(@count)=%%<br>
-        Debug Message: %%=v(@debugMessage)=%%<br>
-        <br>
-        <strong>Questions in SST_SP_Survey_Questions_DE:</strong><br>
-        %%[ FOR @i = 1 TO @questionCount DO
-          SET @debugRow = Row(@questions, @i)
-          SET @debugText = Field(@debugRow, "QuestionText")
-          SET @debugId = Field(@debugRow, "QuestionID")
-        ]%%
-        %%=v(@i)=%%. %%=v(@debugText)=%% (ID: %%=v(@debugId)=%%)<br>
-        %%[ NEXT @i ]%%
-      </div> 
--->
-
-
-                    %%[ FOR @q = 1 TO @questionCount DO
-                    SET @questionRow = Row(@questions, @q)
+                    %%[ FOR @q = 1 TO @analyticsCount DO
+                    SET @questionRow = Row(@analyticsRows, @q)
                     SET @questionText = Field(@questionRow, "QuestionText")
                     SET @questionId = Field(@questionRow, "QuestionID")
                     SET @questionType = Field(@questionRow, "QuestionType")
+                    SET @questionNumber = Field(@questionRow, "QuestionNumber")
+                    SET @optString = Field(@questionRow, "Options")
+                    SET @questionUniqueRespondents = Field(@questionRow, "UniqueRespondents")
+                    SET @averageScore = Field(@questionRow, "AverageScore")
+                    SET @opt1Count = Field(@questionRow, "Opt1_Count")
+                    SET @opt2Count = Field(@questionRow, "Opt2_Count")
+                    SET @opt3Count = Field(@questionRow, "Opt3_Count")
+                    SET @opt4Count = Field(@questionRow, "Opt4_Count")
+                    SET @opt5Count = Field(@questionRow, "Opt5_Count")
 
 
-                    /* Count responses for this question */
-                    VAR @responseCount, @yesCount, @noCount, @textResponses, @otherResponses
-                    SET @responseCount = 0
-                    SET @yesCount = 0
-                    SET @noCount = 0
+                    VAR @responseCount, @yesCount, @noCount, @textResponses, @displayQuestionNumber
+                    IF @questionType == "text" THEN
+                    SET @responseCount = Field(@questionRow, "TextResponseCount")
+                    ELSE
+                    SET @responseCount = Field(@questionRow, "TotalActivity")
+                    ENDIF
+                    SET @yesCount = @opt1Count
+                    SET @noCount = @opt2Count
                     SET @textResponses = ""
-                    SET @otherResponses = ""
+                    IF EMPTY(@questionNumber) THEN
+                    SET @displayQuestionNumber = Format(@q, "00")
+                    ELSE
+                    SET @displayQuestionNumber = @questionNumber
+                    ENDIF
 
 
+                    IF @questionType == "text" AND @responseCount > 0 THEN
                     FOR @i = 1 TO @count DO
                     SET @responseRow = Row(@responses, @i)
-                    SET @responseQuestionID = Field(@responseRow, "QuestionID")
+                    IF Field(@responseRow, "QuestionID") == @questionId THEN
                     SET @response = Field(@responseRow, "Response")
-
-
-                    IF @responseQuestionID == @questionId AND NOT EMPTY(@response) THEN
-                    SET @responseCount = Add(@responseCount, 1)
-
-
-                    /* Count by response type */
-                    IF @response == "Yes" THEN
-                    SET @yesCount = Add(@yesCount, 1)
-                    ELSEIF @response == "No" THEN
-                    SET @noCount = Add(@noCount, 1)
-                    ELSE
-                    /* Store text responses for text-type questions */
-                    IF @questionType == "text" THEN
+                    IF NOT EMPTY(@response) AND LEN(LTRIM(RTRIM(@response))) > 0 THEN
                     SET @textResponses = Concat(@textResponses, "|", @response)
-                    ELSE
-                    /* Store other responses for multiple choice questions */
-                    SET @otherResponses = Concat(@otherResponses, "|", @response)
                     ENDIF
                     ENDIF
+                    NEXT @i
                     ENDIF
-                    NEXT
                     ]%%
 
 
                     <div class="question-card">
                         <div class="question-header">
-                            <span class="question-number">%%=Format(@q, "00")=%%</span>
+                            <span class="question-number">%%=v(@displayQuestionNumber)=%%</span>
                             <div class="question-content">
-                                <!-- <h3>%%=v(@questionText)=%%</h3> -->
-                                <h3>
-                                    %%=v(@questionText)=%%
-                                </h3>
-                                <!-- Debug: Question Text = "%%=v(@questionText)=%%" -->
+                                <h3>%%=v(@questionText)=%%</h3>
                             </div>
                         </div>
 
@@ -705,8 +673,8 @@ ENDIF
                                 </div>
                                 <div class="stat-item">
                                     <span class="stat-label">Response Rate</span>
-                                    <span class="stat-value">%%=IIF(@uniqueContacts > 0,
-                                        FormatNumber(Multiply(Divide(@responseCount, @uniqueContacts), 100), 0),
+                                    <span class="stat-value">%%=IIF(@openedCount > 0,
+                                        FormatNumber(Multiply(Divide(@questionUniqueRespondents, @openedCount), 100), 0),
                                         0)=%%%</span>
                                 </div>
                                 <div class="stat-item">
@@ -716,6 +684,12 @@ ENDIF
                                             class="question-type-badge type-%%=v(@questionType)=%%">%%=v(@questionType)=%%</span>
                                     </span>
                                 </div>
+                                %%[ IF (@questionType == "likert" OR @questionType == "rating") AND NOT EMPTY(@averageScore) THEN ]%%
+                                <div class="stat-item">
+                                    <span class="stat-label">Average Score</span>
+                                    <span class="stat-value">%%=FormatNumber(@averageScore, 2)=%%</span>
+                                </div>
+                                %%[ ENDIF ]%%
                             </div>
                         </div>
 
@@ -768,15 +742,20 @@ ENDIF
 
                                 /* Render first 5 responses lazily */
                                 FOR @k = 1 TO @textCount DO
-                                IF @k <= 5 THEN SET @textResponse=Field(Row(@textArray, @k), 1) IF NOT
-                                    EMPTY(@textResponse) THEN ]%% <div class="text-response-item">
+                                IF @k <= 5 THEN
+                                SET @textResponse = Field(Row(@textArray, @k), 1)
+                                IF NOT EMPTY(@textResponse) THEN
+                                ]%%
+                            <div class="text-response-item">
                                     <div class="text-response-content">
                                         <span class="text-response-text">"%%=v(@textResponse)=%%"</span>
                                     </div>
                             </div>
-                            %%[ ENDIF
-                            ENDIF
-                            NEXT @k ]%%
+                            %%[
+                                ENDIF
+                                ENDIF
+                                NEXT @k
+                                ]%%
 
 
                             <!-- Hidden raw data for modal population -->
@@ -805,61 +784,42 @@ ENDIF
 
                         %%[ ELSEIF @questionType == "likert" OR @questionType == "rating" OR @questionType ==
                         "multiple" THEN ]%%
-                        <!-- Multiple Choice Questions - Aggregate by defined options -->
                         %%[
-                        /* Fetch defined options for this question */
-                        VAR @optString, @optRows, @optCount, @o
-                        SET @optString = Lookup("SST_SP_Survey_Questions_DE", "Options", "QuestionID", @questionId)
-
-
+                        VAR @optRows, @optCount, @o, @maxCount, @o2, @optResponses2
                         IF NOT EMPTY(@optString) THEN
                         SET @optRows = BuildRowSetFromString(@optString, "|")
                         SET @optCount = RowCount(@optRows)
                         ELSE
                         SET @optCount = 0
                         ENDIF
-                        ]%%
-
-
-                        %%[ IF @optCount > 0 THEN ]%%
-                        %%[
-                        VAR @maxCount, @o2, @optVal2, @optResponses2, @ri2
+                        IF @optCount > 5 THEN
+                        SET @optCount = 5
+                        ENDIF
                         SET @maxCount = 0
                         FOR @o2 = 1 TO @optCount DO
-                        SET @optVal2 = Field(Row(@optRows, @o2), 1)
-                        SET @optResponses2 = 0
-                        FOR @ri2 = 1 TO @count DO
-                        SET @row = Row(@responses, @ri2)
-                        IF Field(@row, "QuestionID") == @questionId THEN
-                        IF Field(@row, "Response") == @optVal2 THEN
-                        SET @optResponses2 = Add(@optResponses2, 1)
+                        IF @o2 == 1 THEN SET @optResponses2 = @opt1Count
+                        ELSEIF @o2 == 2 THEN SET @optResponses2 = @opt2Count
+                        ELSEIF @o2 == 3 THEN SET @optResponses2 = @opt3Count
+                        ELSEIF @o2 == 4 THEN SET @optResponses2 = @opt4Count
+                        ELSEIF @o2 == 5 THEN SET @optResponses2 = @opt5Count
+                        ELSE SET @optResponses2 = 0
                         ENDIF
-                        ENDIF
-                        NEXT @ri2
                         IF @optResponses2 > @maxCount THEN
                         SET @maxCount = @optResponses2
                         ENDIF
                         NEXT @o2
                         ]%%
+                        %%[ IF @optCount > 0 THEN ]%%
                         %%[ FOR @o = 1 TO @optCount DO
                         VAR @optVal, @optResponses
                         SET @optVal = Field(Row(@optRows, @o), 1)
-                        SET @optResponses = 0
-
-
-                        /* Count matches in responses for this option */
-                        VAR @ri
-                        FOR @ri = 1 TO @count DO
-                        SET @row = Row(@responses, @ri)
-                        IF Field(@row, "QuestionID") == @questionId THEN
-                        IF Field(@row, "Response") == @optVal THEN
-                        SET @optResponses = Add(@optResponses, 1)
+                        IF @o == 1 THEN SET @optResponses = @opt1Count
+                        ELSEIF @o == 2 THEN SET @optResponses = @opt2Count
+                        ELSEIF @o == 3 THEN SET @optResponses = @opt3Count
+                        ELSEIF @o == 4 THEN SET @optResponses = @opt4Count
+                        ELSEIF @o == 5 THEN SET @optResponses = @opt5Count
+                        ELSE SET @optResponses = 0
                         ENDIF
-                        ENDIF
-                        NEXT @ri
-
-
-                        /* Render only options that have at least one response */
                         IF @optResponses > 0 THEN
                         SET @barClass = IIF(@optResponses == @maxCount, "yes", "multiple-choice")
                         ]%%
@@ -914,21 +874,17 @@ ENDIF
 
 
                 %%[ NEXT @q ]%%
-
-
-                %%[ ELSE ]%%
-                <div class="no-responses">
-                    <div class="empty-state">
-                        <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="1">
-                            <path
-                                d="M20 6h-2.18c.11-.31.18-.65.18-1a2.996 2.996 0 0 0-5.5-1.65l-.5.67-.5-.68C10.96 2.54 10 2 10 2 10 2 9 3 8.18 4H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z" />
-                        </svg>
-                        <h3>No questions found</h3>
-                        <p>No question responses have been recorded yet.</p>
-                    </div>
                 </div>
-                %%[ ENDIF ]%%
+                %%[ ELSEIF @count > 0 THEN ]%%
+                <div class="questions-section">
+                    <div class="section-header">
+                        <h2>Question Analysis</h2>
+                    </div>
+                    <div class="no-responses">
+                        <div class="empty-state">
+                            <p>Question analytics are not available yet. Run the SST_SP_Analytics_Answers query for this survey.</p>
+                        </div>
+                    </div>
                 </div>
                 %%[ ENDIF ]%%
                 </div>
