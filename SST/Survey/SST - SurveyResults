@@ -118,7 +118,10 @@ DeleteData("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId)
 DeleteData("SST_SP_Surveys_Master_DE", "SurveyID", @surveyId)
 
 
+TRY
 DeleteData("SST_SP_Analytics_Answers", "SurveyID", @surveyId)
+CATCH
+ENDIF
 
 
 SET @deleteSuccess = "true"
@@ -378,8 +381,15 @@ ENDIF
                 SET @count = RowCount(@responses)
 
 
+                SET @analyticsCount = 0
+                IF NOT EMPTY(@surveyId) THEN
+                TRY
                 SET @analyticsRows = LookupOrderedRows("SST_SP_Analytics_Answers", 500, "OrderIndex", "SurveyID", @surveyId)
                 SET @analyticsCount = RowCount(@analyticsRows)
+                CATCH
+                SET @analyticsCount = 0
+                ENDIF
+                ENDIF
                 IF @analyticsCount > 0 THEN
                 SET @questionCount = @analyticsCount
                 ELSE
@@ -483,6 +493,8 @@ ENDIF
             SET @openedCount = 0
             SET @completedCount = 0
             SET @surveyTotalActivity = 0
+            VAR @completionRateDisplay
+            SET @completionRateDisplay = 0
 
 
             IF @analyticsCount > 0 THEN
@@ -490,9 +502,15 @@ ENDIF
             SET @openedCount = Field(@analyticsFirst, "OpenedSurvey")
             SET @completedCount = Field(@analyticsFirst, "CompletedSurvey")
             SET @uniqueContacts = Field(@analyticsFirst, "OpenedSurvey")
+            IF EMPTY(@openedCount) THEN SET @openedCount = 0 ENDIF
+            IF EMPTY(@completedCount) THEN SET @completedCount = 0 ENDIF
+            IF EMPTY(@uniqueContacts) THEN SET @uniqueContacts = 0 ENDIF
             FOR @i = 1 TO @analyticsCount DO
             SET @surveyTotalActivity = Add(@surveyTotalActivity, Field(Row(@analyticsRows, @i), "TotalActivity"))
             NEXT @i
+            IF @uniqueContacts > 0 THEN
+            SET @completionRateDisplay = FormatNumber(Multiply(Divide(@completedCount, @uniqueContacts), 100), 0)
+            ENDIF
             ELSE
             SET @contactSet = ""
             FOR @i = 1 TO @count DO
@@ -516,6 +534,9 @@ ENDIF
             ENDIF
             NEXT @i
             SET @surveyTotalActivity = @count
+            IF @uniqueContacts > 0 THEN
+            SET @completionRateDisplay = FormatNumber(Multiply(Divide(@completedCount, @uniqueContacts), 100), 0)
+            ENDIF
             ENDIF
             ]%%
 
@@ -626,14 +647,25 @@ ENDIF
                     SET @opt5Count = Field(@questionRow, "Opt5_Count")
 
 
-                    VAR @responseCount, @yesCount, @noCount, @textResponses, @displayQuestionNumber
+                    VAR @responseCount, @yesCount, @noCount, @textResponses, @displayQuestionNumber, @questionResponseRatePct
                     IF @questionType == "text" THEN
                     SET @responseCount = Field(@questionRow, "TextResponseCount")
                     ELSE
                     SET @responseCount = Field(@questionRow, "TotalActivity")
                     ENDIF
+                    IF EMPTY(@responseCount) THEN SET @responseCount = 0 ENDIF
+                    IF EMPTY(@questionUniqueRespondents) THEN SET @questionUniqueRespondents = 0 ENDIF
+                    IF EMPTY(@opt1Count) THEN SET @opt1Count = 0 ENDIF
+                    IF EMPTY(@opt2Count) THEN SET @opt2Count = 0 ENDIF
+                    IF EMPTY(@opt3Count) THEN SET @opt3Count = 0 ENDIF
+                    IF EMPTY(@opt4Count) THEN SET @opt4Count = 0 ENDIF
+                    IF EMPTY(@opt5Count) THEN SET @opt5Count = 0 ENDIF
                     SET @yesCount = @opt1Count
                     SET @noCount = @opt2Count
+                    SET @questionResponseRatePct = 0
+                    IF @openedCount > 0 THEN
+                    SET @questionResponseRatePct = FormatNumber(Multiply(Divide(@questionUniqueRespondents, @openedCount), 100), 0)
+                    ENDIF
                     SET @textResponses = ""
                     IF EMPTY(@questionNumber) THEN
                     SET @displayQuestionNumber = Format(@q, "00")
@@ -673,9 +705,7 @@ ENDIF
                                 </div>
                                 <div class="stat-item">
                                     <span class="stat-label">Response Rate</span>
-                                    <span class="stat-value">%%=IIF(@openedCount > 0,
-                                        FormatNumber(Multiply(Divide(@questionUniqueRespondents, @openedCount), 100), 0),
-                                        0)=%%%</span>
+                                    <span class="stat-value">%%=v(@questionResponseRatePct)=%%%</span>
                                 </div>
                                 <div class="stat-item">
                                     <span class="stat-label">Question Type</span>
@@ -684,10 +714,17 @@ ENDIF
                                             class="question-type-badge type-%%=v(@questionType)=%%">%%=v(@questionType)=%%</span>
                                     </span>
                                 </div>
-                                %%[ IF (@questionType == "likert" OR @questionType == "rating") AND NOT EMPTY(@averageScore) THEN ]%%
+                                %%[
+                                VAR @averageScoreDisplay
+                                SET @averageScoreDisplay = ""
+                                IF (@questionType == "likert" OR @questionType == "rating") AND NOT EMPTY(@averageScore) THEN
+                                SET @averageScoreDisplay = FormatNumber(@averageScore, 2)
+                                ENDIF
+                                IF NOT EMPTY(@averageScoreDisplay) THEN
+                                ]%%
                                 <div class="stat-item">
                                     <span class="stat-label">Average Score</span>
-                                    <span class="stat-value">%%=FormatNumber(@averageScore, 2)=%%</span>
+                                    <span class="stat-value">%%=v(@averageScoreDisplay)=%%</span>
                                 </div>
                                 %%[ ENDIF ]%%
                             </div>
@@ -934,8 +971,7 @@ ENDIF
             <div class="activity-metric-card">
                 <div class="metric-icon-small engagement">⚡</div>
                 <div class="metric-details">
-                    <div class="metric-number">%%=IIF(@uniqueContacts > 0,
-                        FormatNumber(Multiply(Divide(@completedCount, @uniqueContacts), 100), 0), 0)=%%%</div>
+                    <div class="metric-number">%%=v(@completionRateDisplay)=%%%</div>
                     <div class="metric-label">Completion Rate</div>
                     <div class="metric-trend neutral">Based on responses</div>
                 </div>
