@@ -5023,6 +5023,55 @@ ELSE
                 });
         }
 
+        var COURSE_CHART_BG = [
+            'rgba(99, 102, 241, 0.8)',
+            'rgba(16, 185, 129, 0.8)',
+            'rgba(245, 158, 11, 0.8)',
+            'rgba(239, 68, 68, 0.8)',
+            'rgba(139, 92, 246, 0.8)',
+            'rgba(59, 130, 246, 0.8)',
+            'rgba(236, 72, 153, 0.8)',
+            'rgba(34, 197, 94, 0.8)'
+        ];
+        var COURSE_CHART_BORDER = [
+            'rgba(99, 102, 241, 1)',
+            'rgba(16, 185, 129, 1)',
+            'rgba(245, 158, 11, 1)',
+            'rgba(239, 68, 68, 1)',
+            'rgba(139, 92, 246, 1)',
+            'rgba(59, 130, 246, 1)',
+            'rgba(236, 72, 153, 1)',
+            'rgba(34, 197, 94, 1)'
+        ];
+        var COURSE_CHART_DIM_BG = 'rgba(209, 213, 219, 0.45)';
+        var COURSE_CHART_DIM_BORDER = 'rgba(156, 163, 175, 0.55)';
+
+        function getActiveDetailCourseFilter() {
+            var params = new URLSearchParams(window.location.search);
+            var course = window.currentCourseFilter || params.get('detailCourse') || 'All';
+            if (!course || course === 'All') {
+                return '';
+            }
+            return String(course).trim();
+        }
+
+        function getCourseChartBarColors(labels, selectedCourse) {
+            var dim = Boolean(selectedCourse);
+            return labels.map(function (label, index) {
+                var isSelected = !dim || String(label).trim() === selectedCourse;
+                if (isSelected) {
+                    return {
+                        backgroundColor: COURSE_CHART_BG[index % COURSE_CHART_BG.length],
+                        borderColor: COURSE_CHART_BORDER[index % COURSE_CHART_BORDER.length]
+                    };
+                }
+                return {
+                    backgroundColor: COURSE_CHART_DIM_BG,
+                    borderColor: COURSE_CHART_DIM_BORDER
+                };
+            });
+        }
+
         // Initialize course chart
         function initializeCourseChart() {
             console.log('Initializing course chart...');
@@ -5063,13 +5112,13 @@ ELSE
 
             const sortedLabels = sortedData.map(item => item.label);
             const sortedValues = sortedData.map(item => item.value);
+            const selectedCourse = getActiveDetailCourseFilter();
 
-            // Create Chart.js chart
-            createCourseChart(canvas, sortedLabels, sortedValues);
+            createCourseChart(canvas, sortedLabels, sortedValues, selectedCourse);
         }
 
         // Create course chart
-        function createCourseChart(canvas, labels, data) {
+        function createCourseChart(canvas, labels, data, selectedCourse) {
             console.log('Creating course chart with data:', { labels, data });
 
             // Validate data
@@ -5103,7 +5152,7 @@ ELSE
             }
 
             try {
-                // Create new Chart.js chart
+                var barColors = getCourseChartBarColors(labels, selectedCourse || '');
                 window.courseChart = new Chart(canvas, {
                     type: 'bar',
                     data: {
@@ -5111,26 +5160,8 @@ ELSE
                         datasets: [{
                             label: 'Total Responses',
                             data: data,
-                            backgroundColor: [
-                                'rgba(99, 102, 241, 0.8)',
-                                'rgba(16, 185, 129, 0.8)',
-                                'rgba(245, 158, 11, 0.8)',
-                                'rgba(239, 68, 68, 0.8)',
-                                'rgba(139, 92, 246, 0.8)',
-                                'rgba(59, 130, 246, 0.8)',
-                                'rgba(236, 72, 153, 0.8)',
-                                'rgba(34, 197, 94, 0.8)'
-                            ],
-                            borderColor: [
-                                'rgba(99, 102, 241, 1)',
-                                'rgba(16, 185, 129, 1)',
-                                'rgba(245, 158, 11, 1)',
-                                'rgba(239, 68, 68, 1)',
-                                'rgba(139, 92, 246, 1)',
-                                'rgba(59, 130, 246, 1)',
-                                'rgba(236, 72, 153, 1)',
-                                'rgba(34, 197, 94, 1)'
-                            ],
+                            backgroundColor: barColors.map(function (c) { return c.backgroundColor; }),
+                            borderColor: barColors.map(function (c) { return c.borderColor; }),
                             borderWidth: 2,
                             borderRadius: 0,
                             borderSkipped: false,
@@ -5139,6 +5170,16 @@ ELSE
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
+                        onClick: function (evt, elements) {
+                            if (!elements || !elements.length) {
+                                return;
+                            }
+                            var index = elements[0].index;
+                            var courseName = labels[index];
+                            if (courseName) {
+                                filterByCourse(courseName);
+                            }
+                        },
                         plugins: {
                             legend: {
                                 display: false
