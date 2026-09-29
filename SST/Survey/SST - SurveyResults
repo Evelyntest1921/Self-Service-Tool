@@ -161,7 +161,7 @@ ENDIF
 ENDIF
 VAR @textFocusMode, @focusQuestionId, @focusQuestionText, @focusResponseCount, @textPageSize
 VAR @textDePageKey, @textBatchRows, @textResponse, @textTotalUiPages, @textLocalUiPage, @textPrevPage, @textNextPage, @textFragNav, @textRowIdx, @textRem, @textBatchRowCount
-VAR @textMaxPageRows, @textMaxPageNum
+VAR @textMaxPageRows, @textMaxPageNum, @textFocusCourseLabel, @textFocusCourseRows
 SET @textFocusMode = "false"
 SET @focusQuestionId = ""
 SET @focusQuestionText = ""
@@ -169,6 +169,7 @@ SET @focusResponseCount = 0
 SET @textPageSize = 20
 SET @textTotalUiPages = 1
 SET @textLocalUiPage = 1
+SET @textFocusCourseLabel = ""
 IF NOT EMPTY(@textFocus) AND @textFocus != "0" THEN
 SET @textFocusMode = "true"
 SET @focusQuestionId = Trim(@textExpandQ)
@@ -184,7 +185,16 @@ ENDIF
 IF EMPTY(@focusResponseCount) THEN SET @focusResponseCount = 0 ENDIF
 SET @focusResponseCount = Add(0, @focusResponseCount)
 SET @focusQuestionText = Lookup("SST_SP_Survey_Questions_DE", "QuestionText", "SurveyID", @surveyId, "QuestionID", @focusQuestionId)
-SET @textFragNav = Concat(@textNavBase, "&textFocus=1&textQ=", @focusQuestionId, "&textTotal=", @focusResponseCount, "&textPage=")
+SET @textFocusCourseLabel = Trim(RequestParameter("textCourse"))
+IF EMPTY(@textFocusCourseLabel) THEN SET @textFocusCourseLabel = Trim(QueryParameter("textCourse")) ENDIF
+IF EMPTY(@textFocusCourseLabel) AND NOT EMPTY(@surveyId) AND NOT EMPTY(@focusQuestionId) THEN
+SET @textFocusCourseRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", 1, "LastUpdated ASC", "SurveyID", @surveyId, "QuestionID", @focusQuestionId)
+IF RowCount(@textFocusCourseRows) > 0 THEN
+SET @textFocusCourseLabel = Trim(Field(Row(@textFocusCourseRows, 1), "CourseName"))
+ENDIF
+ENDIF
+IF EMPTY(@textFocusCourseLabel) THEN SET @textFocusCourseLabel = "All courses" ENDIF
+SET @textFragNav = Concat(@textNavBase, "&textFocus=1&textQ=", @focusQuestionId, "&textTotal=", @focusResponseCount, "&textCourse=", URLEncode(@textFocusCourseLabel), "&textPage=")
 SET @textTotalUiPages = 1
 IF NOT EMPTY(@surveyId) AND NOT EMPTY(@focusQuestionId) THEN
 SET @textMaxPageRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", 1, "TextPageNumber DESC", "SurveyID", @surveyId, "QuestionID", @focusQuestionId)
@@ -414,8 +424,17 @@ ENDIF
             </div>
             <div id="textFocusConfig" style="display:none" data-fetch-base="%%=v(@textNavBase)=%%" data-survey-id="%%=v(@surveyId)=%%" data-journey-id="%%=v(@jid)=%%"></div>
             <div id="textQuestionFocusView" class="text-question-focus-view" style="%%[ IF @textFocusMode == "true" THEN ]%%display:flex%%[ ELSE ]%%display:none%%[ ENDIF ]%%">
-                <div class="text-focus-toolbar">
-                    <a class="btn-secondary text-focus-back-btn" href="%%=v(@textNavBase)=%%">Back to question analysis</a>
+                <div class="survey-header text-focus-survey-header">
+                    <div class="breadcrumb-section">
+                        <nav class="breadcrumb-nav" aria-label="Breadcrumb">
+                            <a href="%%=v(@textNavBase)=%%" class="breadcrumb-link">
+                                <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+                                Back
+                            </a>
+                            <span class="breadcrumb-separator" aria-hidden="true">/</span>
+                            <span class="breadcrumb-current">%%=v(@textFocusCourseLabel)=%%</span>
+                        </nav>
+                    </div>
                 </div>
                 <div class="text-focus-header">
                     <h1 id="textFocusQuestionTitle">%%=v(@focusQuestionText)=%%</h1>
@@ -2509,8 +2528,9 @@ ENDIF
             overflow: auto;
         }
 
-        .text-focus-toolbar {
-            margin-bottom: 20px;
+        .text-focus-survey-header {
+            margin-bottom: 0;
+            width: 100%;
         }
 
         .text-focus-header h1 {
@@ -3616,6 +3636,10 @@ ENDIF
             url.searchParams.set('textQ', questionId);
             url.searchParams.set('textPage', String(page));
             url.searchParams.set('textTotal', String(responseCount || 0));
+            var courseFilter = window.currentCourseFilter || '';
+            if (courseFilter && courseFilter !== 'All') {
+                url.searchParams.set('textCourse', courseFilter);
+            }
             url.hash = '';
             return url.toString();
         }
