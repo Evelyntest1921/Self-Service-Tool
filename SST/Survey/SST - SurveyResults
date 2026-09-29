@@ -1292,7 +1292,7 @@ ELSE
                 ENDIF
                 ]%%
 
-                <div class="course-card" onclick="filterByCourse('%%=v(@currentCourse)=%%')">
+                <div class="course-card" data-course-name="%%=v(@currentCourse)=%%" role="button" tabindex="0">
                     <div class="course-card-header">
                         <div class="course-title-section">
                             <svg class="course-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
@@ -1359,6 +1359,12 @@ ELSE
         VAR @detailUiPage, @detailTotalPages, @detailBatchRows, @detailBatchRowCount, @detailDePageKey, @detailMaxPageRows, @detailMaxPageNum, @detailNavBase, @detailRowIdx, @detailRow
         VAR @detailContact, @detailCourseName, @detailQuestionId, @detailResponse, @detailStatus, @detailLastUpdated, @detailQuestionText, @detailQuestionType, @detailContactName
         VAR @detailTotalRows, @detailStartRow, @detailEndRow, @detailPrevPage, @detailNextPage, @detailRem
+        VAR @detailCourseFilter, @detailCourseFilterActive, @detailAllSurveyRows, @detailLoopIdx, @detailPageSize, @detailWindowStart, @detailWindowEnd, @detailSeenMatches
+        SET @detailPageSize = 20
+        SET @detailCourseFilter = Trim(RequestParameter("detailCourse"))
+        IF EMPTY(@detailCourseFilter) THEN SET @detailCourseFilter = Trim(QueryParameter("detailCourse")) ENDIF
+        SET @detailCourseFilterActive = "false"
+        IF NOT EMPTY(@detailCourseFilter) AND @detailCourseFilter != "All" THEN SET @detailCourseFilterActive = "true" ENDIF
         SET @detailUiPage = Trim(RequestParameter("detailPage"))
         IF EMPTY(@detailUiPage) THEN SET @detailUiPage = Trim(QueryParameter("detailPage")) ENDIF
         IF EMPTY(@detailUiPage) THEN SET @detailUiPage = 1 ENDIF
@@ -1377,6 +1383,30 @@ ELSE
         SET @detailNavBase = Concat(@detailNavBase, "?surveyid=", @surveyId)
         IF NOT EMPTY(@jid) THEN SET @detailNavBase = Concat(@detailNavBase, "&journeyId=", @jid) ENDIF
         SET @detailNavBase = Concat(@detailNavBase, "&view=responses&detailPage=")
+        IF @detailCourseFilterActive == "true" THEN
+        SET @detailTotalRows = 0
+        IF NOT EMPTY(@surveyId) THEN
+        SET @detailAllSurveyRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId)
+        FOR @detailLoopIdx = 1 TO RowCount(@detailAllSurveyRows) DO
+        SET @detailRow = Row(@detailAllSurveyRows, @detailLoopIdx)
+        SET @detailQuestionId = Field(@detailRow, "QuestionID")
+        IF @detailQuestionId != "SURVEY_OPEN" THEN
+        SET @detailCourseName = Field(@detailRow, "CourseName")
+        IF Trim(@detailCourseName) == Trim(@detailCourseFilter) THEN
+        SET @detailTotalRows = Add(@detailTotalRows, 1)
+        ENDIF
+        ENDIF
+        NEXT @detailLoopIdx
+        ENDIF
+        SET @detailTotalPages = 1
+        IF @detailTotalRows > 0 THEN
+        SET @detailRem = Mod(@detailTotalRows, @detailPageSize)
+        SET @detailTotalPages = Divide(Subtract(@detailTotalRows, @detailRem), @detailPageSize)
+        IF @detailRem > 0 THEN
+        SET @detailTotalPages = Add(@detailTotalPages, 1)
+        ENDIF
+        ENDIF
+        ELSE
         IF NOT EMPTY(@surveyId) THEN
         SET @detailMaxPageRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", 1, "PageNumber DESC", "SurveyID", @surveyId)
         IF RowCount(@detailMaxPageRows) > 0 THEN
@@ -1390,16 +1420,12 @@ ELSE
         ENDIF
         ENDIF
         IF @detailTotalPages == 1 AND @detailTotalRows > 0 THEN
-        SET @detailRem = Mod(@detailTotalRows, 20)
-        SET @detailTotalPages = Divide(Subtract(@detailTotalRows, @detailRem), 20)
+        SET @detailRem = Mod(@detailTotalRows, @detailPageSize)
+        SET @detailTotalPages = Divide(Subtract(@detailTotalRows, @detailRem), @detailPageSize)
         IF @detailRem > 0 THEN
         SET @detailTotalPages = Add(@detailTotalPages, 1)
         ENDIF
         ENDIF
-        IF @detailUiPage > @detailTotalPages THEN SET @detailUiPage = @detailTotalPages ENDIF
-        IF @detailUiPage < 1 THEN SET @detailUiPage = 1 ENDIF
-        SET @detailPrevPage = Subtract(@detailUiPage, 1)
-        SET @detailNextPage = Add(@detailUiPage, 1)
         SET @detailDePageKey = Concat("", @detailUiPage)
         SET @detailBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "PageNumber", @detailDePageKey)
         SET @detailBatchRowCount = RowCount(@detailBatchRows)
@@ -1407,14 +1433,26 @@ ELSE
         SET @detailBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "PageNumber", @detailUiPage)
         SET @detailBatchRowCount = RowCount(@detailBatchRows)
         ENDIF
+        ENDIF
+        IF @detailTotalPages < 1 THEN SET @detailTotalPages = 1 ENDIF
+        IF @detailUiPage > @detailTotalPages THEN SET @detailUiPage = @detailTotalPages ENDIF
+        IF @detailUiPage < 1 THEN SET @detailUiPage = 1 ENDIF
+        SET @detailPrevPage = Subtract(@detailUiPage, 1)
+        SET @detailNextPage = Add(@detailUiPage, 1)
+        SET @detailWindowStart = Multiply(Subtract(@detailUiPage, 1), @detailPageSize)
+        SET @detailWindowEnd = Multiply(@detailUiPage, @detailPageSize)
         SET @detailStartRow = 0
         SET @detailEndRow = 0
-        IF @detailBatchRowCount > 0 THEN
-        SET @detailStartRow = Add(Multiply(Subtract(@detailUiPage, 1), 20), 1)
+        IF @detailCourseFilterActive == "true" AND @detailTotalRows > 0 THEN
+        SET @detailStartRow = Add(@detailWindowStart, 1)
+        SET @detailEndRow = Add(@detailStartRow, Subtract(@detailPageSize, 1))
+        IF @detailEndRow > @detailTotalRows THEN SET @detailEndRow = @detailTotalRows ENDIF
+        ELSEIF @detailBatchRowCount > 0 THEN
+        SET @detailStartRow = Add(Multiply(Subtract(@detailUiPage, 1), @detailPageSize), 1)
         SET @detailEndRow = Add(@detailStartRow, Subtract(@detailBatchRowCount, 1))
         ENDIF
         ]%%
-        <div id="detailTablePagingConfig" style="display:none" data-current-page="%%=v(@detailUiPage)=%%" data-total-pages="%%=v(@detailTotalPages)=%%" data-total-rows="%%=v(@detailTotalRows)=%%" data-start-row="%%=v(@detailStartRow)=%%" data-end-row="%%=v(@detailEndRow)=%%" data-nav-base="%%=v(@detailNavBase)=%%"></div>
+        <div id="detailTablePagingConfig" style="display:none" data-current-page="%%=v(@detailUiPage)=%%" data-total-pages="%%=v(@detailTotalPages)=%%" data-total-rows="%%=v(@detailTotalRows)=%%" data-start-row="%%=v(@detailStartRow)=%%" data-end-row="%%=v(@detailEndRow)=%%" data-nav-base="%%=v(@detailNavBase)=%%" data-detail-course="%%=v(@detailCourseFilter)=%%"></div>
         <div class="table-container">
             <table class="modern-table" id="detailedResponsesTable">
                 <thead>
@@ -1430,7 +1468,81 @@ ELSE
                     </tr>
                 </thead>
                 <tbody>
-                    %%[ IF @detailBatchRowCount > 0 THEN
+                    %%[ IF @detailCourseFilterActive == "true" AND @detailTotalRows > 0 THEN
+                    SET @detailSeenMatches = 0
+                    SET @detailBatchRowCount = 0
+                    IF NOT EMPTY(@surveyId) THEN
+                    SET @detailAllSurveyRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId)
+                    FOR @detailLoopIdx = 1 TO RowCount(@detailAllSurveyRows) DO
+                    SET @detailRow = Row(@detailAllSurveyRows, @detailLoopIdx)
+                    SET @detailQuestionId = Field(@detailRow, "QuestionID")
+                    IF @detailQuestionId != "SURVEY_OPEN" THEN
+                    SET @detailCourseName = Field(@detailRow, "CourseName")
+                    IF Trim(@detailCourseName) == Trim(@detailCourseFilter) THEN
+                    SET @detailSeenMatches = Add(@detailSeenMatches, 1)
+                    IF @detailSeenMatches > @detailWindowStart AND @detailSeenMatches <= @detailWindowEnd THEN
+                    SET @detailBatchRowCount = Add(@detailBatchRowCount, 1)
+                    SET @detailContact = Field(@detailRow, "Contact")
+                    SET @detailResponse = Field(@detailRow, "Response")
+                    SET @detailStatus = Field(@detailRow, "Status")
+                    SET @detailLastUpdated = Field(@detailRow, "LastUpdated")
+                    SET @detailQuestionText = Field(@detailRow, "QuestionText")
+                    SET @detailQuestionType = Field(@detailRow, "QuestionType")
+                    IF EMPTY(@detailQuestionText) THEN
+                    SET @detailQuestionText = Lookup("SST_SP_Survey_Questions_DE", "QuestionText", "QuestionID", @detailQuestionId)
+                    ENDIF
+                    IF EMPTY(@detailQuestionType) THEN
+                    SET @detailQuestionType = Lookup("SST_SP_Survey_Questions_DE", "QuestionType", "QuestionID", @detailQuestionId)
+                    ENDIF
+                    IF EMPTY(@detailQuestionText) THEN SET @detailQuestionText = "Question not found" ENDIF
+                    IF EMPTY(@detailQuestionType) THEN SET @detailQuestionType = "Unknown" ENDIF
+                    SET @detailContactName = Lookup(@contactTable, "Name", "Id", @detailContact)
+                    IF EMPTY(@detailContactName) THEN SET @detailContactName = "N/A" ENDIF
+                    ]%%
+                    <tr class="detail-response-row" data-last-updated="%%=Format(@detailLastUpdated, "MMM dd, yyyy HH:mm")=%%" tabindex="0" role="button" aria-expanded="false">
+                        <td><strong>%%=v(@detailContact)=%%</strong></td>
+                        <td>%%=v(@detailContactName)=%%</td>
+                        <td class="course-name-cell">%%[ IF EMPTY(@detailCourseName) THEN ]%%N/A%%[ ELSE ]%%%%=v(@detailCourseName)=%%%%[ ENDIF ]%%</td>
+                        <td class="question-cell-preview">%%=v(@detailQuestionText)=%%</td>
+                        <td class="response-cell">%%=v(@detailResponse)=%%</td>
+                        <td><span class="type-badge">%%=v(@detailQuestionType)=%%</span></td>
+                        <td><span class="status-badge status-%%=v(@detailStatus)=%%">%%=v(@detailStatus)=%%</span></td>
+                        <td>%%=Format(@detailLastUpdated, "MMM dd, yyyy HH:mm")=%%</td>
+                    </tr>
+                    <tr class="detail-response-expand-row" hidden aria-hidden="true">
+                        <td colspan="8">
+                            <div class="detail-response-expand-panel">
+                                <div class="detail-response-expand-label">Course</div>
+                                <p class="detail-response-full-course">%%[ IF EMPTY(@detailCourseName) THEN ]%%N/A%%[ ELSE ]%%%%=v(@detailCourseName)=%%%%[ ENDIF ]%%</p>
+                                <div class="detail-response-expand-label detail-response-expand-label--question">Question</div>
+                                <p class="detail-response-full-question">%%=v(@detailQuestionText)=%%</p>
+                                <div class="detail-response-expand-label detail-response-expand-label--response">Response</div>
+                                <p class="detail-response-full-response">%%=v(@detailResponse)=%%</p>
+                            </div>
+                        </td>
+                    </tr>
+                    %%[
+                    ENDIF
+                    ENDIF
+                    ENDIF
+                    NEXT @detailLoopIdx
+                    ENDIF
+                    IF @detailBatchRowCount == 0 AND @detailTotalRows > 0 THEN
+                    SET @detailStartRow = 0
+                    SET @detailEndRow = 0
+                    ]%%
+                    <tr class="detail-table-empty-row">
+                        <td colspan="8">No response rows on this page for the selected course.</td>
+                    </tr>
+                    %%[
+                    ENDIF
+                    ELSEIF @detailCourseFilterActive == "true" AND @detailTotalRows == 0 THEN
+                    ]%%
+                    <tr class="detail-table-empty-row">
+                        <td colspan="8">No detailed responses recorded for course <strong>%%=v(@detailCourseFilter)=%%</strong>.</td>
+                    </tr>
+                    %%[
+                    ELSEIF @detailBatchRowCount > 0 THEN
                     FOR @detailRowIdx = 1 TO @detailBatchRowCount DO
                     SET @detailRow = Row(@detailBatchRows, @detailRowIdx)
                     SET @detailContact = Field(@detailRow, "Contact")
@@ -4105,6 +4217,7 @@ ELSE
                 responsesView.style.display = isResponses ? 'block' : 'none';
                 if (isResponses) {
                     setTimeout(function () {
+                        syncCourseFilterUiFromUrl();
                         initializePagination();
                         initializeCourseChart();
                         var courseSection = document.getElementById('courseChartSection');
@@ -4623,92 +4736,74 @@ ELSE
 
 
 
-        // Course filtering functionality
-        function filterByCourse(courseName) {
-            const tbody = getDetailedResponsesTbody() || document.querySelector('.modern-table tbody');
-            const rows = getDetailDataRows(tbody).length ? getDetailDataRows(tbody) : Array.from(tbody.querySelectorAll('tr')).filter(function (row) {
-                return !row.classList.contains('detail-response-expand-row') && !row.classList.contains('detail-table-empty-row');
-            });
-            const searchInput = document.querySelector('.search-input');
-            const clearFilterBtn = document.getElementById('clearFilterBtn');
-            
-            // Clear any existing search
-            if (searchInput) {
-                searchInput.value = '';
-            }
-            
-            // Store the current filter for pagination
-            window.currentCourseFilter = courseName;
-            
-            // Filter rows based on course name and update total rows
-            const visibleRows = rows.filter(row => {
-                const courseCell = row.querySelector('.course-name-cell');
-                if (courseCell) {
-                    const cellCourseName = courseCell.textContent.trim();
-                    return courseName === 'All' || cellCourseName === courseName;
-                }
-                return false;
-            });
-            
-            // Update total rows for pagination
-            totalRows = visibleRows.length;
-            
-            // Update active course card
-            document.querySelectorAll('.course-card').forEach(card => {
+        function syncCourseFilterUiFromUrl() {
+            var params = new URLSearchParams(window.location.search);
+            var course = params.get('detailCourse') || 'All';
+            window.currentCourseFilter = course;
+            var clearFilterBtn = document.getElementById('clearFilterBtn');
+            document.querySelectorAll('.course-card').forEach(function (card) {
                 card.classList.remove('active');
+                var name = card.getAttribute('data-course-name');
+                if (course !== 'All' && name === course) {
+                    card.classList.add('active');
+                }
             });
-            
-            // Find and highlight the clicked course card
-            const clickedCard = event.currentTarget;
-            clickedCard.classList.add('active');
-            
-            // Show clear filter button
             if (clearFilterBtn) {
-                clearFilterBtn.style.display = 'block';
+                clearFilterBtn.style.display = course !== 'All' ? 'block' : 'none';
             }
-            
-            // Reset to first page and update pagination
-            currentPage = 1;
-            updatePaginationInfo();
-            updatePaginationControls();
-            showPage(1);
-            
-            // Scroll to table
-            document.querySelector('.table-container').scrollIntoView({ 
-                behavior: 'smooth', 
-                block: 'start' 
-            });
         }
 
-        // Clear course filter
-        function clearCourseFilter() {
-            const tbody = getDetailedResponsesTbody() || document.querySelector('.modern-table tbody');
-            const rows = getDetailDataRows(tbody).length ? getDetailDataRows(tbody) : Array.from(tbody.querySelectorAll('tr')).filter(function (row) {
-                return !row.classList.contains('detail-response-expand-row') && !row.classList.contains('detail-table-empty-row');
-            });
-            const clearFilterBtn = document.getElementById('clearFilterBtn');
-            
-            // Clear the course filter
-            window.currentCourseFilter = 'All';
-            
-            // Update total rows for pagination
-            totalRows = rows.length;
-            
-            // Remove active state from all cards
-            document.querySelectorAll('.course-card').forEach(card => {
-                card.classList.remove('active');
-            });
-            
-            // Hide clear filter button
-            if (clearFilterBtn) {
-                clearFilterBtn.style.display = 'none';
+        function filterByCourse(courseName) {
+            var url = new URL(window.location.href);
+            url.searchParams.set('view', 'responses');
+            url.searchParams.set('detailPage', '1');
+            url.searchParams.delete('export');
+            if (!courseName || courseName === 'All') {
+                url.searchParams.delete('detailCourse');
+            } else {
+                url.searchParams.set('detailCourse', courseName);
             }
-            
-            // Reset to first page and update pagination
-            currentPage = 1;
-            updatePaginationInfo();
-            updatePaginationControls();
-            showPage(1);
+            window.location.assign(url.toString());
+        }
+
+        function clearCourseFilter() {
+            var url = new URL(window.location.href);
+            url.searchParams.set('view', 'responses');
+            url.searchParams.set('detailPage', '1');
+            url.searchParams.delete('detailCourse');
+            url.searchParams.delete('export');
+            window.location.assign(url.toString());
+        }
+
+        function initializeCourseCardClicks() {
+            var grid = document.querySelector('.course-cards-grid');
+            if (!grid) {
+                return;
+            }
+            grid.addEventListener('click', function (event) {
+                var card = event.target.closest('.course-card');
+                if (!card) {
+                    return;
+                }
+                var name = card.getAttribute('data-course-name');
+                if (name) {
+                    filterByCourse(name);
+                }
+            });
+            grid.addEventListener('keydown', function (event) {
+                if (event.key !== 'Enter' && event.key !== ' ') {
+                    return;
+                }
+                var card = event.target.closest('.course-card');
+                if (!card) {
+                    return;
+                }
+                event.preventDefault();
+                var name = card.getAttribute('data-course-name');
+                if (name) {
+                    filterByCourse(name);
+                }
+            });
         }
 
         // Pagination variables
@@ -4732,8 +4827,30 @@ ELSE
                 totalRows: parseInt(el.getAttribute('data-total-rows') || '0', 10),
                 startRow: parseInt(el.getAttribute('data-start-row') || '0', 10),
                 endRow: parseInt(el.getAttribute('data-end-row') || '0', 10),
-                navBase: navBase
+                navBase: navBase,
+                detailCourse: el.getAttribute('data-detail-course') || ''
             };
+        }
+
+        function buildDetailResponsesPageUrl(page) {
+            var url = new URL(window.location.href);
+            var cfg = getDetailPagingConfig();
+            url.searchParams.set('view', 'responses');
+            url.searchParams.set('detailPage', String(page));
+            url.searchParams.delete('export');
+            var course = '';
+            if (cfg && cfg.detailCourse) {
+                course = cfg.detailCourse;
+            }
+            if (!course) {
+                course = url.searchParams.get('detailCourse') || '';
+            }
+            if (course && course !== 'All') {
+                url.searchParams.set('detailCourse', course);
+            } else {
+                url.searchParams.delete('detailCourse');
+            }
+            return url;
         }
 
         function navigateDetailPage(page) {
@@ -4745,7 +4862,7 @@ ELSE
             if (page < 1 || page > totalPages) {
                 return false;
             }
-            window.location.assign(cfg.navBase + String(page));
+            window.location.assign(buildDetailResponsesPageUrl(page).toString());
             return true;
         }
 
@@ -4873,7 +4990,7 @@ ELSE
             url.searchParams.delete('textQ');
             url.searchParams.delete('textPage');
             url.searchParams.delete('textTotal');
-            var currentFilter = window.currentCourseFilter || 'All';
+            var currentFilter = window.currentCourseFilter || url.searchParams.get('detailCourse') || 'All';
             if (currentFilter !== 'All') {
                 url.searchParams.set('exportCourse', currentFilter);
             }
@@ -5401,6 +5518,8 @@ ELSE
             initializeSearch();
             initializeAnalyticsViewToggle();
             initializeDetailRowExpand();
+            initializeCourseCardClicks();
+            syncCourseFilterUiFromUrl();
         }
 
         document.addEventListener('DOMContentLoaded', function () {
