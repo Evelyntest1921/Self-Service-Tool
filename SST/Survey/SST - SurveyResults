@@ -161,6 +161,7 @@ ENDIF
 ENDIF
 VAR @textFocusMode, @focusQuestionId, @focusQuestionText, @focusResponseCount, @textPageSize
 VAR @textDePageKey, @textBatchRows, @textResponse, @textTotalUiPages, @textLocalUiPage, @textPrevPage, @textNextPage, @textFragNav, @textRowIdx, @textRem, @textBatchRowCount
+VAR @textMaxPageRows, @textMaxPageNum
 SET @textFocusMode = "false"
 SET @focusQuestionId = ""
 SET @focusQuestionText = ""
@@ -184,7 +185,20 @@ IF EMPTY(@focusResponseCount) THEN SET @focusResponseCount = 0 ENDIF
 SET @focusResponseCount = Add(0, @focusResponseCount)
 SET @focusQuestionText = Lookup("SST_SP_Survey_Questions_DE", "QuestionText", "SurveyID", @surveyId, "QuestionID", @focusQuestionId)
 SET @textFragNav = Concat(@textNavBase, "&textFocus=1&textQ=", @focusQuestionId, "&textTotal=", @focusResponseCount, "&textPage=")
-IF @focusResponseCount > 0 THEN
+SET @textTotalUiPages = 1
+IF NOT EMPTY(@surveyId) AND NOT EMPTY(@focusQuestionId) THEN
+SET @textMaxPageRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", 1, "TextPageNumber DESC", "SurveyID", @surveyId, "QuestionID", @focusQuestionId)
+IF RowCount(@textMaxPageRows) > 0 THEN
+SET @textMaxPageNum = Field(Row(@textMaxPageRows, 1), "TextPageNumber")
+IF NOT EMPTY(@textMaxPageNum) THEN
+SET @textMaxPageNum = Add(0, @textMaxPageNum)
+IF @textMaxPageNum > 0 THEN
+SET @textTotalUiPages = @textMaxPageNum
+ENDIF
+ENDIF
+ENDIF
+ENDIF
+IF @textTotalUiPages == 1 AND @focusResponseCount > 0 THEN
 SET @textRem = Mod(@focusResponseCount, @textPageSize)
 SET @textTotalUiPages = Divide(Subtract(@focusResponseCount, @textRem), @textPageSize)
 IF @textRem > 0 THEN
