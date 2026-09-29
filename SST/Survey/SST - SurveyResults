@@ -6,7 +6,8 @@ VAR @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @JOURNEY_VIEW_URL, @HOME_URL, @edi
 VAR @textExpandQ, @textUiPage, @textNavBase
 VAR @textListQuestionId, @textListQuestionText, @textListCount, @textListPage, @textListTotalPages, @textListPageSize
 VAR @textListNavBase, @textListPrevPage, @textListNextPage, @textListDePageKey, @textListBatchRows, @textListBatchCount, @textListRowIdx, @textListResponse
-VAR @textListFetchSize, @textListStartIdx, @textListEndIdx, @textListAllCount, @textListRenderedOnPage
+VAR @textListFetchSize, @textListStartIdx, @textListEndIdx, @textListAllCount, @textListRenderedOnPage, @textListRem
+VAR @pageLoadError
 SET @surveyId = RequestParameter("surveyid")
 SET @jid = Trim(RequestParameter("journeyId"))
 SET @textExpandQ = Trim(RequestParameter("textQ"))
@@ -32,8 +33,9 @@ IF EMPTY(@textListCount) THEN SET @textListCount = 0 ENDIF
 SET @textListCount = Add(0, @textListCount)
 SET @textListTotalPages = 1
 IF @textListCount > 0 THEN
-SET @textListTotalPages = Floor(Divide(@textListCount, @textListPageSize))
-IF Mod(@textListCount, @textListPageSize) > 0 THEN
+SET @textListRem = Mod(@textListCount, @textListPageSize)
+SET @textListTotalPages = Divide(Subtract(@textListCount, @textListRem), @textListPageSize)
+IF @textListRem > 0 THEN
 SET @textListTotalPages = Add(@textListTotalPages, 1)
 ENDIF
 ENDIF
@@ -53,6 +55,7 @@ SET @buildNavContext = "false"
 SET @buildNavActive = "analytics"
 SET @dispSurveyId = Trim(@surveyId)
 SET @errorFlag = "false"
+SET @pageLoadError = ""
 SET @deleteAction = RequestParameter("deleteAction")
 SET @deleteSuccess = "false"
 SET @deleteError = ""
@@ -387,8 +390,13 @@ ENDIF
                     IF NOT EMPTY(@textExpandQ) AND @textListCount > 0 THEN
                     SET @textListRenderedOnPage = 0
                     SET @textListDePageKey = Concat("", @textListPage)
+                    SET @textListBatchCount = 0
+                    TRY
                     SET @textListBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @textListQuestionId, "TextPageNumber", @textListDePageKey)
                     SET @textListBatchCount = RowCount(@textListBatchRows)
+                    CATCH
+                    SET @textListBatchCount = 0
+                    ENDIF
                     IF @textListBatchCount > 0 THEN
                     FOR @textListRowIdx = 1 TO @textListBatchCount DO
                     SET @textListResponse = Field(Row(@textListBatchRows, @textListRowIdx), "Response")
@@ -500,18 +508,34 @@ ENDIF
                 VAR @courseAnalyticsRows, @courseAnalyticsCount
 
 
-                SET @responses = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId)
-                SET @count = RowCount(@responses)
+                SET @pageLoadError = ""
+                SET @count = 0
                 SET @analyticsCount = 0
                 SET @courseAnalyticsCount = 0
                 IF NOT EMPTY(@surveyId) THEN
+                IF EMPTY(@textExpandQ) THEN
+                TRY
+                SET @responses = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId)
+                SET @count = RowCount(@responses)
+                CATCH
+                SET @count = 0
+                SET @pageLoadError = "Could not load survey responses. Add SST_SP_Survey_Responses_DE (with TextPageNumber) to this CloudPage data extension collection."
+                ENDIF
+                TRY
                 SET @analyticsRows = LookupRows("sst_analytics_answers", "SurveyID", @surveyId)
                 SET @analyticsCount = RowCount(@analyticsRows)
+                CATCH
+                SET @analyticsCount = 0
+                IF EMPTY(@pageLoadError) THEN
+                SET @pageLoadError = "Could not load sst_analytics_answers. Add it to the CloudPage data extension collection."
+                ENDIF
+                ENDIF
                 TRY
                 SET @courseAnalyticsRows = LookupRows("sst_analytics_per_course", "surveyId", @surveyId)
                 SET @courseAnalyticsCount = RowCount(@courseAnalyticsRows)
                 CATCH
                 SET @courseAnalyticsCount = 0
+                ENDIF
                 ENDIF
                 ENDIF
 
@@ -538,6 +562,14 @@ ENDIF
                 SET @surveyStatus = "Unknown"
                 ENDIF
                 ]%%
+                %%[ IF NOT EMPTY(@pageLoadError) THEN ]%%
+                <div class="alert alert-error">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+                    </svg>
+                    %%=v(@pageLoadError)=%%
+                </div>
+                %%[ ENDIF ]%%
 
 
                 <div class="survey-title-section">
@@ -604,6 +636,7 @@ ENDIF
 
 
             <!-- Survey Overview Metrics -->
+            %%[ IF EMPTY(@textExpandQ) THEN ]%%
             %%[
             VAR @uniqueContacts, @openedCount, @completedCount, @surveyTotalActivity, @analyticsOpened
 
@@ -923,9 +956,14 @@ ENDIF
                                 SET @textPreviewLimit = 5
                                 SET @textViewAllUrl = Concat(@textNavBase, "&textQ=", @questionId, "&textPage=1&textTotal=", @responseCount)
                                 IF @responseCount > 0 THEN
+                                SET @textPreviewRowCount = 0
+                                TRY
                                 SET @textBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @questionId, "TextPageNumber", "1")
-                                SET @textItemsRendered = 0
                                 SET @textPreviewRowCount = RowCount(@textBatchRows)
+                                CATCH
+                                SET @textPreviewRowCount = 0
+                                ENDIF
+                                SET @textItemsRendered = 0
                                 IF @textPreviewRowCount == 0 THEN
                                 SET @textBatchRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", @textPreviewLimit, "LastUpdated ASC", "SurveyID", @surveyId, "QuestionID", @questionId)
                                 SET @textPreviewRowCount = RowCount(@textBatchRows)
@@ -1595,6 +1633,7 @@ ENDIF
                 analytics.</p>
         </div>
     </div>
+    %%[ ENDIF ]%%
     %%[ ENDIF ]%%
             </div>
     <footer class="maker-main-footer">
