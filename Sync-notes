@@ -1,67 +1,42 @@
-TextPageNumber batch — one sequence per SurveyID + QuestionID (20 non-empty text rows per page).
-PageNumber batch — one sequence per SurveyID (20 response rows per page, all question types, ordered by LastUpdated ASC).
-Re-run this query activity and update SST_SP_Survey_Responses_DE after changing logic.
 
-SELECT
-    t.ResponsePK,
-    CAST(((t.RowNum - 1) / 20) + 1 AS INT) AS PageNumber,
-    CASE
-        WHEN tr.TextRowNum IS NOT NULL
-            THEN CAST(((tr.TextRowNum - 1) / 20) + 1 AS INT)
-        ELSE NULL
-    END AS TextPageNumber,
-    t.Contact,
-    t.SurveyID,
-    t.QuestionID,
-    t.QuestionNumber,
-    t.QuestionText,
-    t.QuestionType,
-    t.Response,
-    t.Status,
-    t.LastUpdated,
-    t.CourseName
-FROM (
-    SELECT
-        ResponsePK,
-        ROW_NUMBER() OVER (PARTITION BY SurveyID ORDER BY LastUpdated ASC, ResponsePK) AS RowNum,
-        Contact,
-        SurveyID,
-        QuestionID,
-        QuestionNumber,
-        QuestionText,
-        QuestionType,
-        Response,
-        Status,
-        LastUpdated,
-        CourseName
-    FROM SST_SP_Survey_Responses_DE
-) t
-LEFT JOIN (
-    SELECT
-        ResponsePK,
-        ROW_NUMBER() OVER (
-            PARTITION BY SurveyID, QuestionID
-            ORDER BY LastUpdated ASC, ResponsePK
-        ) AS TextRowNum
-    FROM SST_SP_Survey_Responses_DE
-    WHERE LTRIM(RTRIM(QuestionType)) = 'text'
-      AND Response IS NOT NULL
-      AND LTRIM(RTRIM(Response)) <> ''
-) tr
-    ON tr.ResponsePK = t.ResponsePK
+sst_analytics_per_course
+Properties
+Records
+ 
+External Key
+sst_analytics_per_course
+Created
+09/28/2026, 2:26 PM
+Modified
+09/29/2026, 8:45 AM
+Location
+Survey Analytics Change Location
+Type
+Standard
+Used for Sending
 
-Analytics DE external keys (Survey Results):
-sst_analytics_per_survey — one row per survey (LookupRows by surveyId): UniqueRespondents, OpenedSurvey, CompletedSurvey, CompletionRatePct, TotalActivity, LastUpdated
-sst_analytics_answers — question metrics (LookupRows by SurveyID)
-sst_analytics_per_course — course cards/chart (LookupRows by surveyId)
+No
 
-Survey Results data sources (no response-DE fallback loops):
-- Header response-count + metrics grid: sst_analytics_per_survey only
-- Overview metrics + question bars: sst_analytics_answers only
-- Course sections: sst_analytics_per_course only
-- Text preview + View all: SST_SP_Survey_Responses_DE by TextPageNumber (batch SQL targets 20 text rows per TextPageNumber per question; last page can be smaller; UI page N = TextPageNumber N; page count = max TextPageNumber for the question)
-- Detailed response table: SST_SP_Survey_Responses_DE by PageNumber (UI page N = PageNumber N; page count = max PageNumber for the survey; total label from sst_analytics_per_survey TotalActivity; URL param detailPage; keep view=responses)
+Used for Testing
 
-CloudPage collection: sst_analytics_per_survey, sst_analytics_answers, sst_analytics_per_course, SST_SP_Survey_Responses_DE (must include PageNumber and TextPageNumber), questions/master DEs.
+No
 
-Run sst_analytics_answers, sst_analytics_per_course, and sst_analytics_per_survey query activities before expecting analytics on the page.
+Root Data
+
+Use as root
+CONTROL SETTINGSDelete Data Extension PermissionsAllow users to delete this data extensionAttribute PermissionsAllow users to modify existing and add additional attributes in this data extensionDATA RETENTIONTurned Off
+56
+Records
+ 
+Last Refreshed
+
+Never
+Attributes
+ surveyId		50	Yes	
+ CourseName		250	Yes	
+ TotalResponses		50	Yes	
+ UniqueRespondents		50	Yes	
+ CompletedRespondents		50	Yes	
+ CompletionRatePct		50	Yes	
+ FirstActivityDate			Yes	
+ LastActivityDate			Yes
