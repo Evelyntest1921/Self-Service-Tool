@@ -1,15 +1,16 @@
 Analytics DE external keys (Survey Results):
-sst_analytics_answers
-sst_analytics_per_course (LookupRows/DeleteData by surveyId)
+sst_analytics_answers — question metrics, survey totals (LookupRows by SurveyID)
+sst_analytics_per_course — course cards/chart (LookupRows by surveyId)
+
+Survey Results data sources (no response-DE fallback loops):
+- Overview metrics + question bars: sst_analytics_answers only
+- Course sections: sst_analytics_per_course only
+- Text preview + View all: SST_SP_Survey_Responses_DE via TextPageNumber (20 rows per page)
+- Detailed response table: not loaded (placeholder row)
+
+CloudPage collection: sst_analytics_answers, sst_analytics_per_course, SST_SP_Survey_Responses_DE (TextPageNumber), questions/master DEs.
 
 SST_SP_Survey_Responses_DE — TextPageNumber batch (text only, 20 rows = 1 UI page)
-
-Survey Results (CloudPage):
-- View all + preview use LookupOrderedRows (20-row window by LastUpdated ASC). TextPageNumber is for batch/QA only until LookupRows is re-enabled after DE is on the CloudPage collection.
-
-Do not use legacy PageNumber for text UI; keep TextPageNumber separate from any other PageNumber job.
-
-Incremental batch (new text rows only, TextPageNumber IS NULL). Output feeds update on ResponsePK.
 
 SELECT
     n.ResponsePK,
@@ -62,6 +63,4 @@ LEFT JOIN (
     ON pc.SurveyID = n.SurveyID
    AND pc.QuestionID = n.QuestionID
 
-After changing batch logic, clear TextPageNumber on affected text rows and re-batch, or run a one-time full renumber for text questions.
-
-CloudPage collection must include SST_SP_Survey_Responses_DE with TextPageNumber indexed if lookups are slow (optional SFMC tuning).
+Run sst_analytics_answers and sst_analytics_per_course query activities before expecting analytics on the page.
