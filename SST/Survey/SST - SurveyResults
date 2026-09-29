@@ -3,13 +3,23 @@ VAR @surveyId, @errorFlag, @deleteAction, @deleteSuccess, @deleteError
 VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow, @hubUrl, @surveyHomeUrl, @surveyStageUrl, @surveyAnalyticsUrl, @surveyTakeUrl, @environment, @contactTable
 VAR @journeyExitUrl, @calendarUrl, @environmentSwitchUrl, @envDisplayName, @envDisplayEmail, @envAvatarLetter, @envSwitchLabel
 VAR @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @JOURNEY_VIEW_URL, @HOME_URL, @editSidebarHtml, @detailRows, @detailRow, @isSurveyBuild, @buildNavContext, @buildNavActive, @dispSurveyId, @editSurveyUrl, @surveyPreviewUrl, @surveyEmailLink, @surveyLinkTitle, @surveyNameEncoded
-VAR @textExpandQ, @textUiPage, @textNavBase, @textFocus
-SET @surveyId = RequestParameter("surveyid")
+VAR @textExpandQ, @textUiPage, @textNavBase, @textFocus, @surveyIdBreak
+SET @surveyId = Trim(RequestParameter("surveyid"))
 SET @jid = Trim(RequestParameter("journeyId"))
 SET @textFocus = RequestParameter("textFocus")
 SET @textExpandQ = Trim(RequestParameter("textQ"))
 SET @textUiPage = Trim(RequestParameter("textPage"))
+SET @surveyIdBreak = IndexOf(@surveyId, "?")
+IF @surveyIdBreak > 0 THEN
+SET @surveyId = Substring(@surveyId, 1, Subtract(@surveyIdBreak, 1))
+ENDIF
+SET @surveyIdBreak = IndexOf(@surveyId, "&")
+IF @surveyIdBreak > 0 THEN
+SET @surveyId = Substring(@surveyId, 1, Subtract(@surveyIdBreak, 1))
+ENDIF
 IF EMPTY(@textUiPage) THEN SET @textUiPage = 1 ENDIF
+SET @textUiPage = Add(0, @textUiPage)
+IF @textUiPage < 1 THEN SET @textUiPage = 1 ENDIF
 SET @textNavBase = RequestParameter("PAGEURL")
 SET @textNavQueryPos = IndexOf(@textNavBase, "?")
 IF @textNavQueryPos > 0 THEN
@@ -153,27 +163,34 @@ ENDIF
 %%[ IF NOT EMPTY(@textFocus) AND @textFocus != "0" THEN
 VAR @focusQuestionId, @focusQuestionText, @focusResponseCount, @textPageSize, @textItemsRendered
 VAR @textDePageKey, @textBatchRows, @textResponse, @textTotalUiPages, @textLocalUiPage, @textPrevPage, @textNextPage, @textFragNav, @textRowIdx
+VAR @textRem, @textFetchSize, @textAllCount, @textStartIdx, @textEndIdx
 SET @focusQuestionId = Trim(RequestParameter("textQ"))
 SET @textUiPage = Trim(RequestParameter("textPage"))
-IF EMPTY(@textUiPage) OR @textUiPage < 1 THEN SET @textUiPage = 1 ENDIF
+IF EMPTY(@textUiPage) THEN SET @textUiPage = 1 ENDIF
+SET @textUiPage = Add(0, @textUiPage)
+IF @textUiPage < 1 THEN SET @textUiPage = 1 ENDIF
 SET @focusQuestionText = Lookup("SST_SP_Survey_Questions_DE", "QuestionText", "SurveyID", @surveyId, "QuestionID", @focusQuestionId)
 SET @focusResponseCount = Lookup("sst_analytics_answers", "TextResponseCount", "SurveyID", @surveyId, "QuestionID", @focusQuestionId)
 IF EMPTY(@focusResponseCount) OR @focusResponseCount == 0 THEN
 SET @focusResponseCount = RequestParameter("textTotal")
 ENDIF
 IF EMPTY(@focusResponseCount) THEN SET @focusResponseCount = 0 ENDIF
+SET @focusResponseCount = Add(0, @focusResponseCount)
 SET @textFragNav = Concat(@textNavBase, "&textFocus=1&textQ=", @focusQuestionId, "&textTotal=", @focusResponseCount, "&textPage=")
 SET @textPageSize = 20
 SET @textLocalUiPage = @textUiPage
 SET @textTotalUiPages = 1
 IF @focusResponseCount > 0 THEN
-SET @textTotalUiPages = Divide(@focusResponseCount, @textPageSize)
-IF Multiply(@textTotalUiPages, @textPageSize) < @focusResponseCount THEN
+SET @textRem = Mod(@focusResponseCount, @textPageSize)
+SET @textTotalUiPages = Divide(Subtract(@focusResponseCount, @textRem), @textPageSize)
+IF @textRem > 0 THEN
 SET @textTotalUiPages = Add(@textTotalUiPages, 1)
 ENDIF
 ENDIF
 IF @textLocalUiPage > @textTotalUiPages THEN SET @textLocalUiPage = @textTotalUiPages ENDIF
 IF @textLocalUiPage < 1 THEN SET @textLocalUiPage = 1 ENDIF
+SET @textPrevPage = Subtract(@textLocalUiPage, 1)
+SET @textNextPage = Add(@textLocalUiPage, 1)
 ]%%
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><style>
@@ -191,9 +208,15 @@ a.btn-secondary{display:inline-block;padding:8px 14px;border:1px solid #d1d5db;b
 <div class="text-focus-list">
 %%[
 IF @focusResponseCount > 0 THEN
-SET @textDePageKey = Concat("", @textLocalUiPage)
-SET @textBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @focusQuestionId, "PageNumber", @textDePageKey)
-FOR @textRowIdx = 1 TO RowCount(@textBatchRows) DO
+SET @textFetchSize = Multiply(@textLocalUiPage, @textPageSize)
+IF @textFetchSize > 2000 THEN SET @textFetchSize = 2000 ENDIF
+SET @textBatchRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", @textFetchSize, "LastUpdated ASC", "SurveyID", @surveyId, "QuestionID", @focusQuestionId)
+SET @textAllCount = RowCount(@textBatchRows)
+SET @textStartIdx = Add(Multiply(Subtract(@textLocalUiPage, 1), @textPageSize), 1)
+SET @textEndIdx = Add(@textStartIdx, Subtract(@textPageSize, 1))
+IF @textEndIdx > @textAllCount THEN SET @textEndIdx = @textAllCount ENDIF
+IF @textStartIdx <= @textAllCount THEN
+FOR @textRowIdx = @textStartIdx TO @textEndIdx DO
 SET @textResponse = Field(Row(@textBatchRows, @textRowIdx), "Response")
 IF NOT EMPTY(@textResponse) THEN
 ]%%
@@ -201,6 +224,7 @@ IF NOT EMPTY(@textResponse) THEN
 %%[
 ENDIF
 NEXT @textRowIdx
+ENDIF
 ENDIF
 ]%%
 </div>
@@ -546,7 +570,7 @@ ENDIF
                                     </svg>
                                 </button>
                                 <div class="dropdown-menu" id="dropdownMenu">
-                                    <form method="POST" action="%%=RequestParameter('PAGEURL')=%%"
+                                    <form method="POST" action="%%=v(@textNavBase)=%%"
                                         onsubmit="return confirmDelete()">
                                         <input type="hidden" name="deleteAction" value="delete">
                                         <input type="hidden" name="surveyid" value="%%=v(@surveyId)=%%">
@@ -893,7 +917,7 @@ ENDIF
                                 VAR @textPreviewLimit, @textPreviewIdx, @textBatchRows, @textResponse, @textItemsRendered
                                 SET @textPreviewLimit = 5
                                 IF @responseCount > 0 THEN
-                                SET @textBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @questionId, "PageNumber", "1")
+                                SET @textBatchRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", @textPreviewLimit, "LastUpdated ASC", "SurveyID", @surveyId, "QuestionID", @questionId)
                                 SET @textItemsRendered = 0
                                 FOR @textPreviewIdx = 1 TO RowCount(@textBatchRows) DO
                                 IF @textItemsRendered < @textPreviewLimit THEN
@@ -3799,12 +3823,16 @@ ENDIF
 
         function getTextFocusFetchUrl(questionId, page, responseCount) {
             var url;
+            var cfg = document.getElementById('textFocusConfig');
+            var base = cfg ? (cfg.getAttribute('data-fetch-base') || '') : '';
             try {
-                url = new URL(window.location.href);
+                if (base) {
+                    url = new URL(base, window.location.origin);
+                } else {
+                    url = new URL(window.location.href);
+                }
             } catch (e) {
-                var cfg = document.getElementById('textFocusConfig');
-                var base = cfg ? (cfg.getAttribute('data-fetch-base') || window.location.pathname) : window.location.pathname;
-                url = new URL(base, window.location.origin);
+                url = new URL(window.location.pathname, window.location.origin);
             }
             url.searchParams.set('textFocus', '1');
             url.searchParams.set('textQ', questionId);
