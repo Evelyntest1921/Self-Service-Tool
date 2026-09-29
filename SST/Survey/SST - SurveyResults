@@ -166,7 +166,7 @@ ENDIF
 %%[ IF NOT EMPTY(@textFocus) AND @textFocus != "0" THEN
 VAR @focusQuestionId, @focusQuestionText, @focusResponseCount, @textPageSize, @textItemsRendered
 VAR @textDePageKey, @textBatchRows, @textResponse, @textTotalUiPages, @textLocalUiPage, @textPrevPage, @textNextPage, @textFragNav, @textRowIdx
-VAR @textRem, @textFetchSize, @textAllCount, @textStartIdx, @textEndIdx
+VAR @textRem
 SET @focusQuestionId = Trim(RequestParameter("textQ"))
 SET @textUiPage = Trim(RequestParameter("textPage"))
 IF EMPTY(@textUiPage) THEN SET @textUiPage = 1 ENDIF
@@ -211,15 +211,10 @@ a.btn-secondary{display:inline-block;padding:8px 14px;border:1px solid #d1d5db;b
 <div class="text-focus-list">
 %%[
 IF @focusResponseCount > 0 THEN
-SET @textFetchSize = Multiply(@textLocalUiPage, @textPageSize)
-IF @textFetchSize > 2000 THEN SET @textFetchSize = 2000 ENDIF
-SET @textBatchRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", @textFetchSize, "LastUpdated ASC", "SurveyID", @surveyId, "QuestionID", @focusQuestionId)
-SET @textAllCount = RowCount(@textBatchRows)
-SET @textStartIdx = Add(Multiply(Subtract(@textLocalUiPage, 1), @textPageSize), 1)
-SET @textEndIdx = Add(@textStartIdx, Subtract(@textPageSize, 1))
-IF @textEndIdx > @textAllCount THEN SET @textEndIdx = @textAllCount ENDIF
-IF @textStartIdx <= @textAllCount THEN
-FOR @textRowIdx = @textStartIdx TO @textEndIdx DO
+SET @textDePageKey = Concat("", @textLocalUiPage)
+SET @textBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @focusQuestionId, "TextPageNumber", @textDePageKey)
+IF RowCount(@textBatchRows) > 0 THEN
+FOR @textRowIdx = 1 TO RowCount(@textBatchRows) DO
 SET @textResponse = Field(Row(@textBatchRows, @textRowIdx), "Response")
 IF NOT EMPTY(@textResponse) THEN
 ]%%
@@ -864,10 +859,11 @@ ENDIF
                             <div class="text-responses-section">
                                 <h4>Text Responses (%%=v(@responseCount)=%%)</h4>
                                 %%[
-                                VAR @textPreviewLimit, @textPreviewIdx, @textBatchRows, @textResponse, @textItemsRendered
+                                VAR @textPreviewLimit, @textPreviewIdx, @textBatchRows, @textResponse, @textItemsRendered, @textPreviewPageKey
                                 SET @textPreviewLimit = 5
                                 IF @responseCount > 0 THEN
-                                SET @textBatchRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", @textPreviewLimit, "LastUpdated ASC", "SurveyID", @surveyId, "QuestionID", @questionId)
+                                SET @textPreviewPageKey = "1"
+                                SET @textBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @questionId, "TextPageNumber", @textPreviewPageKey)
                                 SET @textItemsRendered = 0
                                 FOR @textPreviewIdx = 1 TO RowCount(@textBatchRows) DO
                                 IF @textItemsRendered < @textPreviewLimit THEN
