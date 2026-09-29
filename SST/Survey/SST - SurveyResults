@@ -230,7 +230,6 @@ IF @detailExport == "csv" AND @textFocusMode != "true" AND NOT EMPTY(@surveyId) 
 SET @runCsvExport = "true"
 ENDIF
 IF @runCsvExport == "true" THEN
-ResponseContentType("text/csv")
 VAR @exportPageNum, @exportMaxPage, @exportBatchRows, @exportRowIdx, @exportRow, @exportDePageKey
 VAR @exportContact, @exportCourseName, @exportQuestionId, @exportResponse, @exportStatus, @exportLastUpdated
 VAR @exportQuestionText, @exportQuestionType, @exportContactName, @exportLine, @exportCell, @exportSkipRow
@@ -246,6 +245,27 @@ ENDIF
 ENDIF
 SET @exportLine = "Contact,Name,Course Name,Question,Response,Question Type,Status,Last Updated"
 ]%%
+%%[ IF @runCsvExport == "true" THEN ]%%
+<script runat="server" language="javascript">
+Platform.Load("core", "1");
+var sid = Platform.Request.GetQueryStringParameter("surveyid");
+if (!sid) {
+  sid = Platform.Request.GetQueryStringParameter("surveyId");
+}
+if (!sid) {
+  sid = "survey";
+}
+var safeSid = String(sid).replace(/[^\w-]/g, "_");
+var course = Platform.Request.GetQueryStringParameter("exportCourse");
+var fn = "survey_" + safeSid + "_responses";
+if (course && course !== "All") {
+  fn += "_" + String(course).replace(/[^\w-]/g, "_");
+}
+fn += ".csv";
+Platform.Response.SetContentType("text/csv; charset=UTF-8");
+Platform.Response.SetResponseHeader("Content-Disposition", 'attachment; filename="' + fn + '"');
+</script>
+%%[ ENDIF ]%%
 %%=Concat(@exportLine, Char(10))=%%
 %%[
 FOR @exportPageNum = 1 TO @exportMaxPage DO
@@ -4839,7 +4859,19 @@ ELSE
         // Initialize course filter
         window.currentCourseFilter = 'All';
 
-        function downloadResponsesCSV() {
+        function getSurveyResponsesExportFilename() {
+            var params = new URLSearchParams(window.location.search);
+            var surveyId = params.get('surveyid') || params.get('surveyId') || 'survey';
+            var safeId = surveyId.replace(/[^\w-]/g, '_');
+            var filename = 'survey_' + safeId + '_responses';
+            var currentFilter = window.currentCourseFilter || 'All';
+            if (currentFilter !== 'All') {
+                filename += '_' + currentFilter.replace(/[^\w-]/g, '_');
+            }
+            return filename + '.csv';
+        }
+
+        function buildSurveyResponsesExportUrl() {
             var url = new URL(window.location.href);
             url.searchParams.set('export', 'csv');
             url.searchParams.set('view', 'responses');
@@ -4853,7 +4885,33 @@ ELSE
             if (currentFilter !== 'All') {
                 url.searchParams.set('exportCourse', currentFilter);
             }
-            window.location.assign(url.toString());
+            return url;
+        }
+
+        function downloadResponsesCSV() {
+            var url = buildSurveyResponsesExportUrl();
+            var filename = getSurveyResponsesExportFilename();
+            fetch(url.toString(), { credentials: 'same-origin' })
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error('Export request failed');
+                    }
+                    return response.blob();
+                })
+                .then(function (blob) {
+                    var objectUrl = URL.createObjectURL(blob);
+                    var link = document.createElement('a');
+                    link.href = objectUrl;
+                    link.download = filename;
+                    link.style.display = 'none';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(objectUrl);
+                })
+                .catch(function () {
+                    window.location.assign(url.toString());
+                });
         }
 
         // Initialize course chart
