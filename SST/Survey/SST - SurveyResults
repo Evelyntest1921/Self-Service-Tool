@@ -237,6 +237,7 @@ ENDIF
 
 
     <link rel="icon" href="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&w=640&q=75" type="image/png">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
     <style>
         .main-content.is-analytics-loading > :not(.survey-analytics-loading-panel) {
             display: none !important;
@@ -569,19 +570,11 @@ ENDIF
                 IF NOT EMPTY(@surveyId) THEN
                 SET @analyticsRows = LookupRows("sst_analytics_answers", "SurveyID", @surveyId)
                 SET @analyticsCount = RowCount(@analyticsRows)
-                TRY
-                SET @courseAnalyticsRows = LookupRows("sst_analytics_per_course", "surveyId", @surveyId)
+                SET @courseAnalyticsRows = LookupRows("sst_analytics_per_course", "surveyId", Trim(@surveyId))
                 SET @courseAnalyticsCount = RowCount(@courseAnalyticsRows)
-                CATCH
-                SET @courseAnalyticsCount = 0
-                ENDIF
                 IF @courseAnalyticsCount == 0 THEN
-                TRY
-                SET @courseAnalyticsRows = LookupRows("sst_analytics_per_course", "SurveyID", @surveyId)
+                SET @courseAnalyticsRows = LookupRows("sst_analytics_per_course", "SurveyID", Trim(@surveyId))
                 SET @courseAnalyticsCount = RowCount(@courseAnalyticsRows)
-                CATCH
-                SET @courseAnalyticsCount = 0
-                ENDIF
                 ENDIF
                 SET @surveyMetricsRows = LookupRows("sst_analytics_per_survey", "surveyId", @surveyId)
                 SET @surveyMetricsCount = RowCount(@surveyMetricsRows)
@@ -1093,137 +1086,27 @@ ENDIF
                 </div>
                 %%[ ENDIF ]%%
                 </div>
-            </div> <!-- End of surveyAnalyticsSection -->
 
-
-
-
-    <!-- Reports Section (Hidden by default) -->
-    <div id="reportsSection" style="display: none;">
-        <div class="section-header">
-            <h2>Reports & Analytics</h2>
-            <div class="activity-filters">
-                <button class="activity-filter active" onclick="filterActivity('12months')" data-period="12months">12
-                    months</button>
-                <button class="activity-filter" onclick="filterActivity('3months')" data-period="3months">3
-                    months</button>
-                <button class="activity-filter" onclick="filterActivity('30days')" data-period="30days">30
-                    days</button>
-            </div>
-        </div>
-
-
-        <!-- Activity Metrics for Reports -->
-        <div class="activity-metrics">
-            <div class="activity-metric-card">
-                <div class="metric-icon-small surveys">👣</div>
-                <div class="metric-details">
-                    <div class="metric-number" id="reports-metric-surveys">%%=v(@openedCount)=%%</div>
-                    <div class="metric-label">Survey Opens</div>
-                    <div class="metric-trend positive" id="reports-metric-surveys-trend">Total survey opens
-                    </div>
-                </div>
-            </div>
-
-
-            <div class="activity-metric-card">
-                <div class="metric-icon-small responses">📝</div>
-                <div class="metric-details">
-                    <div class="metric-number" id="reports-metric-responses">%%=v(@surveyTotalActivity)=%%</div>
-                    <div class="metric-label">Responses Collected</div>
-                    <div class="metric-trend positive" id="reports-metric-responses-trend">Total responses</div>
-                </div>
-            </div>
-
-
-            <div class="activity-metric-card">
-                <div class="metric-icon-small engagement">⚡</div>
-                <div class="metric-details">
-                    <div class="metric-number">%%=IIF(@uniqueContacts > 0,
-                        FormatNumber(Multiply(Divide(@completedCount, @uniqueContacts), 100), 0), 0)=%%%</div>
-                    <div class="metric-label">Completion Rate</div>
-                    <div class="metric-trend neutral">Based on responses</div>
-                </div>
-            </div>
-
-
-            <div class="activity-metric-card">
-                <div class="metric-icon-small time">⏱️</div>
-                <div class="metric-details">
-                    <div class="metric-number">%%=v(@questionCount)=%%</div>
-                    <div class="metric-label">Total Questions</div>
-                    <div class="metric-trend positive">Questions in survey</div>
-                </div>
-            </div>
-        </div>
-
-
-        <!-- Chart for Reports -->
-        <div class="activity-chart-container">
-            <div class="chart-header">
-                <h3>Survey Response Trends</h3>
-                <div class="chart-legend">
-                    <div class="legend-item">
-                        <div class="legend-color responses"></div>
-                        <span>Responses Received</span>
-                    </div>
-                    <div class="chart-info">
-                        <span style="font-size: 12px; color: #6b7280;">Showing response trends for this
-                            survey</span>
-                    </div>
-                </div>
-            </div>
-            <div class="chart-wrapper">
-                <canvas id="reportsChart" width="400" height="200"></canvas>
-                <div id="chartFallback" style="display: none; text-align: center; padding: 40px; color: #6b7280;">
-                    <div style="font-size: 48px; margin-bottom: 16px;">📊</div>
-                    <h3>Chart Loading...</h3>
-                    <p>If the chart doesn't appear, please refresh the page.</p>
-                </div>
-            </div>
-
-
-            <!-- Chart.js CDN -->
-            <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
-
-
-            <!-- Chart data from actual responses -->
-            <div id="chartData" style="display: none;">
-                %%[
-                /* Generate real chart data from actual responses */
-                VAR @chartLabels, @chartData, @responseDates
-                SET @chartLabels = ""
-                SET @chartData = ""
-                SET @responseDates = ""
-                ]%%
-                <span id="totalResponses">%%=v(@surveyTotalActivity)=%%</span>
-                <span id="completedResponses">%%=v(@completedCount)=%%</span>
-                <span id="responseDates">%%=v(@responseDates)=%%</span>
-            </div>
-        </div>
-    </div>
-
-
-
-
-    <!-- Course Analytics Section -->
     %%[ IF @surveyMetricsCount > 0 OR @analyticsCount > 0 OR @courseAnalyticsCount > 0 THEN ]%%
-    <div id="responsesSection" class="responses-section" style="display: none;">
+    <div id="responsesSection" class="responses-section" style="display: none;" data-course-analytics-count="%%=v(@courseAnalyticsCount)=%%">
         %%[
         VAR @courseData, @courseNames, @courseCount, @i, @j, @currentCourse, @courseResponses, @courseCompleted, @uniqueContacts, @courseContacts
         VAR @courseRow, @courseName, @completionRate, @percentRaw, @questions, @questionCount, @contact, @status, @k, @chartLabels, @chartData
-
+        SET @courseAnalyticsRows = LookupRows("sst_analytics_per_course", "surveyId", Trim(@surveyId))
+        SET @courseAnalyticsCount = RowCount(@courseAnalyticsRows)
+        IF @courseAnalyticsCount == 0 THEN
+        SET @courseAnalyticsRows = LookupRows("sst_analytics_per_course", "SurveyID", Trim(@surveyId))
+        SET @courseAnalyticsCount = RowCount(@courseAnalyticsRows)
+        ENDIF
         SET @courseCount = @courseAnalyticsCount
         ]%%
-        
-        <!-- Course Response Chart -->
-        %%[ IF @courseCount > 0 THEN ]%%
-        <div class="course-chart-section">
+
+        <div class="course-chart-section" id="courseChartSection">
             <div class="section-header">
                 <h2>Course Response Overview</h2>
                 <p class="section-subtitle">Total responses by course</p>
             </div>
-            
+
             <div class="chart-container">
                 <canvas id="courseChart" width="400" height="200"></canvas>
                 <div id="courseChartFallback" style="display: none; text-align: center; padding: 40px; color: #6b7280;">
@@ -1233,7 +1116,6 @@ ENDIF
                 </div>
             </div>
 
-            <!-- Chart data from course analytics -->
             <div id="courseChartData" style="display: none;">
                 %%[
                 SET @chartLabels = ""
@@ -1259,13 +1141,12 @@ ENDIF
             </div>
         </div>
 
-        <!-- Course Analytics Cards -->
         <div class="course-analytics-section">
             <div class="section-header">
                 <h2>Course Analytics</h2>
                 <p class="section-subtitle">Response metrics by course</p>
             </div>
-            
+
             <div class="course-cards-grid">
                 %%[
                 IF @courseAnalyticsCount > 0 THEN
@@ -1285,7 +1166,7 @@ ENDIF
                 SET @completionRate = FormatNumber(@completionRate, 0)
                 ENDIF
                 ]%%
-                
+
                 <div class="course-card" onclick="filterByCourse('%%=v(@currentCourse)=%%')">
                     <div class="course-card-header">
                         <div class="course-title-section">
@@ -1318,11 +1199,16 @@ ENDIF
                     </div>
                 </div>
                 %%[ NEXT @i
+                ELSE
+                ]%%
+                <div class="course-analytics-empty">
+                    <p>No course analytics rows for Survey ID <strong>%%=v(@surveyId)=%%</strong> in <code>sst_analytics_per_course</code>. Link that DE to this CloudPage and run the per-course query activity.</p>
+                </div>
+                %%[
                 ENDIF
                 ]%%
             </div>
         </div>
-        %%[ ENDIF ]%%
 
     <!-- Detailed Responses Table -->
         <div class="section-header">
@@ -1485,7 +1371,6 @@ ENDIF
             </table>
         </div>
 
-        <!-- Pagination Controls -->
         <div class="pagination-container">
             <div class="pagination-info">
                 <span id="paginationInfo">Showing 1-20 of <span id="totalRows">0</span> responses</span>
@@ -1498,7 +1383,6 @@ ENDIF
                     Previous
                 </button>
                 <div class="pagination-pages" id="paginationPages">
-                    <!-- Page numbers will be generated by JavaScript -->
                 </div>
                 <button class="pagination-btn" id="nextBtn" onclick="changePage(1)" disabled>
                     Next
@@ -1508,9 +1392,6 @@ ENDIF
                 </button>
             </div>
         </div>
-
-
-        <!-- Pagination will be added back once basic functionality is working -->
     </div>
     %%[ ELSE ]%%
     <div class="no-responses">
@@ -1525,6 +1406,117 @@ ENDIF
         </div>
     </div>
     %%[ ENDIF ]%%
+
+            </div> <!-- End of surveyAnalyticsSection -->
+
+
+
+
+    <!-- Reports Section (Hidden by default) -->
+    <div id="reportsSection" style="display: none;">
+        <div class="section-header">
+            <h2>Reports & Analytics</h2>
+            <div class="activity-filters">
+                <button class="activity-filter active" onclick="filterActivity('12months')" data-period="12months">12
+                    months</button>
+                <button class="activity-filter" onclick="filterActivity('3months')" data-period="3months">3
+                    months</button>
+                <button class="activity-filter" onclick="filterActivity('30days')" data-period="30days">30
+                    days</button>
+            </div>
+        </div>
+
+
+        <!-- Activity Metrics for Reports -->
+        <div class="activity-metrics">
+            <div class="activity-metric-card">
+                <div class="metric-icon-small surveys">👣</div>
+                <div class="metric-details">
+                    <div class="metric-number" id="reports-metric-surveys">%%=v(@openedCount)=%%</div>
+                    <div class="metric-label">Survey Opens</div>
+                    <div class="metric-trend positive" id="reports-metric-surveys-trend">Total survey opens
+                    </div>
+                </div>
+            </div>
+
+
+            <div class="activity-metric-card">
+                <div class="metric-icon-small responses">📝</div>
+                <div class="metric-details">
+                    <div class="metric-number" id="reports-metric-responses">%%=v(@surveyTotalActivity)=%%</div>
+                    <div class="metric-label">Responses Collected</div>
+                    <div class="metric-trend positive" id="reports-metric-responses-trend">Total responses</div>
+                </div>
+            </div>
+
+
+            <div class="activity-metric-card">
+                <div class="metric-icon-small engagement">⚡</div>
+                <div class="metric-details">
+                    <div class="metric-number">%%=IIF(@uniqueContacts > 0,
+                        FormatNumber(Multiply(Divide(@completedCount, @uniqueContacts), 100), 0), 0)=%%%</div>
+                    <div class="metric-label">Completion Rate</div>
+                    <div class="metric-trend neutral">Based on responses</div>
+                </div>
+            </div>
+
+
+            <div class="activity-metric-card">
+                <div class="metric-icon-small time">⏱️</div>
+                <div class="metric-details">
+                    <div class="metric-number">%%=v(@questionCount)=%%</div>
+                    <div class="metric-label">Total Questions</div>
+                    <div class="metric-trend positive">Questions in survey</div>
+                </div>
+            </div>
+        </div>
+
+
+        <!-- Chart for Reports -->
+        <div class="activity-chart-container">
+            <div class="chart-header">
+                <h3>Survey Response Trends</h3>
+                <div class="chart-legend">
+                    <div class="legend-item">
+                        <div class="legend-color responses"></div>
+                        <span>Responses Received</span>
+                    </div>
+                    <div class="chart-info">
+                        <span style="font-size: 12px; color: #6b7280;">Showing response trends for this
+                            survey</span>
+                    </div>
+                </div>
+            </div>
+            <div class="chart-wrapper">
+                <canvas id="reportsChart" width="400" height="200"></canvas>
+                <div id="chartFallback" style="display: none; text-align: center; padding: 40px; color: #6b7280;">
+                    <div style="font-size: 48px; margin-bottom: 16px;">📊</div>
+                    <h3>Chart Loading...</h3>
+                    <p>If the chart doesn't appear, please refresh the page.</p>
+                </div>
+            </div>
+
+
+            <!-- Chart.js CDN -->
+            <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+
+
+            <!-- Chart data from actual responses -->
+            <div id="chartData" style="display: none;">
+                %%[
+                /* Generate real chart data from actual responses */
+                VAR @chartLabels, @chartData, @responseDates
+                SET @chartLabels = ""
+                SET @chartData = ""
+                SET @responseDates = ""
+                ]%%
+                <span id="totalResponses">%%=v(@surveyTotalActivity)=%%</span>
+                <span id="completedResponses">%%=v(@completedCount)=%%</span>
+                <span id="responseDates">%%=v(@responseDates)=%%</span>
+            </div>
+        </div>
+    </div>
+
             </div>
     <footer class="maker-main-footer">
       <span>Self Service</span>
@@ -1542,9 +1534,6 @@ ENDIF
     </footer>
     </main>
 </div>
-
-
-
 
     <style>
         /* Modern Design System */
