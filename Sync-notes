@@ -1,16 +1,22 @@
+sst_analytics_per_course query — output column names MUST match DE attributes exactly:
+surveyId, CourseName, TotalResponses, UniqueRespondents, CompletedRespondents, CompletionRatePct, FirstActivityDate, LastActivityDate
+(Wrong aliases like TotalActivity or CompletedSurvey leave TotalResponses / CompletedRespondents NULL in the DE.)
+
 SELECT
     r.SurveyID AS surveyId,
     LTRIM(RTRIM(r.CourseName)) AS CourseName,
-    COUNT(DISTINCT CASE WHEN r.QuestionID = 'SURVEY_OPEN' THEN r.Contact END) AS OpenedSurvey,
-    COUNT(DISTINCT CASE WHEN r.QuestionID != 'SURVEY_OPEN' THEN r.Contact END) AS UniqueRespondents,
-    COUNT(DISTINCT CASE WHEN r.Status = 'Completed' THEN r.Contact END) AS CompletedSurvey,
+    COUNT(DISTINCT CASE WHEN ISNULL(r.QuestionID, '') != 'SURVEY_OPEN' THEN r.Contact END) AS UniqueRespondents,
+    COUNT(DISTINCT CASE WHEN LTRIM(RTRIM(ISNULL(r.Status, ''))) = 'Completed' THEN r.Contact END) AS CompletedRespondents,
     CAST(
-        COUNT(DISTINCT CASE WHEN r.Status = 'Completed' THEN r.Contact END) * 100.0
-        / NULLIF(COUNT(DISTINCT CASE WHEN r.QuestionID != 'SURVEY_OPEN' THEN r.Contact END), 0)
+        ISNULL(
+            COUNT(DISTINCT CASE WHEN LTRIM(RTRIM(ISNULL(r.Status, ''))) = 'Completed' THEN r.Contact END) * 100.0
+            / NULLIF(COUNT(DISTINCT CASE WHEN ISNULL(r.QuestionID, '') != 'SURVEY_OPEN' THEN r.Contact END), 0),
+            0
+        )
     AS DECIMAL(5, 2)) AS CompletionRatePct,
     MIN(r.LastUpdated) AS FirstActivityDate,
     MAX(r.LastUpdated) AS LastActivityDate,
-    SUM(CASE WHEN r.QuestionID != 'SURVEY_OPEN' THEN 1 ELSE 0 END) AS TotalActivity
+    ISNULL(SUM(CASE WHEN ISNULL(r.QuestionID, '') != 'SURVEY_OPEN' THEN 1 ELSE 0 END), 0) AS TotalResponses
 FROM SST_SP_Survey_Responses_DE r
 WHERE r.SurveyID IS NOT NULL
   AND r.CourseName IS NOT NULL
@@ -18,3 +24,11 @@ WHERE r.SurveyID IS NOT NULL
 GROUP BY
     r.SurveyID,
     LTRIM(RTRIM(r.CourseName))
+
+After changing SQL: re-run the query activity (overwrite/update target DE), then refresh Survey Results CloudPage.
+
+TextPageNumber batch — one sequence per SurveyID + QuestionID (20 non-empty text rows per page).
+PageNumber batch — one sequence per SurveyID (20 response rows per page, ordered by LastUpdated ASC).
+Re-run PageNumber/TextPageNumber query and update SST_SP_Survey_Responses_DE when batch logic changes.
+
+Survey Results reads course cards/chart from sst_analytics_per_course (TotalResponses, CompletedRespondents, UniqueRespondents, CompletionRatePct).
