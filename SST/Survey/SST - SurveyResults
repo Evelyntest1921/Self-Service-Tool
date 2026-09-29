@@ -209,7 +209,7 @@ ENDIF
 ENDIF
 ENDIF
 IF @textTotalUiPages == 1 AND @focusResponseCount > 0 THEN
-SET @textRem = Mod(@focusResponseCount, @textPageSize)text-response-item
+SET @textRem = Mod(@focusResponseCount, @textPageSize)
 SET @textTotalUiPages = Divide(Subtract(@focusResponseCount, @textRem), @textPageSize)
 IF @textRem > 0 THEN
 SET @textTotalUiPages = Add(@textTotalUiPages, 1)
@@ -220,6 +220,119 @@ IF @textLocalUiPage < 1 THEN SET @textLocalUiPage = 1 ENDIF
 SET @textPrevPage = Subtract(@textLocalUiPage, 1)
 SET @textNextPage = Add(@textLocalUiPage, 1)
 ENDIF
+VAR @detailExport, @exportCourseFilter, @runCsvExport
+SET @detailExport = Trim(RequestParameter("export"))
+IF EMPTY(@detailExport) THEN SET @detailExport = Trim(QueryParameter("export")) ENDIF
+SET @exportCourseFilter = Trim(RequestParameter("exportCourse"))
+IF EMPTY(@exportCourseFilter) THEN SET @exportCourseFilter = Trim(QueryParameter("exportCourse")) ENDIF
+SET @runCsvExport = "false"
+IF @detailExport == "csv" AND @textFocusMode != "true" AND NOT EMPTY(@surveyId) THEN
+SET @runCsvExport = "true"
+ENDIF
+IF @runCsvExport == "true" THEN
+ResponseContentType("text/csv")
+VAR @exportPageNum, @exportMaxPage, @exportBatchRows, @exportRowIdx, @exportRow, @exportDePageKey
+VAR @exportContact, @exportCourseName, @exportQuestionId, @exportResponse, @exportStatus, @exportLastUpdated
+VAR @exportQuestionText, @exportQuestionType, @exportContactName, @exportLine, @exportCell, @exportSkipRow
+VAR @exportMaxPageRows, @exportMaxPageNum
+SET @exportMaxPage = 1
+SET @exportMaxPageRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", 1, "PageNumber DESC", "SurveyID", @surveyId)
+IF RowCount(@exportMaxPageRows) > 0 THEN
+SET @exportMaxPageNum = Field(Row(@exportMaxPageRows, 1), "PageNumber")
+IF NOT EMPTY(@exportMaxPageNum) THEN
+SET @exportMaxPageNum = Add(0, @exportMaxPageNum)
+IF @exportMaxPageNum > 0 THEN SET @exportMaxPage = @exportMaxPageNum ENDIF
+ENDIF
+ENDIF
+SET @exportLine = "Contact,Name,Course Name,Question,Response,Question Type,Status,Last Updated"
+]%%
+%%=Concat(@exportLine, Char(10))=%%
+%%[
+FOR @exportPageNum = 1 TO @exportMaxPage DO
+SET @exportDePageKey = Concat("", @exportPageNum)
+SET @exportBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "PageNumber", @exportDePageKey)
+IF RowCount(@exportBatchRows) == 0 THEN
+SET @exportBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "PageNumber", @exportPageNum)
+ENDIF
+FOR @exportRowIdx = 1 TO RowCount(@exportBatchRows) DO
+SET @exportRow = Row(@exportBatchRows, @exportRowIdx)
+SET @exportContact = Field(@exportRow, "Contact")
+SET @exportCourseName = Field(@exportRow, "CourseName")
+SET @exportQuestionId = Field(@exportRow, "QuestionID")
+SET @exportResponse = Field(@exportRow, "Response")
+SET @exportStatus = Field(@exportRow, "Status")
+SET @exportLastUpdated = Field(@exportRow, "LastUpdated")
+SET @exportQuestionText = Field(@exportRow, "QuestionText")
+SET @exportQuestionType = Field(@exportRow, "QuestionType")
+SET @exportSkipRow = "false"
+IF @exportQuestionId == "SURVEY_OPEN" THEN SET @exportSkipRow = "true" ENDIF
+IF NOT EMPTY(@exportCourseFilter) AND @exportCourseFilter != "All" THEN
+IF EMPTY(@exportCourseName) OR @exportCourseName != @exportCourseFilter THEN SET @exportSkipRow = "true" ENDIF
+ENDIF
+IF @exportSkipRow == "false" THEN
+IF EMPTY(@exportQuestionText) THEN SET @exportQuestionText = Lookup("SST_SP_Survey_Questions_DE", "QuestionText", "QuestionID", @exportQuestionId) ENDIF
+IF EMPTY(@exportQuestionType) THEN SET @exportQuestionType = Lookup("SST_SP_Survey_Questions_DE", "QuestionType", "QuestionID", @exportQuestionId) ENDIF
+IF EMPTY(@exportQuestionText) THEN SET @exportQuestionText = "Question not found" ENDIF
+IF EMPTY(@exportQuestionType) THEN SET @exportQuestionType = "Unknown" ENDIF
+SET @exportContactName = Lookup(@contactTable, "Name", "Id", @exportContact)
+IF EMPTY(@exportContactName) THEN SET @exportContactName = "N/A" ENDIF
+IF EMPTY(@exportCourseName) THEN SET @exportCourseName = "N/A" ENDIF
+SET @exportLine = ""
+SET @exportCell = @exportContact
+IF EMPTY(@exportCell) THEN SET @exportCell = "" ENDIF
+IF Substring(@exportCell, 1, 1) == "=" OR Substring(@exportCell, 1, 1) == "+" OR Substring(@exportCell, 1, 1) == "-" OR Substring(@exportCell, 1, 1) == "@" THEN SET @exportCell = Concat("'", @exportCell) ENDIF
+SET @exportCell = Replace(@exportCell, '"', '""')
+IF IndexOf(@exportCell, ",") > 0 OR IndexOf(@exportCell, Char(10)) > 0 OR IndexOf(@exportCell, Char(13)) > 0 THEN SET @exportCell = Concat('"', @exportCell, '"') ENDIF
+SET @exportLine = @exportCell
+SET @exportCell = @exportContactName
+IF EMPTY(@exportCell) THEN SET @exportCell = "" ENDIF
+IF Substring(@exportCell, 1, 1) == "=" OR Substring(@exportCell, 1, 1) == "+" OR Substring(@exportCell, 1, 1) == "-" OR Substring(@exportCell, 1, 1) == "@" THEN SET @exportCell = Concat("'", @exportCell) ENDIF
+SET @exportCell = Replace(@exportCell, '"', '""')
+IF IndexOf(@exportCell, ",") > 0 OR IndexOf(@exportCell, Char(10)) > 0 OR IndexOf(@exportCell, Char(13)) > 0 THEN SET @exportCell = Concat('"', @exportCell, '"') ENDIF
+SET @exportLine = Concat(@exportLine, ",", @exportCell)
+SET @exportCell = @exportCourseName
+IF EMPTY(@exportCell) THEN SET @exportCell = "" ENDIF
+IF Substring(@exportCell, 1, 1) == "=" OR Substring(@exportCell, 1, 1) == "+" OR Substring(@exportCell, 1, 1) == "-" OR Substring(@exportCell, 1, 1) == "@" THEN SET @exportCell = Concat("'", @exportCell) ENDIF
+SET @exportCell = Replace(@exportCell, '"', '""')
+IF IndexOf(@exportCell, ",") > 0 OR IndexOf(@exportCell, Char(10)) > 0 OR IndexOf(@exportCell, Char(13)) > 0 THEN SET @exportCell = Concat('"', @exportCell, '"') ENDIF
+SET @exportLine = Concat(@exportLine, ",", @exportCell)
+SET @exportCell = @exportQuestionText
+IF EMPTY(@exportCell) THEN SET @exportCell = "" ENDIF
+IF Substring(@exportCell, 1, 1) == "=" OR Substring(@exportCell, 1, 1) == "+" OR Substring(@exportCell, 1, 1) == "-" OR Substring(@exportCell, 1, 1) == "@" THEN SET @exportCell = Concat("'", @exportCell) ENDIF
+SET @exportCell = Replace(@exportCell, '"', '""')
+IF IndexOf(@exportCell, ",") > 0 OR IndexOf(@exportCell, Char(10)) > 0 OR IndexOf(@exportCell, Char(13)) > 0 THEN SET @exportCell = Concat('"', @exportCell, '"') ENDIF
+SET @exportLine = Concat(@exportLine, ",", @exportCell)
+SET @exportCell = @exportResponse
+IF EMPTY(@exportCell) THEN SET @exportCell = "" ENDIF
+IF Substring(@exportCell, 1, 1) == "=" OR Substring(@exportCell, 1, 1) == "+" OR Substring(@exportCell, 1, 1) == "-" OR Substring(@exportCell, 1, 1) == "@" THEN SET @exportCell = Concat("'", @exportCell) ENDIF
+SET @exportCell = Replace(@exportCell, '"', '""')
+IF IndexOf(@exportCell, ",") > 0 OR IndexOf(@exportCell, Char(10)) > 0 OR IndexOf(@exportCell, Char(13)) > 0 THEN SET @exportCell = Concat('"', @exportCell, '"') ENDIF
+SET @exportLine = Concat(@exportLine, ",", @exportCell)
+SET @exportCell = @exportQuestionType
+IF EMPTY(@exportCell) THEN SET @exportCell = "" ENDIF
+IF Substring(@exportCell, 1, 1) == "=" OR Substring(@exportCell, 1, 1) == "+" OR Substring(@exportCell, 1, 1) == "-" OR Substring(@exportCell, 1, 1) == "@" THEN SET @exportCell = Concat("'", @exportCell) ENDIF
+SET @exportCell = Replace(@exportCell, '"', '""')
+IF IndexOf(@exportCell, ",") > 0 OR IndexOf(@exportCell, Char(10)) > 0 OR IndexOf(@exportCell, Char(13)) > 0 THEN SET @exportCell = Concat('"', @exportCell, '"') ENDIF
+SET @exportLine = Concat(@exportLine, ",", @exportCell)
+SET @exportCell = @exportStatus
+IF EMPTY(@exportCell) THEN SET @exportCell = "" ENDIF
+IF Substring(@exportCell, 1, 1) == "=" OR Substring(@exportCell, 1, 1) == "+" OR Substring(@exportCell, 1, 1) == "-" OR Substring(@exportCell, 1, 1) == "@" THEN SET @exportCell = Concat("'", @exportCell) ENDIF
+SET @exportCell = Replace(@exportCell, '"', '""')
+IF IndexOf(@exportCell, ",") > 0 OR IndexOf(@exportCell, Char(10)) > 0 OR IndexOf(@exportCell, Char(13)) > 0 THEN SET @exportCell = Concat('"', @exportCell, '"') ENDIF
+SET @exportLine = Concat(@exportLine, ",", @exportCell)
+SET @exportCell = Format(@exportLastUpdated, "MMM dd, yyyy HH:mm")
+IF EMPTY(@exportCell) THEN SET @exportCell = "" ENDIF
+IF Substring(@exportCell, 1, 1) == "=" OR Substring(@exportCell, 1, 1) == "+" OR Substring(@exportCell, 1, 1) == "-" OR Substring(@exportCell, 1, 1) == "@" THEN SET @exportCell = Concat("'", @exportCell) ENDIF
+SET @exportCell = Replace(@exportCell, '"', '""')
+IF IndexOf(@exportCell, ",") > 0 OR IndexOf(@exportCell, Char(10)) > 0 OR IndexOf(@exportCell, Char(13)) > 0 THEN SET @exportCell = Concat('"', @exportCell, '"') ENDIF
+SET @exportLine = Concat(@exportLine, ",", @exportCell)
+]%%
+%%=Concat(@exportLine, Char(10))=%%
+%%[
+ENDIF
+NEXT @exportRowIdx
+NEXT @exportPageNum
+ELSE
 ]%%
 
 
@@ -1216,7 +1329,7 @@ ENDIF
             <div class="table-actions">
                 <div class="search-section">
                     <input class="search-input" type="text" placeholder="Search responses...">
-                    <button class="btn-download" onclick="downloadResponsesCSV()" title="Download CSV">
+                    <button class="btn-download" onclick="downloadResponsesCSV()" title="Download all survey responses as CSV">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                             <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
                         </svg>
@@ -2967,6 +3080,21 @@ ENDIF
             margin-bottom: 40px;
         }
 
+        .course-analytics-empty {
+            padding: 24px;
+            border: 1px dashed var(--gray-300);
+            border-radius: 12px;
+            background: var(--gray-50);
+            color: var(--gray-700);
+            font-size: 14px;
+            line-height: 1.5;
+            min-width: 280px;
+        }
+
+        .course-analytics-empty code {
+            font-size: 13px;
+        }
+
         .section-subtitle {
             color: var(--gray-600);
             font-size: 14px;
@@ -3967,6 +4095,10 @@ ENDIF
                     setTimeout(function () {
                         initializePagination();
                         initializeCourseChart();
+                        var courseSection = document.getElementById('courseChartSection');
+                        if (courseSection) {
+                            courseSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
                     }, 100);
                 }
             }
@@ -4707,98 +4839,21 @@ ENDIF
         // Initialize course filter
         window.currentCourseFilter = 'All';
 
-        // CSV Export functionality
         function downloadResponsesCSV() {
-            const table = document.querySelector('.modern-table tbody');
-            if (!table) {
-                console.error('Table not found');
-                return;
-            }
-
-            const tbody = getDetailedResponsesTbody() || table;
-            const rows = getDetailDataRows(tbody).length ? getDetailDataRows(tbody) : Array.from(table.querySelectorAll('tr')).filter(function (row) {
-                return !row.classList.contains('detail-response-expand-row') && !row.classList.contains('detail-table-empty-row');
-            });
-            const searchInput = document.querySelector('.search-input');
-            const searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
-            const currentFilter = window.currentCourseFilter || 'All';
-
-            const visibleRows = rows.filter(row => {
-                // Apply course filter
-                let passesCourseFilter = true;
-                if (currentFilter !== 'All') {
-                    const courseCell = row.querySelector('.course-name-cell');
-                    if (courseCell) {
-                        const cellCourseName = courseCell.textContent.trim();
-                        passesCourseFilter = cellCourseName === currentFilter;
-                    } else {
-                        passesCourseFilter = false;
-                    }
-                }
-
-                // Apply search filter
-                let passesSearchFilter = true;
-                if (searchTerm) {
-                    const text = row.textContent.toLowerCase();
-                    passesSearchFilter = text.includes(searchTerm);
-                }
-
-                return passesCourseFilter && passesSearchFilter;
-            });
-
-            if (visibleRows.length === 0) {
-                alert('No data to export');
-                return;
-            }
-
-            // Create CSV content
-            let csvContent = 'Contact,Name,Course Name,Question,Response,Question Type,Status,Last Updated\n';
-
-            visibleRows.forEach(row => {
-                const cells = row.querySelectorAll('td');
-                if (cells.length >= 8) {
-                    const contact = escapeCSV(cells[0].textContent.trim());
-                    const name = escapeCSV(cells[1].textContent.trim());
-                    const courseName = escapeCSV(cells[2].textContent.trim());
-                    const question = escapeCSV(cells[3].textContent.trim());
-                    const response = escapeCSV(cells[4].textContent.trim());
-                    const questionType = escapeCSV(cells[5].textContent.trim());
-                    const status = escapeCSV(cells[6].textContent.trim());
-                    const lastUpdated = escapeCSV(cells[7].textContent.trim());
-
-                    csvContent += `${contact},${name},${courseName},${question},${response},${questionType},${status},${lastUpdated}\n`;
-                }
-            });
-
-            // Create and download file
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement('a');
-            const url = URL.createObjectURL(blob);
-            
-            // Generate filename based on current filters
-            let filename = 'survey_responses';
+            var url = new URL(window.location.href);
+            url.searchParams.set('export', 'csv');
+            url.searchParams.set('view', 'responses');
+            url.searchParams.delete('exportCourse');
+            url.searchParams.delete('detailPage');
+            url.searchParams.delete('textFocus');
+            url.searchParams.delete('textQ');
+            url.searchParams.delete('textPage');
+            url.searchParams.delete('textTotal');
+            var currentFilter = window.currentCourseFilter || 'All';
             if (currentFilter !== 'All') {
-                filename += '_' + currentFilter.replace(/[^a-zA-Z0-9]/g, '_');
+                url.searchParams.set('exportCourse', currentFilter);
             }
-            if (searchTerm) {
-                filename += '_filtered';
-            }
-            filename += '.csv';
-
-            link.setAttribute('href', url);
-            link.setAttribute('download', filename);
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-        }
-
-        // Helper function to escape CSV values
-        function escapeCSV(value) {
-            if (value.includes(',') || value.includes('"') || value.includes('\n')) {
-                return '"' + value.replace(/"/g, '""') + '"';
-            }
-            return value;
+            window.location.assign(url.toString());
         }
 
         // Initialize course chart
@@ -4853,6 +4908,13 @@ ENDIF
             // Validate data
             if (!labels || !data || labels.length === 0 || data.length === 0) {
                 console.error('Invalid course chart data:', { labels, data });
+                var courseFallback = document.getElementById('courseChartFallback');
+                if (courseFallback) {
+                    courseFallback.style.display = 'block';
+                    courseFallback.querySelector('h3').textContent = 'No course chart data';
+                    courseFallback.querySelector('p').textContent = 'Add rows to sst_analytics_per_course for this survey or run the per-course query activity.';
+                }
+                canvas.style.display = 'none';
                 return;
             }
 
@@ -5298,3 +5360,6 @@ ENDIF
     </script>
 </body>
 </html>
+%%[
+ENDIF
+]%%
