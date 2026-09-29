@@ -159,7 +159,7 @@ CATCH
 SET @deleteError = "An error occurred while deleting the survey. Please try again."
 ENDIF
 ENDIF
-VAR @textFocusMode, @focusQuestionId, @focusQuestionText, @focusResponseCount, @textPageSize
+VAR @textFocusMode, @focusQuestionId, @focusQuestionText, @focusResponseCount, @textPageSize, @focusQuestionType, @focusQuestionNumber, @textFocusUniqueContacts
 VAR @textDePageKey, @textBatchRows, @textResponse, @textTotalUiPages, @textLocalUiPage, @textPrevPage, @textNextPage, @textFragNav, @textRowIdx, @textRem, @textBatchRowCount
 VAR @textMaxPageRows, @textMaxPageNum
 SET @textFocusMode = "false"
@@ -184,6 +184,14 @@ ENDIF
 IF EMPTY(@focusResponseCount) THEN SET @focusResponseCount = 0 ENDIF
 SET @focusResponseCount = Add(0, @focusResponseCount)
 SET @focusQuestionText = Lookup("SST_SP_Survey_Questions_DE", "QuestionText", "SurveyID", @surveyId, "QuestionID", @focusQuestionId)
+SET @focusQuestionType = Lookup("SST_SP_Survey_Questions_DE", "QuestionType", "SurveyID", @surveyId, "QuestionID", @focusQuestionId)
+SET @focusQuestionNumber = Lookup("SST_SP_Survey_Questions_DE", "QuestionNumber", "SurveyID", @surveyId, "QuestionID", @focusQuestionId)
+IF EMPTY(@focusQuestionNumber) THEN SET @focusQuestionNumber = 1 ENDIF
+SET @focusQuestionNumber = Add(0, @focusQuestionNumber)
+IF EMPTY(@focusQuestionType) THEN SET @focusQuestionType = "text" ENDIF
+SET @textFocusUniqueContacts = Lookup("sst_analytics_per_survey", "UniqueRespondents", "surveyId", @surveyId)
+IF EMPTY(@textFocusUniqueContacts) THEN SET @textFocusUniqueContacts = 0 ENDIF
+SET @textFocusUniqueContacts = Add(0, @textFocusUniqueContacts)
 SET @surveyName = Lookup("SST_SP_Surveys_Master_DE", "SurveyName", "SurveyID", @surveyId)
 IF EMPTY(@surveyName) THEN SET @surveyName = Concat("Survey ", @surveyId) ENDIF
 SET @textFragNav = Concat(@textNavBase, "&textFocus=1&textQ=", @focusQuestionId, "&textTotal=", @focusResponseCount, "&textPage=")
@@ -428,12 +436,35 @@ ENDIF
                         </nav>
                     </div>
                 </div>
-                <div class="text-focus-header">
-                    <h1 id="textFocusQuestionTitle">%%=v(@focusQuestionText)=%%</h1>
-                    <p id="textFocusQuestionMeta" class="text-focus-meta">%%=v(@focusResponseCount)=%% text responses · Page %%=v(@textLocalUiPage)=%% of %%=v(@textTotalUiPages)=%%</p>
-                </div>
                 <div id="textFocusBody" class="text-focus-body">
                 %%[ IF @textFocusMode == "true" THEN ]%%
+                <div class="question-card text-focus-question-card">
+                <div class="question-header">
+                    <span class="question-number">%%=Format(@focusQuestionNumber, "00")=%%</span>
+                    <div class="question-content">
+                        <h3>%%=v(@focusQuestionText)=%%</h3>
+                    </div>
+                </div>
+                <div class="question-stats">
+                    <div class="stat-summary">
+                        <div class="stat-item">
+                            <span class="stat-label">Total Responses</span>
+                            <span class="stat-value">%%=v(@focusResponseCount)=%%</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Response Rate</span>
+                            <span class="stat-value">%%=IIF(@textFocusUniqueContacts > 0, FormatNumber(Multiply(Divide(@focusResponseCount, @textFocusUniqueContacts), 100), 0), 0)=%%%</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Question Type</span>
+                            <span class="stat-value">
+                                <span class="question-type-badge type-%%=v(@focusQuestionType)=%%">%%=v(@focusQuestionType)=%%</span>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                <div class="text-responses-section">
+                <h4>Text Responses (%%=v(@focusResponseCount)=%%)</h4>
                 <div class="text-focus-list">
                 %%[
                 SET @textBatchRowCount = 0
@@ -476,6 +507,7 @@ ENDIF
                 %%[ IF @textLocalUiPage < @textTotalUiPages THEN ]%%
                 <a class="btn-secondary text-responses-page-btn" href="%%=Concat(@textFragNav, @textNextPage)=%%">Next</a>
                 %%[ ENDIF ]%%
+                </div>
                 </div>
                 </div>
                 </div>
@@ -2516,26 +2548,22 @@ ENDIF
             min-height: 0;
             display: flex;
             flex-direction: column;
-            padding: 24px 32px 32px;
-            overflow: auto;
-        }
-
-        .text-focus-survey-header {
-            margin-bottom: 0;
+            padding: 0;
+            overflow: visible;
             width: 100%;
         }
 
-        .text-focus-header h1 {
-            margin: 0 0 8px;
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: var(--gray-900);
+        .text-focus-survey-header {
+            margin-bottom: 32px;
+            width: 100%;
         }
 
-        .text-focus-meta {
-            margin: 0 0 24px;
-            color: var(--gray-600);
-            font-size: 14px;
+        .text-focus-body {
+            width: 100%;
+        }
+
+        .text-focus-question-card {
+            margin-bottom: 0;
         }
 
         .text-focus-body .text-focus-list {
@@ -3628,10 +3656,6 @@ ENDIF
             url.searchParams.set('textQ', questionId);
             url.searchParams.set('textPage', String(page));
             url.searchParams.set('textTotal', String(responseCount || 0));
-            var courseFilter = window.currentCourseFilter || '';
-            if (courseFilter && courseFilter !== 'All') {
-                url.searchParams.set('textCourse', courseFilter);
-            }
             url.hash = '';
             return url.toString();
         }
