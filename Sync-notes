@@ -4,51 +4,78 @@ sst_analytics_per_course (LookupRows/DeleteData by surveyId)
 
 SST_SP_Survey_Responses_DE — PageNumber batch (20 rows = 1 UI page)
 
-Survey Results text focus: LookupRows(SurveyID, QuestionID, PageNumber) where PageNumber equals UI page (1, 2, 3…).
+Why PageNumber stays empty (most common):
+1. Query target is a different DE — SELECT does not update the responses DE by itself.
+2. Query targets SST_SP_Survey_Responses_DE with Overwrite but returns only rows where PageNumber IS NULL — SFMC replaces the entire DE with that subset and deletes everything else, or the run looks like it did nothing useful.
+3. PageNumber on rows is 0 or blank string, not SQL NULL — inner WHERE PageNumber IS NULL matches zero rows.
+4. Response filter excludes rows (empty Response, non-text types only if you added QuestionType = 'text').
 
-Problems with the old global batch query:
-- ROW_NUMBER and MAX(PageNumber) were across the whole DE, not per SurveyID + QuestionID.
-- ON 1=1 join applied one MaxPage to every survey/question.
-- UI page math assumed 500-row batches; your query already uses 20.
+Recommended: full recompute overwrite (Automation Studio Query Activity)
 
-Use this incremental batch (new rows only, PageNumber IS NULL). Output feeds your update step (ResponsePK key).
+Target data extension: SST_SP_Survey_Responses_DE
+Update type: Overwrite (same DE — query must return every row you need to keep)
+Run after new responses or on schedule.
+
+Column list must match your DE exactly (add/remove if your DE differs).
 
 SELECT
-    n.ResponsePK,
-    CAST(
-        (ISNULL(pc.ExistingCount, 0) + n.NewRowNum - 1) / 20 + 1
-    AS INT) AS PageNumber,
-    n.Contact,
-    n.SurveyID,
-    n.QuestionID,
-    n.QuestionNumber,
-    n.QuestionText,
-    n.QuestionType,
-    n.Response,
-    n.Status,
-    n.LastUpdated,
-    n.CourseName
-FROM (
+    r.ResponsePK,
+    r.Contact,
+    r.SurveyID,
+    r.QuestionID,
+    r.QuestionNumber,
+    r.QuestionText,
+    r.QuestionType,
+    r.Response,
+    r.Status,
+    r.LastUpdated,
+    r.CourseName,
+    CASE
+        WHEN r.QuestionType = 'text'
+         AND r.Response IS NOT NULL
+         AND LTRIM(RTRIM(CAST(r.Response AS NVARCHAR(4000)))) <> ''
+        THEN CAST(((rn.TextRowNum - 1) / 20) + 1 AS INT)
+        ELSE NULL
+    END AS PageNumber
+FROM SST_SP_Survey_Responses_DE r
+LEFT JOIN (
     SELECT
         ResponsePK,
         ROW_NUMBER() OVER (
             PARTITION BY SurveyID, QuestionID
             ORDER BY LastUpdated ASC, ResponsePK
-        ) AS NewRowNum,
-        Contact,
+        ) AS TextRowNum
+    FROM SST_SP_Survey_Responses_DE
+    WHERE QuestionType = 'text'
+      AND Response IS NOT NULL
+      AND LTRIM(RTRIM(CAST(Response AS NVARCHAR(4000)))) <> ''
+) rn
+    ON rn.ResponsePK = r.ResponsePK
+
+Only text rows with a non-empty Response get PageNumber 1, 2, 3… (20 per page). All other rows keep PageNumber NULL.
+
+Alternative: incremental staging (does not touch responses DE in the query step)
+
+Step 1 — Query target: staging DE (example sst_responses_pagenumber_staging)
+PK: ResponsePK. Columns: ResponsePK, PageNumber only.
+
+SELECT
+    n.ResponsePK,
+    CAST((ISNULL(pc.ExistingCount, 0) + n.NewRowNum - 1) / 20 + 1 AS INT) AS PageNumber
+FROM (
+    SELECT
+        ResponsePK,
         SurveyID,
         QuestionID,
-        QuestionNumber,
-        QuestionText,
-        QuestionType,
-        Response,
-        Status,
-        LastUpdated,
-        CourseName
+        ROW_NUMBER() OVER (
+            PARTITION BY SurveyID, QuestionID
+            ORDER BY LastUpdated ASC, ResponsePK
+        ) AS NewRowNum
     FROM SST_SP_Survey_Responses_DE
-    WHERE PageNumber IS NULL
+    WHERE QuestionType = 'text'
       AND Response IS NOT NULL
-      AND LTRIM(RTRIM(Response)) <> ''
+      AND LTRIM(RTRIM(CAST(Response AS NVARCHAR(4000)))) <> ''
+      AND (PageNumber IS NULL OR PageNumber = 0 OR PageNumber = '')
 ) n
 LEFT JOIN (
     SELECT
@@ -57,11 +84,21 @@ LEFT JOIN (
         COUNT(1) AS ExistingCount
     FROM SST_SP_Survey_Responses_DE
     WHERE PageNumber IS NOT NULL
+      AND PageNumber > 0
     GROUP BY SurveyID, QuestionID
 ) pc
     ON pc.SurveyID = n.SurveyID
    AND pc.QuestionID = n.QuestionID
 
-Optional: add AND QuestionType = 'text' in the inner WHERE if only text rows should be paged.
+Step 2 — Apply to SST_SP_Survey_Responses_DE (pick one):
+- Import Activity: Update on ResponsePK from staging file/DE, or
+- Script Activity: loop staging rows and UpdateData on ResponsePK + PageNumber, or
+- Manual one-time: export staging, import update into responses DE.
 
-After changing batch logic, re-run batch for rows already numbered wrong, or clear PageNumber and re-batch per question.
+Verify after run:
+- Preview SST_SP_Survey_Responses_DE: text rows show PageNumber 1 for first 20 (same SurveyID + QuestionID), then 2, etc.
+- CloudPage LookupRows(..., PageNumber, "1") returns rows for that question.
+
+Old global batch (wrong — do not use):
+- ROW_NUMBER without PARTITION BY SurveyID, QuestionID
+- JOIN ON 1=1 with one MaxPage for entire DE
