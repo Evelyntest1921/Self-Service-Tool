@@ -1336,8 +1336,68 @@ ENDIF
         </div>
 
 
+        %%[
+        VAR @detailUiPage, @detailTotalPages, @detailBatchRows, @detailBatchRowCount, @detailDePageKey, @detailMaxPageRows, @detailMaxPageNum, @detailNavBase, @detailRowIdx, @detailRow
+        VAR @detailContact, @detailCourseName, @detailQuestionId, @detailResponse, @detailStatus, @detailLastUpdated, @detailQuestionText, @detailQuestionType, @detailContactName
+        VAR @detailTotalRows, @detailStartRow, @detailEndRow, @detailPrevPage, @detailNextPage, @detailRem
+        SET @detailUiPage = Trim(RequestParameter("detailPage"))
+        IF EMPTY(@detailUiPage) THEN SET @detailUiPage = Trim(QueryParameter("detailPage")) ENDIF
+        IF EMPTY(@detailUiPage) THEN SET @detailUiPage = 1 ENDIF
+        SET @detailUiPage = Add(0, @detailUiPage)
+        IF @detailUiPage < 1 THEN SET @detailUiPage = 1 ENDIF
+        SET @detailTotalPages = 1
+        SET @detailBatchRowCount = 0
+        SET @detailTotalRows = @surveyTotalActivity
+        IF EMPTY(@detailTotalRows) THEN SET @detailTotalRows = 0 ENDIF
+        SET @detailTotalRows = Add(0, @detailTotalRows)
+        SET @detailNavBase = RequestParameter("PAGEURL")
+        SET @detailNavQueryPos = IndexOf(@detailNavBase, "?")
+        IF @detailNavQueryPos > 0 THEN
+        SET @detailNavBase = Substring(@detailNavBase, 1, Subtract(@detailNavQueryPos, 1))
+        ENDIF
+        SET @detailNavBase = Concat(@detailNavBase, "?surveyid=", @surveyId)
+        IF NOT EMPTY(@jid) THEN SET @detailNavBase = Concat(@detailNavBase, "&journeyId=", @jid) ENDIF
+        SET @detailNavBase = Concat(@detailNavBase, "&view=responses&detailPage=")
+        IF NOT EMPTY(@surveyId) THEN
+        SET @detailMaxPageRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", 1, "PageNumber DESC", "SurveyID", @surveyId)
+        IF RowCount(@detailMaxPageRows) > 0 THEN
+        SET @detailMaxPageNum = Field(Row(@detailMaxPageRows, 1), "PageNumber")
+        IF NOT EMPTY(@detailMaxPageNum) THEN
+        SET @detailMaxPageNum = Add(0, @detailMaxPageNum)
+        IF @detailMaxPageNum > 0 THEN
+        SET @detailTotalPages = @detailMaxPageNum
+        ENDIF
+        ENDIF
+        ENDIF
+        ENDIF
+        IF @detailTotalPages == 1 AND @detailTotalRows > 0 THEN
+        SET @detailRem = Mod(@detailTotalRows, 20)
+        SET @detailTotalPages = Divide(Subtract(@detailTotalRows, @detailRem), 20)
+        IF @detailRem > 0 THEN
+        SET @detailTotalPages = Add(@detailTotalPages, 1)
+        ENDIF
+        ENDIF
+        IF @detailUiPage > @detailTotalPages THEN SET @detailUiPage = @detailTotalPages ENDIF
+        IF @detailUiPage < 1 THEN SET @detailUiPage = 1 ENDIF
+        SET @detailPrevPage = Subtract(@detailUiPage, 1)
+        SET @detailNextPage = Add(@detailUiPage, 1)
+        SET @detailDePageKey = Concat("", @detailUiPage)
+        SET @detailBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "PageNumber", @detailDePageKey)
+        SET @detailBatchRowCount = RowCount(@detailBatchRows)
+        IF @detailBatchRowCount == 0 THEN
+        SET @detailBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "PageNumber", @detailUiPage)
+        SET @detailBatchRowCount = RowCount(@detailBatchRows)
+        ENDIF
+        SET @detailStartRow = 0
+        SET @detailEndRow = 0
+        IF @detailBatchRowCount > 0 THEN
+        SET @detailStartRow = Add(Multiply(Subtract(@detailUiPage, 1), 20), 1)
+        SET @detailEndRow = Add(@detailStartRow, Subtract(@detailBatchRowCount, 1))
+        ENDIF
+        ]%%
+        <div id="detailTablePagingConfig" style="display:none" data-current-page="%%=v(@detailUiPage)=%%" data-total-pages="%%=v(@detailTotalPages)=%%" data-total-rows="%%=v(@detailTotalRows)=%%" data-start-row="%%=v(@detailStartRow)=%%" data-end-row="%%=v(@detailEndRow)=%%" data-nav-base="%%=v(@detailNavBase)=%%"></div>
         <div class="table-container">
-            <table class="modern-table">
+            <table class="modern-table" id="detailedResponsesTable">
                 <thead>
                     <tr>
                         <th>Contact</th>
@@ -1351,9 +1411,56 @@ ENDIF
                     </tr>
                 </thead>
                 <tbody>
-                    <tr>
-                        <td colspan="8">Detailed response rows are not loaded on this page. Use question analysis for counts and text answers.</td>
+                    %%[ IF @detailBatchRowCount > 0 THEN
+                    FOR @detailRowIdx = 1 TO @detailBatchRowCount DO
+                    SET @detailRow = Row(@detailBatchRows, @detailRowIdx)
+                    SET @detailContact = Field(@detailRow, "Contact")
+                    SET @detailCourseName = Field(@detailRow, "CourseName")
+                    SET @detailQuestionId = Field(@detailRow, "QuestionID")
+                    SET @detailResponse = Field(@detailRow, "Response")
+                    SET @detailStatus = Field(@detailRow, "Status")
+                    SET @detailLastUpdated = Field(@detailRow, "LastUpdated")
+                    SET @detailQuestionText = Field(@detailRow, "QuestionText")
+                    SET @detailQuestionType = Field(@detailRow, "QuestionType")
+                    IF EMPTY(@detailQuestionText) THEN
+                    SET @detailQuestionText = Lookup("SST_SP_Survey_Questions_DE", "QuestionText", "QuestionID", @detailQuestionId)
+                    ENDIF
+                    IF EMPTY(@detailQuestionType) THEN
+                    SET @detailQuestionType = Lookup("SST_SP_Survey_Questions_DE", "QuestionType", "QuestionID", @detailQuestionId)
+                    ENDIF
+                    IF EMPTY(@detailQuestionText) THEN SET @detailQuestionText = "Question not found" ENDIF
+                    IF EMPTY(@detailQuestionType) THEN SET @detailQuestionType = "Unknown" ENDIF
+                    SET @detailContactName = Lookup(@contactTable, "Name", "Id", @detailContact)
+                    IF EMPTY(@detailContactName) THEN SET @detailContactName = "N/A" ENDIF
+                    IF @detailQuestionId != "SURVEY_OPEN" THEN
+                    ]%%
+                    <tr data-last-updated="%%=Format(@detailLastUpdated, "MMM dd, yyyy HH:mm")=%%">
+                        <td><strong>%%=v(@detailContact)=%%</strong></td>
+                        <td>%%=v(@detailContactName)=%%</td>
+                        <td class="course-name-cell">%%[ IF EMPTY(@detailCourseName) THEN ]%%N/A%%[ ELSE ]%%%%=v(@detailCourseName)=%%%%[ ENDIF ]%%</td>
+                        <td>%%=v(@detailQuestionText)=%%</td>
+                        <td class="response-cell">%%=v(@detailResponse)=%%</td>
+                        <td><span class="type-badge">%%=v(@detailQuestionType)=%%</span></td>
+                        <td><span class="status-badge status-%%=v(@detailStatus)=%%">%%=v(@detailStatus)=%%</span></td>
+                        <td>%%=Format(@detailLastUpdated, "MMM dd, yyyy HH:mm")=%%</td>
                     </tr>
+                    %%[
+                    ENDIF
+                    NEXT @detailRowIdx
+                    ELSEIF @detailTotalRows > 0 THEN
+                    ]%%
+                    <tr class="detail-table-empty-row">
+                        <td colspan="8">No response rows on this page. Confirm PageNumber is populated on SST_SP_Survey_Responses_DE for this survey.</td>
+                    </tr>
+                    %%[
+                    ELSE
+                    ]%%
+                    <tr class="detail-table-empty-row">
+                        <td colspan="8">No detailed responses recorded yet.</td>
+                    </tr>
+                    %%[
+                    ENDIF
+                    ]%%
                 </tbody>
             </table>
         </div>
@@ -4397,6 +4504,38 @@ ENDIF
         const rowsPerPage = 20;
         let totalRows = 0;
         let filteredRows = [];
+
+        function getDetailPagingConfig() {
+            var el = document.getElementById('detailTablePagingConfig');
+            if (!el) {
+                return null;
+            }
+            var navBase = el.getAttribute('data-nav-base') || '';
+            if (!navBase) {
+                return null;
+            }
+            return {
+                currentPage: parseInt(el.getAttribute('data-current-page') || '1', 10),
+                totalPages: parseInt(el.getAttribute('data-total-pages') || '1', 10),
+                totalRows: parseInt(el.getAttribute('data-total-rows') || '0', 10),
+                startRow: parseInt(el.getAttribute('data-start-row') || '0', 10),
+                endRow: parseInt(el.getAttribute('data-end-row') || '0', 10),
+                navBase: navBase
+            };
+        }
+
+        function navigateDetailPage(page) {
+            var cfg = getDetailPagingConfig();
+            if (!cfg || !cfg.navBase) {
+                return false;
+            }
+            var totalPages = cfg.totalPages || 1;
+            if (page < 1 || page > totalPages) {
+                return false;
+            }
+            window.location.assign(cfg.navBase + String(page));
+            return true;
+        }
         
         // Initialize course filter
         window.currentCourseFilter = 'All';
@@ -4712,26 +4851,40 @@ ENDIF
 
         // Initialize pagination
         function initializePagination() {
-            const table = document.querySelector('.modern-table tbody');
-            if (table) {
-                const allRows = Array.from(table.querySelectorAll('tr'));
-                // Sort rows by data-last-updated (descending)
-                const sortedRows = allRows.slice().sort((a, b) => {
-                    const aTime = parseTimestamp(a.dataset.lastUpdated);
-                    const bTime = parseTimestamp(b.dataset.lastUpdated);
-                    return bTime - aTime;
+            const table = document.querySelector('#detailedResponsesTable tbody');
+            if (!table) {
+                return;
+            }
+
+            const cfg = getDetailPagingConfig();
+            if (cfg && cfg.navBase) {
+                currentPage = cfg.currentPage;
+                totalRows = cfg.totalRows;
+                const rows = Array.from(table.querySelectorAll('tr'));
+                filteredRows = rows;
+                rows.forEach(function (row) {
+                    row.style.display = '';
                 });
-
-                // Re-append rows in sorted order
-                sortedRows.forEach(row => table.appendChild(row));
-
-                totalRows = sortedRows.length;
-                filteredRows = sortedRows;
-                
                 updatePaginationInfo();
                 updatePaginationControls();
-                showPage(1);
+                return;
             }
+
+            const allRows = Array.from(table.querySelectorAll('tr'));
+            const sortedRows = allRows.slice().sort((a, b) => {
+                const aTime = parseTimestamp(a.dataset.lastUpdated);
+                const bTime = parseTimestamp(b.dataset.lastUpdated);
+                return bTime - aTime;
+            });
+
+            sortedRows.forEach(row => table.appendChild(row));
+
+            totalRows = sortedRows.length;
+            filteredRows = sortedRows;
+            
+            updatePaginationInfo();
+            updatePaginationControls();
+            showPage(1);
         }
 
         // Show specific page
@@ -4783,6 +4936,17 @@ ENDIF
             const totalRowsElement = document.getElementById('totalRows');
             
             if (paginationInfo && totalRowsElement) {
+                const cfg = getDetailPagingConfig();
+                if (cfg && cfg.navBase) {
+                    totalRowsElement.textContent = cfg.totalRows;
+                    if (cfg.startRow > 0 && cfg.endRow >= cfg.startRow) {
+                        paginationInfo.textContent = 'Showing ' + cfg.startRow + '-' + cfg.endRow + ' of ' + cfg.totalRows + ' responses';
+                    } else {
+                        paginationInfo.textContent = 'Showing 0 of ' + cfg.totalRows + ' responses';
+                    }
+                    return;
+                }
+
                 const startRow = (currentPage - 1) * rowsPerPage + 1;
                 const endRow = Math.min(currentPage * rowsPerPage, totalRows);
                 
@@ -4799,42 +4963,42 @@ ENDIF
             
             if (!prevBtn || !nextBtn || !paginationPages) return;
 
-            // Update Previous/Next buttons
-            prevBtn.disabled = currentPage === 1;
-            nextBtn.disabled = currentPage >= Math.ceil(totalRows / rowsPerPage);
+            const cfg = getDetailPagingConfig();
+            const totalPages = cfg && cfg.navBase
+                ? (cfg.totalPages || 1)
+                : Math.ceil(totalRows / rowsPerPage);
+            const activePage = cfg && cfg.navBase ? cfg.currentPage : currentPage;
+
+            prevBtn.disabled = activePage === 1;
+            nextBtn.disabled = activePage >= totalPages;
 
             // Generate page numbers
-            const totalPages = Math.ceil(totalRows / rowsPerPage);
             let pageNumbers = '';
 
             if (totalPages <= 7) {
-                // Show all pages if 7 or fewer
                 for (let i = 1; i <= totalPages; i++) {
-                    pageNumbers += `<span class="page-number ${i === currentPage ? 'active' : ''}" onclick="goToPage(${i})">${i}</span>`;
+                    pageNumbers += `<span class="page-number ${i === activePage ? 'active' : ''}" onclick="goToPage(${i})">${i}</span>`;
                 }
             } else {
-                // Show first page
-                pageNumbers += `<span class="page-number ${1 === currentPage ? 'active' : ''}" onclick="goToPage(1)">1</span>`;
+                pageNumbers += `<span class="page-number ${1 === activePage ? 'active' : ''}" onclick="goToPage(1)">1</span>`;
                 
-                if (currentPage > 4) {
+                if (activePage > 4) {
                     pageNumbers += '<span class="page-ellipsis">...</span>';
                 }
                 
-                // Show pages around current page
-                const startPage = Math.max(2, currentPage - 1);
-                const endPage = Math.min(totalPages - 1, currentPage + 1);
+                const startPage = Math.max(2, activePage - 1);
+                const endPage = Math.min(totalPages - 1, activePage + 1);
                 
                 for (let i = startPage; i <= endPage; i++) {
-                    pageNumbers += `<span class="page-number ${i === currentPage ? 'active' : ''}" onclick="goToPage(${i})">${i}</span>`;
+                    pageNumbers += `<span class="page-number ${i === activePage ? 'active' : ''}" onclick="goToPage(${i})">${i}</span>`;
                 }
                 
-                if (currentPage < totalPages - 3) {
+                if (activePage < totalPages - 3) {
                     pageNumbers += '<span class="page-ellipsis">...</span>';
                 }
                 
-                // Show last page
                 if (totalPages > 1) {
-                    pageNumbers += `<span class="page-number ${totalPages === currentPage ? 'active' : ''}" onclick="goToPage(${totalPages})">${totalPages}</span>`;
+                    pageNumbers += `<span class="page-number ${totalPages === activePage ? 'active' : ''}" onclick="goToPage(${totalPages})">${totalPages}</span>`;
                 }
             }
 
@@ -4843,6 +5007,9 @@ ENDIF
 
         // Go to specific page
         function goToPage(page) {
+            if (navigateDetailPage(page)) {
+                return;
+            }
             const totalPages = Math.ceil(totalRows / rowsPerPage);
             if (page >= 1 && page <= totalPages) {
                 showPage(page);
@@ -4851,6 +5018,11 @@ ENDIF
 
         // Change page (Previous/Next)
         function changePage(direction) {
+            const cfg = getDetailPagingConfig();
+            if (cfg && cfg.navBase) {
+                navigateDetailPage(cfg.currentPage + direction);
+                return;
+            }
             const totalPages = Math.ceil(totalRows / rowsPerPage);
             const newPage = currentPage + direction;
             
