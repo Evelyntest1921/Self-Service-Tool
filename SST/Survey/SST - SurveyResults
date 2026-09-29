@@ -386,6 +386,25 @@ ENDIF
                     %%[
                     IF NOT EMPTY(@textExpandQ) AND @textListCount > 0 THEN
                     SET @textListRenderedOnPage = 0
+                    SET @textListDePageKey = Concat("", @textListPage)
+                    SET @textListBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @textListQuestionId, "TextPageNumber", @textListDePageKey)
+                    SET @textListBatchCount = RowCount(@textListBatchRows)
+                    IF @textListBatchCount > 0 THEN
+                    FOR @textListRowIdx = 1 TO @textListBatchCount DO
+                    SET @textListResponse = Field(Row(@textListBatchRows, @textListRowIdx), "Response")
+                    IF NOT EMPTY(@textListResponse) THEN
+                    SET @textListRenderedOnPage = Add(@textListRenderedOnPage, 1)
+                    ]%%
+                    <div class="text-response-item">
+                        <div class="text-response-content">
+                            <span class="text-response-text">"%%=v(@textListResponse)=%%"</span>
+                        </div>
+                    </div>
+                    %%[
+                    ENDIF
+                    NEXT @textListRowIdx
+                    ENDIF
+                    IF @textListRenderedOnPage == 0 THEN
                     SET @textListFetchSize = Multiply(@textListPage, @textListPageSize)
                     IF @textListFetchSize > 2500 THEN SET @textListFetchSize = 2500 ENDIF
                     SET @textListBatchRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", @textListFetchSize, "LastUpdated ASC", "SurveyID", @surveyId, "QuestionID", @textListQuestionId)
@@ -407,6 +426,7 @@ ENDIF
                     %%[
                     ENDIF
                     NEXT @textListRowIdx
+                    ENDIF
                     ENDIF
                     IF @textListRenderedOnPage == 0 THEN
                     ]%%
@@ -903,9 +923,13 @@ ENDIF
                                 SET @textPreviewLimit = 5
                                 SET @textViewAllUrl = Concat(@textNavBase, "&textQ=", @questionId, "&textPage=1&textTotal=", @responseCount)
                                 IF @responseCount > 0 THEN
-                                SET @textBatchRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", @textPreviewLimit, "LastUpdated ASC", "SurveyID", @surveyId, "QuestionID", @questionId)
+                                SET @textBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @questionId, "TextPageNumber", "1")
                                 SET @textItemsRendered = 0
                                 SET @textPreviewRowCount = RowCount(@textBatchRows)
+                                IF @textPreviewRowCount == 0 THEN
+                                SET @textBatchRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", @textPreviewLimit, "LastUpdated ASC", "SurveyID", @surveyId, "QuestionID", @questionId)
+                                SET @textPreviewRowCount = RowCount(@textBatchRows)
+                                ENDIF
                                 IF @textPreviewRowCount > 0 THEN
                                 FOR @textPreviewIdx = 1 TO @textPreviewRowCount DO
                                 IF @textItemsRendered < @textPreviewLimit THEN

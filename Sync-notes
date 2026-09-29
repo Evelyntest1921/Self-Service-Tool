@@ -2,22 +2,21 @@ Analytics DE external keys (Survey Results):
 sst_analytics_answers
 sst_analytics_per_course (LookupRows/DeleteData by surveyId)
 
-SST_SP_Survey_Responses_DE — PageNumber batch (20 rows = 1 UI page)
+SST_SP_Survey_Responses_DE — TextPageNumber batch (text only, 20 rows = 1 UI page)
 
-Survey Results text focus: LookupRows(SurveyID, QuestionID, PageNumber) where PageNumber equals UI page (1, 2, 3…).
+Survey Results:
+- View all: LookupRows(SurveyID, QuestionID, TextPageNumber) where TextPageNumber equals UI page (1, 2, 3…).
+- If no rows for that page, fallback: LookupOrderedRows by LastUpdated ASC (same 20-row window math).
 
-Problems with the old global batch query:
-- ROW_NUMBER and MAX(PageNumber) were across the whole DE, not per SurveyID + QuestionID.
-- ON 1=1 join applied one MaxPage to every survey/question.
-- UI page math assumed 500-row batches; your query already uses 20.
+Do not use legacy PageNumber for text UI; keep TextPageNumber separate from any other PageNumber job.
 
-Use this incremental batch (new rows only, PageNumber IS NULL). Output feeds your update step (ResponsePK key).
+Incremental batch (new text rows only, TextPageNumber IS NULL). Output feeds update on ResponsePK.
 
 SELECT
     n.ResponsePK,
     CAST(
         (ISNULL(pc.ExistingCount, 0) + n.NewRowNum - 1) / 20 + 1
-    AS INT) AS PageNumber,
+    AS INT) AS TextPageNumber,
     n.Contact,
     n.SurveyID,
     n.QuestionID,
@@ -46,7 +45,8 @@ FROM (
         LastUpdated,
         CourseName
     FROM SST_SP_Survey_Responses_DE
-    WHERE PageNumber IS NULL
+    WHERE TextPageNumber IS NULL
+      AND QuestionType = 'text'
       AND Response IS NOT NULL
       AND LTRIM(RTRIM(Response)) <> ''
 ) n
@@ -56,14 +56,13 @@ LEFT JOIN (
         QuestionID,
         COUNT(1) AS ExistingCount
     FROM SST_SP_Survey_Responses_DE
-    WHERE PageNumber IS NOT NULL
+    WHERE TextPageNumber IS NOT NULL
+      AND QuestionType = 'text'
     GROUP BY SurveyID, QuestionID
 ) pc
     ON pc.SurveyID = n.SurveyID
    AND pc.QuestionID = n.QuestionID
 
-Optional: add AND QuestionType = 'text' in the inner WHERE if only text rows should be paged.
+After changing batch logic, clear TextPageNumber on affected text rows and re-batch, or run a one-time full renumber for text questions.
 
-After changing batch logic, re-run batch for rows already numbered wrong, or clear PageNumber and re-batch per question.
-
-Symptom "1 text response per UI page": PageNumber was set to row sequence (1..N) instead of batch page ((row-1)/20+1). Survey Results View all ignores PageNumber and pages by LastUpdated ASC in AMPscript; fix PageNumber only if other jobs rely on it.
+CloudPage collection must include SST_SP_Survey_Responses_DE with TextPageNumber indexed if lookups are slow (optional SFMC tuning).
