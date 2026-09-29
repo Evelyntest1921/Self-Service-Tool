@@ -9,6 +9,7 @@ VAR @textListNavBase, @textListPrevPage, @textListNextPage, @textListDePageKey, 
 VAR @textListFetchSize, @textListStartIdx, @textListEndIdx, @textListAllCount, @textListRenderedOnPage, @textListRem
 VAR @pageLoadError
 SET @surveyId = Trim(RequestParameter("surveyid"))
+IF EMPTY(@surveyId) THEN SET @surveyId = Trim(QueryParameter("surveyid")) ENDIF
 SET @jid = Trim(RequestParameter("journeyId"))
 SET @textExpandQ = Trim(RequestParameter("textQ"))
 SET @textUiPage = Trim(RequestParameter("textPage"))
@@ -507,6 +508,15 @@ ENDIF
                 CATCH
                 SET @count = 0
                 ENDIF
+                IF @count == 0 THEN
+                TRY
+                SET @responses = LookupOrderedRows("SST_SP_Survey_Responses_DE", 2000, "LastUpdated DESC", "SurveyID", @surveyId)
+                SET @count = RowCount(@responses)
+                IF @count > 0 THEN SET @responsesLookupOk = 1 ENDIF
+                CATCH
+                SET @count = 0
+                ENDIF
+                ENDIF
                 TRY
                 SET @analyticsRows = LookupRows("sst_analytics_answers", "SurveyID", @surveyId)
                 SET @analyticsCount = RowCount(@analyticsRows)
@@ -514,11 +524,28 @@ ENDIF
                 CATCH
                 SET @analyticsCount = 0
                 ENDIF
+                IF @analyticsCount == 0 THEN
+                TRY
+                SET @analyticsRows = LookupRows("sst_analytics_answers", "surveyId", @surveyId)
+                SET @analyticsCount = RowCount(@analyticsRows)
+                IF @analyticsCount > 0 THEN SET @analyticsLookupOk = 1 ENDIF
+                CATCH
+                SET @analyticsCount = 0
+                ENDIF
+                ENDIF
                 TRY
                 SET @courseAnalyticsRows = LookupRows("sst_analytics_per_course", "surveyId", @surveyId)
                 SET @courseAnalyticsCount = RowCount(@courseAnalyticsRows)
                 CATCH
                 SET @courseAnalyticsCount = 0
+                ENDIF
+                IF @courseAnalyticsCount == 0 THEN
+                TRY
+                SET @courseAnalyticsRows = LookupRows("sst_analytics_per_course", "SurveyID", @surveyId)
+                SET @courseAnalyticsCount = RowCount(@courseAnalyticsRows)
+                CATCH
+                SET @courseAnalyticsCount = 0
+                ENDIF
                 ENDIF
                 IF @count == 0 AND @analyticsCount > 0 THEN
                 SET @respLoadSum = 0
@@ -625,6 +652,7 @@ ENDIF
                         <span class="survey-badge">Survey ID: %%=v(@surveyId)=%%</span>
                         <span class="survey-status-badge status-%%=v(@surveyStatus)=%%">%%=v(@surveyStatus)=%%</span>
                         <span class="response-count">%%=v(@count)=%% Total Responses</span>
+                        <span class="survey-badge">Analytics %%=v(@analyticsCount)=%% · Course %%=v(@courseAnalyticsCount)=%%</span>
                         <span class="last-updated">Last updated: %%=Format(Now(), "MMM dd, yyyy")=%%</span>
                     </div>
                 </div>
@@ -650,7 +678,9 @@ ENDIF
             SET @completedCount = Field(Row(@analyticsRows, 1), "CompletedSurvey")
             SET @uniqueContacts = @analyticsOpened
             FOR @i = 1 TO @analyticsCount DO
-            SET @surveyTotalActivity = Add(@surveyTotalActivity, Field(Row(@analyticsRows, @i), "TotalActivity"))
+            SET @analyticsOpened = Field(Row(@analyticsRows, @i), "TotalActivity")
+            IF EMPTY(@analyticsOpened) THEN SET @analyticsOpened = 0 ENDIF
+            SET @surveyTotalActivity = Add(@surveyTotalActivity, @analyticsOpened)
             NEXT @i
             IF EMPTY(@openedCount) THEN SET @openedCount = 0 ENDIF
             IF EMPTY(@completedCount) THEN SET @completedCount = 0 ENDIF
