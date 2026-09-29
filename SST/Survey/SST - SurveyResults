@@ -5,8 +5,8 @@ VAR @journeyExitUrl, @calendarUrl, @environmentSwitchUrl, @envDisplayName, @envD
 VAR @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @JOURNEY_VIEW_URL, @HOME_URL, @editSidebarHtml, @detailRows, @detailRow, @isSurveyBuild, @buildNavContext, @buildNavActive, @dispSurveyId, @editSurveyUrl, @surveyPreviewUrl, @surveyEmailLink, @surveyLinkTitle, @surveyNameEncoded
 VAR @textExpandQ, @textUiPage, @textNavBase
 VAR @textListQuestionId, @textListQuestionText, @textListCount, @textListPage, @textListTotalPages, @textListPageSize
-VAR @textListNavBase, @textListPrevPage, @textListNextPage, @textListDePageKey, @textListBatchRows, @textListBatchCount, @textListRowIdx, @textListResponse
-VAR @textListRem
+VAR @textListNavBase, @textListPrevPage, @textListNextPage, @textListBatchRows, @textListBatchCount, @textListRowIdx, @textListResponse
+VAR @textListRem, @textListFetchSize, @textListStartIdx, @textListEndIdx
 SET @surveyId = RequestParameter("surveyid")
 SET @jid = Trim(RequestParameter("journeyId"))
 SET @textExpandQ = Trim(RequestParameter("textQ"))
@@ -22,10 +22,16 @@ SET @textNavBase = Substring(@textNavBase, 1, Subtract(@textNavQueryPos, 1))
 ENDIF
 SET @textNavBase = Concat(@textNavBase, "?surveyid=", @surveyId)
 IF NOT EMPTY(@jid) THEN SET @textNavBase = Concat(@textNavBase, "&journeyId=", @jid) ENDIF
+SET @textListCount = 0
+SET @textListPage = 1
+SET @textListTotalPages = 1
+SET @textListBatchCount = 0
+SET @textListQuestionText = ""
 IF NOT EMPTY(@textExpandQ) THEN
 SET @textListQuestionId = @textExpandQ
 SET @textListPage = @textUiPage
 SET @textListQuestionText = Lookup("SST_SP_Survey_Questions_DE", "QuestionText", "SurveyID", @surveyId, "QuestionID", @textListQuestionId)
+IF EMPTY(@textListQuestionText) THEN SET @textListQuestionText = "Question" ENDIF
 SET @textListCount = Lookup("sst_analytics_answers", "TextResponseCount", "SurveyID", @surveyId, "QuestionID", @textListQuestionId)
 IF EMPTY(@textListCount) THEN SET @textListCount = RequestParameter("textTotal") ENDIF
 IF EMPTY(@textListCount) THEN SET @textListCount = 0 ENDIF
@@ -379,22 +385,22 @@ ENDIF
                     <a href="%%=v(@textNavBase)=%%" class="btn-secondary text-focus-back-btn">Back to question analysis</a>
                 </div>
                 <div class="text-focus-header">
-                    <h1>%%=IIF(NOT EMPTY(@textListQuestionText), @textListQuestionText, "Question")=%%</h1>
+                    <h1>%%=v(@textListQuestionText)=%%</h1>
                     <p class="text-focus-meta">%%=v(@textListCount)=%% text responses · Page %%=v(@textListPage)=%% of %%=v(@textListTotalPages)=%%</p>
                 </div>
                 <div id="textFocusBody" class="text-focus-body">
                     <div class="text-focus-list">
                     %%[
                     IF NOT EMPTY(@textExpandQ) AND @textListCount > 0 THEN
-                    SET @textListDePageKey = Concat("", @textListPage)
-                    SET @textListBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @textListQuestionId, "TextPageNumber", @textListDePageKey)
+                    SET @textListFetchSize = Multiply(@textListPage, @textListPageSize)
+                    IF @textListFetchSize > 2000 THEN SET @textListFetchSize = 2000 ENDIF
+                    SET @textListBatchRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", @textListFetchSize, "LastUpdated ASC", "SurveyID", @surveyId, "QuestionID", @textListQuestionId)
                     SET @textListBatchCount = RowCount(@textListBatchRows)
-                    IF @textListBatchCount == 0 THEN
-                    ]%%
-                    <p class="text-focus-meta">No text responses on this page. Run the TextPageNumber batch for this question.</p>
-                    %%[
-                    ELSE
-                    FOR @textListRowIdx = 1 TO @textListBatchCount DO
+                    SET @textListStartIdx = Add(Multiply(Subtract(@textListPage, 1), @textListPageSize), 1)
+                    SET @textListEndIdx = Add(@textListStartIdx, Subtract(@textListPageSize, 1))
+                    IF @textListEndIdx > @textListBatchCount THEN SET @textListEndIdx = @textListBatchCount ENDIF
+                    IF @textListStartIdx <= @textListBatchCount THEN
+                    FOR @textListRowIdx = @textListStartIdx TO @textListEndIdx DO
                     SET @textListResponse = Field(Row(@textListBatchRows, @textListRowIdx), "Response")
                     IF NOT EMPTY(@textListResponse) THEN
                     ]%%
@@ -407,7 +413,8 @@ ENDIF
                     ENDIF
                     NEXT @textListRowIdx
                     ENDIF
-                    ELSEIF NOT EMPTY(@textExpandQ) THEN
+                    ENDIF
+                    IF NOT EMPTY(@textExpandQ) AND @textListCount == 0 THEN
                     ]%%
                     <p class="text-focus-meta">No text responses recorded for this question.</p>
                     %%[
@@ -695,40 +702,10 @@ ENDIF
                     VAR @questions, @questionCount
                     SET @questions = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId)
                     SET @questionCount = RowCount(@questions)
-
-
-                    /* Debug: Check if questions exist */
-                    IF @questionCount == 0 THEN
-                    SET @debugMessage = "No questions found in SST_SP_Survey_Questions_DE for SurveyID: " + @surveyId
-                    ELSE
-                    SET @debugMessage = "Found " + @questionCount + " questions"
-                    ENDIF
                     ]%%
 
 
                     %%[ IF @questionCount > 0 THEN ]%%
-
-
-                    <!-- Debug Info 
-      <div style="background: #f0f0f0; padding: 10px; margin: 10px 0; border-radius: 5px; font-family: monospace; font-size: 12px;">
-        <strong>Debug Info:</strong><br>
-        Survey ID: %%=v(@surveyId)=%%<br>
-        Questions Found: %%=v(@questionCount)=%%<br>
-        Responses Found: %%=v(@count)=%%<br>
-        Debug Message: %%=v(@debugMessage)=%%<br>
-        <br>
-        <strong>Questions in SST_SP_Survey_Questions_DE:</strong><br>
-        %%[ FOR @i = 1 TO @questionCount DO
-          SET @debugRow = Row(@questions, @i)
-          SET @debugText = Field(@debugRow, "QuestionText")
-          SET @debugId = Field(@debugRow, "QuestionID")
-        ]%%
-        %%=v(@i)=%%. %%=v(@debugText)=%% (ID: %%=v(@debugId)=%%)<br>
-        %%[ NEXT @i ]%%
-      </div> 
--->
-
-
                     %%[ FOR @q = 1 TO @questionCount DO
                     SET @questionRow = Row(@questions, @q)
                     SET @questionText = Field(@questionRow, "QuestionText")
@@ -836,7 +813,7 @@ ENDIF
                                 SET @textPreviewLimit = 5
                                 SET @textViewAllUrl = Concat(@textNavBase, "&textQ=", @questionId, "&textPage=1&textTotal=", @responseCount)
                                 IF @responseCount > 0 THEN
-                                SET @textBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @questionId, "TextPageNumber", "1")
+                                SET @textBatchRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", @textPreviewLimit, "LastUpdated ASC", "SurveyID", @surveyId, "QuestionID", @questionId)
                                 SET @textItemsRendered = 0
                                 SET @textPreviewRowCount = RowCount(@textBatchRows)
                                 IF @textPreviewRowCount > 0 THEN
@@ -856,14 +833,6 @@ ENDIF
                                 ENDIF
                                 NEXT @textPreviewIdx
                                 ENDIF
-                                ELSE
-                                ]%%
-                                <div class="text-response-item">
-                                    <div class="text-response-content">
-                                        <span class="text-response-text">No text responses recorded</span>
-                                    </div>
-                                </div>
-                                %%[
                                 ENDIF
                                 ]%%
                                 %%[ IF @responseCount > @textPreviewLimit THEN ]%%
@@ -874,8 +843,7 @@ ENDIF
                             </div>
 
 
-                        %%[ ELSEIF @questionType == "likert" OR @questionType == "rating" OR @questionType ==
-                        "multiple" THEN ]%%
+                        %%[ ELSEIF @questionType == "likert" OR @questionType == "rating" OR @questionType == "multiple" THEN ]%%
                         <!-- Multiple Choice Questions - Aggregate by defined options -->
                         %%[
                         /* Fetch defined options for this question */
