@@ -380,14 +380,6 @@ ENDIF
                 <div class="text-focus-toolbar">
                     <a href="%%=v(@textNavBase)=%%" class="btn-secondary text-focus-back-btn">Back to question analysis</a>
                 </div>
-                %%[ IF NOT EMPTY(@pageLoadError) THEN ]%%
-                <div class="alert alert-error">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
-                    </svg>
-                    %%=v(@pageLoadError)=%%
-                </div>
-                %%[ ENDIF ]%%
                 <div class="text-focus-header">
                     <h1>%%=IIF(NOT EMPTY(@textListQuestionText), @textListQuestionText, "Question")=%%</h1>
                     <p class="text-focus-meta">%%=v(@textListCount)=%% text responses · Page %%=v(@textListPage)=%% of %%=v(@textListTotalPages)=%%</p>
@@ -489,6 +481,7 @@ ENDIF
                 %%[
                 VAR @responses, @count, @surveyName, @surveyStatus, @analyticsCount, @analyticsRows
                 VAR @courseAnalyticsRows, @courseAnalyticsCount
+                VAR @respLoadIdx, @respLoadSum, @respLoadActivity
 
 
                 SET @pageLoadError = ""
@@ -501,22 +494,33 @@ ENDIF
                 SET @count = RowCount(@responses)
                 CATCH
                 SET @count = 0
-                SET @pageLoadError = "Could not load survey responses. Add SST_SP_Survey_Responses_DE to this CloudPage data extension collection."
                 ENDIF
                 TRY
                 SET @analyticsRows = LookupRows("sst_analytics_answers", "SurveyID", @surveyId)
                 SET @analyticsCount = RowCount(@analyticsRows)
                 CATCH
                 SET @analyticsCount = 0
-                IF EMPTY(@pageLoadError) THEN
-                SET @pageLoadError = "Could not load sst_analytics_answers. Add it to the CloudPage data extension collection."
-                ENDIF
                 ENDIF
                 TRY
                 SET @courseAnalyticsRows = LookupRows("sst_analytics_per_course", "surveyId", @surveyId)
                 SET @courseAnalyticsCount = RowCount(@courseAnalyticsRows)
                 CATCH
                 SET @courseAnalyticsCount = 0
+                ENDIF
+                IF @count == 0 AND @analyticsCount > 0 THEN
+                SET @respLoadSum = 0
+                FOR @respLoadIdx = 1 TO @analyticsCount DO
+                SET @respLoadActivity = Field(Row(@analyticsRows, @respLoadIdx), "TotalActivity")
+                IF NOT EMPTY(@respLoadActivity) THEN
+                SET @respLoadSum = Add(@respLoadSum, @respLoadActivity)
+                ENDIF
+                NEXT @respLoadIdx
+                IF @respLoadSum > 0 THEN
+                SET @count = @respLoadSum
+                ENDIF
+                ENDIF
+                IF @count == 0 AND @analyticsCount == 0 THEN
+                SET @pageLoadError = "Could not load survey analytics. Add sst_analytics_answers and SST_SP_Survey_Responses_DE to this CloudPage data extension collection."
                 ENDIF
                 ENDIF
 
