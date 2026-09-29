@@ -1,5 +1,5 @@
 %%[
-VAR @surveyId, @errorFlag, @deleteAction, @deleteSuccess, @deleteError
+VAR @surveyId, @errorFlag, @deleteAction, @deleteSuccess, @deleteError, @surveyIdBreak
 VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow, @hubUrl, @surveyHomeUrl, @surveyStageUrl, @surveyAnalyticsUrl, @surveyTakeUrl, @environment, @contactTable
 VAR @journeyExitUrl, @calendarUrl, @environmentSwitchUrl, @envDisplayName, @envDisplayEmail, @envAvatarLetter, @envSwitchLabel
 VAR @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @JOURNEY_VIEW_URL, @HOME_URL, @editSidebarHtml, @detailRows, @detailRow, @isSurveyBuild, @buildNavContext, @buildNavActive, @dispSurveyId, @editSurveyUrl, @surveyPreviewUrl, @surveyEmailLink, @surveyLinkTitle, @surveyNameEncoded
@@ -7,10 +7,18 @@ VAR @textExpandQ, @textUiPage, @textNavBase
 VAR @textListQuestionId, @textListQuestionText, @textListCount, @textListPage, @textListTotalPages, @textListPageSize
 VAR @textListNavBase, @textListPrevPage, @textListNextPage, @textListBatchRows, @textListBatchCount, @textListRowIdx, @textListResponse
 VAR @textListRem, @textListFetchSize, @textListStartIdx, @textListEndIdx
-SET @surveyId = RequestParameter("surveyid")
+SET @surveyId = Trim(RequestParameter("surveyid"))
 SET @jid = Trim(RequestParameter("journeyId"))
 SET @textExpandQ = Trim(RequestParameter("textQ"))
 SET @textUiPage = Trim(RequestParameter("textPage"))
+SET @surveyIdBreak = IndexOf(@surveyId, "?")
+IF @surveyIdBreak > 0 THEN
+SET @surveyId = Substring(@surveyId, 1, Subtract(@surveyIdBreak, 1))
+ENDIF
+SET @surveyIdBreak = IndexOf(@surveyId, "&")
+IF @surveyIdBreak > 0 THEN
+SET @surveyId = Substring(@surveyId, 1, Subtract(@surveyIdBreak, 1))
+ENDIF
 IF EMPTY(@textUiPage) THEN SET @textUiPage = 1 ENDIF
 SET @textUiPage = Add(0, @textUiPage)
 IF @textUiPage < 1 THEN SET @textUiPage = 1 ENDIF
@@ -487,8 +495,12 @@ ENDIF
                 IF NOT EMPTY(@surveyId) THEN
                 SET @analyticsRows = LookupRows("sst_analytics_answers", "SurveyID", @surveyId)
                 SET @analyticsCount = RowCount(@analyticsRows)
+                TRY
                 SET @courseAnalyticsRows = LookupRows("sst_analytics_per_course", "surveyId", @surveyId)
                 SET @courseAnalyticsCount = RowCount(@courseAnalyticsRows)
+                CATCH
+                SET @courseAnalyticsCount = 0
+                ENDIF
                 ENDIF
 
 
@@ -551,7 +563,7 @@ ENDIF
                                     </svg>
                                 </button>
                                 <div class="dropdown-menu" id="dropdownMenu">
-                                    <form method="POST" action="%%=RequestParameter('PAGEURL')=%%"
+                                    <form method="POST" action="%%=v(@textNavBase)=%%"
                                         onsubmit="return confirmDelete()">
                                         <input type="hidden" name="deleteAction" value="delete">
                                         <input type="hidden" name="surveyid" value="%%=v(@surveyId)=%%">
@@ -591,13 +603,22 @@ ENDIF
             SET @analyticsOpened = 0
 
             IF @analyticsCount > 0 THEN
+            TRY
             SET @analyticsOpened = Field(Row(@analyticsRows, 1), "OpenedSurvey")
             SET @openedCount = @analyticsOpened
             SET @completedCount = Field(Row(@analyticsRows, 1), "CompletedSurvey")
             SET @uniqueContacts = @analyticsOpened
             FOR @i = 1 TO @analyticsCount DO
-            SET @surveyTotalActivity = Add(@surveyTotalActivity, Field(Row(@analyticsRows, @i), "TotalActivity"))
+            SET @analyticsOpened = Field(Row(@analyticsRows, @i), "TotalActivity")
+            IF EMPTY(@analyticsOpened) THEN SET @analyticsOpened = 0 ENDIF
+            SET @surveyTotalActivity = Add(@surveyTotalActivity, @analyticsOpened)
             NEXT @i
+            CATCH
+            SET @openedCount = 0
+            SET @completedCount = 0
+            SET @uniqueContacts = 0
+            SET @surveyTotalActivity = 0
+            ENDIF
             IF EMPTY(@openedCount) THEN SET @openedCount = 0 ENDIF
             IF EMPTY(@completedCount) THEN SET @completedCount = 0 ENDIF
             IF EMPTY(@uniqueContacts) THEN SET @uniqueContacts = 0 ENDIF
@@ -1137,17 +1158,24 @@ ENDIF
                 SET @courseRow = Row(@courseAnalyticsRows, @i)
                 SET @currentCourse = Field(@courseRow, "CourseName")
                 SET @courseResponses = Field(@courseRow, "TotalActivity")
-                SET @uniqueContacts = Field(@courseRow, "UniqueRespondents")
+                SET @uniqueContacts = 0
                 SET @courseCompleted = Field(@courseRow, "CompletedSurvey")
+                SET @completionRate = 0
+                TRY
+                SET @uniqueContacts = Field(@courseRow, "UniqueRespondents")
+                CATCH
+                SET @uniqueContacts = 0
+                ENDIF
+                TRY
                 SET @completionRate = Field(@courseRow, "CompletionRatePct")
+                CATCH
+                SET @completionRate = 0
+                ENDIF
                 IF EMPTY(@courseResponses) THEN SET @courseResponses = 0 ENDIF
                 IF EMPTY(@uniqueContacts) THEN SET @uniqueContacts = 0 ENDIF
                 IF EMPTY(@courseCompleted) THEN SET @courseCompleted = 0 ENDIF
-                IF EMPTY(@completionRate) THEN
-                SET @completionRate = 0
-                ELSE
+                IF EMPTY(@completionRate) THEN SET @completionRate = 0 ENDIF
                 SET @completionRate = FormatNumber(@completionRate, 0)
-                ENDIF
                 ]%%
                 
                 <div class="course-card" onclick="filterByCourse('%%=v(@currentCourse)=%%')">
