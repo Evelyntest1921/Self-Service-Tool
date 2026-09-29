@@ -146,6 +146,9 @@ DeleteData("sst_analytics_answers", "SurveyID", @surveyId)
 DeleteData("sst_analytics_per_course", "surveyId", @surveyId)
 
 
+DeleteData("sst_analytics_per_survey", "surveyId", @surveyId)
+
+
 SET @deleteSuccess = "true"
 CATCH
 SET @deleteError = "An error occurred while deleting the survey. Please try again."
@@ -493,16 +496,17 @@ ENDIF
                 %%[
                 VAR @surveyName, @surveyStatus, @analyticsCount, @analyticsRows
                 VAR @courseAnalyticsRows, @courseAnalyticsCount
-                VAR @uniqueContacts, @openedCount, @completedCount, @surveyTotalActivity, @analyticsOpened, @i, @rowActivity
+                VAR @surveyMetricsRows, @surveyMetricsCount, @surveyMetricRow
+                VAR @uniqueContacts, @openedCount, @completedCount, @surveyTotalActivity
 
 
                 SET @analyticsCount = 0
                 SET @courseAnalyticsCount = 0
+                SET @surveyMetricsCount = 0
                 SET @uniqueContacts = 0
                 SET @openedCount = 0
                 SET @completedCount = 0
                 SET @surveyTotalActivity = 0
-                SET @analyticsOpened = 0
                 IF NOT EMPTY(@surveyId) THEN
                 SET @analyticsRows = LookupRows("sst_analytics_answers", "SurveyID", @surveyId)
                 SET @analyticsCount = RowCount(@analyticsRows)
@@ -512,20 +516,18 @@ ENDIF
                 CATCH
                 SET @courseAnalyticsCount = 0
                 ENDIF
+                SET @surveyMetricsRows = LookupRows("sst_analytics_per_survey", "surveyId", @surveyId)
+                SET @surveyMetricsCount = RowCount(@surveyMetricsRows)
                 ENDIF
-                IF @analyticsCount > 0 THEN
-                SET @analyticsOpened = Field(Row(@analyticsRows, 1), "OpenedSurvey")
-                SET @openedCount = @analyticsOpened
-                SET @completedCount = Field(Row(@analyticsRows, 1), "CompletedSurvey")
-                SET @uniqueContacts = @analyticsOpened
-                FOR @i = 1 TO @analyticsCount DO
-                SET @rowActivity = Field(Row(@analyticsRows, @i), "TotalActivity")
-                IF EMPTY(@rowActivity) THEN SET @rowActivity = 0 ENDIF
-                SET @surveyTotalActivity = Add(@surveyTotalActivity, @rowActivity)
-                NEXT @i
+                IF @surveyMetricsCount > 0 THEN
+                SET @surveyMetricRow = Row(@surveyMetricsRows, 1)
+                SET @uniqueContacts = Field(@surveyMetricRow, "UniqueRespondents")
+                SET @openedCount = Field(@surveyMetricRow, "OpenedSurvey")
+                SET @completedCount = Field(@surveyMetricRow, "CompletedSurvey")
+                SET @surveyTotalActivity = Field(@surveyMetricRow, "TotalActivity")
+                IF EMPTY(@uniqueContacts) THEN SET @uniqueContacts = 0 ENDIF
                 IF EMPTY(@openedCount) THEN SET @openedCount = 0 ENDIF
                 IF EMPTY(@completedCount) THEN SET @completedCount = 0 ENDIF
-                IF EMPTY(@uniqueContacts) THEN SET @uniqueContacts = 0 ENDIF
                 IF EMPTY(@surveyTotalActivity) THEN SET @surveyTotalActivity = 0 ENDIF
                 ENDIF
 
@@ -624,7 +626,7 @@ ENDIF
 
             <!-- Survey Analytics Section (Default View) -->
             <div id="surveyAnalyticsSection">
-                %%[ IF @analyticsCount > 0 OR @courseAnalyticsCount > 0 THEN ]%%
+                %%[ IF @surveyMetricsCount > 0 OR @analyticsCount > 0 OR @courseAnalyticsCount > 0 THEN ]%%
                 <div class="analytics-view-bar">
                     <div class="view-toggle">
                         <button type="button" class="toggle-btn active" data-view="chart">Chart View</button>
@@ -1131,7 +1133,7 @@ ENDIF
 
 
     <!-- Course Analytics Section -->
-    %%[ IF @analyticsCount > 0 OR @courseAnalyticsCount > 0 THEN ]%%
+    %%[ IF @surveyMetricsCount > 0 OR @analyticsCount > 0 OR @courseAnalyticsCount > 0 THEN ]%%
     <div id="responsesSection" class="responses-section" style="display: none;">
         %%[
         VAR @courseData, @courseNames, @courseCount, @i, @j, @currentCourse, @courseResponses, @courseCompleted, @uniqueContacts, @courseContacts
