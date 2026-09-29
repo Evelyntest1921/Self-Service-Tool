@@ -1,67 +1,20 @@
-TextPageNumber batch — one sequence per SurveyID + QuestionID (20 non-empty text rows per page).
-PageNumber batch — one sequence per SurveyID (20 response rows per page, all question types, ordered by LastUpdated ASC).
-Re-run this query activity and update SST_SP_Survey_Responses_DE after changing logic.
-
 SELECT
-    t.ResponsePK,
-    CAST(((t.RowNum - 1) / 20) + 1 AS INT) AS PageNumber,
-    CASE
-        WHEN tr.TextRowNum IS NOT NULL
-            THEN CAST(((tr.TextRowNum - 1) / 20) + 1 AS INT)
-        ELSE NULL
-    END AS TextPageNumber,
-    t.Contact,
-    t.SurveyID,
-    t.QuestionID,
-    t.QuestionNumber,
-    t.QuestionText,
-    t.QuestionType,
-    t.Response,
-    t.Status,
-    t.LastUpdated,
-    t.CourseName
-FROM (
-    SELECT
-        ResponsePK,
-        ROW_NUMBER() OVER (PARTITION BY SurveyID ORDER BY LastUpdated ASC, ResponsePK) AS RowNum,
-        Contact,
-        SurveyID,
-        QuestionID,
-        QuestionNumber,
-        QuestionText,
-        QuestionType,
-        Response,
-        Status,
-        LastUpdated,
-        CourseName
-    FROM SST_SP_Survey_Responses_DE
-) t
-LEFT JOIN (
-    SELECT
-        ResponsePK,
-        ROW_NUMBER() OVER (
-            PARTITION BY SurveyID, QuestionID
-            ORDER BY LastUpdated ASC, ResponsePK
-        ) AS TextRowNum
-    FROM SST_SP_Survey_Responses_DE
-    WHERE LTRIM(RTRIM(QuestionType)) = 'text'
-      AND Response IS NOT NULL
-      AND LTRIM(RTRIM(Response)) <> ''
-) tr
-    ON tr.ResponsePK = t.ResponsePK
-
-Analytics DE external keys (Survey Results):
-sst_analytics_per_survey — one row per survey (LookupRows by surveyId): UniqueRespondents, OpenedSurvey, CompletedSurvey, CompletionRatePct, TotalActivity, LastUpdated
-sst_analytics_answers — question metrics (LookupRows by SurveyID)
-sst_analytics_per_course — course cards/chart (LookupRows by surveyId; fallback SurveyID). Attributes: surveyId, CourseName, TotalResponses, UniqueRespondents, CompletedRespondents, CompletionRatePct, FirstActivityDate, LastActivityDate. Do not use TotalActivity or CompletedSurvey on this DE.
-
-Survey Results data sources (no response-DE fallback loops):
-- Header response-count + metrics grid: sst_analytics_per_survey only
-- Overview metrics + question bars: sst_analytics_answers only
-- Course sections: sst_analytics_per_course only (Responses View tab)
-- Text preview + View all: SST_SP_Survey_Responses_DE by TextPageNumber (batch SQL targets 20 text rows per TextPageNumber per question; last page can be smaller; UI page N = TextPageNumber N; page count = max TextPageNumber for the question)
-- Detailed response table: SST_SP_Survey_Responses_DE by PageNumber (UI page N = PageNumber N; page count = max PageNumber for the survey; total label from sst_analytics_per_survey TotalActivity; URL param detailPage; keep view=responses)
-
-CloudPage collection: sst_analytics_per_survey, sst_analytics_answers, sst_analytics_per_course, SST_SP_Survey_Responses_DE (must include PageNumber and TextPageNumber), questions/master DEs.
-
-Run sst_analytics_answers, sst_analytics_per_course, and sst_analytics_per_survey query activities before expecting analytics on the page.
+    r.SurveyID AS surveyId,
+    LTRIM(RTRIM(r.CourseName)) AS CourseName,
+    COUNT(DISTINCT CASE WHEN r.QuestionID = 'SURVEY_OPEN' THEN r.Contact END) AS OpenedSurvey,
+    COUNT(DISTINCT CASE WHEN r.QuestionID != 'SURVEY_OPEN' THEN r.Contact END) AS UniqueRespondents,
+    COUNT(DISTINCT CASE WHEN r.Status = 'Completed' THEN r.Contact END) AS CompletedSurvey,
+    CAST(
+        COUNT(DISTINCT CASE WHEN r.Status = 'Completed' THEN r.Contact END) * 100.0
+        / NULLIF(COUNT(DISTINCT CASE WHEN r.QuestionID != 'SURVEY_OPEN' THEN r.Contact END), 0)
+    AS DECIMAL(5, 2)) AS CompletionRatePct,
+    MIN(r.LastUpdated) AS FirstActivityDate,
+    MAX(r.LastUpdated) AS LastActivityDate,
+    SUM(CASE WHEN r.QuestionID != 'SURVEY_OPEN' THEN 1 ELSE 0 END) AS TotalActivity
+FROM SST_SP_Survey_Responses_DE r
+WHERE r.SurveyID IS NOT NULL
+  AND r.CourseName IS NOT NULL
+  AND LTRIM(RTRIM(r.CourseName)) <> ''
+GROUP BY
+    r.SurveyID,
+    LTRIM(RTRIM(r.CourseName))
