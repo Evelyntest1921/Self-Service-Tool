@@ -370,7 +370,7 @@ ENDIF
   %%[ SET @activeNav = "survey_home" ]%%
   %%=ContentBlockByName("sst_shell_sidebar")=%%
   %%[ ENDIF ]%%
-        <main class="main-content survey-analytics-page%%[ IF NOT EMPTY(@textExpandQ) THEN ]%% text-focus-active%%[ ENDIF ]%%">
+        <main class="main-content survey-analytics-page is-analytics-loading%%[ IF NOT EMPTY(@textExpandQ) THEN ]%% text-focus-active%%[ ENDIF ]%%">
             <div class="survey-analytics-loading-panel" id="surveyAnalyticsLoadingPanel" aria-live="polite">
                 <div class="survey-analytics-loading-spinner" aria-hidden="true"></div>
                 <p class="survey-analytics-loading-title">Loading survey</p>
@@ -5062,6 +5062,30 @@ ENDIF
             }
         }
 
+        function isSurveyAnalyticsContentReady() {
+            var textQ = new URLSearchParams(window.location.search).get('textQ');
+            if (textQ) {
+                return document.getElementById('textFocusBody') !== null;
+            }
+            var mainWrap = document.getElementById('surveyAnalyticsMainWrap');
+            if (!mainWrap) {
+                return false;
+            }
+            return mainWrap.querySelector('.survey-title-section, .alert-error, .no-responses, #surveyAnalyticsSection') !== null;
+        }
+
+        function dismissSurveyAnalyticsLoading() {
+            var mainEl = document.querySelector('.main-content.survey-analytics-page');
+            if (!mainEl || !mainEl.classList.contains('is-analytics-loading')) {
+                return true;
+            }
+            if (!isSurveyAnalyticsContentReady()) {
+                return false;
+            }
+            mainEl.classList.remove('is-analytics-loading');
+            return true;
+        }
+
         function initializeSurveyResultsPage() {
             const urlParams = new URLSearchParams(window.location.search);
             const view = urlParams.get('view');
@@ -5079,11 +5103,30 @@ ENDIF
         }
 
         document.addEventListener('DOMContentLoaded', function () {
-            initializeSurveyResultsPage();
             var mainEl = document.querySelector('.main-content.survey-analytics-page');
-            if (new URLSearchParams(window.location.search).get('textQ') && mainEl) {
-                mainEl.scrollTop = 0;
+            var pollAttempts = 0;
+            var pollMax = 100;
+
+            function tryDismissAndInit() {
+                if (dismissSurveyAnalyticsLoading()) {
+                    initializeSurveyResultsPage();
+                    if (new URLSearchParams(window.location.search).get('textQ') && mainEl) {
+                        mainEl.scrollTop = 0;
+                    }
+                    return;
+                }
+                pollAttempts += 1;
+                if (pollAttempts >= pollMax) {
+                    if (mainEl) {
+                        mainEl.classList.remove('is-analytics-loading');
+                    }
+                    initializeSurveyResultsPage();
+                    return;
+                }
+                window.setTimeout(tryDismissAndInit, 50);
             }
+
+            tryDismissAndInit();
         });
     </script>
 </body>
