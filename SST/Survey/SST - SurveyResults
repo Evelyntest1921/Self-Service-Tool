@@ -6,11 +6,13 @@ VAR @jid, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @JOURNEY_VIEW_URL, @HOME_URL, @edi
 VAR @textExpandQ, @textUiPage, @textNavBase
 VAR @textListQuestionId, @textListQuestionText, @textListCount, @textListPage, @textListTotalPages, @textListPageSize
 VAR @textListNavBase, @textListPrevPage, @textListNextPage, @textListDePageKey, @textListBatchRows, @textListBatchCount, @textListRowIdx, @textListResponse
+VAR @textListFetchSize, @textListStartIdx, @textListEndIdx, @textListAllCount, @textListRenderedOnPage
 SET @surveyId = RequestParameter("surveyid")
 SET @jid = Trim(RequestParameter("journeyId"))
 SET @textExpandQ = Trim(RequestParameter("textQ"))
 SET @textUiPage = Trim(RequestParameter("textPage"))
 IF EMPTY(@textUiPage) THEN SET @textUiPage = 1 ENDIF
+SET @textUiPage = Add(0, @textUiPage)
 IF @textUiPage < 1 THEN SET @textUiPage = 1 ENDIF
 SET @textListPageSize = 20
 SET @textNavBase = RequestParameter("PAGEURL")
@@ -27,10 +29,11 @@ SET @textListQuestionText = Lookup("SST_SP_Survey_Questions_DE", "QuestionText",
 SET @textListCount = Lookup("sst_analytics_answers", "TextResponseCount", "SurveyID", @surveyId, "QuestionID", @textListQuestionId)
 IF EMPTY(@textListCount) THEN SET @textListCount = RequestParameter("textTotal") ENDIF
 IF EMPTY(@textListCount) THEN SET @textListCount = 0 ENDIF
+SET @textListCount = Add(0, @textListCount)
 SET @textListTotalPages = 1
 IF @textListCount > 0 THEN
-SET @textListTotalPages = Divide(@textListCount, @textListPageSize)
-IF Multiply(@textListTotalPages, @textListPageSize) < @textListCount THEN
+SET @textListTotalPages = Floor(Divide(@textListCount, @textListPageSize))
+IF Mod(@textListCount, @textListPageSize) > 0 THEN
 SET @textListTotalPages = Add(@textListTotalPages, 1)
 ENDIF
 ENDIF
@@ -382,17 +385,15 @@ ENDIF
                     <div class="text-focus-list">
                     %%[
                     IF NOT EMPTY(@textExpandQ) AND @textListCount > 0 THEN
+                    SET @textListRenderedOnPage = 0
                     SET @textListDePageKey = Concat("", @textListPage)
                     SET @textListBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @textListQuestionId, "PageNumber", @textListDePageKey)
                     SET @textListBatchCount = RowCount(@textListBatchRows)
-                    IF @textListBatchCount == 0 AND @textListPage == 1 THEN
-                    SET @textListBatchRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", @textListPageSize, "LastUpdated ASC", "SurveyID", @surveyId, "QuestionID", @textListQuestionId)
-                    SET @textListBatchCount = RowCount(@textListBatchRows)
-                    ENDIF
                     IF @textListBatchCount > 0 THEN
                     FOR @textListRowIdx = 1 TO @textListBatchCount DO
                     SET @textListResponse = Field(Row(@textListBatchRows, @textListRowIdx), "Response")
                     IF NOT EMPTY(@textListResponse) THEN
+                    SET @textListRenderedOnPage = Add(@textListRenderedOnPage, 1)
                     ]%%
                     <div class="text-response-item">
                         <div class="text-response-content">
@@ -402,9 +403,34 @@ ENDIF
                     %%[
                     ENDIF
                     NEXT @textListRowIdx
-                    ELSE
+                    ENDIF
+                    IF @textListRenderedOnPage == 0 THEN
+                    SET @textListFetchSize = Multiply(@textListPage, @textListPageSize)
+                    IF @textListFetchSize > 2500 THEN SET @textListFetchSize = 2500 ENDIF
+                    SET @textListBatchRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", @textListFetchSize, "LastUpdated ASC", "SurveyID", @surveyId, "QuestionID", @textListQuestionId)
+                    SET @textListAllCount = RowCount(@textListBatchRows)
+                    SET @textListStartIdx = Add(Multiply(Subtract(@textListPage, 1), @textListPageSize), 1)
+                    SET @textListEndIdx = Add(@textListStartIdx, Subtract(@textListPageSize, 1))
+                    IF @textListEndIdx > @textListAllCount THEN SET @textListEndIdx = @textListAllCount ENDIF
+                    IF @textListStartIdx <= @textListAllCount AND @textListStartIdx <= @textListEndIdx THEN
+                    FOR @textListRowIdx = @textListStartIdx TO @textListEndIdx DO
+                    SET @textListResponse = Field(Row(@textListBatchRows, @textListRowIdx), "Response")
+                    IF NOT EMPTY(@textListResponse) THEN
+                    SET @textListRenderedOnPage = Add(@textListRenderedOnPage, 1)
                     ]%%
-                    <p class="text-focus-meta">No rows for this page. Run the PageNumber batch on responses or check PageNumber values for this question.</p>
+                    <div class="text-response-item">
+                        <div class="text-response-content">
+                            <span class="text-response-text">"%%=v(@textListResponse)=%%"</span>
+                        </div>
+                    </div>
+                    %%[
+                    ENDIF
+                    NEXT @textListRowIdx
+                    ENDIF
+                    ENDIF
+                    IF @textListRenderedOnPage == 0 THEN
+                    ]%%
+                    <p class="text-focus-meta">No text responses on this page for this question.</p>
                     %%[
                     ENDIF
                     ELSEIF NOT EMPTY(@textExpandQ) THEN
