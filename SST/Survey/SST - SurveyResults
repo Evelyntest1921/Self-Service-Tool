@@ -1434,15 +1434,23 @@ ENDIF
                     IF EMPTY(@detailContactName) THEN SET @detailContactName = "N/A" ENDIF
                     IF @detailQuestionId != "SURVEY_OPEN" THEN
                     ]%%
-                    <tr data-last-updated="%%=Format(@detailLastUpdated, "MMM dd, yyyy HH:mm")=%%">
+                    <tr class="detail-response-row" data-last-updated="%%=Format(@detailLastUpdated, "MMM dd, yyyy HH:mm")=%%" tabindex="0" role="button" aria-expanded="false">
                         <td><strong>%%=v(@detailContact)=%%</strong></td>
                         <td>%%=v(@detailContactName)=%%</td>
                         <td class="course-name-cell">%%[ IF EMPTY(@detailCourseName) THEN ]%%N/A%%[ ELSE ]%%%%=v(@detailCourseName)=%%%%[ ENDIF ]%%</td>
-                        <td>%%=v(@detailQuestionText)=%%</td>
+                        <td class="question-cell-preview">%%=v(@detailQuestionText)=%%</td>
                         <td class="response-cell">%%=v(@detailResponse)=%%</td>
                         <td><span class="type-badge">%%=v(@detailQuestionType)=%%</span></td>
                         <td><span class="status-badge status-%%=v(@detailStatus)=%%">%%=v(@detailStatus)=%%</span></td>
                         <td>%%=Format(@detailLastUpdated, "MMM dd, yyyy HH:mm")=%%</td>
+                    </tr>
+                    <tr class="detail-response-expand-row" hidden aria-hidden="true">
+                        <td colspan="8">
+                            <div class="detail-response-expand-panel">
+                                <div class="detail-response-expand-label">Question</div>
+                                <p class="detail-response-full-question">%%=v(@detailQuestionText)=%%</p>
+                            </div>
+                        </td>
                     </tr>
                     %%[
                     ENDIF
@@ -3264,7 +3272,55 @@ ENDIF
 
 
 
-        .modern-table tbody tr:hover {
+        .modern-table tbody tr.detail-response-row {
+            cursor: pointer;
+        }
+
+        .modern-table tbody tr.detail-response-row.is-expanded {
+            background: var(--gray-50);
+        }
+
+        .modern-table tbody tr.detail-response-row:hover {
+            background: var(--gray-50);
+        }
+
+        .modern-table td.question-cell-preview {
+            max-width: 200px;
+        }
+
+        .detail-response-expand-row td {
+            white-space: normal;
+            max-width: none;
+            overflow: visible;
+            text-overflow: unset;
+            padding-top: 0;
+            border-bottom: 1px solid var(--gray-200);
+            background: var(--gray-50);
+        }
+
+        .detail-response-expand-panel {
+            padding: 4px 4px 16px;
+        }
+
+        .detail-response-expand-label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--gray-500);
+            margin-bottom: 6px;
+        }
+
+        .detail-response-full-question {
+            margin: 0;
+            font-size: 14px;
+            line-height: 1.5;
+            color: var(--gray-800);
+            white-space: normal;
+            word-wrap: break-word;
+        }
+
+        .modern-table tbody tr:hover:not(.detail-response-expand-row) {
             background: var(--gray-50);
         }
 
@@ -4417,8 +4473,10 @@ ENDIF
 
         // Course filtering functionality
         function filterByCourse(courseName) {
-            const table = document.querySelector('.modern-table tbody');
-            const rows = Array.from(table.querySelectorAll('tr'));
+            const tbody = getDetailedResponsesTbody() || document.querySelector('.modern-table tbody');
+            const rows = getDetailDataRows(tbody).length ? getDetailDataRows(tbody) : Array.from(tbody.querySelectorAll('tr')).filter(function (row) {
+                return !row.classList.contains('detail-response-expand-row') && !row.classList.contains('detail-table-empty-row');
+            });
             const searchInput = document.querySelector('.search-input');
             const clearFilterBtn = document.getElementById('clearFilterBtn');
             
@@ -4472,8 +4530,10 @@ ENDIF
 
         // Clear course filter
         function clearCourseFilter() {
-            const table = document.querySelector('.modern-table tbody');
-            const rows = Array.from(table.querySelectorAll('tr'));
+            const tbody = getDetailedResponsesTbody() || document.querySelector('.modern-table tbody');
+            const rows = getDetailDataRows(tbody).length ? getDetailDataRows(tbody) : Array.from(tbody.querySelectorAll('tr')).filter(function (row) {
+                return !row.classList.contains('detail-response-expand-row') && !row.classList.contains('detail-table-empty-row');
+            });
             const clearFilterBtn = document.getElementById('clearFilterBtn');
             
             // Clear the course filter
@@ -4536,6 +4596,105 @@ ENDIF
             window.location.assign(cfg.navBase + String(page));
             return true;
         }
+
+        function getDetailedResponsesTbody() {
+            var table = document.getElementById('detailedResponsesTable');
+            return table ? table.querySelector('tbody') : null;
+        }
+
+        function getDetailDataRows(tbody) {
+            if (!tbody) {
+                return [];
+            }
+            return Array.from(tbody.querySelectorAll('tr.detail-response-row'));
+        }
+
+        function getDetailExpandRow(dataRow) {
+            if (!dataRow || !dataRow.nextElementSibling) {
+                return null;
+            }
+            var next = dataRow.nextElementSibling;
+            if (next.classList && next.classList.contains('detail-response-expand-row')) {
+                return next;
+            }
+            return null;
+        }
+
+        function collapseDetailRow(dataRow) {
+            if (!dataRow) {
+                return;
+            }
+            dataRow.classList.remove('is-expanded');
+            dataRow.setAttribute('aria-expanded', 'false');
+            var expandRow = getDetailExpandRow(dataRow);
+            if (expandRow) {
+                expandRow.hidden = true;
+                expandRow.setAttribute('aria-hidden', 'true');
+                expandRow.style.display = 'none';
+            }
+        }
+
+        function setDetailDataRowVisible(dataRow, visible) {
+            if (!dataRow) {
+                return;
+            }
+            dataRow.style.display = visible ? '' : 'none';
+            if (!visible) {
+                collapseDetailRow(dataRow);
+                return;
+            }
+            var expandRow = getDetailExpandRow(dataRow);
+            if (expandRow && dataRow.classList.contains('is-expanded')) {
+                expandRow.hidden = false;
+                expandRow.setAttribute('aria-hidden', 'false');
+                expandRow.style.display = '';
+            } else if (expandRow) {
+                expandRow.style.display = 'none';
+            }
+        }
+
+        function toggleDetailRowExpand(dataRow) {
+            if (!dataRow) {
+                return;
+            }
+            var expandRow = getDetailExpandRow(dataRow);
+            if (!expandRow) {
+                return;
+            }
+            var expanded = !dataRow.classList.contains('is-expanded');
+            dataRow.classList.toggle('is-expanded', expanded);
+            dataRow.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            expandRow.hidden = !expanded;
+            expandRow.setAttribute('aria-hidden', expanded ? 'false' : 'true');
+            expandRow.style.display = expanded ? '' : 'none';
+        }
+
+        function initializeDetailRowExpand() {
+            var tbody = getDetailedResponsesTbody();
+            if (!tbody) {
+                return;
+            }
+            tbody.addEventListener('click', function (event) {
+                if (event.target.closest('a, button')) {
+                    return;
+                }
+                var dataRow = event.target.closest('tr.detail-response-row');
+                if (!dataRow || !tbody.contains(dataRow)) {
+                    return;
+                }
+                toggleDetailRowExpand(dataRow);
+            });
+            tbody.addEventListener('keydown', function (event) {
+                var dataRow = event.target.closest('tr.detail-response-row');
+                if (!dataRow || !tbody.contains(dataRow)) {
+                    return;
+                }
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    toggleDetailRowExpand(dataRow);
+                }
+            });
+        }
         
         // Initialize course filter
         window.currentCourseFilter = 'All';
@@ -4548,12 +4707,14 @@ ENDIF
                 return;
             }
 
-            const rows = Array.from(table.querySelectorAll('tr'));
+            const tbody = getDetailedResponsesTbody() || table;
+            const rows = getDetailDataRows(tbody).length ? getDetailDataRows(tbody) : Array.from(table.querySelectorAll('tr')).filter(function (row) {
+                return !row.classList.contains('detail-response-expand-row') && !row.classList.contains('detail-table-empty-row');
+            });
             const searchInput = document.querySelector('.search-input');
             const searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
             const currentFilter = window.currentCourseFilter || 'All';
 
-            // Get visible rows based on current filters
             const visibleRows = rows.filter(row => {
                 // Apply course filter
                 let passesCourseFilter = true;
@@ -4860,17 +5021,30 @@ ENDIF
             if (cfg && cfg.navBase) {
                 currentPage = cfg.currentPage;
                 totalRows = cfg.totalRows;
-                const rows = Array.from(table.querySelectorAll('tr'));
-                filteredRows = rows;
-                rows.forEach(function (row) {
-                    row.style.display = '';
+                const dataRows = getDetailDataRows(table);
+                filteredRows = dataRows;
+                dataRows.forEach(function (row) {
+                    setDetailDataRowVisible(row, true);
                 });
                 updatePaginationInfo();
                 updatePaginationControls();
                 return;
             }
 
-            const allRows = Array.from(table.querySelectorAll('tr'));
+            const allRows = getDetailDataRows(table).length
+                ? getDetailDataRows(table)
+                : Array.from(table.querySelectorAll('tr')).filter(function (row) {
+                    return !row.classList.contains('detail-response-expand-row') && !row.classList.contains('detail-table-empty-row');
+                });
+            if (table.querySelector('.detail-response-expand-row')) {
+                filteredRows = allRows;
+                allRows.forEach(function (row) {
+                    setDetailDataRowVisible(row, true);
+                });
+                updatePaginationInfo();
+                updatePaginationControls();
+                return;
+            }
             const sortedRows = allRows.slice().sort((a, b) => {
                 const aTime = parseTimestamp(a.dataset.lastUpdated);
                 const bTime = parseTimestamp(b.dataset.lastUpdated);
@@ -4889,16 +5063,17 @@ ENDIF
 
         // Show specific page
         function showPage(page) {
-            const table = document.querySelector('.modern-table tbody');
-            if (!table) return;
+            const tbody = getDetailedResponsesTbody() || document.querySelector('.modern-table tbody');
+            if (!tbody) return;
 
-            const rows = Array.from(table.querySelectorAll('tr'));
-            
-            // Get the current course filter
+            const dataRows = getDetailDataRows(tbody).length
+                ? getDetailDataRows(tbody)
+                : Array.from(tbody.querySelectorAll('tr')).filter(function (row) {
+                    return !row.classList.contains('detail-response-expand-row') && !row.classList.contains('detail-table-empty-row');
+                });
             const currentFilter = window.currentCourseFilter || 'All';
-            
-            // Filter rows based on current course filter
-            const visibleRows = rows.filter(row => {
+
+            const visibleRows = dataRows.filter(row => {
                 if (currentFilter === 'All') {
                     return true;
                 }
@@ -4913,15 +5088,16 @@ ENDIF
             const startIndex = (page - 1) * rowsPerPage;
             const endIndex = startIndex + rowsPerPage;
 
-            // Hide all rows first
-            rows.forEach(row => {
+            dataRows.forEach(function (row) {
+                setDetailDataRowVisible(row, false);
+            });
+            Array.from(tbody.querySelectorAll('tr.detail-table-empty-row')).forEach(function (row) {
                 row.style.display = 'none';
             });
 
-            // Show rows for current page from filtered results
             for (let i = startIndex; i < endIndex && i < visibleRows.length; i++) {
                 if (visibleRows[i]) {
-                    visibleRows[i].style.display = '';
+                    setDetailDataRowVisible(visibleRows[i], true);
                 }
             }
 
@@ -5037,13 +5213,13 @@ ENDIF
             if (searchInput) {
                 searchInput.addEventListener('input', function() {
                     const searchTerm = this.value.toLowerCase();
-                    const table = document.querySelector('.modern-table tbody');
-                    const rows = Array.from(table.querySelectorAll('tr'));
+                    const tbody = getDetailedResponsesTbody() || document.querySelector('.modern-table tbody');
+                    const rows = getDetailDataRows(tbody).length ? getDetailDataRows(tbody) : Array.from(tbody.querySelectorAll('tr')).filter(function (row) {
+                        return !row.classList.contains('detail-response-expand-row') && !row.classList.contains('detail-table-empty-row');
+                    });
                     
-                    // Get the current course filter
                     const currentFilter = window.currentCourseFilter || 'All';
                     
-                    // Filter rows based on both search term and course filter
                     const visibleRows = rows.filter(row => {
                         // First apply course filter
                         let passesCourseFilter = true;
@@ -5067,11 +5243,17 @@ ENDIF
                     // Update total rows for pagination
                     totalRows = visibleRows.length;
                     
-                    // Reset to first page and update pagination
                     currentPage = 1;
+                    var pagingCfg = getDetailPagingConfig();
+                    if (pagingCfg && pagingCfg.navBase) {
+                        rows.forEach(function (row) {
+                            setDetailDataRowVisible(row, visibleRows.indexOf(row) >= 0);
+                        });
+                    } else {
+                        showPage(1);
+                    }
                     updatePaginationInfo();
                     updatePaginationControls();
-                    showPage(1);
                 });
             }
         }
@@ -5095,6 +5277,7 @@ ENDIF
 
             initializeSearch();
             initializeAnalyticsViewToggle();
+            initializeDetailRowExpand();
         }
 
         document.addEventListener('DOMContentLoaded', function () {
