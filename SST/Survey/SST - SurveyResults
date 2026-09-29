@@ -7,8 +7,11 @@ VAR @textExpandQ, @textUiPage, @textNavBase, @textFocus, @surveyIdBreak
 SET @surveyId = Trim(RequestParameter("surveyid"))
 SET @jid = Trim(RequestParameter("journeyId"))
 SET @textFocus = RequestParameter("textFocus")
+IF EMPTY(@textFocus) THEN SET @textFocus = QueryParameter("textFocus") ENDIF
 SET @textExpandQ = Trim(RequestParameter("textQ"))
+IF EMPTY(@textExpandQ) THEN SET @textExpandQ = Trim(QueryParameter("textQ")) ENDIF
 SET @textUiPage = Trim(RequestParameter("textPage"))
+IF EMPTY(@textUiPage) THEN SET @textUiPage = Trim(QueryParameter("textPage")) ENDIF
 SET @surveyIdBreak = IndexOf(@surveyId, "?")
 IF @surveyIdBreak > 0 THEN
 SET @surveyId = Substring(@surveyId, 1, Subtract(@surveyIdBreak, 1))
@@ -168,7 +171,10 @@ VAR @focusQuestionId, @focusQuestionText, @focusResponseCount, @textPageSize, @t
 VAR @textDePageKey, @textBatchRows, @textResponse, @textTotalUiPages, @textLocalUiPage, @textPrevPage, @textNextPage, @textFragNav, @textRowIdx
 VAR @textRem
 SET @focusQuestionId = Trim(RequestParameter("textQ"))
+IF EMPTY(@focusQuestionId) THEN SET @focusQuestionId = Trim(QueryParameter("textQ")) ENDIF
+IF EMPTY(@focusQuestionId) THEN SET @focusQuestionId = Trim(@textExpandQ) ENDIF
 SET @textUiPage = Trim(RequestParameter("textPage"))
+IF EMPTY(@textUiPage) THEN SET @textUiPage = Trim(QueryParameter("textPage")) ENDIF
 IF EMPTY(@textUiPage) THEN SET @textUiPage = 1 ENDIF
 SET @textUiPage = Add(0, @textUiPage)
 IF @textUiPage < 1 THEN SET @textUiPage = 1 ENDIF
@@ -176,6 +182,7 @@ SET @focusQuestionText = Lookup("SST_SP_Survey_Questions_DE", "QuestionText", "S
 SET @focusResponseCount = Lookup("sst_analytics_answers", "TextResponseCount", "SurveyID", @surveyId, "QuestionID", @focusQuestionId)
 IF EMPTY(@focusResponseCount) OR @focusResponseCount == 0 THEN
 SET @focusResponseCount = RequestParameter("textTotal")
+IF EMPTY(@focusResponseCount) THEN SET @focusResponseCount = QueryParameter("textTotal") ENDIF
 ENDIF
 IF EMPTY(@focusResponseCount) THEN SET @focusResponseCount = 0 ENDIF
 SET @focusResponseCount = Add(0, @focusResponseCount)
@@ -210,11 +217,18 @@ a.btn-secondary{display:inline-block;padding:8px 14px;border:1px solid #d1d5db;b
 <div id="text-focus-fragment" data-question-id="%%=v(@focusQuestionId)=%%" data-current-page="%%=v(@textLocalUiPage)=%%" data-total-pages="%%=v(@textTotalUiPages)=%%" data-response-count="%%=v(@focusResponseCount)=%%">
 <div class="text-focus-list">
 %%[
+VAR @textBatchRowCount
+SET @textBatchRowCount = 0
 IF @focusResponseCount > 0 THEN
 SET @textDePageKey = Concat("", @textLocalUiPage)
+TRY
 SET @textBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @focusQuestionId, "TextPageNumber", @textDePageKey)
-IF RowCount(@textBatchRows) > 0 THEN
-FOR @textRowIdx = 1 TO RowCount(@textBatchRows) DO
+SET @textBatchRowCount = RowCount(@textBatchRows)
+CATCH
+SET @textBatchRowCount = 0
+ENDIF
+IF @textBatchRowCount > 0 THEN
+FOR @textRowIdx = 1 TO @textBatchRowCount DO
 SET @textResponse = Field(Row(@textBatchRows, @textRowIdx), "Response")
 IF NOT EMPTY(@textResponse) THEN
 ]%%
@@ -447,7 +461,7 @@ ENDIF
                 <p class="survey-analytics-loading-title">Loading survey</p>
                 <p class="survey-analytics-loading-sub">Fetching survey results and charts. This may take a moment.</p>
             </div>
-            <div id="textFocusConfig" style="display:none" data-fetch-base="%%=v(@textNavBase)=%%"></div>
+            <div id="textFocusConfig" style="display:none" data-fetch-base="%%=v(@textNavBase)=%%" data-survey-id="%%=v(@surveyId)=%%" data-journey-id="%%=v(@jid)=%%"></div>
             <div id="textQuestionFocusView" class="text-question-focus-view" style="display:none">
                 <div class="text-focus-toolbar">
                     <button type="button" class="btn-secondary text-focus-back-btn" onclick="closeTextQuestionFocus()">Back to question analysis</button>
@@ -3578,18 +3592,38 @@ ENDIF
             responseCount: 0
         };
 
+        function findTextFocusFragment(html) {
+            var doc = new DOMParser().parseFromString(html, 'text/html');
+            var frag = doc.getElementById('text-focus-fragment');
+            if (frag) {
+                return frag;
+            }
+            var tmp = document.createElement('div');
+            tmp.innerHTML = html;
+            return tmp.querySelector('#text-focus-fragment');
+        }
+
         function getTextFocusFetchUrl(questionId, page, responseCount) {
-            var url;
             var cfg = document.getElementById('textFocusConfig');
-            var base = cfg ? (cfg.getAttribute('data-fetch-base') || '') : '';
+            var surveyId = cfg ? (cfg.getAttribute('data-survey-id') || '') : '';
+            var journeyId = cfg ? (cfg.getAttribute('data-journey-id') || '') : '';
+            var url;
             try {
-                if (base) {
-                    url = new URL(base, window.location.origin);
-                } else {
-                    url = new URL(window.location.href);
-                }
-            } catch (e) {
                 url = new URL(window.location.pathname, window.location.origin);
+            } catch (e) {
+                url = new URL(window.location.href);
+            }
+            url.search = '';
+            if (!surveyId) {
+                try {
+                    surveyId = new URL(window.location.href).searchParams.get('surveyid') || '';
+                } catch (e2) {}
+            }
+            if (surveyId) {
+                url.searchParams.set('surveyid', surveyId);
+            }
+            if (journeyId) {
+                url.searchParams.set('journeyId', journeyId);
             }
             url.searchParams.set('textFocus', '1');
             url.searchParams.set('textQ', questionId);
@@ -3644,10 +3678,10 @@ ENDIF
                     return response.text();
                 })
                 .then(function (html) {
-                    var doc = new DOMParser().parseFromString(html, 'text/html');
-                    var frag = doc.getElementById('text-focus-fragment');
+                    var frag = findTextFocusFragment(html);
                     if (!frag) {
-                        body.innerHTML = '<p class="text-focus-error">Could not load survey responses.</p>';
+                        body.innerHTML = '<p class="text-focus-loading">Opening responses…</p>';
+                        window.location.assign(url);
                         return;
                     }
                     var currentPage = parseInt(frag.getAttribute('data-current-page') || String(page), 10);
@@ -3658,7 +3692,7 @@ ENDIF
                     }
                     updateTextFocusMeta(currentPage, textQuestionFocusState.responseCount, totalPages);
                     body.innerHTML = '';
-                    body.appendChild(frag);
+                    body.appendChild(document.importNode(frag, true));
                     bindTextFocusPagination(body);
                 })
                 .catch(function () {
