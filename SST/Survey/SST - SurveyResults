@@ -9,7 +9,9 @@ VAR @textListNavBase, @textListPrevPage, @textListNextPage, @textListDePageKey, 
 VAR @textListFetchSize, @textListStartIdx, @textListEndIdx, @textListAllCount, @textListRenderedOnPage, @textListRem
 VAR @pageLoadError
 SET @surveyId = Trim(RequestParameter("surveyid"))
+IF EMPTY(@surveyId) THEN SET @surveyId = Trim(RequestParameter("SurveyID")) ENDIF
 IF EMPTY(@surveyId) THEN SET @surveyId = Trim(QueryParameter("surveyid")) ENDIF
+IF EMPTY(@surveyId) THEN SET @surveyId = Trim(QueryParameter("SurveyID")) ENDIF
 SET @jid = Trim(RequestParameter("journeyId"))
 SET @textExpandQ = Trim(RequestParameter("textQ"))
 SET @textUiPage = Trim(RequestParameter("textPage"))
@@ -559,8 +561,15 @@ ENDIF
                 SET @count = @respLoadSum
                 ENDIF
                 ENDIF
-                IF @responsesLookupOk == 0 AND @analyticsLookupOk == 0 THEN
-                SET @pageLoadError = "Could not load survey analytics. Add sst_analytics_answers and SST_SP_Survey_Responses_DE to this CloudPage data extension collection."
+                IF @count == 0 AND @analyticsCount == 0 THEN
+                IF @responsesLookupOk == 0 THEN
+                SET @pageLoadError = "Responses lookup failed. Add SST_SP_Survey_Responses_DE to this CloudPage data extension collection."
+                ELSE
+                SET @pageLoadError = Concat("No rows in SST_SP_Survey_Responses_DE for SurveyID ", @surveyId)
+                ENDIF
+                IF @analyticsLookupOk == 0 THEN
+                SET @pageLoadError = Concat(@pageLoadError, " Analytics lookup failed. Add sst_analytics_answers to the collection and run the query activity.")
+                ENDIF
                 ENDIF
                 ENDIF
 
@@ -652,7 +661,7 @@ ENDIF
                         <span class="survey-badge">Survey ID: %%=v(@surveyId)=%%</span>
                         <span class="survey-status-badge status-%%=v(@surveyStatus)=%%">%%=v(@surveyStatus)=%%</span>
                         <span class="response-count">%%=v(@count)=%% Total Responses</span>
-                        <span class="survey-badge">Analytics %%=v(@analyticsCount)=%% · Course %%=v(@courseAnalyticsCount)=%%</span>
+                        <span class="survey-badge">R %%=v(@responsesLookupOk)=%% · A %%=v(@analyticsLookupOk)=%% · Analytics %%=v(@analyticsCount)=%% · Course %%=v(@courseAnalyticsCount)=%%</span>
                         <span class="last-updated">Last updated: %%=Format(Now(), "MMM dd, yyyy")=%%</span>
                     </div>
                 </div>
@@ -1642,8 +1651,8 @@ ENDIF
                     d="M20 6h-2.18c.11-.31.18-.65.18-1a2.996 2.996 0 0 0-5.5-1.65l-.5.67-.5-.68C10.96 2.54 10 2 10 2 10 2 9 3 8.18 4H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z" />
             </svg>
             <h3>No responses yet</h3>
-            <p>Once people start responding to this survey, their answers will appear here with detailed
-                analytics.</p>
+            <p>%%=v(@pageLoadError)=%%</p>
+            <p>CloudPage collection must include SST_SP_Survey_Responses_DE, sst_analytics_answers, and sst_analytics_per_course. Then run the analytics query activities for this survey.</p>
         </div>
     </div>
     %%[ ENDIF ]%%
