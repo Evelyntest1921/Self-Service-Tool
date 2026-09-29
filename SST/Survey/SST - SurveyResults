@@ -227,7 +227,15 @@ IF NOT EMPTY(@textResponse) THEN
 %%[
 ENDIF
 NEXT @textRowIdx
+ELSE
+]%%
+<p class="text-focus-empty">No text responses on this page.</p>
+%%[
 ENDIF
+ELSE
+]%%
+<p class="text-focus-empty">No text responses recorded for this question.</p>
+%%[
 ENDIF
 ]%%
 </div>
@@ -236,10 +244,10 @@ ENDIF
 <span class="text-responses-page-info">Page %%=v(@textLocalUiPage)=%% of %%=v(@textTotalUiPages)=%%</span>
 <div class="text-responses-page-buttons">
 %%[ IF @textLocalUiPage > 1 THEN ]%%
-<a class="btn-secondary text-responses-page-btn" href="%%=Concat(@textFragNav, @textPrevPage)=%%">Previous</a>
+<a class="btn-secondary text-responses-page-btn" href="%%=Concat(@textFragNav, @textPrevPage)=%%" data-text-ui-page="%%=v(@textPrevPage)=%%">Previous</a>
 %%[ ENDIF ]%%
 %%[ IF @textLocalUiPage < @textTotalUiPages THEN ]%%
-<a class="btn-secondary text-responses-page-btn" href="%%=Concat(@textFragNav, @textNextPage)=%%">Next</a>
+<a class="btn-secondary text-responses-page-btn" href="%%=Concat(@textFragNav, @textNextPage)=%%" data-text-ui-page="%%=v(@textNextPage)=%%">Next</a>
 %%[ ENDIF ]%%
 </div>
 </div>
@@ -2509,11 +2517,15 @@ ENDIF
             gap: 12px;
         }
 
-        .text-focus-iframe {
-            width: 100%;
-            min-height: 480px;
-            border: 0;
-            background: #fff;
+        .text-focus-loading,
+        .text-focus-error {
+            padding: 24px 16px;
+            color: var(--gray-600);
+            font-size: 14px;
+        }
+
+        .text-focus-error {
+            color: var(--danger-color);
         }
 
         .main-content.survey-analytics-page.text-focus-active #surveyAnalyticsMainWrap {
@@ -3593,14 +3605,29 @@ ENDIF
             return url.toString();
         }
 
-        function updateTextFocusMeta(page, responseCount) {
-            var totalPages = Math.max(1, Math.ceil(responseCount / 20));
+        function updateTextFocusMeta(page, responseCount, totalPages) {
+            var pages = totalPages;
+            if (!pages || pages < 1) {
+                pages = Math.max(1, Math.ceil(responseCount / 20));
+            }
             var meta = document.getElementById('textFocusQuestionMeta');
             if (meta) {
-                meta.textContent = responseCount + ' text responses · Page ' + page + ' of ' + totalPages;
+                meta.textContent = responseCount + ' text responses · Page ' + page + ' of ' + pages;
             }
             textQuestionFocusState.page = page;
-            textQuestionFocusState.totalPages = totalPages;
+            textQuestionFocusState.totalPages = pages;
+        }
+
+        function bindTextFocusPagination(root) {
+            if (!root) return;
+            root.querySelectorAll('.text-responses-page-btn').forEach(function (btn) {
+                btn.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    var nextPage = parseInt(btn.getAttribute('data-text-ui-page') || '1', 10);
+                    if (nextPage < 1) nextPage = 1;
+                    loadTextQuestionFocusPage(nextPage);
+                });
+            });
         }
 
         function loadTextQuestionFocusPage(page) {
@@ -3612,17 +3639,35 @@ ENDIF
                 page,
                 textQuestionFocusState.responseCount
             );
-            updateTextFocusMeta(page, textQuestionFocusState.responseCount);
-            var iframe = document.getElementById('textFocusIframe');
-            if (!iframe) {
-                body.innerHTML = '';
-                iframe = document.createElement('iframe');
-                iframe.id = 'textFocusIframe';
-                iframe.className = 'text-focus-iframe';
-                iframe.setAttribute('title', 'Text responses');
-                body.appendChild(iframe);
-            }
-            iframe.src = url;
+            body.innerHTML = '<p class="text-focus-loading">Loading responses…</p>';
+            fetch(url, { credentials: 'same-origin', cache: 'no-store' })
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error('HTTP ' + response.status);
+                    }
+                    return response.text();
+                })
+                .then(function (html) {
+                    var doc = new DOMParser().parseFromString(html, 'text/html');
+                    var frag = doc.getElementById('text-focus-fragment');
+                    if (!frag) {
+                        body.innerHTML = '<p class="text-focus-error">Could not load survey responses.</p>';
+                        return;
+                    }
+                    var currentPage = parseInt(frag.getAttribute('data-current-page') || String(page), 10);
+                    var totalPages = parseInt(frag.getAttribute('data-total-pages') || '1', 10);
+                    var responseCount = parseInt(frag.getAttribute('data-response-count') || '0', 10);
+                    if (responseCount > 0) {
+                        textQuestionFocusState.responseCount = responseCount;
+                    }
+                    updateTextFocusMeta(currentPage, textQuestionFocusState.responseCount, totalPages);
+                    body.innerHTML = '';
+                    body.appendChild(frag);
+                    bindTextFocusPagination(body);
+                })
+                .catch(function () {
+                    body.innerHTML = '<p class="text-focus-error">Could not load survey responses.</p>';
+                });
             if (mainEl) mainEl.scrollTop = 0;
         }
 
@@ -3638,6 +3683,7 @@ ENDIF
             textQuestionFocusState.page = 1;
             textQuestionFocusState.responseCount = parseInt(responseCount || '0', 10);
             if (mainEl) {
+                mainEl.classList.remove('is-analytics-loading');
                 mainEl.classList.add('text-focus-active');
                 mainEl.scrollTop = 0;
             }
@@ -3646,8 +3692,12 @@ ENDIF
 
         function closeTextQuestionFocus() {
             var mainEl = document.querySelector('.main-content.survey-analytics-page');
+            var body = document.getElementById('textFocusBody');
             if (mainEl) {
                 mainEl.classList.remove('text-focus-active');
+            }
+            if (body) {
+                body.innerHTML = '';
             }
             textQuestionFocusState.questionId = '';
         }
@@ -4898,13 +4948,11 @@ ENDIF
         }
 
         document.addEventListener('DOMContentLoaded', function () {
-            setTimeout(function () {
-                var mainEl = document.querySelector('.main-content.survey-analytics-page');
-                if (mainEl) {
-                    mainEl.classList.remove('is-analytics-loading');
-                }
-                initializeSurveyResultsPage();
-            }, 3000);
+            var mainEl = document.querySelector('.main-content.survey-analytics-page');
+            if (mainEl) {
+                mainEl.classList.remove('is-analytics-loading');
+            }
+            initializeSurveyResultsPage();
         });
     </script>
 </body>
