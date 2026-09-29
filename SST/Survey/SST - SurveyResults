@@ -380,6 +380,14 @@ ENDIF
                 <div class="text-focus-toolbar">
                     <a href="%%=v(@textNavBase)=%%" class="btn-secondary text-focus-back-btn">Back to question analysis</a>
                 </div>
+                %%[ IF NOT EMPTY(@pageLoadError) THEN ]%%
+                <div class="alert alert-error">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+                    </svg>
+                    %%=v(@pageLoadError)=%%
+                </div>
+                %%[ ENDIF ]%%
                 <div class="text-focus-header">
                     <h1>%%=IIF(NOT EMPTY(@textListQuestionText), @textListQuestionText, "Question")=%%</h1>
                     <p class="text-focus-meta">%%=v(@textListCount)=%% text responses · Page %%=v(@textListPage)=%% of %%=v(@textListTotalPages)=%%</p>
@@ -389,30 +397,6 @@ ENDIF
                     %%[
                     IF NOT EMPTY(@textExpandQ) AND @textListCount > 0 THEN
                     SET @textListRenderedOnPage = 0
-                    SET @textListDePageKey = Concat("", @textListPage)
-                    SET @textListBatchCount = 0
-                    TRY
-                    SET @textListBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @textListQuestionId, "TextPageNumber", @textListDePageKey)
-                    SET @textListBatchCount = RowCount(@textListBatchRows)
-                    CATCH
-                    SET @textListBatchCount = 0
-                    ENDIF
-                    IF @textListBatchCount > 0 THEN
-                    FOR @textListRowIdx = 1 TO @textListBatchCount DO
-                    SET @textListResponse = Field(Row(@textListBatchRows, @textListRowIdx), "Response")
-                    IF NOT EMPTY(@textListResponse) THEN
-                    SET @textListRenderedOnPage = Add(@textListRenderedOnPage, 1)
-                    ]%%
-                    <div class="text-response-item">
-                        <div class="text-response-content">
-                            <span class="text-response-text">"%%=v(@textListResponse)=%%"</span>
-                        </div>
-                    </div>
-                    %%[
-                    ENDIF
-                    NEXT @textListRowIdx
-                    ENDIF
-                    IF @textListRenderedOnPage == 0 THEN
                     SET @textListFetchSize = Multiply(@textListPage, @textListPageSize)
                     IF @textListFetchSize > 2500 THEN SET @textListFetchSize = 2500 ENDIF
                     SET @textListBatchRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", @textListFetchSize, "LastUpdated ASC", "SurveyID", @surveyId, "QuestionID", @textListQuestionId)
@@ -434,7 +418,6 @@ ENDIF
                     %%[
                     ENDIF
                     NEXT @textListRowIdx
-                    ENDIF
                     ENDIF
                     IF @textListRenderedOnPage == 0 THEN
                     ]%%
@@ -513,13 +496,12 @@ ENDIF
                 SET @analyticsCount = 0
                 SET @courseAnalyticsCount = 0
                 IF NOT EMPTY(@surveyId) THEN
-                IF EMPTY(@textExpandQ) THEN
                 TRY
                 SET @responses = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId)
                 SET @count = RowCount(@responses)
                 CATCH
                 SET @count = 0
-                SET @pageLoadError = "Could not load survey responses. Add SST_SP_Survey_Responses_DE (with TextPageNumber) to this CloudPage data extension collection."
+                SET @pageLoadError = "Could not load survey responses. Add SST_SP_Survey_Responses_DE to this CloudPage data extension collection."
                 ENDIF
                 TRY
                 SET @analyticsRows = LookupRows("sst_analytics_answers", "SurveyID", @surveyId)
@@ -535,7 +517,6 @@ ENDIF
                 SET @courseAnalyticsCount = RowCount(@courseAnalyticsRows)
                 CATCH
                 SET @courseAnalyticsCount = 0
-                ENDIF
                 ENDIF
                 ENDIF
 
@@ -636,7 +617,6 @@ ENDIF
 
 
             <!-- Survey Overview Metrics -->
-            %%[ IF EMPTY(@textExpandQ) THEN ]%%
             %%[
             VAR @uniqueContacts, @openedCount, @completedCount, @surveyTotalActivity, @analyticsOpened
 
@@ -956,18 +936,9 @@ ENDIF
                                 SET @textPreviewLimit = 5
                                 SET @textViewAllUrl = Concat(@textNavBase, "&textQ=", @questionId, "&textPage=1&textTotal=", @responseCount)
                                 IF @responseCount > 0 THEN
-                                SET @textPreviewRowCount = 0
-                                TRY
-                                SET @textBatchRows = LookupRows("SST_SP_Survey_Responses_DE", "SurveyID", @surveyId, "QuestionID", @questionId, "TextPageNumber", "1")
-                                SET @textPreviewRowCount = RowCount(@textBatchRows)
-                                CATCH
-                                SET @textPreviewRowCount = 0
-                                ENDIF
-                                SET @textItemsRendered = 0
-                                IF @textPreviewRowCount == 0 THEN
                                 SET @textBatchRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", @textPreviewLimit, "LastUpdated ASC", "SurveyID", @surveyId, "QuestionID", @questionId)
+                                SET @textItemsRendered = 0
                                 SET @textPreviewRowCount = RowCount(@textBatchRows)
-                                ENDIF
                                 IF @textPreviewRowCount > 0 THEN
                                 FOR @textPreviewIdx = 1 TO @textPreviewRowCount DO
                                 IF @textItemsRendered < @textPreviewLimit THEN
@@ -1633,7 +1604,6 @@ ENDIF
                 analytics.</p>
         </div>
     </div>
-    %%[ ENDIF ]%%
     %%[ ENDIF ]%%
             </div>
     <footer class="maker-main-footer">
