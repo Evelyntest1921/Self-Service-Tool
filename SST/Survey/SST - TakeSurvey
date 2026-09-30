@@ -2,7 +2,7 @@
 VAR @submitted, @surveyId, @contact, @surveyName, @fullSurveyName, @questionCount, @questions, @isFirstVisit
 VAR @saveStep, @saveStepDone, @saveStepOk, @saveStepError
 VAR @saveQuestionNumber, @saveAnswerValue, @saveQuestionId, @saveQuestionText, @saveQuestionType, @i, @row
-VAR @responseRows, @responseRow, @responseRowCount, @ri
+VAR @savedAnswerSafe
 SET @saveStepDone = "false"
 SET @saveStepOk = "false"
 SET @saveStepError = ""
@@ -72,11 +72,6 @@ ENDIF
 /* Load questions for this survey */
 SET @questions = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId)
 SET @questionCount = RowCount(@questions)
-SET @responseRowCount = 0
-IF @saveStep != "1" AND @submitted != "true" AND NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) THEN
-  SET @responseRows = LookupRows("SST_SP_Survey_Responses_DE", "Contact", @contact, "SurveyID", @surveyId)
-  SET @responseRowCount = RowCount(@responseRows)
-ENDIF
 
 IF @saveStep == "1" AND @submitted != "true" THEN
   SET @saveQuestionNumber = RequestParameter("questionNumber")
@@ -1625,7 +1620,7 @@ color: #000000;
      <input type="hidden" name="submitted" value="true">
      <input type="hidden" name="firstVisit" value="false">
      <input type="hidden" name="id" value="%%=v(@surveyId)=%%">
-     <input type="hidden" name="contact" value="%%=v(@contact)=%%">
+     <input type="hidden" name="contact" value="%%=Replace(@contact, '"', '&quot;')=%%">
      <input type="hidden" name="surveyName" value="%%=Replace(@fullSurveyName,'"','')=%%">
             %%[ FOR @i = 1 TO @questionCount DO
       SET @row = Row(@questions, @i)
@@ -1637,13 +1632,17 @@ color: #000000;
       SET @required = Field(@row, "Required")
       SET @orderIndex = Field(@row, "OrderIndex")
       SET @savedAnswer = ""
-      IF @responseRowCount > 0 AND NOT EMPTY(@questionId) THEN
-        FOR @ri = 1 TO @responseRowCount DO
-          SET @responseRow = Row(@responseRows, @ri)
-          IF Field(@responseRow, "QuestionID") == @questionId THEN
-            SET @savedAnswer = Field(@responseRow, "Response")
-          ENDIF
-        NEXT @ri
+      SET @savedAnswerSafe = ""
+      IF NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) AND NOT EMPTY(@questionId) THEN
+        TRY
+          SET @savedAnswer = Lookup("SST_SP_Survey_Responses_DE", "Response", "Contact", @contact, "SurveyID", @surveyId, "QuestionID", @questionId)
+        CATCH
+        ENDIF
+      ENDIF
+      IF NOT EMPTY(@savedAnswer) THEN
+        SET @savedAnswerSafe = Replace(@savedAnswer, "&", "&amp;")
+        SET @savedAnswerSafe = Replace(@savedAnswerSafe, "<", "&lt;")
+        SET @savedAnswerSafe = Replace(@savedAnswerSafe, ">", "&gt;")
       ENDIF
     ]%%
     <div class="question-card" data-question="%%=v(@i)=%%" %%[ IF @i > 1 THEN ]%%style="display: none;"%%[ ENDIF ]%%>
@@ -1683,7 +1682,7 @@ color: #000000;
  
      %%[ ELSEIF @questionType == "text" THEN ]%%
      <div class="form-group">
-       <textarea class="textarea-control" name="q%%=v(@questionNumber)=%%" placeholder="Please provide your response here...">%%=v(@savedAnswer)=%%</textarea>
+       <textarea class="textarea-control" name="q%%=v(@questionNumber)=%%" placeholder="Please provide your response here...">%%=v(@savedAnswerSafe)=%%</textarea>
        <div class="question-buttons" style="margin-top: 26px;">
          <button type="button" class="submit-button back-button" onclick="goBackToPreviousQuestion()" style="display: none;">Back</button>
          <button type="button" class="submit-button next-button" data-qname="q%%=v(@questionNumber)=%%" data-question="%%=v(@i)=%%">Next</button>
