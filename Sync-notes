@@ -138,52 +138,9 @@ Detailed table course filter: course card click sets detailCourse on the URL (wi
 
 Take Survey open log: only Lookup/UPSERT SURVEY_OPEN when both contact and id are present (Lookup must not run with empty keys). Autosave-on-Next was reverted from CloudPage until a stable pattern is re-added. Final submit still UPSERTDE all answers with Status Completed.
 
-Survey Landing no longer Retrieve()s the full responses DE. It reads query-backed DEs only: sst_analytics_per_survey (grid open counts), sst_analytics_landing_portfolio (stat cards + 30-day chart bucket), sst_analytics_responses_by_month (12-month chart), sst_analytics_completion_time (avg completion). Schedule the same refresh cadence as other analytics DEs.
+Survey Landing no longer Retrieve()s the full responses DE. It reads sst_analytics_per_survey (grid open counts + stat cards) and sst_analytics_responses_by_month (activity chart). Schedule the same refresh cadence as other analytics DEs.
 
-sst_analytics_landing_portfolio — one summary row (Survey Landing stat cards; avoids summing per-survey rows on the CloudPage).
-
-DE columns: TotalOpened, TotalCompleted, TotalResponses, CompletionRatePct, AvgResponseRatePct, ResponseCount30Days
-
-SELECT
-    agg.TotalOpened,
-    agg.TotalCompleted,
-    agg.TotalResponses,
-    agg.CompletionRatePct,
-    ISNULL(rate.AvgResponseRatePct, 0) AS AvgResponseRatePct,
-    ISNULL(last30.ResponseCount30Days, 0) AS ResponseCount30Days
-FROM (
-    SELECT
-        CAST(ISNULL(SUM(s.OpenedSurvey), 0) AS INT) AS TotalOpened,
-        CAST(ISNULL(SUM(s.CompletedSurvey), 0) AS INT) AS TotalCompleted,
-        CAST(ISNULL(SUM(s.TotalActivity), 0) AS INT) AS TotalResponses,
-        CAST(
-            CASE WHEN ISNULL(SUM(s.OpenedSurvey), 0) > 0
-            THEN ROUND(SUM(CAST(s.CompletedSurvey AS FLOAT)) * 100.0 / SUM(CAST(s.OpenedSurvey AS FLOAT)), 0)
-            ELSE 0 END AS INT) AS CompletionRatePct
-    FROM sst_analytics_per_survey s
-) agg
-CROSS JOIN (
-    SELECT CAST(ROUND(AVG(x.rate), 0) AS INT) AS AvgResponseRatePct
-    FROM (
-        SELECT
-            CASE
-                WHEN s.OpenedSurvey > 0 THEN s.CompletedSurvey * 100.0 / s.OpenedSurvey
-                WHEN s.UniqueRespondents > 0 THEN s.CompletedSurvey * 100.0 / s.UniqueRespondents
-                ELSE NULL
-            END AS rate
-        FROM sst_analytics_per_survey s
-    ) x
-    WHERE x.rate IS NOT NULL
-) rate
-CROSS JOIN (
-    SELECT COUNT(*) AS ResponseCount30Days
-    FROM SST_SP_Survey_Responses_DE r
-    WHERE LTRIM(RTRIM(ISNULL(r.Status, ''))) = 'Completed'
-      AND ISNULL(r.QuestionID, '') != 'SURVEY_OPEN'
-      AND r.LastUpdated >= DATEADD(day, -30, GETDATE())
-) last30
-
-Survey Landing Avg Response Rate (landingAvgResponseRate): comes from AvgResponseRatePct on sst_analytics_landing_portfolio when that DE is populated; otherwise fallback sums sst_analytics_per_survey on the page (legacy).
+Survey Landing Avg Response Rate (landingAvgResponseRate): for each row in sst_analytics_per_survey, rate = CompletedSurvey / OpenedSurvey (or CompletedSurvey / UniqueRespondents if OpenedSurvey is 0); then arithmetic mean of those rates, rounded to whole percent. Requires per-survey query refresh.
 
 sst_analytics_completion_time — Survey Landing Avg Completion Time (one summary row). Fast sample: TOP 5 SurveyID+Contact by most recent first completion, not full-table avg.
 DE columns: AvgCompletionMinutes (Decimal), CompletedSessionCount (Number, 1–5)
@@ -233,4 +190,94 @@ FROM (
        AND recent.Contact = opens.Contact
     WHERE DATEDIFF(MINUTE, opens.OpenedAt, recent.CompletedAt) BETWEEN 0 AND 2880
 ) d
+
+
+
+Manage Builds Performance page — charts read pre-aggregated DEs (no live chart aggregation on CloudPage). Response detail table still loads bd_self_service_engagement per journey. Link all sst_analytics_journey_* DEs to the Performance CloudPage and schedule query refresh with other analytics DEs.
+
+sst_analytics_journey_metrics — one row per journey (summary cards + combined engagement bar).
+DE columns: journeyId, TotalRecords, OpenedCount, BouncedCount, DidNotOpenCount, ClickedCount, UnregisteredOpenedCount
+
+SELECT
+    e.JourneyID AS journeyId,
+    COUNT(*) AS TotalRecords,
+    SUM(CASE WHEN LTRIM(RTRIM(ISNULL(e.Engagement, ''))) = 'Opened' THEN 1 ELSE 0 END) AS OpenedCount,
+    SUM(CASE WHEN LTRIM(RTRIM(ISNULL(e.Engagement, ''))) = 'Bounced' THEN 1 ELSE 0 END) AS BouncedCount,
+    SUM(CASE WHEN LTRIM(RTRIM(ISNULL(e.Engagement, ''))) = 'Did Not Open' THEN 1 ELSE 0 END) AS DidNotOpenCount,
+    SUM(CASE WHEN LTRIM(RTRIM(ISNULL(e.Engagement, ''))) = 'Clicked' THEN 1 ELSE 0 END) AS ClickedCount,
+    SUM(CASE WHEN LTRIM(RTRIM(ISNULL(e.Engagement, ''))) = 'Opened' AND (e.Auth0UserId IS NULL OR LTRIM(RTRIM(e.Auth0UserId)) = '') THEN 1 ELSE 0 END) AS UnregisteredOpenedCount
+FROM bd_self_service_engagement e
+WHERE e.JourneyID IS NOT NULL
+GROUP BY e.JourneyID
+
+
+
+sst_analytics_journey_sent_by_day — Emails Sent Over Time chart.
+DE columns: journeyId, SortDate (Text yyyy-MM-dd), DayLabel (Text), SentCount (Number)
+
+SELECT
+    e.JourneyID AS journeyId,
+    SUBSTRING(CONVERT(VARCHAR(20), e.LastSent, 120), 1, 10) AS SortDate,
+    SUBSTRING(CONVERT(VARCHAR(20), e.LastSent, 120), 1, 10) AS DayLabel,
+    COUNT(*) AS SentCount
+FROM bd_self_service_engagement e
+WHERE e.JourneyID IS NOT NULL
+  AND e.LastSent IS NOT NULL
+GROUP BY e.JourneyID, SUBSTRING(CONVERT(VARCHAR(20), e.LastSent, 120), 1, 10)
+
+
+
+sst_analytics_journey_events_by_day — Opens & Clicks Over Time chart.
+DE columns: journeyId, SortDate, DayLabel, OpenCount, ClickCount, UnsubscribedCount, UnregisteredOpenCount
+
+SELECT
+    e.JourneyID AS journeyId,
+    SUBSTRING(CONVERT(VARCHAR(20), e.LastSent, 120), 1, 10) AS SortDate,
+    SUBSTRING(CONVERT(VARCHAR(20), e.LastSent, 120), 1, 10) AS DayLabel,
+    SUM(CASE WHEN LTRIM(RTRIM(ISNULL(e.Engagement, ''))) = 'Opened' THEN 1 ELSE 0 END) AS OpenCount,
+    SUM(CASE WHEN LTRIM(RTRIM(ISNULL(e.Engagement, ''))) = 'Clicked' THEN 1 ELSE 0 END) AS ClickCount,
+    SUM(CASE WHEN LTRIM(RTRIM(ISNULL(e.Engagement, ''))) = 'Unsubscribed' THEN 1 ELSE 0 END) AS UnsubscribedCount,
+    SUM(CASE WHEN LTRIM(RTRIM(ISNULL(e.Engagement, ''))) = 'Opened' AND (e.Auth0UserId IS NULL OR LTRIM(RTRIM(e.Auth0UserId)) = '') THEN 1 ELSE 0 END) AS UnregisteredOpenCount
+FROM bd_self_service_engagement e
+WHERE e.JourneyID IS NOT NULL
+  AND e.LastSent IS NOT NULL
+GROUP BY e.JourneyID, SUBSTRING(CONVERT(VARCHAR(20), e.LastSent, 120), 1, 10)
+
+
+
+sst_analytics_journey_by_state — state map/bar chart.
+DE columns: journeyId, StateName, Opened, Bounced, DidNotOpen, Clicked, Total
+
+SELECT
+    e.JourneyID AS journeyId,
+    LTRIM(RTRIM(e.Related_Account_Primary_State)) AS StateName,
+    SUM(CASE WHEN LTRIM(RTRIM(ISNULL(e.Engagement, ''))) = 'Opened' THEN 1 ELSE 0 END) AS Opened,
+    SUM(CASE WHEN LTRIM(RTRIM(ISNULL(e.Engagement, ''))) = 'Bounced' THEN 1 ELSE 0 END) AS Bounced,
+    SUM(CASE WHEN LTRIM(RTRIM(ISNULL(e.Engagement, ''))) = 'Did Not Open' THEN 1 ELSE 0 END) AS DidNotOpen,
+    SUM(CASE WHEN LTRIM(RTRIM(ISNULL(e.Engagement, ''))) = 'Clicked' THEN 1 ELSE 0 END) AS Clicked,
+    COUNT(*) AS Total
+FROM bd_self_service_engagement e
+WHERE e.JourneyID IS NOT NULL
+  AND e.Related_Account_Primary_State IS NOT NULL
+  AND LTRIM(RTRIM(e.Related_Account_Primary_State)) <> ''
+GROUP BY e.JourneyID, LTRIM(RTRIM(e.Related_Account_Primary_State))
+
+
+
+sst_analytics_journey_by_specialty — specialty chart.
+DE columns: journeyId, Specialty, Opened, Bounced, DidNotOpen, Clicked, Total
+
+SELECT
+    e.JourneyID AS journeyId,
+    LTRIM(RTRIM(e.Primary_Specialty)) AS Specialty,
+    SUM(CASE WHEN LTRIM(RTRIM(ISNULL(e.Engagement, ''))) = 'Opened' THEN 1 ELSE 0 END) AS Opened,
+    SUM(CASE WHEN LTRIM(RTRIM(ISNULL(e.Engagement, ''))) = 'Bounced' THEN 1 ELSE 0 END) AS Bounced,
+    SUM(CASE WHEN LTRIM(RTRIM(ISNULL(e.Engagement, ''))) = 'Did Not Open' THEN 1 ELSE 0 END) AS DidNotOpen,
+    SUM(CASE WHEN LTRIM(RTRIM(ISNULL(e.Engagement, ''))) = 'Clicked' THEN 1 ELSE 0 END) AS Clicked,
+    COUNT(*) AS Total
+FROM bd_self_service_engagement e
+WHERE e.JourneyID IS NOT NULL
+  AND e.Primary_Specialty IS NOT NULL
+  AND LTRIM(RTRIM(e.Primary_Specialty)) <> ''
+GROUP BY e.JourneyID, LTRIM(RTRIM(e.Primary_Specialty))
 

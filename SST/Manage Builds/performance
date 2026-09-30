@@ -113,46 +113,155 @@ IF NOT Empty(@jid) AND Empty(@configError) THEN
   SET @analyticsData = LookupRows("bd_self_service_engagement", "JourneyID", @jid)
   SET @totalRecords = RowCount(@analyticsData)
 ENDIF
+VAR @metricsRows, @metricsRow, @sentRows, @sentRow, @si, @eventRows, @eventRow, @stRows, @stRow, @spRows, @spRow
+VAR @perfSentLabels, @perfSentCounts, @perfEventLabels, @perfEventOpens, @perfEventClicks, @perfEventUnsubs, @perfEventUnregOpens
+VAR @valSent, @valOpen, @valClk, @valUnsub, @valUnreg, @lblDay
 SET @openedCount = 0
 SET @bouncedCount = 0
 SET @didNotOpenCount = 0
 SET @clickedCount = 0
 SET @unregisteredOpenedCount = 0
-SET @dateData = ""
-SET @openedDateData = ""
-SET @clickedDateData = ""
-SET @unsubscribedDateData = ""
-SET @unregisteredOpenedDateData = ""
-SET @openedData = ""
-SET @bouncedData = ""
-SET @didNotOpenData = ""
-SET @clickedData = ""
-SET @openedUnique = ""
-SET @openedCounts = ""
-SET @bouncedUnique = ""
-SET @bouncedCounts = ""
-SET @didNotOpenUnique = ""
-SET @didNotOpenCounts = ""
-SET @clickedUnique = ""
-SET @clickedCounts = ""
 SET @responsesData = ""
-SET @stateData = ""
-SET @specialtyData = ""
-SET @jobIdData = ""
 SET @stateLabels = ""
 SET @stateOpenedData = ""
 SET @stateDidNotOpenData = ""
 SET @stateBouncedData = ""
 SET @stateClickedData = ""
 SET @stateTotalData = ""
-SET @stateEngagementMap = ""
 SET @specialtyLabels = ""
 SET @specialtyOpenedData = ""
 SET @specialtyDidNotOpenData = ""
 SET @specialtyBouncedData = ""
 SET @specialtyClickedData = ""
 SET @specialtyTotalData = ""
-SET @specialtyEngagementMap = "" 
+SET @perfSentLabels = ""
+SET @perfSentCounts = ""
+SET @perfEventLabels = ""
+SET @perfEventOpens = ""
+SET @perfEventClicks = ""
+SET @perfEventUnsubs = ""
+SET @perfEventUnregOpens = ""
+SET @stateCount = 0
+IF NOT Empty(@jid) AND Empty(@configError) THEN
+  SET @metricsRows = LookupRows("sst_analytics_journey_metrics", "journeyId", @jid)
+  IF RowCount(@metricsRows) == 0 THEN
+    SET @metricsRows = LookupRows("sst_analytics_journey_metrics", "JourneyID", @jid)
+  ENDIF
+  IF RowCount(@metricsRows) > 0 THEN
+    SET @metricsRow = Row(@metricsRows, 1)
+    SET @totalRecords = Field(@metricsRow, "TotalRecords")
+    SET @openedCount = Field(@metricsRow, "OpenedCount")
+    SET @bouncedCount = Field(@metricsRow, "BouncedCount")
+    SET @didNotOpenCount = Field(@metricsRow, "DidNotOpenCount")
+    SET @clickedCount = Field(@metricsRow, "ClickedCount")
+    SET @unregisteredOpenedCount = Field(@metricsRow, "UnregisteredOpenedCount")
+  ENDIF
+  SET @sentRows = LookupOrderedRows("sst_analytics_journey_sent_by_day", 500, "SortDate ASC", "journeyId", @jid)
+  IF RowCount(@sentRows) == 0 THEN
+    SET @sentRows = LookupOrderedRows("sst_analytics_journey_sent_by_day", 500, "SortDate ASC", "JourneyID", @jid)
+  ENDIF
+  FOR @si = 1 TO RowCount(@sentRows) DO
+    SET @sentRow = Row(@sentRows, @si)
+    SET @lblDay = Field(@sentRow, "DayLabel")
+    SET @valSent = Field(@sentRow, "SentCount")
+    IF Empty(@lblDay) THEN SET @lblDay = Field(@sentRow, "SortDate") ENDIF
+    IF Empty(@valSent) THEN SET @valSent = 0 ENDIF
+    IF Empty(@perfSentLabels) THEN
+      SET @perfSentLabels = @lblDay
+      SET @perfSentCounts = @valSent
+    ELSE
+      SET @perfSentLabels = Concat(@perfSentLabels, "|", @lblDay)
+      SET @perfSentCounts = Concat(@perfSentCounts, "|", @valSent)
+    ENDIF
+  NEXT @si
+  SET @eventRows = LookupOrderedRows("sst_analytics_journey_events_by_day", 500, "SortDate ASC", "journeyId", @jid)
+  IF RowCount(@eventRows) == 0 THEN
+    SET @eventRows = LookupOrderedRows("sst_analytics_journey_events_by_day", 500, "SortDate ASC", "JourneyID", @jid)
+  ENDIF
+  FOR @si = 1 TO RowCount(@eventRows) DO
+    SET @eventRow = Row(@eventRows, @si)
+    SET @lblDay = Field(@eventRow, "DayLabel")
+    SET @valOpen = Field(@eventRow, "OpenCount")
+    SET @valClk = Field(@eventRow, "ClickCount")
+    SET @valUnsub = Field(@eventRow, "UnsubscribedCount")
+    SET @valUnreg = Field(@eventRow, "UnregisteredOpenCount")
+    IF Empty(@lblDay) THEN SET @lblDay = Field(@eventRow, "SortDate") ENDIF
+    IF Empty(@valOpen) THEN SET @valOpen = 0 ENDIF
+    IF Empty(@valClk) THEN SET @valClk = 0 ENDIF
+    IF Empty(@valUnsub) THEN SET @valUnsub = 0 ENDIF
+    IF Empty(@valUnreg) THEN SET @valUnreg = 0 ENDIF
+    IF Empty(@perfEventLabels) THEN
+      SET @perfEventLabels = @lblDay
+      SET @perfEventOpens = @valOpen
+      SET @perfEventClicks = @valClk
+      SET @perfEventUnsubs = @valUnsub
+      SET @perfEventUnregOpens = @valUnreg
+    ELSE
+      SET @perfEventLabels = Concat(@perfEventLabels, "|", @lblDay)
+      SET @perfEventOpens = Concat(@perfEventOpens, "|", @valOpen)
+      SET @perfEventClicks = Concat(@perfEventClicks, "|", @valClk)
+      SET @perfEventUnsubs = Concat(@perfEventUnsubs, "|", @valUnsub)
+      SET @perfEventUnregOpens = Concat(@perfEventUnregOpens, "|", @valUnreg)
+    ENDIF
+  NEXT @si
+  SET @stRows = LookupRows("sst_analytics_journey_by_state", "journeyId", @jid)
+  IF RowCount(@stRows) == 0 THEN
+    SET @stRows = LookupRows("sst_analytics_journey_by_state", "JourneyID", @jid)
+  ENDIF
+  SET @stateCount = RowCount(@stRows)
+  FOR @si = 1 TO @stateCount DO
+    SET @stRow = Row(@stRows, @si)
+    SET @stateName = Field(@stRow, "StateName")
+    SET @stateOpenedCount = Field(@stRow, "Opened")
+    SET @stateBouncedCount = Field(@stRow, "Bounced")
+    SET @stateDidNotOpenCount = Field(@stRow, "DidNotOpen")
+    SET @stateClickedCount = Field(@stRow, "Clicked")
+    SET @stateTotalCount = Field(@stRow, "Total")
+    IF Empty(@stateLabels) THEN
+      SET @stateLabels = @stateName
+      SET @stateOpenedData = @stateOpenedCount
+      SET @stateBouncedData = @stateBouncedCount
+      SET @stateDidNotOpenData = @stateDidNotOpenCount
+      SET @stateClickedData = @stateClickedCount
+      SET @stateTotalData = @stateTotalCount
+    ELSE
+      SET @stateLabels = Concat(@stateLabels, ",", @stateName)
+      SET @stateOpenedData = Concat(@stateOpenedData, ",", @stateOpenedCount)
+      SET @stateBouncedData = Concat(@stateBouncedData, ",", @stateBouncedCount)
+      SET @stateDidNotOpenData = Concat(@stateDidNotOpenData, ",", @stateDidNotOpenCount)
+      SET @stateClickedData = Concat(@stateClickedData, ",", @stateClickedCount)
+      SET @stateTotalData = Concat(@stateTotalData, ",", @stateTotalCount)
+    ENDIF
+  NEXT @si
+  SET @spRows = LookupRows("sst_analytics_journey_by_specialty", "journeyId", @jid)
+  IF RowCount(@spRows) == 0 THEN
+    SET @spRows = LookupRows("sst_analytics_journey_by_specialty", "JourneyID", @jid)
+  ENDIF
+  FOR @si = 1 TO RowCount(@spRows) DO
+    SET @spRow = Row(@spRows, @si)
+    SET @specialtyName = Field(@spRow, "Specialty")
+    SET @specialtyOpenedCount = Field(@spRow, "Opened")
+    SET @specialtyBouncedCount = Field(@spRow, "Bounced")
+    SET @specialtyDidNotOpenCount = Field(@spRow, "DidNotOpen")
+    SET @specialtyClickedCount = Field(@spRow, "Clicked")
+    SET @specialtyTotalCount = Field(@spRow, "Total")
+    IF Empty(@specialtyLabels) THEN
+      SET @specialtyLabels = @specialtyName
+      SET @specialtyOpenedData = @specialtyOpenedCount
+      SET @specialtyBouncedData = @specialtyBouncedCount
+      SET @specialtyDidNotOpenData = @specialtyDidNotOpenCount
+      SET @specialtyClickedData = @specialtyClickedCount
+      SET @specialtyTotalData = @specialtyTotalCount
+    ELSE
+      SET @specialtyLabels = Concat(@specialtyLabels, ",", @specialtyName)
+      SET @specialtyOpenedData = Concat(@specialtyOpenedData, ",", @specialtyOpenedCount)
+      SET @specialtyBouncedData = Concat(@specialtyBouncedData, ",", @specialtyBouncedCount)
+      SET @specialtyDidNotOpenData = Concat(@specialtyDidNotOpenData, ",", @specialtyDidNotOpenCount)
+      SET @specialtyClickedData = Concat(@specialtyClickedData, ",", @specialtyClickedCount)
+      SET @specialtyTotalData = Concat(@specialtyTotalData, ",", @specialtyTotalCount)
+    ENDIF
+  NEXT @si
+ENDIF
 
 IF @totalRecords > 0 THEN
 FOR @i = 1 TO @totalRecords DO
@@ -185,208 +294,6 @@ ENDIF
 SET @viewEmailUrl = Field(@row, "view_email_url")
 SET @clickCount = Field(@row, "ClickCount")
 SET @botOrHuman = Field(@row, "BotOrHuman")
-IF NOT Empty(@engagement) THEN
-SET @engagementTrimmed = Trim(@engagement) 
-
-IF @engagementTrimmed == "Opened" THEN
-SET @openedCount = Add(@openedCount, 1)
-SET @openedData = Concat(@openedData, @engagementTrimmed, "|||")
-IF NOT Empty(@date) THEN
-SET @openedDateData = Concat(@openedDateData, @date, ",")
-ENDIF
-IF Empty(@auth0UserId) THEN
-SET @unregisteredOpenedCount = Add(@unregisteredOpenedCount, 1)
-IF NOT Empty(@date) THEN
-SET @unregisteredOpenedDateData = Concat(@unregisteredOpenedDateData, @date, ",")
-ENDIF
-ENDIF
-ELSEIF @engagementTrimmed == "Bounced" THEN
-SET @bouncedCount = Add(@bouncedCount, 1)
-SET @bouncedData = Concat(@bouncedData, @engagementTrimmed, "|||")
-ELSEIF @engagementTrimmed == "Did Not Open" THEN
-SET @didNotOpenCount = Add(@didNotOpenCount, 1)
-SET @didNotOpenData = Concat(@didNotOpenData, @engagementTrimmed, "|||")
-ELSEIF @engagementTrimmed == "Clicked" THEN
-SET @clickedCount = Add(@clickedCount, 1)
-SET @clickedData = Concat(@clickedData, @engagementTrimmed, "|||")
-IF NOT Empty(@date) THEN
-SET @clickedDateData = Concat(@clickedDateData, @date, ",")
-ENDIF
-ELSEIF @engagementTrimmed == "Unsubscribed" THEN
-IF NOT Empty(@date) THEN
-SET @unsubscribedDateData = Concat(@unsubscribedDateData, @date, ",")
-ENDIF
-ENDIF
-ENDIF 
-
-IF NOT Empty(@date) THEN
-SET @dateData = Concat(@dateData, @date, ",")
-ENDIF 
-
-IF NOT Empty(@state) AND NOT Empty(@engagement) THEN
-SET @stateData = Concat(@stateData, @state, ",")
-SET @stateTrimmed = Trim(@state)
-SET @stateKey = Concat(@stateTrimmed, ":::")
-SET @stateFound = 0
-SET @stateFoundIndex = 0
-IF NOT Empty(@stateEngagementMap) THEN
-SET @stateMapKeys = BuildRowsetFromString(@stateEngagementMap, "|||")
-FOR @stateMapIdx = 1 TO RowCount(@stateMapKeys) DO
-SET @stateMapRow = Row(@stateMapKeys, @stateMapIdx)
-SET @stateMapValue = Field(@stateMapRow, 1)
-IF IndexOf(@stateMapValue, @stateKey) == 1 THEN
-SET @stateFound = 1
-SET @stateFoundIndex = @stateMapIdx
-ENDIF
-NEXT @stateMapIdx
-ENDIF
-IF @stateFound == 0 THEN
-SET @stateOpenedCount = 0
-SET @stateBouncedCount = 0
-SET @stateDidNotOpenCount = 0
-SET @stateClickedCount = 0
-SET @stateTotalCount = 0
-IF @engagementTrimmed == "Opened" THEN
-SET @stateOpenedCount = 1
-ELSEIF @engagementTrimmed == "Bounced" THEN
-SET @stateBouncedCount = 1
-ELSEIF @engagementTrimmed == "Did Not Open" THEN
-SET @stateDidNotOpenCount = 1
-ELSEIF @engagementTrimmed == "Clicked" THEN
-SET @stateClickedCount = 1
-ENDIF
-SET @stateTotalCount = 1
-IF Empty(@stateEngagementMap) THEN
-SET @stateEngagementMap = Concat(@stateTrimmed, ":::", @stateOpenedCount, ":::", @stateBouncedCount, ":::",
-@stateDidNotOpenCount, ":::", @stateClickedCount, ":::", @stateTotalCount)
-ELSE
-SET @stateEngagementMap = Concat(@stateEngagementMap, "|||", @stateTrimmed, ":::", @stateOpenedCount, ":::",
-@stateBouncedCount, ":::", @stateDidNotOpenCount, ":::", @stateClickedCount, ":::", @stateTotalCount)
-ENDIF
-ELSE
-SET @stateMapRow = Row(@stateMapKeys, @stateFoundIndex)
-SET @stateMapValue = Field(@stateMapRow, 1)
-SET @stateParts = BuildRowsetFromString(@stateMapValue, ":::")
-SET @stateName = Field(Row(@stateParts, 1), 1)
-SET @stateOpenedCount = Field(Row(@stateParts, 2), 1)
-SET @stateBouncedCount = Field(Row(@stateParts, 3), 1)
-SET @stateDidNotOpenCount = Field(Row(@stateParts, 4), 1)
-SET @stateClickedCount = Field(Row(@stateParts, 5), 1)
-SET @stateTotalCount = Field(Row(@stateParts, 6), 1)
-IF @engagementTrimmed == "Opened" THEN
-SET @stateOpenedCount = Add(@stateOpenedCount, 1)
-ELSEIF @engagementTrimmed == "Bounced" THEN
-SET @stateBouncedCount = Add(@stateBouncedCount, 1)
-ELSEIF @engagementTrimmed == "Did Not Open" THEN
-SET @stateDidNotOpenCount = Add(@stateDidNotOpenCount, 1)
-ELSEIF @engagementTrimmed == "Clicked" THEN
-SET @stateClickedCount = Add(@stateClickedCount, 1)
-ENDIF
-SET @stateTotalCount = Add(@stateTotalCount, 1)
-SET @stateNewValue = Concat(@stateName, ":::", @stateOpenedCount, ":::", @stateBouncedCount, ":::",
-@stateDidNotOpenCount, ":::", @stateClickedCount, ":::", @stateTotalCount)
-SET @stateMapKeysNew = BuildRowsetFromString(@stateEngagementMap, "|||")
-SET @stateEngagementMap = ""
-FOR @stateMapIdx2 = 1 TO RowCount(@stateMapKeysNew) DO
-SET @stateMapRow2 = Row(@stateMapKeysNew, @stateMapIdx2)
-IF @stateMapIdx2 == @stateFoundIndex THEN
-SET @stateMapValue2 = @stateNewValue
-ELSE
-SET @stateMapValue2 = Field(@stateMapRow2, 1)
-ENDIF
-IF Empty(@stateEngagementMap) THEN
-SET @stateEngagementMap = @stateMapValue2
-ELSE
-SET @stateEngagementMap = Concat(@stateEngagementMap, "|||", @stateMapValue2)
-ENDIF
-NEXT @stateMapIdx2
-ENDIF
-ENDIF 
-
-IF NOT Empty(@primarySpecialty) AND NOT Empty(@engagement) THEN
-SET @specialtyData = Concat(@specialtyData, @primarySpecialty, ",")
-SET @specialtyTrimmed = Trim(@primarySpecialty)
-SET @specialtyKey = Concat(@specialtyTrimmed, ":::")
-SET @specialtyFound = 0
-SET @specialtyFoundIndex = 0
-IF NOT Empty(@specialtyEngagementMap) THEN
-SET @specialtyMapKeys = BuildRowsetFromString(@specialtyEngagementMap, "|||")
-FOR @specialtyMapIdx = 1 TO RowCount(@specialtyMapKeys) DO
-SET @specialtyMapRow = Row(@specialtyMapKeys, @specialtyMapIdx)
-SET @specialtyMapValue = Field(@specialtyMapRow, 1)
-IF IndexOf(@specialtyMapValue, @specialtyKey) == 1 THEN
-SET @specialtyFound = 1
-SET @specialtyFoundIndex = @specialtyMapIdx
-ENDIF
-NEXT @specialtyMapIdx
-ENDIF
-IF @specialtyFound == 0 THEN
-SET @specialtyOpenedCount = 0
-SET @specialtyBouncedCount = 0
-SET @specialtyDidNotOpenCount = 0
-SET @specialtyClickedCount = 0
-SET @specialtyTotalCount = 0
-IF @engagementTrimmed == "Opened" THEN
-SET @specialtyOpenedCount = 1
-ELSEIF @engagementTrimmed == "Bounced" THEN
-SET @specialtyBouncedCount = 1
-ELSEIF @engagementTrimmed == "Did Not Open" THEN
-SET @specialtyDidNotOpenCount = 1
-ELSEIF @engagementTrimmed == "Clicked" THEN
-SET @specialtyClickedCount = 1
-ENDIF
-SET @specialtyTotalCount = 1
-IF Empty(@specialtyEngagementMap) THEN
-SET @specialtyEngagementMap = Concat(@specialtyTrimmed, ":::", @specialtyOpenedCount, ":::", @specialtyBouncedCount, ":::",
-@specialtyDidNotOpenCount, ":::", @specialtyClickedCount, ":::", @specialtyTotalCount)
-ELSE
-SET @specialtyEngagementMap = Concat(@specialtyEngagementMap, "|||", @specialtyTrimmed, ":::", @specialtyOpenedCount, ":::",
-@specialtyBouncedCount, ":::", @specialtyDidNotOpenCount, ":::", @specialtyClickedCount, ":::", @specialtyTotalCount)
-ENDIF
-ELSE
-SET @specialtyMapRow = Row(@specialtyMapKeys, @specialtyFoundIndex)
-SET @specialtyMapValue = Field(@specialtyMapRow, 1)
-SET @specialtyParts = BuildRowsetFromString(@specialtyMapValue, ":::")
-SET @specialtyName = Field(Row(@specialtyParts, 1), 1)
-SET @specialtyOpenedCount = Field(Row(@specialtyParts, 2), 1)
-SET @specialtyBouncedCount = Field(Row(@specialtyParts, 3), 1)
-SET @specialtyDidNotOpenCount = Field(Row(@specialtyParts, 4), 1)
-SET @specialtyClickedCount = Field(Row(@specialtyParts, 5), 1)
-SET @specialtyTotalCount = Field(Row(@specialtyParts, 6), 1)
-IF @engagementTrimmed == "Opened" THEN
-SET @specialtyOpenedCount = Add(@specialtyOpenedCount, 1)
-ELSEIF @engagementTrimmed == "Bounced" THEN
-SET @specialtyBouncedCount = Add(@specialtyBouncedCount, 1)
-ELSEIF @engagementTrimmed == "Did Not Open" THEN
-SET @specialtyDidNotOpenCount = Add(@specialtyDidNotOpenCount, 1)
-ELSEIF @engagementTrimmed == "Clicked" THEN
-SET @specialtyClickedCount = Add(@specialtyClickedCount, 1)
-ENDIF
-SET @specialtyTotalCount = Add(@specialtyTotalCount, 1)
-SET @specialtyNewValue = Concat(@specialtyName, ":::", @specialtyOpenedCount, ":::", @specialtyBouncedCount, ":::",
-@specialtyDidNotOpenCount, ":::", @specialtyClickedCount, ":::", @specialtyTotalCount)
-SET @specialtyMapKeysNew = BuildRowsetFromString(@specialtyEngagementMap, "|||")
-SET @specialtyEngagementMap = ""
-FOR @specialtyMapIdx2 = 1 TO RowCount(@specialtyMapKeysNew) DO
-SET @specialtyMapRow2 = Row(@specialtyMapKeysNew, @specialtyMapIdx2)
-IF @specialtyMapIdx2 == @specialtyFoundIndex THEN
-SET @specialtyMapValue2 = @specialtyNewValue
-ELSE
-SET @specialtyMapValue2 = Field(@specialtyMapRow2, 1)
-ENDIF
-IF Empty(@specialtyEngagementMap) THEN
-SET @specialtyEngagementMap = @specialtyMapValue2
-ELSE
-SET @specialtyEngagementMap = Concat(@specialtyEngagementMap, "|||", @specialtyMapValue2)
-ENDIF
-NEXT @specialtyMapIdx2
-ENDIF
-ENDIF 
-
-IF NOT Empty(@jobId) THEN
-SET @jobIdData = Concat(@jobIdData, @jobId, ",")
-ENDIF 
-
 SET @responseContactId = IIF(Empty(@contactId), "N/A", @contactId)
 SET @responseEmail = IIF(Empty(@email), "N/A", @email)
 SET @responseDate = IIF(Empty(@date), "N/A", @date)
@@ -414,257 +321,8 @@ SET @responseEntry = Concat(@responseContactId, ":::", @responseEmail, ":::", @r
 @responseClickCount, ":::", @responseBotOrHuman)
 SET @responsesData = Concat(@responsesData, @responseEntry, "|||")
 NEXT @i
-ENDIF 
+ENDIF
 
-SET @stateCount = 0
-IF NOT Empty(@stateEngagementMap) THEN
-SET @stateMapKeys = BuildRowsetFromString(@stateEngagementMap, "|||")
-SET @stateCount = RowCount(@stateMapKeys)
-FOR @stateMapIdx = 1 TO RowCount(@stateMapKeys) DO
-SET @stateMapRow = Row(@stateMapKeys, @stateMapIdx)
-SET @stateMapValue = Field(@stateMapRow, 1)
-SET @stateParts = BuildRowsetFromString(@stateMapValue, ":::")
-SET @stateName = Field(Row(@stateParts, 1), 1)
-SET @stateOpenedCount = Field(Row(@stateParts, 2), 1)
-SET @stateBouncedCount = Field(Row(@stateParts, 3), 1)
-SET @stateDidNotOpenCount = Field(Row(@stateParts, 4), 1)
-SET @stateClickedCount = Field(Row(@stateParts, 5), 1)
-SET @stateTotalCount = Field(Row(@stateParts, 6), 1)
-IF Empty(@stateLabels) THEN
-SET @stateLabels = @stateName
-SET @stateOpenedData = @stateOpenedCount
-SET @stateBouncedData = @stateBouncedCount
-SET @stateDidNotOpenData = @stateDidNotOpenCount
-SET @stateClickedData = @stateClickedCount
-SET @stateTotalData = @stateTotalCount
-ELSE
-SET @stateLabels = Concat(@stateLabels, ",", @stateName)
-SET @stateOpenedData = Concat(@stateOpenedData, ",", @stateOpenedCount)
-SET @stateBouncedData = Concat(@stateBouncedData, ",", @stateBouncedCount)
-SET @stateDidNotOpenData = Concat(@stateDidNotOpenData, ",", @stateDidNotOpenCount)
-SET @stateClickedData = Concat(@stateClickedData, ",", @stateClickedCount)
-SET @stateTotalData = Concat(@stateTotalData, ",", @stateTotalCount)
-ENDIF
-NEXT @stateMapIdx
-ENDIF        
-
-IF NOT Empty(@specialtyEngagementMap) THEN
-SET @specialtyMapKeys = BuildRowsetFromString(@specialtyEngagementMap, "|||")
-FOR @specialtyMapIdx = 1 TO RowCount(@specialtyMapKeys) DO
-SET @specialtyMapRow = Row(@specialtyMapKeys, @specialtyMapIdx)
-SET @specialtyMapValue = Field(@specialtyMapRow, 1)
-SET @specialtyParts = BuildRowsetFromString(@specialtyMapValue, ":::")
-SET @specialtyName = Field(Row(@specialtyParts, 1), 1)
-SET @specialtyOpenedCount = Field(Row(@specialtyParts, 2), 1)
-SET @specialtyBouncedCount = Field(Row(@specialtyParts, 3), 1)
-SET @specialtyDidNotOpenCount = Field(Row(@specialtyParts, 4), 1)
-SET @specialtyClickedCount = Field(Row(@specialtyParts, 5), 1)
-SET @specialtyTotalCount = Field(Row(@specialtyParts, 6), 1)
-IF Empty(@specialtyLabels) THEN
-SET @specialtyLabels = @specialtyName
-SET @specialtyOpenedData = @specialtyOpenedCount
-SET @specialtyBouncedData = @specialtyBouncedCount
-SET @specialtyDidNotOpenData = @specialtyDidNotOpenCount
-SET @specialtyClickedData = @specialtyClickedCount
-SET @specialtyTotalData = @specialtyTotalCount
-ELSE
-SET @specialtyLabels = Concat(@specialtyLabels, ",", @specialtyName)
-SET @specialtyOpenedData = Concat(@specialtyOpenedData, ",", @specialtyOpenedCount)
-SET @specialtyBouncedData = Concat(@specialtyBouncedData, ",", @specialtyBouncedCount)
-SET @specialtyDidNotOpenData = Concat(@specialtyDidNotOpenData, ",", @specialtyDidNotOpenCount)
-SET @specialtyClickedData = Concat(@specialtyClickedData, ",", @specialtyClickedCount)
-SET @specialtyTotalData = Concat(@specialtyTotalData, ",", @specialtyTotalCount)
-ENDIF
-NEXT @specialtyMapIdx
-ENDIF 
-
-IF NOT Empty(@openedData) THEN
-SET @openedArray = BuildRowsetFromString(@openedData, "|||")
-SET @openedArrayCount = RowCount(@openedArray)
-FOR @j = 1 TO @openedArrayCount DO
-SET @openedRow = Row(@openedArray, @j)
-SET @openedValue = Trim(Field(@openedRow, 1))
-IF NOT Empty(@openedValue) THEN
-IF Empty(@openedUnique) THEN
-SET @openedUnique = @openedValue
-SET @openedCounts = "1"
-ELSE
-SET @openedUniqueArray = BuildRowsetFromString(@openedUnique, "|||")
-SET @found = 0
-SET @foundIndex = 0
-FOR @k = 1 TO RowCount(@openedUniqueArray) DO
-SET @uniqueRow = Row(@openedUniqueArray, @k)
-SET @uniqueValue = Trim(Field(@uniqueRow, 1))
-IF @uniqueValue == @openedValue THEN
-SET @found = 1
-SET @foundIndex = @k
-ENDIF
-NEXT @k
-IF @found == 0 THEN
-SET @openedUnique = Concat(@openedUnique, "|||", @openedValue)
-SET @openedCounts = Concat(@openedCounts, "|||", "1")
-ELSE
-SET @openedCountArray = BuildRowsetFromString(@openedCounts, "|||")
-SET @newCounts = ""
-FOR @l = 1 TO RowCount(@openedCountArray) DO
-SET @countRow = Row(@openedCountArray, @l)
-SET @countValue = Field(@countRow, 1)
-IF @l == @foundIndex THEN
-SET @countValue = Add(@countValue, 1)
-ENDIF
-IF Empty(@newCounts) THEN
-SET @newCounts = @countValue
-ELSE
-SET @newCounts = Concat(@newCounts, "|||", @countValue)
-ENDIF
-NEXT @l
-SET @openedCounts = @newCounts
-ENDIF
-ENDIF
-ENDIF
-NEXT @j
-ENDIF 
-
-IF NOT Empty(@bouncedData) THEN
-SET @bouncedArray = BuildRowsetFromString(@bouncedData, "|||")
-SET @bouncedArrayCount = RowCount(@bouncedArray)
-FOR @m = 1 TO @bouncedArrayCount DO
-SET @bouncedRow = Row(@bouncedArray, @m)
-SET @bouncedValue = Trim(Field(@bouncedRow, 1))
-IF NOT Empty(@bouncedValue) THEN
-IF Empty(@bouncedUnique) THEN
-SET @bouncedUnique = @bouncedValue
-SET @bouncedCounts = "1"
-ELSE
-SET @bouncedUniqueArray = BuildRowsetFromString(@bouncedUnique, "|||")
-SET @found2 = 0
-SET @foundIndex2 = 0
-FOR @n = 1 TO RowCount(@bouncedUniqueArray) DO
-SET @uniqueRow2 = Row(@bouncedUniqueArray, @n)
-SET @uniqueValue2 = Trim(Field(@uniqueRow2, 1))
-IF @uniqueValue2 == @bouncedValue THEN
-SET @found2 = 1
-SET @foundIndex2 = @n
-ENDIF
-NEXT @n
-IF @found2 == 0 THEN
-SET @bouncedUnique = Concat(@bouncedUnique, "|||", @bouncedValue)
-SET @bouncedCounts = Concat(@bouncedCounts, "|||", "1")
-ELSE
-SET @bouncedCountArray = BuildRowsetFromString(@bouncedCounts, "|||")
-SET @newCounts2 = ""
-FOR @o = 1 TO RowCount(@bouncedCountArray) DO
-SET @countRow2 = Row(@bouncedCountArray, @o)
-SET @countValue2 = Field(@countRow2, 1)
-IF @o == @foundIndex2 THEN
-SET @countValue2 = Add(@countValue2, 1)
-ENDIF
-IF Empty(@newCounts2) THEN
-SET @newCounts2 = @countValue2
-ELSE
-SET @newCounts2 = Concat(@newCounts2, "|||", @countValue2)
-ENDIF
-NEXT @o
-SET @bouncedCounts = @newCounts2
-ENDIF
-ENDIF
-ENDIF
-NEXT @m
-ENDIF 
-
-IF NOT Empty(@didNotOpenData) THEN
-SET @didNotOpenArray = BuildRowsetFromString(@didNotOpenData, "|||")
-SET @didNotOpenArrayCount = RowCount(@didNotOpenArray)
-FOR @p = 1 TO @didNotOpenArrayCount DO
-SET @didNotOpenRow = Row(@didNotOpenArray, @p)
-SET @didNotOpenValue = Trim(Field(@didNotOpenRow, 1))
-IF NOT Empty(@didNotOpenValue) THEN
-IF Empty(@didNotOpenUnique) THEN
-SET @didNotOpenUnique = @didNotOpenValue
-SET @didNotOpenCounts = "1"
-ELSE
-SET @didNotOpenUniqueArray = BuildRowsetFromString(@didNotOpenUnique, "|||")
-SET @found3 = 0
-SET @foundIndex3 = 0
-FOR @q = 1 TO RowCount(@didNotOpenUniqueArray) DO
-SET @uniqueRow3 = Row(@didNotOpenUniqueArray, @q)
-SET @uniqueValue3 = Trim(Field(@uniqueRow3, 1))
-IF @uniqueValue3 == @didNotOpenValue THEN
-SET @found3 = 1
-SET @foundIndex3 = @q
-ENDIF
-NEXT @q
-IF @found3 == 0 THEN
-SET @didNotOpenUnique = Concat(@didNotOpenUnique, "|||", @didNotOpenValue)
-SET @didNotOpenCounts = Concat(@didNotOpenCounts, "|||", "1")
-ELSE
-SET @didNotOpenCountArray = BuildRowsetFromString(@didNotOpenCounts, "|||")
-SET @newCounts3 = ""
-FOR @r = 1 TO RowCount(@didNotOpenCountArray) DO
-SET @countRow3 = Row(@didNotOpenCountArray, @r)
-SET @countValue3 = Field(@countRow3, 1)
-IF @r == @foundIndex3 THEN
-SET @countValue3 = Add(@countValue3, 1)
-ENDIF
-IF Empty(@newCounts3) THEN
-SET @newCounts3 = @countValue3
-ELSE
-SET @newCounts3 = Concat(@newCounts3, "|||", @countValue3)
-ENDIF
-NEXT @r
-SET @didNotOpenCounts = @newCounts3
-ENDIF
-ENDIF
-ENDIF
-NEXT @p
-ENDIF    
-
-IF NOT Empty(@clickedData) THEN
-SET @clickedArray = BuildRowsetFromString(@clickedData, "|||")
-SET @clickedArrayCount = RowCount(@clickedArray)
-FOR @s = 1 TO @clickedArrayCount DO
-SET @clickedRow = Row(@clickedArray, @s)
-SET @clickedValue = Trim(Field(@clickedRow, 1))
-IF NOT Empty(@clickedValue) THEN
-IF Empty(@clickedUnique) THEN
-SET @clickedUnique = @clickedValue
-SET @clickedCounts = "1"
-ELSE
-SET @clickedUniqueArray = BuildRowsetFromString(@clickedUnique, "|||")
-SET @found4 = 0
-SET @foundIndex4 = 0
-FOR @t = 1 TO RowCount(@clickedUniqueArray) DO
-SET @uniqueRow4 = Row(@clickedUniqueArray, @t)
-SET @uniqueValue4 = Trim(Field(@uniqueRow4, 1))
-IF @uniqueValue4 == @clickedValue THEN
-SET @found4 = 1
-SET @foundIndex4 = @t
-ENDIF
-NEXT @t
-IF @found4 == 0 THEN
-SET @clickedUnique = Concat(@clickedUnique, "|||", @clickedValue)
-SET @clickedCounts = Concat(@clickedCounts, "|||", "1")
-ELSE
-SET @clickedCountArray = BuildRowsetFromString(@clickedCounts, "|||")
-SET @newCounts4 = ""
-FOR @u = 1 TO RowCount(@clickedCountArray) DO
-SET @countRow4 = Row(@clickedCountArray, @u)
-SET @countValue4 = Field(@countRow4, 1)
-IF @u == @foundIndex4 THEN
-SET @countValue4 = Add(@countValue4, 1)
-ENDIF
-IF Empty(@newCounts4) THEN
-SET @newCounts4 = @countValue4
-ELSE
-SET @newCounts4 = Concat(@newCounts4, "|||", @countValue4)
-ENDIF
-NEXT @u
-SET @clickedCounts = @newCounts4
-ENDIF
-ENDIF
-ENDIF
-NEXT @s
-ENDIF
 SET @editSidebarHtml = ContentBlockByKey("sst_shell_edit_sidebar")
 ]%%
 
@@ -1686,43 +1344,19 @@ pre.log.show{display:block}
            }
        }
 
+       function splitPerfPipe(raw) {
+           if (!raw || raw === '') return [];
+           return raw.split('|').filter(function (part) { return part.trim() !== ''; });
+       }
+       function splitPerfNumbers(raw) {
+           return splitPerfPipe(raw).map(function (n) { return parseInt(n, 10) || 0; });
+       }
+
        function createResponseChart() {
            const ctx = document.getElementById('responseChart');
            if (!ctx) return;
-           const dateData = '%%=v(@dateData)=%%';
-           const dateCounts = {};
-           if (dateData && dateData !== '') {
-               const dates = dateData.split(',').filter(date => date.trim() !== '');
-               dates.forEach(date => {
-                   const trimmedDate = date.trim();
-                   if (trimmedDate) {
-                       const parsedDate = parseCustomDate(trimmedDate);
-                       if (parsedDate && !isNaN(parsedDate.getTime())) {
-                           const dateOnly = parsedDate.toLocaleDateString('en-US', {
-                               year: 'numeric',
-                               month: 'short',
-                               day: 'numeric'
-                           });
-                           dateCounts[dateOnly] = (dateCounts[dateOnly] || 0) + 1;
-                       } else {
-                           const parts = trimmedDate.split(' ');
-                           if (parts.length >= 3) {
-                               const dateOnly = parts[0] + ' ' + parts[1] + ' ' + parts[2];
-                               dateCounts[dateOnly] = (dateCounts[dateOnly] || 0) + 1;
-                           }
-                       }
-                   }
-               });
-           }
-           const sortedDates = Object.keys(dateCounts).sort((a, b) => {
-               const dateA = parseCustomDate(a);
-               const dateB = parseCustomDate(b);
-               if (!dateA && !dateB) return a.localeCompare(b);
-               if (!dateA) return 1;
-               if (!dateB) return -1;
-               return dateA.getTime() - dateB.getTime();
-           });
-           const counts = sortedDates.map(date => dateCounts[date]);
+           const sortedDates = splitPerfPipe('%%=v(@perfSentLabels)=%%');
+           const counts = splitPerfNumbers('%%=v(@perfSentCounts)=%%');
            const allValues = counts.filter(v => !isNaN(v));
            const maxValue = allValues.length > 0 ? Math.max(...allValues) : 1;
            const stepSize = Math.max(1, Math.ceil(maxValue / 10));
@@ -1910,31 +1544,11 @@ pre.log.show{display:block}
       function createOpensClicksChart() {
           const ctx = document.getElementById('opensClicksChart');
           if (!ctx) return;
-          const openedDateData = '%%=v(@openedDateData)=%%';
-          const clickedDateData = '%%=v(@clickedDateData)=%%';
-          const unsubscribedDateData = '%%=v(@unsubscribedDateData)=%%';
-          const unregisteredOpenedDateData = '%%=v(@unregisteredOpenedDateData)=%%';
-          const openCounts = buildDateCounts(openedDateData);
-          const clickCounts = buildDateCounts(clickedDateData);
-          const unsubscribedCounts = buildDateCounts(unsubscribedDateData);
-          const unregisteredOpenCounts = buildDateCounts(unregisteredOpenedDateData);
-          const allDatesSet = {};
-          Object.keys(openCounts).forEach(d => { allDatesSet[d] = true; });
-          Object.keys(clickCounts).forEach(d => { allDatesSet[d] = true; });
-          Object.keys(unsubscribedCounts).forEach(d => { allDatesSet[d] = true; });
-          Object.keys(unregisteredOpenCounts).forEach(d => { allDatesSet[d] = true; });
-           const sortedDates = Object.keys(allDatesSet).sort((a, b) => {
-               const dateA = parseCustomDate(a);
-               const dateB = parseCustomDate(b);
-               if (!dateA && !dateB) return a.localeCompare(b);
-               if (!dateA) return 1;
-               if (!dateB) return -1;
-               return dateA.getTime() - dateB.getTime();
-           });
-          const opensData = sortedDates.map(d => openCounts[d] || 0);
-          const clicksData = sortedDates.map(d => clickCounts[d] || 0);
-          const unsubscribedData = sortedDates.map(d => unsubscribedCounts[d] || 0);
-          const unregisteredOpensData = sortedDates.map(d => unregisteredOpenCounts[d] || 0);
+          const sortedDates = splitPerfPipe('%%=v(@perfEventLabels)=%%');
+          const opensData = splitPerfNumbers('%%=v(@perfEventOpens)=%%');
+          const clicksData = splitPerfNumbers('%%=v(@perfEventClicks)=%%');
+          const unsubscribedData = splitPerfNumbers('%%=v(@perfEventUnsubs)=%%');
+          const unregisteredOpensData = splitPerfNumbers('%%=v(@perfEventUnregOpens)=%%');
           const allValues = opensData.concat(clicksData, unsubscribedData, unregisteredOpensData).filter(v => !isNaN(v));
            const maxValue = allValues.length > 0 ? Math.max(...allValues) : 1;
            const stepSize = Math.max(1, Math.ceil(maxValue / 10));
