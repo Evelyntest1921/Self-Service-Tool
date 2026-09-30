@@ -10,12 +10,15 @@ VAR @responseContactId, @responseEmail, @responseDate, @responseEngagement, @res
 VAR @responseJobId, @responseAccountName, @responseFirstName, @responseLastName, @responseDesignation, @responseRole
 VAR @responseMobile, @responseAuth0UserId, @responseOpenDate, @responseViewEmailUrl, @responseEmailName, @responseContactUrl
 VAR @responseClickCount, @responseBotOrHuman
-VAR @openedArray, @openedArrayCount, @openedRow, @openedValue, @openedUniqueArray, @openedCountArray, @newCounts
-VAR @bouncedArray, @bouncedArrayCount, @bouncedRow, @bouncedValue, @bouncedUniqueArray, @found2, @foundIndex2, @uniqueRow2, @uniqueValue2
-VAR @bouncedCountArray, @newCounts2, @countRow2, @countValue2, @didNotOpenArray, @didNotOpenArrayCount, @didNotOpenRow, @didNotOpenValue
-VAR @didNotOpenUniqueArray, @found3, @foundIndex3, @uniqueRow3, @uniqueValue3, @didNotOpenCountArray, @newCounts3, @countRow3, @countValue3
-VAR @clickedArray, @clickedArrayCount, @clickedRow, @clickedValue, @clickedUniqueArray, @found4, @foundIndex4, @uniqueRow4, @uniqueValue4
-VAR @clickedCountArray, @newCounts4, @countRow4, @countValue4, @n, @o, @p, @q, @r, @s, @t, @u, @m, @j
+VAR @analyticsData, @totalRecords, @responseRowCount, @openedCount, @bouncedCount, @didNotOpenCount, @clickedCount
+VAR @row, @i, @engagement, @date, @responsesData
+VAR @stateLabels, @stateOpenedData, @stateDidNotOpenData, @stateBouncedData, @stateClickedData, @stateTotalData
+VAR @stateName, @stateOpenedCount, @stateBouncedCount, @stateDidNotOpenCount, @stateClickedCount, @stateTotalCount, @stateCount
+VAR @specialtyLabels, @specialtyOpenedData, @specialtyDidNotOpenData, @specialtyBouncedData, @specialtyClickedData, @specialtyTotalData
+VAR @specialtyName, @specialtyOpenedCount, @specialtyBouncedCount, @specialtyDidNotOpenCount, @specialtyClickedCount, @specialtyTotalCount
+VAR @metricsRows, @metricsRow, @sentRows, @sentRow, @si, @eventRows, @eventRow, @stRows, @stRow, @spRows, @spRow
+VAR @perfSentLabels, @perfSentCounts, @perfEventLabels, @perfEventOpens, @perfEventClicks, @perfEventUnsubs, @perfEventUnregOpens
+VAR @valSent, @valOpen, @valClk, @valUnsub, @valUnreg, @lblDay, @editSidebarHtml
 
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
@@ -92,25 +95,6 @@ IF RequestParameter("do") == "addContact" AND NOT Empty(RequestParameter("contac
   Redirect(Concat(@articlePreviewUrl, "?subscriberKey=", @contactIdToAdd))
 ENDIF
 
-VAR @analyticsData, @totalRecords, @openedCount, @bouncedCount, @didNotOpenCount, @clickedCount, @dateData, @openedDateData, @clickedDateData, @unsubscribedDateData, @unregisteredOpenedDateData, @openedData, @bouncedData,
-@didNotOpenData, @clickedData, @openedUnique, @openedCounts, @bouncedUnique, @bouncedCounts, @didNotOpenUnique, @didNotOpenCounts,
-@clickedUnique, @clickedCounts, @row, @i, @engagement, @date, @engagementArray, @engagementArrayCount, @engagementRow, @engagementValue,
-@engagementUniqueArray, @found, @foundIndex, @engagementCountArray, @countRow, @countValue, @newCounts, @k, @uniqueRow,
-@uniqueValue, @l, @responsesData, @stateData, @specialtyData, @jobIdData, @stateLabels, @stateOpenedData,
-@stateDidNotOpenData,
-@stateBouncedData, @stateClickedData, @stateTotalData, @stateEngagementMap, @stateKey, @stateOpenedCount, @stateBouncedCount,
-@stateDidNotOpenCount, @stateClickedCount,
-@stateTotalCount, @stateMapKeys, @stateMapKey, @stateMapRow, @stateMapValue, @stateMapIdx, @stateMapIdx2, @stateMapRow2,
-@stateMapValue2, @stateNewValue, @stateParts, @stateName, @stateMapKeysNew, @stateTrimmed, @stateFound, @stateFoundIndex,
-@specialtyLabels, @specialtyOpenedData, @specialtyDidNotOpenData, @specialtyBouncedData, @specialtyClickedData, @specialtyTotalData,
-@specialtyEngagementMap, @specialtyKey, @specialtyOpenedCount, @specialtyBouncedCount, @specialtyDidNotOpenCount, @specialtyClickedCount,
-@specialtyTotalCount, @specialtyMapKeys, @specialtyMapKey, @specialtyMapRow, @specialtyMapValue, @specialtyMapIdx,
-@specialtyMapIdx2, @specialtyMapRow2, @specialtyMapValue2, @specialtyNewValue, @specialtyParts, @specialtyName,
-@specialtyMapKeysNew, @specialtyTrimmed, @specialtyFound, @specialtyFoundIndex, @stateCount
-VAR @metricsRows, @metricsRow, @sentRows, @sentRow, @si, @eventRows, @eventRow, @stRows, @stRow, @spRows, @spRow
-VAR @perfSentLabels, @perfSentCounts, @perfEventLabels, @perfEventOpens, @perfEventClicks, @perfEventUnsubs, @perfEventUnregOpens
-VAR @valSent, @valOpen, @valClk, @valUnsub, @valUnreg, @lblDay, @responseRowCount
-
 SET @totalRecords = 0
 SET @responseRowCount = 0
 IF NOT Empty(@jid) AND Empty(@configError) THEN
@@ -145,124 +129,141 @@ SET @perfEventUnsubs = ""
 SET @perfEventUnregOpens = ""
 SET @stateCount = 0
 IF NOT Empty(@jid) AND Empty(@configError) THEN
-  SET @metricsRows = LookupRows("sst_analytics_journey_metrics", "journeyId", @jid)
-  IF RowCount(@metricsRows) == 0 THEN
-    SET @metricsRows = LookupRows("sst_analytics_journey_metrics", "JourneyID", @jid)
-  ENDIF
-  IF RowCount(@metricsRows) > 0 THEN
-    SET @metricsRow = Row(@metricsRows, 1)
-    SET @totalRecords = Field(@metricsRow, "TotalRecords")
-    SET @openedCount = Field(@metricsRow, "OpenedCount")
-    SET @bouncedCount = Field(@metricsRow, "BouncedCount")
-    SET @didNotOpenCount = Field(@metricsRow, "DidNotOpenCount")
-    SET @clickedCount = Field(@metricsRow, "ClickedCount")
-    SET @unregisteredOpenedCount = Field(@metricsRow, "UnregisteredOpenedCount")
-  ENDIF
-  SET @sentRows = LookupOrderedRows("sst_analytics_journey_sent_by_day", 500, "SortDate ASC", "journeyId", @jid)
-  IF RowCount(@sentRows) == 0 THEN
-    SET @sentRows = LookupOrderedRows("sst_analytics_journey_sent_by_day", 500, "SortDate ASC", "JourneyID", @jid)
-  ENDIF
-  FOR @si = 1 TO RowCount(@sentRows) DO
-    SET @sentRow = Row(@sentRows, @si)
-    SET @lblDay = Field(@sentRow, "DayLabel")
-    SET @valSent = Field(@sentRow, "SentCount")
-    IF Empty(@lblDay) THEN SET @lblDay = Field(@sentRow, "SortDate") ENDIF
-    IF Empty(@valSent) THEN SET @valSent = 0 ENDIF
-    IF Empty(@perfSentLabels) THEN
-      SET @perfSentLabels = @lblDay
-      SET @perfSentCounts = @valSent
-    ELSE
-      SET @perfSentLabels = Concat(@perfSentLabels, "|", @lblDay)
-      SET @perfSentCounts = Concat(@perfSentCounts, "|", @valSent)
+  TRY
+    SET @metricsRows = LookupRows("sst_analytics_journey_metrics", "journeyId", @jid)
+    IF RowCount(@metricsRows) == 0 THEN
+      SET @metricsRows = LookupRows("sst_analytics_journey_metrics", "JourneyID", @jid)
     ENDIF
-  NEXT @si
-  SET @eventRows = LookupOrderedRows("sst_analytics_journey_events_by_day", 500, "SortDate ASC", "journeyId", @jid)
-  IF RowCount(@eventRows) == 0 THEN
-    SET @eventRows = LookupOrderedRows("sst_analytics_journey_events_by_day", 500, "SortDate ASC", "JourneyID", @jid)
-  ENDIF
-  FOR @si = 1 TO RowCount(@eventRows) DO
-    SET @eventRow = Row(@eventRows, @si)
-    SET @lblDay = Field(@eventRow, "DayLabel")
-    SET @valOpen = Field(@eventRow, "OpenCount")
-    SET @valClk = Field(@eventRow, "ClickCount")
-    SET @valUnsub = Field(@eventRow, "UnsubscribedCount")
-    SET @valUnreg = Field(@eventRow, "UnregisteredOpenCount")
-    IF Empty(@lblDay) THEN SET @lblDay = Field(@eventRow, "SortDate") ENDIF
-    IF Empty(@valOpen) THEN SET @valOpen = 0 ENDIF
-    IF Empty(@valClk) THEN SET @valClk = 0 ENDIF
-    IF Empty(@valUnsub) THEN SET @valUnsub = 0 ENDIF
-    IF Empty(@valUnreg) THEN SET @valUnreg = 0 ENDIF
-    IF Empty(@perfEventLabels) THEN
-      SET @perfEventLabels = @lblDay
-      SET @perfEventOpens = @valOpen
-      SET @perfEventClicks = @valClk
-      SET @perfEventUnsubs = @valUnsub
-      SET @perfEventUnregOpens = @valUnreg
-    ELSE
-      SET @perfEventLabels = Concat(@perfEventLabels, "|", @lblDay)
-      SET @perfEventOpens = Concat(@perfEventOpens, "|", @valOpen)
-      SET @perfEventClicks = Concat(@perfEventClicks, "|", @valClk)
-      SET @perfEventUnsubs = Concat(@perfEventUnsubs, "|", @valUnsub)
-      SET @perfEventUnregOpens = Concat(@perfEventUnregOpens, "|", @valUnreg)
+    IF RowCount(@metricsRows) > 0 THEN
+      SET @metricsRow = Row(@metricsRows, 1)
+      SET @totalRecords = Field(@metricsRow, "TotalRecords")
+      SET @openedCount = Field(@metricsRow, "OpenedCount")
+      SET @bouncedCount = Field(@metricsRow, "BouncedCount")
+      SET @didNotOpenCount = Field(@metricsRow, "DidNotOpenCount")
+      SET @clickedCount = Field(@metricsRow, "ClickedCount")
+      SET @unregisteredOpenedCount = Field(@metricsRow, "UnregisteredOpenedCount")
     ENDIF
-  NEXT @si
-  SET @stRows = LookupRows("sst_analytics_journey_by_state", "journeyId", @jid)
-  IF RowCount(@stRows) == 0 THEN
-    SET @stRows = LookupRows("sst_analytics_journey_by_state", "JourneyID", @jid)
-  ENDIF
-  SET @stateCount = RowCount(@stRows)
-  FOR @si = 1 TO @stateCount DO
-    SET @stRow = Row(@stRows, @si)
-    SET @stateName = Field(@stRow, "StateName")
-    SET @stateOpenedCount = Field(@stRow, "Opened")
-    SET @stateBouncedCount = Field(@stRow, "Bounced")
-    SET @stateDidNotOpenCount = Field(@stRow, "DidNotOpen")
-    SET @stateClickedCount = Field(@stRow, "Clicked")
-    SET @stateTotalCount = Field(@stRow, "Total")
-    IF Empty(@stateLabels) THEN
-      SET @stateLabels = @stateName
-      SET @stateOpenedData = @stateOpenedCount
-      SET @stateBouncedData = @stateBouncedCount
-      SET @stateDidNotOpenData = @stateDidNotOpenCount
-      SET @stateClickedData = @stateClickedCount
-      SET @stateTotalData = @stateTotalCount
-    ELSE
-      SET @stateLabels = Concat(@stateLabels, ",", @stateName)
-      SET @stateOpenedData = Concat(@stateOpenedData, ",", @stateOpenedCount)
-      SET @stateBouncedData = Concat(@stateBouncedData, ",", @stateBouncedCount)
-      SET @stateDidNotOpenData = Concat(@stateDidNotOpenData, ",", @stateDidNotOpenCount)
-      SET @stateClickedData = Concat(@stateClickedData, ",", @stateClickedCount)
-      SET @stateTotalData = Concat(@stateTotalData, ",", @stateTotalCount)
+    SET @sentRows = LookupRows("sst_analytics_journey_sent_by_day", "journeyId", @jid)
+    IF RowCount(@sentRows) == 0 THEN
+      SET @sentRows = LookupRows("sst_analytics_journey_sent_by_day", "JourneyID", @jid)
     ENDIF
-  NEXT @si
-  SET @spRows = LookupRows("sst_analytics_journey_by_specialty", "journeyId", @jid)
-  IF RowCount(@spRows) == 0 THEN
-    SET @spRows = LookupRows("sst_analytics_journey_by_specialty", "JourneyID", @jid)
-  ENDIF
-  FOR @si = 1 TO RowCount(@spRows) DO
-    SET @spRow = Row(@spRows, @si)
-    SET @specialtyName = Field(@spRow, "Specialty")
-    SET @specialtyOpenedCount = Field(@spRow, "Opened")
-    SET @specialtyBouncedCount = Field(@spRow, "Bounced")
-    SET @specialtyDidNotOpenCount = Field(@spRow, "DidNotOpen")
-    SET @specialtyClickedCount = Field(@spRow, "Clicked")
-    SET @specialtyTotalCount = Field(@spRow, "Total")
-    IF Empty(@specialtyLabels) THEN
-      SET @specialtyLabels = @specialtyName
-      SET @specialtyOpenedData = @specialtyOpenedCount
-      SET @specialtyBouncedData = @specialtyBouncedCount
-      SET @specialtyDidNotOpenData = @specialtyDidNotOpenCount
-      SET @specialtyClickedData = @specialtyClickedCount
-      SET @specialtyTotalData = @specialtyTotalCount
-    ELSE
-      SET @specialtyLabels = Concat(@specialtyLabels, ",", @specialtyName)
-      SET @specialtyOpenedData = Concat(@specialtyOpenedData, ",", @specialtyOpenedCount)
-      SET @specialtyBouncedData = Concat(@specialtyBouncedData, ",", @specialtyBouncedCount)
-      SET @specialtyDidNotOpenData = Concat(@specialtyDidNotOpenData, ",", @specialtyDidNotOpenCount)
-      SET @specialtyClickedData = Concat(@specialtyClickedData, ",", @specialtyClickedCount)
-      SET @specialtyTotalData = Concat(@specialtyTotalData, ",", @specialtyTotalCount)
+    FOR @si = 1 TO RowCount(@sentRows) DO
+      SET @sentRow = Row(@sentRows, @si)
+      SET @lblDay = Field(@sentRow, "DayLabel")
+      SET @valSent = Field(@sentRow, "SentCount")
+      IF Empty(@lblDay) THEN
+        SET @lblDay = Field(@sentRow, "SortDate")
+      ENDIF
+      IF Empty(@valSent) THEN
+        SET @valSent = 0
+      ENDIF
+      IF Empty(@perfSentLabels) THEN
+        SET @perfSentLabels = @lblDay
+        SET @perfSentCounts = @valSent
+      ELSE
+        SET @perfSentLabels = Concat(@perfSentLabels, "|", @lblDay)
+        SET @perfSentCounts = Concat(@perfSentCounts, "|", @valSent)
+      ENDIF
+    NEXT @si
+    SET @eventRows = LookupRows("sst_analytics_journey_events_by_day", "journeyId", @jid)
+    IF RowCount(@eventRows) == 0 THEN
+      SET @eventRows = LookupRows("sst_analytics_journey_events_by_day", "JourneyID", @jid)
     ENDIF
-  NEXT @si
+    FOR @si = 1 TO RowCount(@eventRows) DO
+      SET @eventRow = Row(@eventRows, @si)
+      SET @lblDay = Field(@eventRow, "DayLabel")
+      SET @valOpen = Field(@eventRow, "OpenCount")
+      SET @valClk = Field(@eventRow, "ClickCount")
+      SET @valUnsub = Field(@eventRow, "UnsubscribedCount")
+      SET @valUnreg = Field(@eventRow, "UnregisteredOpenCount")
+      IF Empty(@lblDay) THEN
+        SET @lblDay = Field(@eventRow, "SortDate")
+      ENDIF
+      IF Empty(@valOpen) THEN
+        SET @valOpen = 0
+      ENDIF
+      IF Empty(@valClk) THEN
+        SET @valClk = 0
+      ENDIF
+      IF Empty(@valUnsub) THEN
+        SET @valUnsub = 0
+      ENDIF
+      IF Empty(@valUnreg) THEN
+        SET @valUnreg = 0
+      ENDIF
+      IF Empty(@perfEventLabels) THEN
+        SET @perfEventLabels = @lblDay
+        SET @perfEventOpens = @valOpen
+        SET @perfEventClicks = @valClk
+        SET @perfEventUnsubs = @valUnsub
+        SET @perfEventUnregOpens = @valUnreg
+      ELSE
+        SET @perfEventLabels = Concat(@perfEventLabels, "|", @lblDay)
+        SET @perfEventOpens = Concat(@perfEventOpens, "|", @valOpen)
+        SET @perfEventClicks = Concat(@perfEventClicks, "|", @valClk)
+        SET @perfEventUnsubs = Concat(@perfEventUnsubs, "|", @valUnsub)
+        SET @perfEventUnregOpens = Concat(@perfEventUnregOpens, "|", @valUnreg)
+      ENDIF
+    NEXT @si
+    SET @stRows = LookupRows("sst_analytics_journey_by_state", "journeyId", @jid)
+    IF RowCount(@stRows) == 0 THEN
+      SET @stRows = LookupRows("sst_analytics_journey_by_state", "JourneyID", @jid)
+    ENDIF
+    SET @stateCount = RowCount(@stRows)
+    FOR @si = 1 TO @stateCount DO
+      SET @stRow = Row(@stRows, @si)
+      SET @stateName = Field(@stRow, "StateName")
+      SET @stateOpenedCount = Field(@stRow, "Opened")
+      SET @stateBouncedCount = Field(@stRow, "Bounced")
+      SET @stateDidNotOpenCount = Field(@stRow, "DidNotOpen")
+      SET @stateClickedCount = Field(@stRow, "Clicked")
+      SET @stateTotalCount = Field(@stRow, "Total")
+      IF Empty(@stateLabels) THEN
+        SET @stateLabels = @stateName
+        SET @stateOpenedData = @stateOpenedCount
+        SET @stateBouncedData = @stateBouncedCount
+        SET @stateDidNotOpenData = @stateDidNotOpenCount
+        SET @stateClickedData = @stateClickedCount
+        SET @stateTotalData = @stateTotalCount
+      ELSE
+        SET @stateLabels = Concat(@stateLabels, ",", @stateName)
+        SET @stateOpenedData = Concat(@stateOpenedData, ",", @stateOpenedCount)
+        SET @stateBouncedData = Concat(@stateBouncedData, ",", @stateBouncedCount)
+        SET @stateDidNotOpenData = Concat(@stateDidNotOpenData, ",", @stateDidNotOpenCount)
+        SET @stateClickedData = Concat(@stateClickedData, ",", @stateClickedCount)
+        SET @stateTotalData = Concat(@stateTotalData, ",", @stateTotalCount)
+      ENDIF
+    NEXT @si
+    SET @spRows = LookupRows("sst_analytics_journey_by_specialty", "journeyId", @jid)
+    IF RowCount(@spRows) == 0 THEN
+      SET @spRows = LookupRows("sst_analytics_journey_by_specialty", "JourneyID", @jid)
+    ENDIF
+    FOR @si = 1 TO RowCount(@spRows) DO
+      SET @spRow = Row(@spRows, @si)
+      SET @specialtyName = Field(@spRow, "Specialty")
+      SET @specialtyOpenedCount = Field(@spRow, "Opened")
+      SET @specialtyBouncedCount = Field(@spRow, "Bounced")
+      SET @specialtyDidNotOpenCount = Field(@spRow, "DidNotOpen")
+      SET @specialtyClickedCount = Field(@spRow, "Clicked")
+      SET @specialtyTotalCount = Field(@spRow, "Total")
+      IF Empty(@specialtyLabels) THEN
+        SET @specialtyLabels = @specialtyName
+        SET @specialtyOpenedData = @specialtyOpenedCount
+        SET @specialtyBouncedData = @specialtyBouncedCount
+        SET @specialtyDidNotOpenData = @specialtyDidNotOpenCount
+        SET @specialtyClickedData = @specialtyClickedCount
+        SET @specialtyTotalData = @specialtyTotalCount
+      ELSE
+        SET @specialtyLabels = Concat(@specialtyLabels, ",", @specialtyName)
+        SET @specialtyOpenedData = Concat(@specialtyOpenedData, ",", @specialtyOpenedCount)
+        SET @specialtyBouncedData = Concat(@specialtyBouncedData, ",", @specialtyBouncedCount)
+        SET @specialtyDidNotOpenData = Concat(@specialtyDidNotOpenData, ",", @specialtyDidNotOpenCount)
+        SET @specialtyClickedData = Concat(@specialtyClickedData, ",", @specialtyClickedCount)
+        SET @specialtyTotalData = Concat(@specialtyTotalData, ",", @specialtyTotalCount)
+      ENDIF
+    NEXT @si
+  CATCH
+  ENDTRY
 ENDIF
 
 IF @responseRowCount > 0 THEN
