@@ -81,10 +81,36 @@ SET @questionCount = RowCount(@questions)
 IF @saveStep == "1" AND @submitted != "true" THEN
   SET @saveQuestionNumber = RequestParameter("questionNumber")
   SET @saveAnswerValue = RequestParameter("answer")
+  SET @surveyId = RequestParameter("id")
+  IF EMPTY(@surveyId) THEN
+    SET @surveyId = QueryParameter("id")
+  ENDIF
+  SET @contact = RequestParameter("contact")
+  IF EMPTY(@contact) THEN
+    SET @contact = QueryParameter("contact")
+  ENDIF
   IF EMPTY(@saveAnswerValue) AND NOT EMPTY(@saveQuestionNumber) THEN
     SET @saveAnswerValue = RequestParameter(Concat("q", @saveQuestionNumber))
   ENDIF
-  IF NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) AND NOT EMPTY(@saveQuestionNumber) AND NOT EMPTY(@saveAnswerValue) THEN
+  IF EMPTY(@contact) THEN
+    SET @saveStepError = "missing_contact"
+  ELSEIF EMPTY(@surveyId) THEN
+    SET @saveStepError = "missing_survey_id"
+  ELSEIF EMPTY(@saveQuestionNumber) THEN
+    SET @saveStepError = "missing_question_number"
+  ELSEIF EMPTY(@saveAnswerValue) THEN
+    SET @saveStepError = "missing_answer"
+  ELSE
+    SET @questions = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId)
+    SET @questionCount = RowCount(@questions)
+    SET @surveyName = Trim(RequestParameter("surveyName"))
+    IF EMPTY(@surveyName) THEN
+      SET @surveyName = Trim(Lookup("SST_SP_Surveys_Master_DE", "SurveyName", "SurveyID", @surveyId))
+    ENDIF
+    IF EMPTY(@surveyName) THEN
+      SET @surveyName = Concat("Survey ", @surveyId)
+    ENDIF
+    SET @fullSurveyName = @surveyName
     SET @saveQuestionId = ""
     SET @saveQuestionText = ""
     SET @saveQuestionType = ""
@@ -121,8 +147,6 @@ IF @saveStep == "1" AND @submitted != "true" THEN
     ELSE
       SET @saveStepError = "unknown_question"
     ENDIF
-  ELSE
-    SET @saveStepError = "missing_fields"
   ENDIF
   SET @saveStepDone = "true"
 ENDIF
@@ -1726,6 +1750,17 @@ function storeAnswerLocally(questionName, answer) {
   window.pendingAnswers[questionName] = answer;
 }
 
+function getSurveySavePostUrl() {
+  const form = document.getElementById('surveyForm');
+  if (form) {
+    const action = String(form.getAttribute('action') || form.action || '').trim();
+    if (action && action !== '#' && action.indexOf('javascript:') !== 0) {
+      return action;
+    }
+  }
+  return window.location.href.split('#')[0];
+}
+
 function persistAnswerToServer(questionName, answer) {
   const form = document.getElementById('surveyForm');
   if (!form || answer === null || answer === undefined) {
@@ -1735,16 +1770,40 @@ function persistAnswerToServer(questionName, answer) {
   if (trimmed === '') {
     return;
   }
+  const idInput = form.querySelector('[name="id"]');
+  const contactInput = form.querySelector('[name="contact"]');
+  const surveyId = idInput ? String(idInput.value || '').trim() : '';
+  const contact = contactInput ? String(contactInput.value || '').trim() : '';
+  if (!surveyId || !contact) {
+    console.warn('Survey autosave skipped: missing id or contact');
+    return;
+  }
   const qnum = String(questionName).replace(/^q/i, '');
-  const fd = new FormData();
-  fd.append('saveStep', '1');
-  fd.append('questionNumber', qnum);
-  fd.append('answer', trimmed);
-  fd.append('firstVisit', 'false');
-  fd.append('id', form.querySelector('[name="id"]').value);
-  fd.append('contact', form.querySelector('[name="contact"]').value);
-  fd.append('surveyName', form.querySelector('[name="surveyName"]').value);
-  fetch(form.action, { method: 'POST', body: fd, credentials: 'same-origin' })
+  const surveyNameInput = form.querySelector('[name="surveyName"]');
+  const surveyName = surveyNameInput ? String(surveyNameInput.value || '') : '';
+  const body = new URLSearchParams();
+  body.append('saveStep', '1');
+  body.append('questionNumber', qnum);
+  body.append('answer', trimmed);
+  body.append('firstVisit', 'false');
+  body.append('id', surveyId);
+  body.append('contact', contact);
+  body.append('surveyName', surveyName);
+  let saveUrl = getSurveySavePostUrl();
+  try {
+    const urlObj = new URL(saveUrl, window.location.href);
+    urlObj.searchParams.set('id', surveyId);
+    urlObj.searchParams.set('contact', contact);
+    saveUrl = urlObj.toString();
+  } catch (urlErr) {
+    saveUrl = window.location.href.split('#')[0];
+  }
+  fetch(saveUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+    body: body.toString(),
+    credentials: 'same-origin'
+  })
     .then(function(res) { return res.text(); })
     .then(function(text) {
       var data = null;
