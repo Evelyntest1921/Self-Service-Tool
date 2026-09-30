@@ -466,11 +466,24 @@ SET @landingAvgCompletionTime = 0
     if (!rows.length) {
       return 0;
     }
-    v = parseFloat(fieldFromRow(rows[0], ["AvgCompletionMinutes", "avgCompletionMinutes"]));
-    if (isNaN(v) || v < 0) {
+    v = parseFloat(String(fieldFromRow(rows[0], ["AvgCompletionMinutes", "avgCompletionMinutes"])));
+    if (isNaN(v) || !isFinite(v) || v < 0) {
       return 0;
     }
     return v;
+  }
+  function formatLandingMinutes(raw) {
+    var n = Number(raw);
+    if (isNaN(n) || !isFinite(n) || n < 0) {
+      n = 0;
+    }
+    var tenths = Math.round(n * 10);
+    var whole = Math.floor(tenths / 10);
+    var frac = tenths % 10;
+    if (frac < 0) {
+      frac = -frac;
+    }
+    return String(whole) + "." + String(frac);
   }
   function setLandingDashboardMetrics(surveyRows) {
     var analytics = loadAnalyticsPerSurveyRows();
@@ -497,7 +510,7 @@ SET @landingAvgCompletionTime = 0
     setV("landingActiveSurveyCount", String(active));
     setV("landingSurveyCount", String(surveyRows.length));
     setV("landingAvgResponseRate", String(computeAvgSurveyResponseRatePct(analytics)));
-    setV("landingAvgCompletionTime", loadAvgCompletionMinutes().toFixed(1));
+    setV("landingAvgCompletionTime", formatLandingMinutes(loadAvgCompletionMinutes()));
     var monthMap = loadMonthlyResponseMap();
     var keys = buildLast12MonthKeys();
     for (i = 0; i < 12; i++) {
@@ -559,7 +572,20 @@ SET @landingAvgCompletionTime = 0
       }
       var surveyRows = loadSurveyMasterRows();
       sortRowsBySurveyCreatedDate(surveyRows);
-      setLandingDashboardMetrics(surveyRows);
+      try {
+        setLandingDashboardMetrics(surveyRows);
+      } catch (metricsEx) {
+        setV("landingTotalOpened", "0");
+        setV("landingTotalCompleted", "0");
+        setV("landingTotalResponses", "0");
+        setV("landingActiveSurveyCount", "0");
+        setV("landingSurveyCount", String(surveyRows.length));
+        setV("landingAvgResponseRate", "0");
+        setV("landingAvgCompletionTime", "0.0");
+        for (var landingRespIdx = 1; landingRespIdx <= 12; landingRespIdx++) {
+          setV("landingResp" + landingRespIdx, "0");
+        }
+      }
       var openCounts = loadOpenCountsBySurveyId();
       var rowCount = surveyRows.length;
       var totalPages = rowCount > 0 ? Math.ceil(rowCount / SURVEY_PAGE_SIZE) : 1;
