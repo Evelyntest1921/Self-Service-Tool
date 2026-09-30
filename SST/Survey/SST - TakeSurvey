@@ -2,7 +2,6 @@
 VAR @submitted, @surveyId, @contact, @surveyName, @fullSurveyName, @questionCount, @questions, @isFirstVisit
 VAR @saveStep, @saveStepDone, @saveStepOk, @saveStepError
 VAR @saveQuestionNumber, @saveAnswerValue, @saveQuestionId, @saveQuestionText, @saveQuestionType, @i, @row
-VAR @savedAnswerSafe
 SET @saveStepDone = "false"
 SET @saveStepOk = "false"
 SET @saveStepError = ""
@@ -39,8 +38,14 @@ SET @fullSurveyName = @surveyName
 SET @isFirstVisit = RequestParameter("firstVisit")
 IF EMPTY(@isFirstVisit) THEN
 SET @isFirstVisit = "true"
-/* Log survey open event - only if we have valid parameters */
-SET @alreadyOpened = Lookup("SST_SP_Survey_Responses_DE", "Status", "Contact", @contact, "SurveyID", @surveyId)
+SET @alreadyOpened = ""
+IF NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) THEN
+  TRY
+    SET @alreadyOpened = Lookup("SST_SP_Survey_Responses_DE", "Status", "Contact", @contact, "SurveyID", @surveyId)
+  CATCH
+    SET @alreadyOpened = "Opened"
+  ENDIF
+ENDIF
 IF NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) AND EMPTY(@alreadyOpened) THEN
 TRY
   UPSERTDE(
@@ -103,7 +108,7 @@ IF @saveStep == "1" AND @submitted != "true" THEN
         "QuestionText", @saveQuestionText,
         "QuestionType", @saveQuestionType,
         "Response", @saveAnswerValue,
-        "Status", "In Progress",
+        "Status", "Partial",
         "CourseName", @fullSurveyName,
         "LastUpdated", NOW()
       )
@@ -1625,25 +1630,11 @@ color: #000000;
             %%[ FOR @i = 1 TO @questionCount DO
       SET @row = Row(@questions, @i)
       SET @questionNumber = Field(@row, "QuestionNumber")
-      SET @questionId = Field(@row, "QuestionID")
       SET @questionText = Field(@row, "QuestionText")
       SET @questionType = Field(@row, "QuestionType")
       SET @options = Field(@row, "Options")
       SET @required = Field(@row, "Required")
       SET @orderIndex = Field(@row, "OrderIndex")
-      SET @savedAnswer = ""
-      SET @savedAnswerSafe = ""
-      IF NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) AND NOT EMPTY(@questionId) THEN
-        TRY
-          SET @savedAnswer = Lookup("SST_SP_Survey_Responses_DE", "Response", "Contact", @contact, "SurveyID", @surveyId, "QuestionID", @questionId)
-        CATCH
-        ENDIF
-      ENDIF
-      IF NOT EMPTY(@savedAnswer) THEN
-        SET @savedAnswerSafe = Replace(@savedAnswer, "&", "&amp;")
-        SET @savedAnswerSafe = Replace(@savedAnswerSafe, "<", "&lt;")
-        SET @savedAnswerSafe = Replace(@savedAnswerSafe, ">", "&gt;")
-      ENDIF
     ]%%
     <div class="question-card" data-question="%%=v(@i)=%%" %%[ IF @i > 1 THEN ]%%style="display: none;"%%[ ENDIF ]%%>
       <div class="question-header">
@@ -1669,7 +1660,7 @@ color: #000000;
             SET @option = Field(@optionRow, 1)
           ]%%
           <div class="radio-option">
-            <input type="radio" name="q%%=v(@questionNumber)=%%" value="%%=v(@option)=%%" %%[ IF @required == "Yes" AND @j == 1 THEN ]%%required%%[ ENDIF ]%% %%[ IF NOT EMPTY(@savedAnswer) AND @savedAnswer == @option THEN ]%%checked%%[ ENDIF ]%%>
+            <input type="radio" name="q%%=v(@questionNumber)=%%" value="%%=v(@option)=%%" %%[ IF @required == "Yes" AND @j == 1 THEN ]%%required%%[ ENDIF ]%%>
             <label>%%=v(@option)=%%</label>
           </div>
           %%[ NEXT @j ]%%
@@ -1682,7 +1673,7 @@ color: #000000;
  
      %%[ ELSEIF @questionType == "text" THEN ]%%
      <div class="form-group">
-       <textarea class="textarea-control" name="q%%=v(@questionNumber)=%%" placeholder="Please provide your response here...">%%=v(@savedAnswerSafe)=%%</textarea>
+       <textarea class="textarea-control" name="q%%=v(@questionNumber)=%%" placeholder="Please provide your response here..."></textarea>
        <div class="question-buttons" style="margin-top: 26px;">
          <button type="button" class="submit-button back-button" onclick="goBackToPreviousQuestion()" style="display: none;">Back</button>
          <button type="button" class="submit-button next-button" data-qname="q%%=v(@questionNumber)=%%" data-question="%%=v(@i)=%%">Next</button>
@@ -1765,61 +1756,6 @@ function persistAnswerToServer(questionName, answer) {
     .catch(function(err) {
       console.warn('Survey autosave request failed:', err);
     });
-}
-
-function questionCardHasSavedAnswer(card) {
-  const checkedRadio = card.querySelector('input[type="radio"]:checked');
-  if (checkedRadio && checkedRadio.value) {
-    return { qname: checkedRadio.name, value: checkedRadio.value };
-  }
-  const textarea = card.querySelector('textarea');
-  if (textarea && textarea.name && textarea.value && textarea.value.trim() !== '') {
-    return { qname: textarea.name, value: textarea.value };
-  }
-  return null;
-}
-
-function applySavedSurveyProgress() {
-  const cards = Array.from(document.querySelectorAll('.question-card'));
-  cards.sort(function(a, b) {
-    return parseInt(a.dataset.question, 10) - parseInt(b.dataset.question, 10);
-  });
-  let firstOpen = null;
-  cards.forEach(function(card) {
-    const saved = questionCardHasSavedAnswer(card);
-    if (!saved) {
-      if (!firstOpen) {
-        firstOpen = card;
-      }
-      return;
-    }
-    storeAnswerLocally(saved.qname, saved.value);
-    card.classList.add('answered');
-    card.style.display = 'none';
-    hiddenQuestionsHistory.push(card);
-    const selectedOption = card.querySelector('.radio-option input[type="radio"]:checked');
-    if (selectedOption) {
-      const optionWrap = selectedOption.closest('.radio-option');
-      if (optionWrap) {
-        optionWrap.classList.add('selected');
-      }
-    }
-  });
-  cards.forEach(function(card) {
-    if (!card.classList.contains('answered')) {
-      card.style.display = 'none';
-    }
-  });
-  if (firstOpen) {
-    firstOpen.style.display = 'block';
-    firstOpen.classList.add('fade-in');
-  } else if (cards.length > 0) {
-    cards[cards.length - 1].style.display = 'block';
-  }
-  updateBackButtonVisibility();
-  debouncedUpdateProgress();
-  checkRequiredQuestionsAndShowSubmit();
-  checkIfLastQuestionAndHideNext();
 }
 
 // Enhanced radio option selection functionality
