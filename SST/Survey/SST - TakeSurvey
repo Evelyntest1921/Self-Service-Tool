@@ -1,6 +1,6 @@
 %%[
 VAR @submitted, @surveyId, @contact, @surveyName, @fullSurveyName, @questionCount, @questions, @isFirstVisit, @alreadyOpened
-VAR @saveStep, @saveStepDone, @saveStepOk, @saveStepError
+VAR @saveStep, @saveStepDone, @saveStepOk, @saveStepError, @saveStepResponse, @saveStepOkPart, @saveStepErrSafe
 VAR @saveQuestionNumber, @saveAnswerValue, @saveQuestionId, @saveQuestionText, @saveQuestionType, @i, @row
 SET @saveStepDone = "false"
 SET @saveStepOk = "false"
@@ -116,7 +116,7 @@ IF @saveStep == "1" AND @submitted != "true" THEN
     IF @questionCount > 0 THEN
       FOR @i = 1 TO @questionCount DO
         SET @row = Row(@questions, @i)
-        IF Concat("", Field(@row, "QuestionNumber")) == Concat("", @saveQuestionNumber) THEN
+        IF Field(@row, "QuestionNumber") == @saveQuestionNumber THEN
           SET @saveQuestionId = Field(@row, "QuestionID")
           SET @saveQuestionText = Field(@row, "QuestionText")
           SET @saveQuestionType = Field(@row, "QuestionType")
@@ -139,11 +139,17 @@ IF @saveStep == "1" AND @submitted != "true" THEN
       )
       SET @saveStepOk = "true"
     ENDIF
-    IF EMPTY(@saveQuestionId) THEN
+    IF @saveStepOk != "true" AND EMPTY(@saveQuestionId) THEN
       SET @saveStepError = "unknown_question"
     ENDIF
   ENDIF
   SET @saveStepDone = "true"
+  SET @saveStepOkPart = "false"
+  IF @saveStepOk == "true" THEN
+    SET @saveStepOkPart = "true"
+  ENDIF
+  SET @saveStepErrSafe = Replace(@saveStepError, Char(34), "")
+  SET @saveStepResponse = Concat('{"ok":', @saveStepOkPart, ',"error":"', @saveStepErrSafe, '"}')
 ENDIF
 
 /* Handle form submission */
@@ -189,7 +195,7 @@ ENDIF
 
 
 %%[ IF @saveStepDone == "true" THEN ]%%
-{"ok":%%=IIF(@saveStepOk == "true", "true", "false")=%%,"error":"%%=Replace(@saveStepError, '"', '')=%%"}
+%%=v(@saveStepResponse)=%%
 %%[ ELSE ]%%
 <!DOCTYPE html>
 <html lang="en">
