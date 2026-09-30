@@ -1,5 +1,20 @@
 %%[
-VAR @submitted, @surveyId, @contact, @surveyName, @fullSurveyName, @questionCount, @questions, @isFirstVisit
+VAR @submitted, @surveyId, @contact, @surveyName, @fullSurveyName, @questionCount, @questions, @isFirstVisit, @saveMode, @saveQid, @saveQnum, @saveAnswer, @saveOk, @savePK
+SET @saveMode = RequestParameter("saveStep")
+SET @saveOk = "false"
+IF @saveMode == "1" THEN
+  SET @contact = RequestParameter("contact")
+  SET @surveyId = RequestParameter("id")
+  SET @saveQid = RequestParameter("qid")
+  SET @saveQnum = RequestParameter("qnum")
+  SET @saveAnswer = RequestParameter("answer")
+  IF NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) AND NOT EMPTY(@saveQid) AND NOT EMPTY(@saveAnswer) THEN
+    SET @savePK = Concat(@contact, "_", @surveyId, "_", @saveQid)
+    UpsertData("SST_SP_Survey_Responses_DE", 1, "ResponsePK", @savePK, "Contact", @contact, "SurveyID", @surveyId, "QuestionID", @saveQid, "QuestionNumber", @saveQnum, "Response", @saveAnswer, "Status", "Opened", "LastUpdated", NOW())
+    SET @saveOk = "true"
+  ENDIF
+ENDIF
+IF @saveMode != "1" THEN
 SET @submitted = RequestParameter("submitted")
 SET @surveyId = RequestParameter("id")
 IF EMPTY(@surveyId) THEN
@@ -83,7 +98,9 @@ FOR @i = 1 TO @questionCount DO
 NEXT @i
 ENDIF
 ENDIF
+ENDIF
 ]%%
+%%[ IF @saveMode == "1" THEN ]%%{"ok":%%=v(@saveOk)=%%}%%[ ELSE ]%%
 
 
 
@@ -1638,9 +1655,17 @@ text-align: -webkit-center;">
 
 
 <script>
-const SAVE_ENDPOINT = "PASTE_SAVE_PAGE_URL_HERE";
+function getSaveEndpoint() {
+  const form = document.getElementById("surveyForm");
+  const action = form && form.getAttribute("action") ? form.getAttribute("action") : "";
+  if (action) {
+    return action.split("?")[0];
+  }
+  return window.location.href.split("?")[0];
+}
 function persistAnswerToServer(questionName, answer) {
-  if (!SAVE_ENDPOINT || SAVE_ENDPOINT.indexOf("PASTE_") === 0) {
+  const endpoint = getSaveEndpoint();
+  if (!endpoint) {
     return;
   }
   const form = document.getElementById("surveyForm");
@@ -1655,8 +1680,8 @@ function persistAnswerToServer(questionName, answer) {
     return;
   }
   const qnum = questionName.replace("q", "");
-  const body = "contact=" + encodeURIComponent(contact) + "&id=" + encodeURIComponent(surveyId) + "&qid=" + encodeURIComponent(qid) + "&qnum=" + encodeURIComponent(qnum) + "&answer=" + encodeURIComponent(answer);
-  fetch(SAVE_ENDPOINT, {
+  const body = "saveStep=1&contact=" + encodeURIComponent(contact) + "&id=" + encodeURIComponent(surveyId) + "&qid=" + encodeURIComponent(qid) + "&qnum=" + encodeURIComponent(qnum) + "&answer=" + encodeURIComponent(answer);
+  fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body
@@ -2434,4 +2459,5 @@ if (form) {
 </script>
 </body>
 </html>
+%%[ ENDIF ]%%
 
