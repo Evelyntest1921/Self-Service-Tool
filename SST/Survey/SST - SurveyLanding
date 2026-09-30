@@ -95,6 +95,7 @@ SET @landingResp10 = 0
 SET @landingResp11 = 0
 SET @landingResp12 = 0
 SET @landingAvgResponseRate = 0
+SET @landingAvgCompletionTime = 0
 
 ]%%
 <script runat="server" language="javascript">
@@ -102,6 +103,7 @@ SET @landingAvgResponseRate = 0
   var SURVEYS_DE = "SST_SP_Surveys_Master_DE";
   var ANALYTICS_PER_SURVEY_DE = "sst_analytics_per_survey";
   var ANALYTICS_MONTHLY_DE = "sst_analytics_responses_by_month";
+  var ANALYTICS_COMPLETION_DE = "sst_analytics_completion_time";
   var SURVEY_PAGE_SIZE = 20;
   var SURVEY_CARD_ICON_SVG =
     '<svg class="stat-icon-svg" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M19 21H5V5h2v2h10V5h2v2.172l1-1V4h-3V3h-3a2 2 0 0 0-4 0H7v1H4v18h16V11.828l-1 1zM8 4h3V2.615A.615.615 0 0 1 11.614 2h.771a.615.615 0 0 1 .615.615V4h3v2H8zm14.646 1.646l.707.707-8.853 8.854-3.854-3.854.707-.707 3.147 3.147z"/></svg>';
@@ -455,6 +457,21 @@ SET @landingAvgResponseRate = 0
     }
     return Math.round(sum / rates.length);
   }
+  function loadAvgCompletionMinutes() {
+    var rows = [];
+    var v;
+    try {
+      rows = coerceDeRows(DataExtension.Init(ANALYTICS_COMPLETION_DE).Rows.Retrieve());
+    } catch (deEx) {}
+    if (!rows.length) {
+      return 0;
+    }
+    v = parseFloat(fieldFromRow(rows[0], ["AvgCompletionMinutes", "avgCompletionMinutes"]));
+    if (isNaN(v) || v < 0) {
+      return 0;
+    }
+    return v;
+  }
   function setLandingDashboardMetrics(surveyRows) {
     var analytics = loadAnalyticsPerSurveyRows();
     var opened = 0;
@@ -480,6 +497,7 @@ SET @landingAvgResponseRate = 0
     setV("landingActiveSurveyCount", String(active));
     setV("landingSurveyCount", String(surveyRows.length));
     setV("landingAvgResponseRate", String(computeAvgSurveyResponseRatePct(analytics)));
+    setV("landingAvgCompletionTime", loadAvgCompletionMinutes().toFixed(1));
     var monthMap = loadMonthlyResponseMap();
     var keys = buildLast12MonthKeys();
     for (i = 0; i < 12; i++) {
@@ -916,9 +934,9 @@ SET @landingAvgResponseRate = 0
           <svg class="stat-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M9.99999 3.01782C9.58578 3.01782 9.24999 2.68204 9.24999 2.26782C9.24999 1.85361 9.58578 1.51782 9.99999 1.51782H13.5355C13.9497 1.51782 14.2855 1.85361 14.2855 2.26782C14.2855 2.68204 13.9497 3.01782 13.5355 3.01782H9.99999Z" fill="currentColor"/><path d="M6.53033 3.46973C6.82322 3.76262 6.82322 4.23749 6.53033 4.53039L4.03033 7.03039C3.73744 7.32328 3.26256 7.32328 2.96967 7.03039C2.67678 6.73749 2.67678 6.26262 2.96967 5.96973L5.46967 3.46973C5.76256 3.17683 6.23744 3.17683 6.53033 3.46973Z" fill="currentColor"/><path d="M12 5.75006C7.99594 5.75006 4.75 8.99599 4.75 13.0001C4.75 17.0041 7.99594 20.2501 12 20.2501C16.0041 20.2501 19.25 17.0041 19.25 13.0001C19.25 12.5858 19.5858 12.2501 20 12.2501C20.4142 12.2501 20.75 12.5858 20.75 13.0001C20.75 17.8325 16.8325 21.7501 12 21.7501C7.16751 21.7501 3.25 17.8325 3.25 13.0001C3.25 8.16756 7.16751 4.25006 12 4.25006C12.4142 4.25006 12.75 4.58584 12.75 5.00006C12.75 5.41427 12.4142 5.75006 12 5.75006Z" fill="currentColor"/><path d="M17.1882 8.36432C17.4204 8.06575 17.394 7.64099 17.1265 7.37353C16.8591 7.10607 16.4343 7.07963 16.1357 7.31185L12.9658 9.77733L10.8944 11.2569C10.4519 11.573 10.1893 12.0832 10.1893 12.627C10.1893 13.5569 10.9432 14.3107 11.873 14.3107C12.4168 14.3107 12.9271 14.0481 13.2431 13.6056L14.7227 11.5342L17.1882 8.36432Z" fill="currentColor"/></svg>
         </div>
         <div class="metric-details">
-          <div class="metric-number">4.2</div>
+          <div class="metric-number">%%=v(@landingAvgCompletionTime)=%% min</div>
           <div class="metric-label">Avg Completion Time</div>
-          <div class="metric-trend positive">-0.5 min vs last quarter</div>
+          <div class="metric-trend neutral">Minutes from survey open to completed</div>
         </div>
       </div>
     </div>
@@ -1167,9 +1185,9 @@ SET @landingAvgResponseRate = 0
           <svg class="stat-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M9.99999 3.01782C9.58578 3.01782 9.24999 2.68204 9.24999 2.26782C9.24999 1.85361 9.58578 1.51782 9.99999 1.51782H13.5355C13.9497 1.51782 14.2855 1.85361 14.2855 2.26782C14.2855 2.68204 13.9497 3.01782 13.5355 3.01782H9.99999Z" fill="currentColor"/><path d="M6.53033 3.46973C6.82322 3.76262 6.82322 4.23749 6.53033 4.53039L4.03033 7.03039C3.73744 7.32328 3.26256 7.32328 2.96967 7.03039C2.67678 6.73749 2.67678 6.26262 2.96967 5.96973L5.46967 3.46973C5.76256 3.17683 6.23744 3.17683 6.53033 3.46973Z" fill="currentColor"/><path d="M12 5.75006C7.99594 5.75006 4.75 8.99599 4.75 13.0001C4.75 17.0041 7.99594 20.2501 12 20.2501C16.0041 20.2501 19.25 17.0041 19.25 13.0001C19.25 12.5858 19.5858 12.2501 20 12.2501C20.4142 12.2501 20.75 12.5858 20.75 13.0001C20.75 17.8325 16.8325 21.7501 12 21.7501C7.16751 21.7501 3.25 17.8325 3.25 13.0001C3.25 8.16756 7.16751 4.25006 12 4.25006C12.4142 4.25006 12.75 4.58584 12.75 5.00006C12.75 5.41427 12.4142 5.75006 12 5.75006Z" fill="currentColor"/><path d="M17.1882 8.36432C17.4204 8.06575 17.394 7.64099 17.1265 7.37353C16.8591 7.10607 16.4343 7.07963 16.1357 7.31185L12.9658 9.77733L10.8944 11.2569C10.4519 11.573 10.1893 12.0832 10.1893 12.627C10.1893 13.5569 10.9432 14.3107 11.873 14.3107C12.4168 14.3107 12.9271 14.0481 13.2431 13.6056L14.7227 11.5342L17.1882 8.36432Z" fill="currentColor"/></svg>
         </div>
           <div class="metric-details">
-            <div class="metric-number">4.2</div>
+            <div class="metric-number">%%=v(@landingAvgCompletionTime)=%% min</div>
             <div class="metric-label">Avg Completion Time</div>
-            <div class="metric-trend positive">-0.5 min vs last quarter</div>
+            <div class="metric-trend neutral">Minutes from survey open to completed</div>
           </div>
         </div>
       </div>

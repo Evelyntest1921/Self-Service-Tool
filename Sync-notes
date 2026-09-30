@@ -140,4 +140,30 @@ Survey Landing no longer Retrieve()s the full responses DE. It reads sst_analyti
 
 Survey Landing Avg Response Rate (landingAvgResponseRate): for each row in sst_analytics_per_survey, rate = CompletedSurvey / OpenedSurvey (or CompletedSurvey / UniqueRespondents if OpenedSurvey is 0); then arithmetic mean of those rates, rounded to whole percent. Requires per-survey query refresh.
 
+sst_analytics_completion_time — Survey Landing Avg Completion Time (one summary row).
+DE columns: AvgCompletionMinutes (Decimal), CompletedSessionCount (Number)
+Per completed session (SurveyID + Contact): minutes from earliest SURVEY_OPEN LastUpdated to latest Completed non–SURVEY_OPEN LastUpdated. Query outputs AVG across sessions.
+
+SELECT
+    CAST(AVG(CAST(d.CompletionMinutes AS FLOAT)) AS DECIMAL(10, 2)) AS AvgCompletionMinutes,
+    COUNT(*) AS CompletedSessionCount
+FROM (
+    SELECT
+        DATEDIFF(MINUTE, o.OpenedAt, c.CompletedAt) AS CompletionMinutes
+    FROM (
+        SELECT SurveyID, Contact, MIN(LastUpdated) AS OpenedAt
+        FROM SST_SP_Survey_Responses_DE
+        WHERE QuestionID = 'SURVEY_OPEN'
+        GROUP BY SurveyID, Contact
+    ) o
+    INNER JOIN (
+        SELECT SurveyID, Contact, MAX(LastUpdated) AS CompletedAt
+        FROM SST_SP_Survey_Responses_DE
+        WHERE LTRIM(RTRIM(ISNULL(Status, ''))) = 'Completed'
+          AND ISNULL(QuestionID, '') != 'SURVEY_OPEN'
+        GROUP BY SurveyID, Contact
+    ) c ON o.SurveyID = c.SurveyID AND o.Contact = c.Contact
+    WHERE c.CompletedAt >= o.OpenedAt
+) d
+
 
