@@ -1,6 +1,14 @@
 %%[
 VAR @submitted, @surveyId, @contact, @surveyName, @fullSurveyName, @questionCount, @questions, @isFirstVisit
+VAR @saveStep, @saveStepDone, @saveStepOk, @saveStepError, @savedAnswersJson
+VAR @saveQuestionNumber, @saveAnswerValue, @saveQuestionId, @saveQuestionText, @saveQuestionType
+VAR @savedRows, @si, @srow, @sqId, @sqType, @sqNum, @sResponse, @jsonFirst
+SET @saveStepDone = "false"
+SET @saveStepOk = "false"
+SET @saveStepError = ""
+SET @savedAnswersJson = "{}"
 SET @submitted = RequestParameter("submitted")
+SET @saveStep = RequestParameter("saveStep")
 SET @surveyId = RequestParameter("id")
 IF EMPTY(@surveyId) THEN
  SET @surveyId = QueryParameter("id")
@@ -66,6 +74,85 @@ ENDIF
 SET @questions = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId)
 SET @questionCount = RowCount(@questions)
 
+IF @saveStep == "1" AND @submitted != "true" THEN
+  SET @saveQuestionNumber = RequestParameter("questionNumber")
+  SET @saveAnswerValue = RequestParameter("answer")
+  IF EMPTY(@saveAnswerValue) AND NOT EMPTY(@saveQuestionNumber) THEN
+    SET @saveAnswerValue = RequestParameter(Concat("q", @saveQuestionNumber))
+  ENDIF
+  IF NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) AND NOT EMPTY(@saveQuestionNumber) AND NOT EMPTY(@saveAnswerValue) THEN
+    SET @saveQuestionId = ""
+    SET @saveQuestionText = ""
+    SET @saveQuestionType = ""
+    IF @questionCount > 0 THEN
+      FOR @i = 1 TO @questionCount DO
+        SET @row = Row(@questions, @i)
+        IF Field(@row, "QuestionNumber") == @saveQuestionNumber THEN
+          SET @saveQuestionId = Field(@row, "QuestionID")
+          SET @saveQuestionText = Field(@row, "QuestionText")
+          SET @saveQuestionType = Field(@row, "QuestionType")
+        ENDIF
+      NEXT @i
+    ENDIF
+    IF NOT EMPTY(@saveQuestionId) THEN
+      TRY
+        UPSERTDE(
+          "SST_SP_Survey_Responses_DE", 3,
+          "Contact", @contact,
+          "SurveyID", @surveyId,
+          "QuestionID", @saveQuestionId,
+          "QuestionNumber", @saveQuestionNumber,
+          "QuestionText", @saveQuestionText,
+          "QuestionType", @saveQuestionType,
+          "Response", @saveAnswerValue,
+          "Status", "In Progress",
+          "CourseName", @fullSurveyName,
+          "LastUpdated", NOW()
+        )
+        SET @saveStepOk = "true"
+      CATCH @saveEx
+        SET @saveStepOk = "false"
+        SET @saveStepError = "upsert_failed"
+      ENDTRY
+    ELSE
+      SET @saveStepError = "unknown_question"
+    ENDIF
+  ELSE
+    SET @saveStepError = "missing_fields"
+  ENDIF
+  SET @saveStepDone = "true"
+ENDIF
+
+IF @saveStepDone != "true" AND @submitted != "true" AND NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) THEN
+  SET @savedRows = LookupRows("SST_SP_Survey_Responses_DE", "Contact", @contact, "SurveyID", @surveyId)
+  IF RowCount(@savedRows) > 0 THEN
+    SET @savedAnswersJson = "{"
+    SET @jsonFirst = "true"
+    FOR @si = 1 TO RowCount(@savedRows) DO
+      SET @srow = Row(@savedRows, @si)
+      SET @sqId = Field(@srow, "QuestionID")
+      SET @sqType = Field(@srow, "QuestionType")
+      SET @sqNum = Field(@srow, "QuestionNumber")
+      SET @sResponse = Field(@srow, "Response")
+      IF @sqId != "SURVEY_OPEN" AND @sqType != "log" AND NOT EMPTY(@sqNum) AND NOT EMPTY(@sResponse) THEN
+        IF @jsonFirst != "true" THEN
+          SET @savedAnswersJson = Concat(@savedAnswersJson, ",")
+        ENDIF
+        SET @sResponse = Replace(@sResponse, "\", "\\")
+        SET @sResponse = Replace(@sResponse, '"', '\"')
+        SET @sResponse = Replace(@sResponse, Char(10), "\n")
+        SET @sResponse = Replace(@sResponse, Char(13), "")
+        SET @savedAnswersJson = Concat(@savedAnswersJson, '"q', @sqNum, '":"', @sResponse, '"')
+        SET @jsonFirst = "false"
+      ENDIF
+    NEXT @si
+    IF @jsonFirst == "true" THEN
+      SET @savedAnswersJson = "{}"
+    ELSE
+      SET @savedAnswersJson = Concat(@savedAnswersJson, "}")
+    ENDIF
+  ENDIF
+ENDIF
 
 /* Handle form submission */
 IF @submitted == "true" THEN
@@ -109,6 +196,18 @@ ENDIF
 
 
 
+%%[ IF @saveStepDone == "true" THEN ]%%
+<script runat="server" language="javascript">
+  Platform.Load("Core", "1.1");
+  var ok = Platform.Variable.GetValue("@saveStepOk");
+  var err = Platform.Variable.GetValue("@saveStepError");
+  if (err === null || err === undefined) {
+    err = "";
+  }
+  Platform.Response.SetResponseHeader("Content-Type", "application/json; charset=UTF-8");
+  Write('{"ok":' + (ok === "true" ? "true" : "false") + ',"error":"' + String(err).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"}');
+</script>
+%%[ ELSE ]%%
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1654,6 +1753,107 @@ text-align: -webkit-center;">
 
 
 <script>
+window.SURVEY_SAVED_ANSWERS = %%=IIF(EMPTY(@savedAnswersJson), "{}", @savedAnswersJson)=%%;
+
+function storeAnswerLocally(questionName, answer) {
+  if (!window.pendingAnswers) {
+    window.pendingAnswers = {};
+  }
+  window.pendingAnswers[questionName] = answer;
+}
+
+function persistAnswerToServer(questionName, answer) {
+  const form = document.getElementById('surveyForm');
+  if (!form || answer === null || answer === undefined) {
+    return;
+  }
+  const trimmed = String(answer).trim();
+  if (trimmed === '') {
+    return;
+  }
+  const qnum = String(questionName).replace(/^q/i, '');
+  const fd = new FormData();
+  fd.append('saveStep', '1');
+  fd.append('questionNumber', qnum);
+  fd.append('answer', trimmed);
+  fd.append('firstVisit', 'false');
+  fd.append('id', form.querySelector('[name="id"]').value);
+  fd.append('contact', form.querySelector('[name="contact"]').value);
+  fd.append('surveyName', form.querySelector('[name="surveyName"]').value);
+  fetch(form.action, { method: 'POST', body: fd, credentials: 'same-origin' })
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+      if (!data || !data.ok) {
+        console.warn('Survey autosave failed:', data);
+      }
+    })
+    .catch(function(err) {
+      console.warn('Survey autosave request failed:', err);
+    });
+}
+
+function applyAnswerToQuestionCard(questionName, answer) {
+  const radios = document.querySelectorAll('input[type="radio"][name="' + questionName + '"]');
+  let radioMatched = false;
+  radios.forEach(function(radio) {
+    if (radio.value === String(answer)) {
+      radio.checked = true;
+      radioMatched = true;
+      const option = radio.closest('.radio-option');
+      if (option) {
+        option.classList.add('selected');
+      }
+    }
+  });
+  if (radioMatched) {
+    return;
+  }
+  const textarea = document.querySelector('textarea[name="' + questionName + '"]');
+  if (textarea) {
+    textarea.value = answer;
+  }
+}
+
+function applySavedSurveyProgress() {
+  const saved = window.SURVEY_SAVED_ANSWERS;
+  if (!saved || typeof saved !== 'object' || Object.keys(saved).length === 0) {
+    return;
+  }
+  const cards = Array.from(document.querySelectorAll('.question-card'));
+  cards.sort(function(a, b) {
+    return parseInt(a.dataset.question, 10) - parseInt(b.dataset.question, 10);
+  });
+  let firstOpen = null;
+  cards.forEach(function(card) {
+    const input = card.querySelector('input[type="radio"], textarea');
+    if (!input || !input.name) {
+      return;
+    }
+    const qname = input.name;
+    if (!saved[qname]) {
+      if (!firstOpen) {
+        firstOpen = card;
+      }
+      return;
+    }
+    storeAnswerLocally(qname, saved[qname]);
+    applyAnswerToQuestionCard(qname, saved[qname]);
+    card.classList.add('answered');
+    card.style.display = 'none';
+    hiddenQuestionsHistory.push(card);
+  });
+  if (firstOpen) {
+    firstOpen.style.display = 'block';
+    firstOpen.classList.add('fade-in');
+  } else if (cards.length > 0) {
+    cards[cards.length - 1].style.display = 'block';
+  }
+  updateBackButtonVisibility();
+  debouncedUpdateProgress();
+  checkRequiredQuestionsAndShowSubmit();
+  checkIfLastQuestionAndHideNext();
+}
+
 // Enhanced radio option selection functionality
 function setupRadioOptions() {
   const radioOptions = document.querySelectorAll('.radio-option');
@@ -1719,14 +1919,11 @@ function setupRadioOptions() {
 
 
 
-    // Function to store answers locally (will be saved on final submission)
-function saveAnswer(questionName, answer) {
-  console.log('Storing answer locally:', questionName, answer);
-  // Store the answer to be saved on final form submission
-  if (!window.pendingAnswers) {
-    window.pendingAnswers = {};
+function saveAnswer(questionName, answer, options) {
+  storeAnswerLocally(questionName, answer);
+  if (!options || !options.skipServer) {
+    persistAnswerToServer(questionName, answer);
   }
-  window.pendingAnswers[questionName] = answer;
 }
 
 
@@ -2410,13 +2607,10 @@ if (form) {
   // Initialize progress and radio options
   // Delay initial progress update to ensure DOM is fully loaded
   setTimeout(() => {
+    applySavedSurveyProgress();
     updateProgress();
-    // Initialize back button visibility
     updateBackButtonVisibility();
-    // Check if all required questions are answered
     checkRequiredQuestionsAndShowSubmit();
- 
-    // Check if current question is last and hide Next button
     checkIfLastQuestionAndHideNext();
   }, 200);
   setupRadioOptions();
@@ -2425,4 +2619,5 @@ if (form) {
 </script>
 </body>
 </html>
+%%[ ENDIF ]%%
 
