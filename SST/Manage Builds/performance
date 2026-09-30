@@ -19,6 +19,8 @@ VAR @specialtyName, @specialtyOpenedCount, @specialtyBouncedCount, @specialtyDid
 VAR @metricsRows, @metricsRow, @sentRows, @sentRow, @si, @eventRows, @eventRow, @stRows, @stRow, @spRows, @spRow
 VAR @perfSentLabels, @perfSentCounts, @perfEventLabels, @perfEventOpens, @perfEventClicks, @perfEventUnsubs, @perfEventUnregOpens
 VAR @valSent, @valOpen, @valClk, @valUnsub, @valUnreg, @lblDay, @editSidebarHtml
+VAR @contactUiPage, @contactTotalPages, @contactPageSize, @contactBatchRowCount, @contactMaxPageRows, @contactMaxPageNum
+VAR @contactTotalPagesFromField, @contactDePageKey, @contactStartRow, @contactEndRow, @contactNavBase, @contactNavQueryPos
 
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
@@ -97,10 +99,86 @@ ENDIF
 
 SET @totalRecords = 0
 SET @responseRowCount = 0
+SET @contactUiPage = Trim(RequestParameter("contactPage"))
+IF Empty(@contactUiPage) THEN
+  SET @contactUiPage = Trim(QueryParameter("contactPage"))
+ENDIF
+IF Empty(@contactUiPage) THEN
+  SET @contactUiPage = 1
+ENDIF
+SET @contactUiPage = Add(0, @contactUiPage)
+IF @contactUiPage < 1 THEN
+  SET @contactUiPage = 1
+ENDIF
+SET @contactPageSize = 20
+SET @contactTotalPages = 1
+SET @contactBatchRowCount = 0
+SET @contactStartRow = 0
+SET @contactEndRow = 0
+SET @contactNavBase = RequestParameter("PAGEURL")
+SET @contactNavQueryPos = IndexOf(@contactNavBase, "?")
+IF @contactNavQueryPos > 0 THEN
+  SET @contactNavBase = Substring(@contactNavBase, 1, Subtract(@contactNavQueryPos, 1))
+ENDIF
+IF NOT Empty(@jid) THEN
+  SET @contactNavBase = Concat(@contactNavBase, "?journeyId=", @jid, "&contactPage=")
+ENDIF
 IF NOT Empty(@jid) AND Empty(@configError) THEN
-  SET @analyticsData = LookupRows("bd_self_service_engagement", "JourneyID", @jid)
-  SET @responseRowCount = RowCount(@analyticsData)
-  SET @totalRecords = @responseRowCount
+  SET @contactMaxPageRows = LookupOrderedRows("bd_self_service_engagement", 1, "PageNumber DESC", "JourneyID", @jid)
+  IF RowCount(@contactMaxPageRows) > 0 THEN
+    SET @contactMaxPageNum = Field(Row(@contactMaxPageRows, 1), "PageNumber")
+    IF NOT Empty(@contactMaxPageNum) THEN
+      SET @contactMaxPageNum = Add(0, @contactMaxPageNum)
+      IF @contactMaxPageNum > 0 THEN
+        SET @contactTotalPages = @contactMaxPageNum
+      ENDIF
+    ENDIF
+    SET @contactTotalPagesFromField = Field(Row(@contactMaxPageRows, 1), "TotalPages")
+    IF NOT Empty(@contactTotalPagesFromField) THEN
+      SET @contactTotalPagesFromField = Add(0, @contactTotalPagesFromField)
+      IF @contactTotalPagesFromField > 0 THEN
+        SET @contactTotalPages = @contactTotalPagesFromField
+      ENDIF
+    ENDIF
+  ENDIF
+  IF @contactTotalPages < 1 THEN
+    SET @contactTotalPages = 1
+  ENDIF
+  IF @contactUiPage > @contactTotalPages THEN
+    SET @contactUiPage = @contactTotalPages
+  ENDIF
+  SET @contactDePageKey = Concat("", @contactUiPage)
+  SET @analyticsData = LookupRows("bd_self_service_engagement", "JourneyID", @jid, "PageNumber", @contactDePageKey)
+  SET @contactBatchRowCount = RowCount(@analyticsData)
+  IF @contactBatchRowCount == 0 THEN
+    SET @analyticsData = LookupRows("bd_self_service_engagement", "JourneyID", @jid, "PageNumber", @contactUiPage)
+    SET @contactBatchRowCount = RowCount(@analyticsData)
+  ENDIF
+  IF @contactBatchRowCount == 0 AND @contactUiPage == 1 THEN
+    SET @analyticsData = LookupRows("bd_self_service_engagement", "JourneyID", @jid)
+    SET @contactBatchRowCount = RowCount(@analyticsData)
+    IF @contactBatchRowCount > 0 AND @contactTotalPages == 1 THEN
+      SET @contactRem = Mod(@contactBatchRowCount, @contactPageSize)
+      SET @contactTotalPages = Divide(Subtract(@contactBatchRowCount, @contactRem), @contactPageSize)
+      IF @contactRem > 0 THEN
+        SET @contactTotalPages = Add(@contactTotalPages, 1)
+      ENDIF
+      IF @contactTotalPages < 1 THEN
+        SET @contactTotalPages = 1
+      ENDIF
+    ENDIF
+  ENDIF
+  SET @responseRowCount = @contactBatchRowCount
+  IF @totalRecords == 0 AND @contactTotalPages > 0 AND @contactBatchRowCount > 0 THEN
+    SET @totalRecords = Multiply(@contactTotalPages, @contactPageSize)
+  ENDIF
+  IF @totalRecords == 0 AND @contactBatchRowCount > 0 THEN
+    SET @totalRecords = @contactBatchRowCount
+  ENDIF
+  IF @contactBatchRowCount > 0 THEN
+    SET @contactStartRow = Add(Multiply(Subtract(@contactUiPage, 1), @contactPageSize), 1)
+    SET @contactEndRow = Add(@contactStartRow, Subtract(@contactBatchRowCount, 1))
+  ENDIF
 ENDIF
 SET @openedCount = 0
 SET @bouncedCount = 0
@@ -1144,7 +1222,7 @@ pre.log.show{display:block}
                   </p>
               </div>
           </div>
-          %%[ ELSEIF @totalRecords > 0 THEN ]%%
+          %%[ ELSEIF @totalRecords > 0 OR @contactBatchRowCount > 0 THEN ]%%
            <h1 style="
     padding: 20px 0px 0px 24px;
     /* margin: 24px; */
@@ -1282,6 +1360,7 @@ pre.log.show{display:block}
                    <div class="contact-add-success flicker">Successfully added.</div>
                    <div class="contact-add-error" style="display: none;">Error occurred. Please try again.</div>
                </div>
+               <div id="contactTablePagingConfig" style="display:none" data-current-page="%%=v(@contactUiPage)=%%" data-total-pages="%%=v(@contactTotalPages)=%%" data-total-rows="%%=v(@totalRecords)=%%" data-start-row="%%=v(@contactStartRow)=%%" data-end-row="%%=v(@contactEndRow)=%%" data-nav-base="%%=v(@contactNavBase)=%%" data-page-size="%%=v(@contactPageSize)=%%" data-server-paging="1"></div>
                <div id="filterscrollto" class="table-wrapper">
                    <table class="responses-table">
                        <thead>
@@ -2083,7 +2162,26 @@ pre.log.show{display:block}
        let allResponses = [];
        let filteredResponses = [];
        let currentPage = 1;
-       const rowsPerPage = 10; 
+       let rowsPerPage = 20;
+       let serverContactPaging = false;
+       let contactTotalPages = 1;
+       let contactTotalRows = 0;
+       let contactNavBase = "";
+       let contactStartRow = 0;
+       let contactEndRow = 0;
+       function loadContactPagingConfig() {
+           const cfg = document.getElementById("contactTablePagingConfig");
+           if (!cfg) return;
+           serverContactPaging = cfg.getAttribute("data-server-paging") === "1";
+           currentPage = parseInt(cfg.getAttribute("data-current-page"), 10) || 1;
+           contactTotalPages = parseInt(cfg.getAttribute("data-total-pages"), 10) || 1;
+           contactTotalRows = parseInt(cfg.getAttribute("data-total-rows"), 10) || 0;
+           contactStartRow = parseInt(cfg.getAttribute("data-start-row"), 10) || 0;
+           contactEndRow = parseInt(cfg.getAttribute("data-end-row"), 10) || 0;
+           contactNavBase = cfg.getAttribute("data-nav-base") || "";
+           const ps = parseInt(cfg.getAttribute("data-page-size"), 10);
+           if (!isNaN(ps) && ps > 0) rowsPerPage = ps;
+       } 
 
        function parseCustomDate(dateString) {
            if (!dateString || dateString === 'N/A') return null;
@@ -2375,9 +2473,9 @@ pre.log.show{display:block}
            const tbody = document.getElementById('responsesTableBody');
            if (!tbody) return;
            const dataToShow = filteredResponses.length > 0 ? filteredResponses : allResponses;
-           const startIndex = (currentPage - 1) * rowsPerPage;
-           const endIndex = startIndex + rowsPerPage;
-           const pageData = dataToShow.slice(startIndex, endIndex);
+           const pageData = serverContactPaging && filteredResponses.length === 0
+             ? dataToShow
+             : dataToShow.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
            if (pageData.length === 0) {
                tbody.innerHTML = '<tr><td colspan="16" style="text-align: center; padding: 24px; color: var(--text-secondary);">No records found</td></tr>';
                return;
@@ -2416,6 +2514,23 @@ pre.log.show{display:block}
            const paginationContainer = document.getElementById('pagination');
            if (!paginationContainer) return;
            const dataToShow = filteredResponses.length > 0 ? filteredResponses : allResponses;
+           if (serverContactPaging && filteredResponses.length === 0) {
+               const totalPages = contactTotalPages > 0 ? contactTotalPages : 1;
+               const startIndex = contactStartRow > 0 ? contactStartRow : 1;
+               const endIndex = contactEndRow > 0 ? contactEndRow : dataToShow.length;
+               const totalRows = contactTotalRows > 0 ? contactTotalRows : endIndex;
+               if (totalPages <= 1) {
+                   paginationContainer.innerHTML = `<div class="pagination-info">Showing ${startIndex}-${endIndex} of ${totalRows} records (batch ${currentPage} of ${totalPages})</div>`;
+                   return;
+               }
+               let paginationHTML = "";
+               paginationHTML += `<button class="pagination-button" ${currentPage === 1 ? "disabled" : ""} onclick="goToPage(${currentPage - 1})">Previous</button>`;
+               paginationHTML += `<button class="pagination-button active">${currentPage}</button>`;
+               paginationHTML += `<button class="pagination-button" ${currentPage === totalPages ? "disabled" : ""} onclick="goToPage(${currentPage + 1})">Next</button>`;
+               paginationHTML += `<div class="pagination-info">Showing ${startIndex}-${endIndex} of ${totalRows} records (page ${currentPage} of ${totalPages})</div>`;
+               paginationContainer.innerHTML = paginationHTML;
+               return;
+           }
            const totalPages = Math.ceil(dataToShow.length / rowsPerPage);
            if (totalPages <= 1) {
                paginationContainer.innerHTML = `<div class="pagination-info">Showing ${dataToShow.length} of ${dataToShow.length} records</div>`;
@@ -2452,13 +2567,22 @@ pre.log.show{display:block}
        } 
 
        function goToPage(page) {
+           if (serverContactPaging && filteredResponses.length === 0 && contactNavBase) {
+               const totalPages = contactTotalPages > 0 ? contactTotalPages : 1;
+               if (page < 1 || page > totalPages) return;
+               window.location.href = contactNavBase + String(page) + "#filterscrollto";
+               return;
+           }
            const dataToShow = filteredResponses.length > 0 ? filteredResponses : allResponses;
            const totalPages = Math.ceil(dataToShow.length / rowsPerPage);
            if (page < 1 || page > totalPages) return;
            currentPage = page;
            renderResponsesTable();
            renderPagination();
-           window.scrollTo({ top: document.getElementById('downloadBtn').offsetTop - 200, behavior: 'smooth' });
+           const scrollAnchor = document.getElementById("downloadBtn");
+           if (scrollAnchor) {
+               window.scrollTo({ top: scrollAnchor.offsetTop - 200, behavior: "smooth" });
+           }
        } 
 
        document.addEventListener('DOMContentLoaded', function () {
@@ -2467,6 +2591,7 @@ pre.log.show{display:block}
            createCombinedEngagementChart();
            createStateChart();
            createSpecialtyChart();
+           loadContactPagingConfig();
            allResponses = parseResponsesData();
            filteredResponses = [];
            populateFilters();
