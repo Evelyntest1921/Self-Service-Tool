@@ -97,6 +97,7 @@ SET @landingResp12 = 0
 SET @landingAvgResponseRate = 0
 SET @landingAvgCompletionTime = 0
 SET @landingCompletionRate = 0
+SET @landingResponseCount30Days = 0
 
 ]%%
 <script runat="server" language="javascript">
@@ -105,6 +106,8 @@ SET @landingCompletionRate = 0
   var ANALYTICS_PER_SURVEY_DE = "sst_analytics_per_survey";
   var ANALYTICS_MONTHLY_DE = "sst_analytics_responses_by_month";
   var ANALYTICS_COMPLETION_DE = "sst_analytics_completion_time";
+  var ANALYTICS_PORTFOLIO_DE = "sst_analytics_landing_portfolio";
+  var cachedAnalyticsPerSurveyRows = null;
   var COMPLETION_MAX_MINUTES = 2880;
   var SURVEY_PAGE_SIZE = 20;
   var SURVEY_CARD_ICON_SVG =
@@ -372,17 +375,39 @@ SET @landingCompletionRate = 0
     return rows;
   }
   function loadAnalyticsPerSurveyRows() {
+    if (cachedAnalyticsPerSurveyRows) {
+      return cachedAnalyticsPerSurveyRows;
+    }
     var rows = [];
     try {
-      rows = coerceDeRows(DataExtension.Init(ANALYTICS_PER_SURVEY_DE).Rows.Retrieve());
-    } catch (deEx) {}
-    if (rows.length) {
-      return rows;
-    }
-    try {
-      return coerceRows(Platform.Function.LookupOrderedRows(ANALYTICS_PER_SURVEY_DE, 3000, "surveyId ASC"));
+      rows = coerceRows(
+        Platform.Function.LookupOrderedRows(ANALYTICS_PER_SURVEY_DE, 3000, "surveyId ASC")
+      );
     } catch (lookupEx) {}
-    return [];
+    if (!rows.length) {
+      try {
+        rows = coerceDeRows(DataExtension.Init(ANALYTICS_PER_SURVEY_DE).Rows.Retrieve());
+      } catch (deEx) {}
+    }
+    cachedAnalyticsPerSurveyRows = rows;
+    return rows;
+  }
+  function loadLandingPortfolioRow() {
+    var rows = [];
+    try {
+      rows = coerceRows(
+        Platform.Function.LookupOrderedRows(ANALYTICS_PORTFOLIO_DE, 1, "TotalOpened DESC")
+      );
+    } catch (lookupEx) {}
+    if (!rows.length) {
+      try {
+        rows = coerceDeRows(DataExtension.Init(ANALYTICS_PORTFOLIO_DE).Rows.Retrieve());
+      } catch (deEx) {}
+    }
+    if (rows.length) {
+      return rows[0];
+    }
+    return null;
   }
   function loadOpenCountsBySurveyId() {
     var map = {};
@@ -420,8 +445,15 @@ SET @landingCompletionRate = 0
     var rows = [];
     var i, monthKey, countVal;
     try {
-      rows = coerceDeRows(DataExtension.Init(ANALYTICS_MONTHLY_DE).Rows.Retrieve());
-    } catch (deEx) {}
+      rows = coerceRows(
+        Platform.Function.LookupOrderedRows(ANALYTICS_MONTHLY_DE, 48, "ResponseMonth ASC")
+      );
+    } catch (lookupEx) {}
+    if (!rows.length) {
+      try {
+        rows = coerceDeRows(DataExtension.Init(ANALYTICS_MONTHLY_DE).Rows.Retrieve());
+      } catch (deEx) {}
+    }
     for (i = 0; i < rows.length; i++) {
       monthKey = String(fieldFromRow(rows[i], ["ResponseMonth", "responseMonth"]));
       countVal = parseInt(fieldFromRow(rows[i], ["ResponseCount", "responseCount"]), 10);
@@ -491,17 +523,40 @@ SET @landingCompletionRate = 0
     return String(whole) + "." + String(frac);
   }
   function setLandingDashboardMetrics(surveyRows) {
+    var portfolio = loadLandingPortfolioRow();
     var analytics = loadAnalyticsPerSurveyRows();
     var opened = 0;
     var completed = 0;
     var responses = 0;
     var active = 0;
+    var avgRate = 0;
+    var overallCompletionPct = 0;
+    var response30 = 0;
     var i;
     var st;
-    for (i = 0; i < analytics.length; i++) {
-      opened += parseInt(fieldFromRow(analytics[i], ["OpenedSurvey", "openedSurvey"]), 10) || 0;
-      completed += parseInt(fieldFromRow(analytics[i], ["CompletedSurvey", "completedSurvey"]), 10) || 0;
-      responses += parseInt(fieldFromRow(analytics[i], ["TotalActivity", "totalActivity"]), 10) || 0;
+    if (portfolio) {
+      opened =
+        parseInt(fieldFromRow(portfolio, ["TotalOpened", "totalOpened"]), 10) || 0;
+      completed =
+        parseInt(fieldFromRow(portfolio, ["TotalCompleted", "totalCompleted"]), 10) || 0;
+      responses =
+        parseInt(fieldFromRow(portfolio, ["TotalResponses", "totalResponses"]), 10) || 0;
+      avgRate =
+        parseInt(fieldFromRow(portfolio, ["AvgResponseRatePct", "avgResponseRatePct"]), 10) || 0;
+      overallCompletionPct =
+        parseInt(fieldFromRow(portfolio, ["CompletionRatePct", "completionRatePct"]), 10) || 0;
+      response30 =
+        parseInt(fieldFromRow(portfolio, ["ResponseCount30Days", "responseCount30Days"]), 10) || 0;
+    } else {
+      for (i = 0; i < analytics.length; i++) {
+        opened += parseInt(fieldFromRow(analytics[i], ["OpenedSurvey", "openedSurvey"]), 10) || 0;
+        completed += parseInt(fieldFromRow(analytics[i], ["CompletedSurvey", "completedSurvey"]), 10) || 0;
+        responses += parseInt(fieldFromRow(analytics[i], ["TotalActivity", "totalActivity"]), 10) || 0;
+      }
+      avgRate = computeAvgSurveyResponseRatePct(analytics);
+      if (opened > 0) {
+        overallCompletionPct = Math.round((completed / opened) * 100);
+      }
     }
     for (i = 0; i < surveyRows.length; i++) {
       st = String(fieldFromRow(surveyRows[i], ["SurveyStatus", "surveyStatus"])).replace(/^\s+|\s+$/g, "");
@@ -514,12 +569,9 @@ SET @landingCompletionRate = 0
     setV("landingTotalResponses", String(responses));
     setV("landingActiveSurveyCount", String(active));
     setV("landingSurveyCount", String(surveyRows.length));
-    setV("landingAvgResponseRate", String(computeAvgSurveyResponseRatePct(analytics)));
-    var overallCompletionPct = 0;
-    if (opened > 0) {
-      overallCompletionPct = Math.round((completed / opened) * 100);
-    }
+    setV("landingAvgResponseRate", String(avgRate));
     setV("landingCompletionRate", String(overallCompletionPct));
+    setV("landingResponseCount30Days", String(response30));
     setV("landingAvgCompletionTime", formatLandingMinutes(loadAvgCompletionMinutes()));
     var monthMap = loadMonthlyResponseMap();
     var keys = buildLast12MonthKeys();
@@ -716,7 +768,7 @@ SET @landingCompletionRate = 0
       <div class="demo-content">
         <strong>Test Mode:</strong> Data extensions are not accessible. Showing sample data for Testing.
         <br><span style="font-size: 12px; opacity: 0.8;">
-          Check that SST_SP_Surveys_Master_DE, SST_SP_Survey_Responses_DE, and SST_SP_Survey_Questions_DE exist and have proper CloudPage permissions.
+          Check that SST_SP_Surveys_Master_DE and analytics DEs (sst_analytics_per_survey, sst_analytics_responses_by_month, sst_analytics_landing_portfolio, sst_analytics_completion_time) exist, are linked to this CloudPage, and query activities are scheduled.
         </span>
       </div>
     </div>
@@ -902,10 +954,12 @@ SET @landingCompletionRate = 0
         SET @responses12 = 5
       ENDIF
       
-      /* Simple calculations for different time periods */
       VAR @last3MonthResponses, @recent30DayResponses
       SET @last3MonthResponses = Add(Add(@responses10, @responses11), @responses12)
-      SET @recent30DayResponses = @responses12
+      SET @recent30DayResponses = @landingResponseCount30Days
+      IF @recent30DayResponses == 0 THEN
+        SET @recent30DayResponses = @responses12
+      ENDIF
     ]%%
     
     <div class="section-header">

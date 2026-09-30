@@ -138,9 +138,52 @@ Detailed table course filter: course card click sets detailCourse on the URL (wi
 
 Take Survey open log: only Lookup/UPSERT SURVEY_OPEN when both contact and id are present (Lookup must not run with empty keys). Autosave-on-Next was reverted from CloudPage until a stable pattern is re-added. Final submit still UPSERTDE all answers with Status Completed.
 
-Survey Landing no longer Retrieve()s the full responses DE. It reads sst_analytics_per_survey (grid open counts + stat cards) and sst_analytics_responses_by_month (activity chart). Schedule the same refresh cadence as other analytics DEs.
+Survey Landing no longer Retrieve()s the full responses DE. It reads query-backed DEs only: sst_analytics_per_survey (grid open counts), sst_analytics_landing_portfolio (stat cards + 30-day chart bucket), sst_analytics_responses_by_month (12-month chart), sst_analytics_completion_time (avg completion). Schedule the same refresh cadence as other analytics DEs.
 
-Survey Landing Avg Response Rate (landingAvgResponseRate): for each row in sst_analytics_per_survey, rate = CompletedSurvey / OpenedSurvey (or CompletedSurvey / UniqueRespondents if OpenedSurvey is 0); then arithmetic mean of those rates, rounded to whole percent. Requires per-survey query refresh.
+sst_analytics_landing_portfolio — one summary row (Survey Landing stat cards; avoids summing per-survey rows on the CloudPage).
+
+DE columns: TotalOpened, TotalCompleted, TotalResponses, CompletionRatePct, AvgResponseRatePct, ResponseCount30Days
+
+SELECT
+    agg.TotalOpened,
+    agg.TotalCompleted,
+    agg.TotalResponses,
+    agg.CompletionRatePct,
+    ISNULL(rate.AvgResponseRatePct, 0) AS AvgResponseRatePct,
+    ISNULL(last30.ResponseCount30Days, 0) AS ResponseCount30Days
+FROM (
+    SELECT
+        CAST(ISNULL(SUM(s.OpenedSurvey), 0) AS INT) AS TotalOpened,
+        CAST(ISNULL(SUM(s.CompletedSurvey), 0) AS INT) AS TotalCompleted,
+        CAST(ISNULL(SUM(s.TotalActivity), 0) AS INT) AS TotalResponses,
+        CAST(
+            CASE WHEN ISNULL(SUM(s.OpenedSurvey), 0) > 0
+            THEN ROUND(SUM(CAST(s.CompletedSurvey AS FLOAT)) * 100.0 / SUM(CAST(s.OpenedSurvey AS FLOAT)), 0)
+            ELSE 0 END AS INT) AS CompletionRatePct
+    FROM sst_analytics_per_survey s
+) agg
+CROSS JOIN (
+    SELECT CAST(ROUND(AVG(x.rate), 0) AS INT) AS AvgResponseRatePct
+    FROM (
+        SELECT
+            CASE
+                WHEN s.OpenedSurvey > 0 THEN s.CompletedSurvey * 100.0 / s.OpenedSurvey
+                WHEN s.UniqueRespondents > 0 THEN s.CompletedSurvey * 100.0 / s.UniqueRespondents
+                ELSE NULL
+            END AS rate
+        FROM sst_analytics_per_survey s
+    ) x
+    WHERE x.rate IS NOT NULL
+) rate
+CROSS JOIN (
+    SELECT COUNT(*) AS ResponseCount30Days
+    FROM SST_SP_Survey_Responses_DE r
+    WHERE LTRIM(RTRIM(ISNULL(r.Status, ''))) = 'Completed'
+      AND ISNULL(r.QuestionID, '') != 'SURVEY_OPEN'
+      AND r.LastUpdated >= DATEADD(day, -30, GETDATE())
+) last30
+
+Survey Landing Avg Response Rate (landingAvgResponseRate): comes from AvgResponseRatePct on sst_analytics_landing_portfolio when that DE is populated; otherwise fallback sums sst_analytics_per_survey on the page (legacy).
 
 sst_analytics_completion_time — Survey Landing Avg Completion Time (one summary row). Fast sample: TOP 5 SurveyID+Contact by most recent first completion, not full-table avg.
 DE columns: AvgCompletionMinutes (Decimal), CompletedSessionCount (Number, 1–5)
