@@ -1,5 +1,5 @@
 %%[
-VAR @submitted, @surveyId, @contact, @surveyName, @fullSurveyName, @questionCount, @questions, @isFirstVisit, @alreadyOpened
+VAR @submitted, @surveyId, @contact, @surveyName, @fullSurveyName, @questionCount, @questions, @isFirstVisit
 VAR @saveStep, @saveStepDone, @saveStepOk, @saveStepError, @saveStepResponse, @saveStepOkPart, @saveStepErrSafe
 VAR @saveQuestionNumber, @saveAnswerValue, @saveQuestionId, @saveQuestionText, @saveQuestionType, @i, @row
 SET @saveStepDone = "false"
@@ -19,7 +19,7 @@ SET @surveyName = Trim(QueryParameter("surveyName"))
 IF EMPTY(@surveyName) THEN
  SET @surveyName = Trim(RequestParameter("surveyName"))
 ENDIF
-IF EMPTY(@surveyName) THEN
+IF EMPTY(@surveyName) AND NOT EMPTY(@surveyId) THEN
  SET @surveyName = Trim(Lookup("SST_SP_Surveys_Master_DE", "SurveyName", "SurveyID", @surveyId))
 ENDIF
 IF EMPTY(@surveyName) THEN
@@ -37,11 +37,7 @@ SET @fullSurveyName = @surveyName
 SET @isFirstVisit = RequestParameter("firstVisit")
 IF EMPTY(@isFirstVisit) THEN
   SET @isFirstVisit = "true"
-  SET @alreadyOpened = ""
   IF NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) THEN
-    SET @alreadyOpened = Lookup("SST_SP_Survey_Responses_DE", "Status", "Contact", @contact, "SurveyID", @surveyId)
-  ENDIF
-  IF NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) AND EMPTY(@alreadyOpened) THEN
     TRY
       UPSERTDE(
         "SST_SP_Survey_Responses_DE", 3,
@@ -69,8 +65,11 @@ ENDIF
 
 
 /* Load questions for this survey */
-SET @questions = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId)
-SET @questionCount = RowCount(@questions)
+SET @questionCount = 0
+IF NOT EMPTY(@surveyId) THEN
+  SET @questions = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId)
+  SET @questionCount = RowCount(@questions)
+ENDIF
 
 IF @saveStep == "1" AND @submitted != "true" THEN
   SET @saveQuestionNumber = RequestParameter("questionNumber")
