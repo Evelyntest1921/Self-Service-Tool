@@ -34,37 +34,26 @@ SET @fullSurveyName = @surveyName
 
 
 
-/* Check if this is the first visit to the survey */
 SET @isFirstVisit = RequestParameter("firstVisit")
-IF EMPTY(@isFirstVisit) THEN
-SET @isFirstVisit = "true"
-SET @alreadyOpened = ""
-IF NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) THEN
-  TRY
-    SET @alreadyOpened = Lookup("SST_SP_Survey_Responses_DE", "Status", "Contact", @contact, "SurveyID", @surveyId)
-  CATCH
-    SET @alreadyOpened = "Opened"
+IF @saveStep != "1" AND @submitted != "true" THEN
+  IF (EMPTY(@isFirstVisit) OR @isFirstVisit == "true") AND NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) THEN
+    TRY
+      UPSERTDE(
+        "SST_SP_Survey_Responses_DE", 3,
+        "Contact", @contact,
+        "SurveyID", @surveyId,
+        "QuestionID", "SURVEY_OPEN",
+        "QuestionNumber", "0",
+        "QuestionText", "Survey Opened",
+        "QuestionType", "log",
+        "Response", "Survey accessed by user",
+        "Status", "Opened",
+        "CourseName", @fullSurveyName,
+        "LastUpdated", NOW()
+      )
+    CATCH
+    ENDIF
   ENDIF
-ENDIF
-IF NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) AND EMPTY(@alreadyOpened) THEN
-TRY
-  UPSERTDE(
-    "SST_SP_Survey_Responses_DE", 3,
-    "Contact", @contact,
-    "SurveyID", @surveyId,
-    "QuestionID", "SURVEY_OPEN",
-    "QuestionNumber", "0",
-    "QuestionText", "Survey Opened",
-    "QuestionType", "log",
-    "Response", "Survey accessed by user",
-    "Status", "Opened",
-    "CourseName", @fullSurveyName,
-    "LastUpdated", NOW()
-  )
-CATCH
-  /* Silently handle any errors with the logging */
-ENDIF
-ENDIF
 ENDIF
 
 
@@ -130,21 +119,27 @@ IF @saveStep == "1" AND @submitted != "true" THEN
       NEXT @i
     ENDIF
     IF NOT EMPTY(@saveQuestionId) THEN
-      UPSERTDE(
-        "SST_SP_Survey_Responses_DE", 3,
-        "Contact", @contact,
-        "SurveyID", @surveyId,
-        "QuestionID", @saveQuestionId,
-        "QuestionNumber", @saveQuestionNumber,
-        "QuestionText", @saveQuestionText,
-        "QuestionType", @saveQuestionType,
-        "Response", @saveAnswerValue,
-        "Status", "In Progress",
-        "CourseName", @fullSurveyName,
-        "LastUpdated", NOW()
-      )
-      SET @saveStepOk = "true"
-    ELSE
+      TRY
+        UPSERTDE(
+          "SST_SP_Survey_Responses_DE", 3,
+          "Contact", @contact,
+          "SurveyID", @surveyId,
+          "QuestionID", @saveQuestionId,
+          "QuestionNumber", @saveQuestionNumber,
+          "QuestionText", @saveQuestionText,
+          "QuestionType", @saveQuestionType,
+          "Response", @saveAnswerValue,
+          "Status", "Opened",
+          "CourseName", @fullSurveyName,
+          "LastUpdated", NOW()
+        )
+        SET @saveStepOk = "true"
+      CATCH
+        SET @saveStepOk = "false"
+        SET @saveStepError = "upsert_failed"
+      ENDIF
+    ENDIF
+    IF EMPTY(@saveQuestionId) THEN
       SET @saveStepError = "unknown_question"
     ENDIF
   ENDIF
