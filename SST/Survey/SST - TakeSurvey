@@ -1,12 +1,10 @@
 %%[
 VAR @submitted, @surveyId, @contact, @surveyName, @fullSurveyName, @questionCount, @questions, @isFirstVisit
-VAR @saveStep, @saveStepDone, @saveStepOk, @saveStepError, @savedAnswersJson
+VAR @saveStep, @saveStepDone, @saveStepOk, @saveStepError
 VAR @saveQuestionNumber, @saveAnswerValue, @saveQuestionId, @saveQuestionText, @saveQuestionType
-VAR @savedRows, @si, @srow, @sqId, @sqType, @sqNum, @sResponse, @jsonFirst
 SET @saveStepDone = "false"
 SET @saveStepOk = "false"
 SET @saveStepError = ""
-SET @savedAnswersJson = "{}"
 SET @submitted = RequestParameter("submitted")
 SET @saveStep = RequestParameter("saveStep")
 SET @surveyId = RequestParameter("id")
@@ -87,7 +85,7 @@ IF @saveStep == "1" AND @submitted != "true" THEN
     IF @questionCount > 0 THEN
       FOR @i = 1 TO @questionCount DO
         SET @row = Row(@questions, @i)
-        IF Field(@row, "QuestionNumber") == @saveQuestionNumber THEN
+        IF Concat("", Field(@row, "QuestionNumber")) == Concat("", @saveQuestionNumber) THEN
           SET @saveQuestionId = Field(@row, "QuestionID")
           SET @saveQuestionText = Field(@row, "QuestionText")
           SET @saveQuestionType = Field(@row, "QuestionType")
@@ -110,10 +108,10 @@ IF @saveStep == "1" AND @submitted != "true" THEN
           "LastUpdated", NOW()
         )
         SET @saveStepOk = "true"
-      CATCH @saveEx
+      CATCH
         SET @saveStepOk = "false"
         SET @saveStepError = "upsert_failed"
-      ENDTRY
+      ENDIF
     ELSE
       SET @saveStepError = "unknown_question"
     ENDIF
@@ -121,37 +119,6 @@ IF @saveStep == "1" AND @submitted != "true" THEN
     SET @saveStepError = "missing_fields"
   ENDIF
   SET @saveStepDone = "true"
-ENDIF
-
-IF @saveStepDone != "true" AND @submitted != "true" AND NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) THEN
-  SET @savedRows = LookupRows("SST_SP_Survey_Responses_DE", "Contact", @contact, "SurveyID", @surveyId)
-  IF RowCount(@savedRows) > 0 THEN
-    SET @savedAnswersJson = "{"
-    SET @jsonFirst = "true"
-    FOR @si = 1 TO RowCount(@savedRows) DO
-      SET @srow = Row(@savedRows, @si)
-      SET @sqId = Field(@srow, "QuestionID")
-      SET @sqType = Field(@srow, "QuestionType")
-      SET @sqNum = Field(@srow, "QuestionNumber")
-      SET @sResponse = Field(@srow, "Response")
-      IF @sqId != "SURVEY_OPEN" AND @sqType != "log" AND NOT EMPTY(@sqNum) AND NOT EMPTY(@sResponse) THEN
-        IF @jsonFirst != "true" THEN
-          SET @savedAnswersJson = Concat(@savedAnswersJson, ",")
-        ENDIF
-        SET @sResponse = Replace(@sResponse, "\", "\\")
-        SET @sResponse = Replace(@sResponse, '"', '\"')
-        SET @sResponse = Replace(@sResponse, Char(10), "\n")
-        SET @sResponse = Replace(@sResponse, Char(13), "")
-        SET @savedAnswersJson = Concat(@savedAnswersJson, '"q', @sqNum, '":"', @sResponse, '"')
-        SET @jsonFirst = "false"
-      ENDIF
-    NEXT @si
-    IF @jsonFirst == "true" THEN
-      SET @savedAnswersJson = "{}"
-    ELSE
-      SET @savedAnswersJson = Concat(@savedAnswersJson, "}")
-    ENDIF
-  ENDIF
 ENDIF
 
 /* Handle form submission */
@@ -1752,8 +1719,54 @@ text-align: -webkit-center;">
 
 
 
+<script runat="server" language="javascript">
+  Platform.Load("Core", "1.1");
+  function writeSurveySavedAnswersBootstrap() {
+    var saved = {};
+    var out = "{}";
+    try {
+      var contact = Platform.Variable.GetValue("@contact");
+      var surveyId = Platform.Variable.GetValue("@surveyId");
+      var submitted = Platform.Variable.GetValue("@submitted");
+      if (submitted === "true" || !contact || !surveyId) {
+        Write("window.SURVEY_SAVED_ANSWERS = {};\n");
+        return;
+      }
+      var rows = Platform.Function.LookupRows(
+        "SST_SP_Survey_Responses_DE",
+        "Contact",
+        contact,
+        "SurveyID",
+        surveyId
+      );
+      var i, row, qid, qtype, qnum, resp;
+      if (rows && rows.length) {
+        for (i = 0; i < rows.length; i++) {
+          row = rows[i];
+          qid = row.QuestionID;
+          qtype = row.QuestionType;
+          qnum = row.QuestionNumber;
+          resp = row.Response;
+          if (qid === "SURVEY_OPEN" || qtype === "log") {
+            continue;
+          }
+          if (qnum === null || qnum === undefined || qnum === "") {
+            continue;
+          }
+          if (resp === null || resp === undefined || String(resp) === "") {
+            continue;
+          }
+          saved["q" + String(qnum)] = String(resp);
+        }
+      }
+      out = Platform.Function.Stringify(saved);
+    } catch (bootstrapEx) {}
+    Write("window.SURVEY_SAVED_ANSWERS = " + out + ";\n");
+  }
+  writeSurveySavedAnswersBootstrap();
+</script>
 <script>
-window.SURVEY_SAVED_ANSWERS = %%=IIF(EMPTY(@savedAnswersJson), "{}", @savedAnswersJson)=%%;
+let hiddenQuestionsHistory = [];
 
 function storeAnswerLocally(questionName, answer) {
   if (!window.pendingAnswers) {
@@ -1781,8 +1794,15 @@ function persistAnswerToServer(questionName, answer) {
   fd.append('contact', form.querySelector('[name="contact"]').value);
   fd.append('surveyName', form.querySelector('[name="surveyName"]').value);
   fetch(form.action, { method: 'POST', body: fd, credentials: 'same-origin' })
-    .then(function(res) { return res.json(); })
-    .then(function(data) {
+    .then(function(res) { return res.text(); })
+    .then(function(text) {
+      var data = null;
+      try {
+        data = JSON.parse(text);
+      } catch (parseErr) {
+        console.warn('Survey autosave returned non-JSON response:', text ? text.substring(0, 200) : text);
+        return;
+      }
       if (!data || !data.ok) {
         console.warn('Survey autosave failed:', data);
       }
@@ -2189,10 +2209,6 @@ function debouncedUpdateProgress() {
 
 
 
-
-
-// Back button functionality - store history of hidden questions
-let hiddenQuestionsHistory = [];
 
 
 
