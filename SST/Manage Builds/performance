@@ -20,7 +20,7 @@ VAR @metricsRows, @metricsRow, @sentRows, @sentRow, @si, @eventRows, @eventRow, 
 VAR @perfSentLabels, @perfSentCounts, @perfEventLabels, @perfEventOpens, @perfEventClicks, @perfEventUnsubs, @perfEventUnregOpens
 VAR @valSent, @valOpen, @valClk, @valUnsub, @valUnreg, @lblDay, @editSidebarHtml
 VAR @contactUiPage, @contactTotalPages, @contactPageSize, @contactBatchRowCount, @contactMaxPageRows, @contactMaxPageNum
-VAR @contactTotalPagesFromField, @contactDePageKey, @contactStartRow, @contactEndRow, @contactNavBase, @contactNavQueryPos
+VAR @contactTotalPagesFromField, @contactDePageKey, @contactStartRow, @contactEndRow, @contactNavBase, @contactNavQueryPos, @contactRem
 
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
@@ -47,6 +47,12 @@ IF RowCount(@surveyUrlRows) > 0 THEN
 ENDIF
 
 SET @jid = Trim(RequestParameter("journeyId"))
+IF Empty(@jid) THEN
+  SET @jid = Trim(QueryParameter("journeyId"))
+ENDIF
+IF Empty(@jid) THEN
+  SET @jid = Trim(QueryParameter("journeyid"))
+ENDIF
 SET @dispSurveyId = ""
 SET @isSurveyBuild = "false"
 SET @buildNavContext = "false"
@@ -154,7 +160,7 @@ IF NOT Empty(@jid) AND Empty(@configError) THEN
     SET @analyticsData = LookupRows("bd_self_service_engagement", "JourneyID", @jid, "PageNumber", @contactUiPage)
     SET @contactBatchRowCount = RowCount(@analyticsData)
   ENDIF
-  IF @contactBatchRowCount == 0 AND @contactUiPage == 1 THEN
+  IF @contactBatchRowCount == 0 AND @contactUiPage == 1 AND @contactTotalPages <= 1 THEN
     SET @analyticsData = LookupRows("bd_self_service_engagement", "JourneyID", @jid)
     SET @contactBatchRowCount = RowCount(@analyticsData)
     IF @contactBatchRowCount > 0 AND @contactTotalPages == 1 THEN
@@ -169,15 +175,22 @@ IF NOT Empty(@jid) AND Empty(@configError) THEN
     ENDIF
   ENDIF
   SET @responseRowCount = @contactBatchRowCount
+  IF @totalRecords == 0 AND @contactTotalPages > 1 THEN
+    SET @totalRecords = Multiply(@contactTotalPages, @contactPageSize)
+  ENDIF
   IF @totalRecords == 0 AND @contactTotalPages > 0 AND @contactBatchRowCount > 0 THEN
     SET @totalRecords = Multiply(@contactTotalPages, @contactPageSize)
   ENDIF
   IF @totalRecords == 0 AND @contactBatchRowCount > 0 THEN
     SET @totalRecords = @contactBatchRowCount
   ENDIF
-  IF @contactBatchRowCount > 0 THEN
+  IF @contactUiPage > 0 THEN
     SET @contactStartRow = Add(Multiply(Subtract(@contactUiPage, 1), @contactPageSize), 1)
-    SET @contactEndRow = Add(@contactStartRow, Subtract(@contactBatchRowCount, 1))
+    IF @contactBatchRowCount > 0 THEN
+      SET @contactEndRow = Add(@contactStartRow, Subtract(@contactBatchRowCount, 1))
+    ELSE
+      SET @contactEndRow = Add(@contactStartRow, Subtract(@contactPageSize, 1))
+    ENDIF
   ENDIF
 ENDIF
 SET @openedCount = 0
@@ -1222,7 +1235,7 @@ pre.log.show{display:block}
                   </p>
               </div>
           </div>
-          %%[ ELSEIF @totalRecords > 0 OR @contactBatchRowCount > 0 THEN ]%%
+          %%[ ELSEIF @totalRecords > 0 OR @contactBatchRowCount > 0 OR (@contactTotalPages > 1 AND NOT Empty(@jid)) THEN ]%%
            <h1 style="
     padding: 20px 0px 0px 24px;
     /* margin: 24px; */
@@ -1360,7 +1373,7 @@ pre.log.show{display:block}
                    <div class="contact-add-success flicker">Successfully added.</div>
                    <div class="contact-add-error" style="display: none;">Error occurred. Please try again.</div>
                </div>
-               <div id="contactTablePagingConfig" style="display:none" data-current-page="%%=v(@contactUiPage)=%%" data-total-pages="%%=v(@contactTotalPages)=%%" data-total-rows="%%=v(@totalRecords)=%%" data-start-row="%%=v(@contactStartRow)=%%" data-end-row="%%=v(@contactEndRow)=%%" data-nav-base="%%=v(@contactNavBase)=%%" data-page-size="%%=v(@contactPageSize)=%%" data-server-paging="1"></div>
+               <div id="contactTablePagingConfig" style="display:none" data-current-page="%%=v(@contactUiPage)=%%" data-total-pages="%%=v(@contactTotalPages)=%%" data-total-rows="%%=v(@totalRecords)=%%" data-start-row="%%=v(@contactStartRow)=%%" data-end-row="%%=v(@contactEndRow)=%%" data-nav-base="%%=v(@contactNavBase)=%%" data-page-size="%%=v(@contactPageSize)=%%" data-journey-id="%%=v(@jid)=%%" data-server-paging="1"></div>
                <div id="filterscrollto" class="table-wrapper">
                    <table class="responses-table">
                        <thead>
@@ -2567,11 +2580,23 @@ pre.log.show{display:block}
        } 
 
        function goToPage(page) {
-           if (serverContactPaging && filteredResponses.length === 0 && contactNavBase) {
+           if (serverContactPaging && filteredResponses.length === 0) {
                const totalPages = contactTotalPages > 0 ? contactTotalPages : 1;
                if (page < 1 || page > totalPages) return;
-               window.location.href = contactNavBase + String(page) + "#filterscrollto";
-               return;
+               if (contactNavBase) {
+                   window.location.href = contactNavBase + String(page) + "#filterscrollto";
+                   return;
+               }
+               const cfg = document.getElementById("contactTablePagingConfig");
+               const jid = cfg ? (cfg.getAttribute("data-journey-id") || "").trim() : "";
+               if (jid) {
+                   const url = new URL(window.location.href);
+                   url.searchParams.set("journeyId", jid);
+                   url.searchParams.set("contactPage", String(page));
+                   url.hash = "filterscrollto";
+                   window.location.href = url.toString();
+                   return;
+               }
            }
            const dataToShow = filteredResponses.length > 0 ? filteredResponses : allResponses;
            const totalPages = Math.ceil(dataToShow.length / rowsPerPage);
