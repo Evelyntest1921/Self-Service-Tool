@@ -140,7 +140,52 @@ Survey Landing no longer Retrieve()s the full responses DE. It reads sst_analyti
 
 Survey Landing Avg Response Rate (landingAvgResponseRate): for each row in sst_analytics_per_survey, rate = CompletedSurvey / OpenedSurvey (or CompletedSurvey / UniqueRespondents if OpenedSurvey is 0); then arithmetic mean of those rates, rounded to whole percent. Requires per-survey query refresh.
 
-Survey Landing Avg Completion Time — computed in CloudPage SSJS (no sst_analytics_completion_time query).
-Sample: up to 5 distinct SurveyID+Contact pairs from LookupOrderedRows(SST_SP_Survey_Responses_DE, 250, LastUpdated DESC, Status, Completed), skipping SURVEY_OPEN.
-Per pair: minutes from latest SURVEY_OPEN at or before that row’s LastUpdated → that row’s LastUpdated. Sessions over 48 hours skipped. Average the sample (not full population).
+sst_analytics_completion_time — Survey Landing Avg Completion Time (one summary row). Fast sample: TOP 5 SurveyID+Contact by most recent first completion, not full-table avg.
+DE columns: AvgCompletionMinutes (Decimal), CompletedSessionCount (Number, 1–5)
+
+SELECT
+    CAST(AVG(CAST(d.CompletionMinutes AS FLOAT)) AS DECIMAL(10, 2)) AS AvgCompletionMinutes,
+    COUNT(*) AS CompletedSessionCount
+FROM (
+    SELECT
+        DATEDIFF(MINUTE, opens.OpenedAt, recent.CompletedAt) AS CompletionMinutes
+    FROM (
+        SELECT TOP 5
+            SurveyID,
+            Contact,
+            MIN(LastUpdated) AS CompletedAt
+        FROM SST_SP_Survey_Responses_DE
+        WHERE LTRIM(RTRIM(ISNULL(Status, ''))) = 'Completed'
+          AND ISNULL(QuestionID, '') != 'SURVEY_OPEN'
+        GROUP BY SurveyID, Contact
+        ORDER BY MIN(LastUpdated) DESC
+    ) recent
+    INNER JOIN (
+        SELECT
+            r.SurveyID,
+            r.Contact,
+            r.CompletedAt,
+            MAX(o.LastUpdated) AS OpenedAt
+        FROM (
+            SELECT TOP 5
+                SurveyID,
+                Contact,
+                MIN(LastUpdated) AS CompletedAt
+            FROM SST_SP_Survey_Responses_DE
+            WHERE LTRIM(RTRIM(ISNULL(Status, ''))) = 'Completed'
+              AND ISNULL(QuestionID, '') != 'SURVEY_OPEN'
+            GROUP BY SurveyID, Contact
+            ORDER BY MIN(LastUpdated) DESC
+        ) r
+        INNER JOIN SST_SP_Survey_Responses_DE o
+            ON o.SurveyID = r.SurveyID
+           AND o.Contact = r.Contact
+           AND o.QuestionID = 'SURVEY_OPEN'
+           AND o.LastUpdated <= r.CompletedAt
+        GROUP BY r.SurveyID, r.Contact, r.CompletedAt
+    ) opens
+        ON recent.SurveyID = opens.SurveyID
+       AND recent.Contact = opens.Contact
+    WHERE DATEDIFF(MINUTE, opens.OpenedAt, recent.CompletedAt) BETWEEN 0 AND 2880
+) d
 

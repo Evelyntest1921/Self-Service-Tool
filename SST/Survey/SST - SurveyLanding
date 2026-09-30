@@ -103,8 +103,7 @@ SET @landingAvgCompletionTime = 0
   var SURVEYS_DE = "SST_SP_Surveys_Master_DE";
   var ANALYTICS_PER_SURVEY_DE = "sst_analytics_per_survey";
   var ANALYTICS_MONTHLY_DE = "sst_analytics_responses_by_month";
-  var RESPONSES_DE = "SST_SP_Survey_Responses_DE";
-  var COMPLETION_SAMPLE_SIZE = 5;
+  var ANALYTICS_COMPLETION_DE = "sst_analytics_completion_time";
   var COMPLETION_MAX_MINUTES = 2880;
   var SURVEY_PAGE_SIZE = 20;
   var SURVEY_CARD_ICON_SVG =
@@ -459,99 +458,23 @@ SET @landingAvgCompletionTime = 0
     }
     return Math.round(sum / rates.length);
   }
-  function parseDeDateMs(val) {
-    if (val == null || val === "") {
-      return NaN;
-    }
-    var s = String(val).trim();
-    var t = new Date(s.replace(" ", "T"));
-    if (!isNaN(t.getTime())) {
-      return t.getTime();
-    }
-    return NaN;
-  }
-  function minutesBetweenDates(startVal, endVal) {
-    var startMs = parseDeDateMs(startVal);
-    var endMs = parseDeDateMs(endVal);
-    if (isNaN(startMs) || isNaN(endMs)) {
-      return -1;
-    }
-    return Math.round((endMs - startMs) / 60000);
-  }
-  function findLatestOpenBefore(surveyId, contact, completedAt) {
+  function loadAvgCompletionMinutes() {
     var rows = [];
-    var completedMs = parseDeDateMs(completedAt);
-    var i, openAt, openMs, bestMs;
-    if (!surveyId || !contact || isNaN(completedMs)) {
-      return "";
-    }
+    var v;
     try {
-      rows = coerceRows(
-        Platform.Function.LookupRows(RESPONSES_DE, "SurveyID", surveyId, "Contact", contact, "QuestionID", "SURVEY_OPEN")
-      );
-    } catch (lookupEx) {}
-    bestMs = -1;
-    for (i = 0; i < rows.length; i++) {
-      openAt = fieldFromRow(rows[i], ["LastUpdated"]);
-      openMs = parseDeDateMs(openAt);
-      if (isNaN(openMs) || openMs > completedMs) {
-        continue;
-      }
-      if (openMs > bestMs) {
-        bestMs = openMs;
-      }
-    }
-    if (bestMs < 0) {
-      return "";
-    }
-    return new Date(bestMs);
-  }
-  function computeAvgCompletionMinutesSample(sampleSize) {
-    var limit = sampleSize || COMPLETION_SAMPLE_SIZE;
-    var rows = [];
-    var seen = {};
-    var durations = [];
-    var i, row, qid, surveyId, contact, key, completedAt, openAt, mins;
-    try {
-      rows = coerceRows(
-        Platform.Function.LookupOrderedRows(RESPONSES_DE, 250, "LastUpdated DESC", "Status", "Completed")
-      );
-    } catch (orderedEx) {}
-    for (i = 0; i < rows.length && durations.length < limit; i++) {
-      row = rows[i];
-      qid = String(fieldFromRow(row, ["QuestionID", "QuestionId"]));
-      if (qid === "SURVEY_OPEN") {
-        continue;
-      }
-      surveyId = String(fieldFromRow(row, ["SurveyID", "SurveyId"]));
-      contact = String(fieldFromRow(row, ["Contact"]));
-      if (!surveyId || !contact) {
-        continue;
-      }
-      key = surveyId.toLowerCase() + "|" + String(contact).toLowerCase();
-      if (seen[key]) {
-        continue;
-      }
-      seen[key] = true;
-      completedAt = fieldFromRow(row, ["LastUpdated"]);
-      openAt = findLatestOpenBefore(surveyId, contact, completedAt);
-      if (!openAt) {
-        continue;
-      }
-      mins = minutesBetweenDates(openAt, completedAt);
-      if (mins < 0 || mins > COMPLETION_MAX_MINUTES) {
-        continue;
-      }
-      durations.push(mins);
-    }
-    if (!durations.length) {
+      rows = coerceDeRows(DataExtension.Init(ANALYTICS_COMPLETION_DE).Rows.Retrieve());
+    } catch (deEx) {}
+    if (!rows.length) {
       return 0;
     }
-    var sum = 0;
-    for (i = 0; i < durations.length; i++) {
-      sum += durations[i];
+    v = parseFloat(String(fieldFromRow(rows[0], ["AvgCompletionMinutes", "avgCompletionMinutes"])));
+    if (isNaN(v) || !isFinite(v) || v < 0) {
+      return 0;
     }
-    return sum / durations.length;
+    if (v > COMPLETION_MAX_MINUTES) {
+      return 0;
+    }
+    return v;
   }
   function formatLandingMinutes(raw) {
     var n = Number(raw);
@@ -591,7 +514,7 @@ SET @landingAvgCompletionTime = 0
     setV("landingActiveSurveyCount", String(active));
     setV("landingSurveyCount", String(surveyRows.length));
     setV("landingAvgResponseRate", String(computeAvgSurveyResponseRatePct(analytics)));
-    setV("landingAvgCompletionTime", formatLandingMinutes(computeAvgCompletionMinutesSample(COMPLETION_SAMPLE_SIZE)));
+    setV("landingAvgCompletionTime", formatLandingMinutes(loadAvgCompletionMinutes()));
     var monthMap = loadMonthlyResponseMap();
     var keys = buildLast12MonthKeys();
     for (i = 0; i < 12; i++) {
@@ -1043,7 +966,7 @@ SET @landingAvgCompletionTime = 0
         <div class="metric-details">
           <div class="metric-number">%%=v(@landingAvgCompletionTime)=%% min</div>
           <div class="metric-label">Avg Completion Time</div>
-          <div class="metric-trend neutral">Avg of last 5 completed participants</div>
+          <div class="metric-trend neutral">Query avg of 5 most recent completions</div>
         </div>
       </div>
     </div>
@@ -1294,7 +1217,7 @@ SET @landingAvgCompletionTime = 0
           <div class="metric-details">
             <div class="metric-number">%%=v(@landingAvgCompletionTime)=%% min</div>
             <div class="metric-label">Avg Completion Time</div>
-            <div class="metric-trend neutral">Avg of last 5 completed participants</div>
+            <div class="metric-trend neutral">Query avg of 5 most recent completions</div>
           </div>
         </div>
       </div>
