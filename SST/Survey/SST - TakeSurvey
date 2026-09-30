@@ -1553,13 +1553,14 @@ color: #000000;
             %%[ FOR @i = 1 TO @questionCount DO
       SET @row = Row(@questions, @i)
       SET @questionNumber = Field(@row, "QuestionNumber")
+      SET @questionId = Field(@row, "QuestionID")
       SET @questionText = Field(@row, "QuestionText")
       SET @questionType = Field(@row, "QuestionType")
       SET @options = Field(@row, "Options")
       SET @required = Field(@row, "Required")
       SET @orderIndex = Field(@row, "OrderIndex")
     ]%%
-    <div class="question-card" data-question="%%=v(@i)=%%" %%[ IF @i > 1 THEN ]%%style="display: none;"%%[ ENDIF ]%%>
+    <div class="question-card" data-question="%%=v(@i)=%%" data-qid="%%=v(@questionId)=%%" %%[ IF @i > 1 THEN ]%%style="display: none;"%%[ ENDIF ]%%>
       <div class="question-header">
         <div class="question-number">%%=v(@questionNumber)=%%</div>
         <div class="question-content">
@@ -1635,6 +1636,30 @@ text-align: -webkit-center;">
 
 
 <script>
+const SAVE_ENDPOINT = "PASTE_SAVE_PAGE_URL_HERE";
+function persistAnswerToServer(questionName, answer) {
+  if (!SAVE_ENDPOINT || SAVE_ENDPOINT.indexOf("PASTE_") === 0) {
+    return;
+  }
+  const form = document.getElementById("surveyForm");
+  const contactField = form ? form.querySelector('input[name="contact"]') : null;
+  const idField = form ? form.querySelector('input[name="id"]') : null;
+  const input = document.querySelector('[name="' + questionName + '"]');
+  const card = input ? input.closest(".question-card") : null;
+  const qid = card ? card.getAttribute("data-qid") : "";
+  const contact = contactField ? contactField.value : "";
+  const surveyId = idField ? idField.value : "";
+  if (!contact || !surveyId || !qid || !answer) {
+    return;
+  }
+  const qnum = questionName.replace("q", "");
+  const body = "contact=" + encodeURIComponent(contact) + "&id=" + encodeURIComponent(surveyId) + "&qid=" + encodeURIComponent(qid) + "&qnum=" + encodeURIComponent(qnum) + "&answer=" + encodeURIComponent(answer);
+  fetch(SAVE_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body
+  }).catch(function() {});
+}
 // Enhanced radio option selection functionality
 function setupRadioOptions() {
   const radioOptions = document.querySelectorAll('.radio-option');
@@ -1708,6 +1733,7 @@ function saveAnswer(questionName, answer) {
     window.pendingAnswers = {};
   }
   window.pendingAnswers[questionName] = answer;
+  persistAnswerToServer(questionName, answer);
 }
 
 
