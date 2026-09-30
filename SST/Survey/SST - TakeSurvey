@@ -93,25 +93,20 @@ IF @saveStep == "1" AND @submitted != "true" THEN
       NEXT @i
     ENDIF
     IF NOT EMPTY(@saveQuestionId) THEN
-      TRY
-        UPSERTDE(
-          "SST_SP_Survey_Responses_DE", 3,
-          "Contact", @contact,
-          "SurveyID", @surveyId,
-          "QuestionID", @saveQuestionId,
-          "QuestionNumber", @saveQuestionNumber,
-          "QuestionText", @saveQuestionText,
-          "QuestionType", @saveQuestionType,
-          "Response", @saveAnswerValue,
-          "Status", "In Progress",
-          "CourseName", @fullSurveyName,
-          "LastUpdated", NOW()
-        )
-        SET @saveStepOk = "true"
-      CATCH
-        SET @saveStepOk = "false"
-        SET @saveStepError = "upsert_failed"
-      ENDIF
+      UPSERTDE(
+        "SST_SP_Survey_Responses_DE", 3,
+        "Contact", @contact,
+        "SurveyID", @surveyId,
+        "QuestionID", @saveQuestionId,
+        "QuestionNumber", @saveQuestionNumber,
+        "QuestionText", @saveQuestionText,
+        "QuestionType", @saveQuestionType,
+        "Response", @saveAnswerValue,
+        "Status", "In Progress",
+        "CourseName", @fullSurveyName,
+        "LastUpdated", NOW()
+      )
+      SET @saveStepOk = "true"
     ELSE
       SET @saveStepError = "unknown_question"
     ENDIF
@@ -1638,11 +1633,16 @@ color: #000000;
             %%[ FOR @i = 1 TO @questionCount DO
       SET @row = Row(@questions, @i)
       SET @questionNumber = Field(@row, "QuestionNumber")
+      SET @questionId = Field(@row, "QuestionID")
       SET @questionText = Field(@row, "QuestionText")
       SET @questionType = Field(@row, "QuestionType")
       SET @options = Field(@row, "Options")
       SET @required = Field(@row, "Required")
       SET @orderIndex = Field(@row, "OrderIndex")
+      SET @savedAnswer = ""
+      IF NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) AND NOT EMPTY(@questionId) THEN
+        SET @savedAnswer = Lookup("SST_SP_Survey_Responses_DE", "Response", "Contact", @contact, "SurveyID", @surveyId, "QuestionID", @questionId)
+      ENDIF
     ]%%
     <div class="question-card" data-question="%%=v(@i)=%%" %%[ IF @i > 1 THEN ]%%style="display: none;"%%[ ENDIF ]%%>
       <div class="question-header">
@@ -1668,7 +1668,7 @@ color: #000000;
             SET @option = Field(@optionRow, 1)
           ]%%
           <div class="radio-option">
-            <input type="radio" name="q%%=v(@questionNumber)=%%" value="%%=v(@option)=%%" %%[ IF @required == "Yes" AND @j == 1 THEN ]%%required%%[ ENDIF ]%%>
+            <input type="radio" name="q%%=v(@questionNumber)=%%" value="%%=v(@option)=%%" %%[ IF @required == "Yes" AND @j == 1 THEN ]%%required%%[ ENDIF ]%% %%[ IF NOT EMPTY(@savedAnswer) AND @savedAnswer == @option THEN ]%%checked%%[ ENDIF ]%%>
             <label>%%=v(@option)=%%</label>
           </div>
           %%[ NEXT @j ]%%
@@ -1681,7 +1681,7 @@ color: #000000;
  
      %%[ ELSEIF @questionType == "text" THEN ]%%
      <div class="form-group">
-       <textarea class="textarea-control" name="q%%=v(@questionNumber)=%%" placeholder="Please provide your response here..."></textarea>
+       <textarea class="textarea-control" name="q%%=v(@questionNumber)=%%" placeholder="Please provide your response here...">%%=v(@savedAnswer)=%%</textarea>
        <div class="question-buttons" style="margin-top: 26px;">
          <button type="button" class="submit-button back-button" onclick="goBackToPreviousQuestion()" style="display: none;">Back</button>
          <button type="button" class="submit-button next-button" data-qname="q%%=v(@questionNumber)=%%" data-question="%%=v(@i)=%%">Next</button>
@@ -1719,52 +1719,6 @@ text-align: -webkit-center;">
 
 
 
-<script runat="server" language="javascript">
-  Platform.Load("Core", "1.1");
-  function writeSurveySavedAnswersBootstrap() {
-    var saved = {};
-    var out = "{}";
-    try {
-      var contact = Platform.Variable.GetValue("@contact");
-      var surveyId = Platform.Variable.GetValue("@surveyId");
-      var submitted = Platform.Variable.GetValue("@submitted");
-      if (submitted === "true" || !contact || !surveyId) {
-        Write("window.SURVEY_SAVED_ANSWERS = {};\n");
-        return;
-      }
-      var rows = Platform.Function.LookupRows(
-        "SST_SP_Survey_Responses_DE",
-        "Contact",
-        contact,
-        "SurveyID",
-        surveyId
-      );
-      var i, row, qid, qtype, qnum, resp;
-      if (rows && rows.length) {
-        for (i = 0; i < rows.length; i++) {
-          row = rows[i];
-          qid = row.QuestionID;
-          qtype = row.QuestionType;
-          qnum = row.QuestionNumber;
-          resp = row.Response;
-          if (qid === "SURVEY_OPEN" || qtype === "log") {
-            continue;
-          }
-          if (qnum === null || qnum === undefined || qnum === "") {
-            continue;
-          }
-          if (resp === null || resp === undefined || String(resp) === "") {
-            continue;
-          }
-          saved["q" + String(qnum)] = String(resp);
-        }
-      }
-      out = Platform.Function.Stringify(saved);
-    } catch (bootstrapEx) {}
-    Write("window.SURVEY_SAVED_ANSWERS = " + out + ";\n");
-  }
-  writeSurveySavedAnswersBootstrap();
-</script>
 <script>
 let hiddenQuestionsHistory = [];
 
@@ -1812,55 +1766,48 @@ function persistAnswerToServer(questionName, answer) {
     });
 }
 
-function applyAnswerToQuestionCard(questionName, answer) {
-  const radios = document.querySelectorAll('input[type="radio"][name="' + questionName + '"]');
-  let radioMatched = false;
-  radios.forEach(function(radio) {
-    if (radio.value === String(answer)) {
-      radio.checked = true;
-      radioMatched = true;
-      const option = radio.closest('.radio-option');
-      if (option) {
-        option.classList.add('selected');
-      }
-    }
-  });
-  if (radioMatched) {
-    return;
+function questionCardHasSavedAnswer(card) {
+  const checkedRadio = card.querySelector('input[type="radio"]:checked');
+  if (checkedRadio && checkedRadio.value) {
+    return { qname: checkedRadio.name, value: checkedRadio.value };
   }
-  const textarea = document.querySelector('textarea[name="' + questionName + '"]');
-  if (textarea) {
-    textarea.value = answer;
+  const textarea = card.querySelector('textarea');
+  if (textarea && textarea.name && textarea.value && textarea.value.trim() !== '') {
+    return { qname: textarea.name, value: textarea.value };
   }
+  return null;
 }
 
 function applySavedSurveyProgress() {
-  const saved = window.SURVEY_SAVED_ANSWERS;
-  if (!saved || typeof saved !== 'object' || Object.keys(saved).length === 0) {
-    return;
-  }
   const cards = Array.from(document.querySelectorAll('.question-card'));
   cards.sort(function(a, b) {
     return parseInt(a.dataset.question, 10) - parseInt(b.dataset.question, 10);
   });
   let firstOpen = null;
   cards.forEach(function(card) {
-    const input = card.querySelector('input[type="radio"], textarea');
-    if (!input || !input.name) {
-      return;
-    }
-    const qname = input.name;
-    if (!saved[qname]) {
+    const saved = questionCardHasSavedAnswer(card);
+    if (!saved) {
       if (!firstOpen) {
         firstOpen = card;
       }
       return;
     }
-    storeAnswerLocally(qname, saved[qname]);
-    applyAnswerToQuestionCard(qname, saved[qname]);
+    storeAnswerLocally(saved.qname, saved.value);
     card.classList.add('answered');
     card.style.display = 'none';
     hiddenQuestionsHistory.push(card);
+    const selectedOption = card.querySelector('.radio-option input[type="radio"]:checked');
+    if (selectedOption) {
+      const optionWrap = selectedOption.closest('.radio-option');
+      if (optionWrap) {
+        optionWrap.classList.add('selected');
+      }
+    }
+  });
+  cards.forEach(function(card) {
+    if (!card.classList.contains('answered')) {
+      card.style.display = 'none';
+    }
   });
   if (firstOpen) {
     firstOpen.style.display = 'block';
@@ -2623,7 +2570,11 @@ if (form) {
   // Initialize progress and radio options
   // Delay initial progress update to ensure DOM is fully loaded
   setTimeout(() => {
-    applySavedSurveyProgress();
+    try {
+      applySavedSurveyProgress();
+    } catch (resumeErr) {
+      console.warn('Survey resume skipped:', resumeErr);
+    }
     updateProgress();
     updateBackButtonVisibility();
     checkRequiredQuestionsAndShowSubmit();
