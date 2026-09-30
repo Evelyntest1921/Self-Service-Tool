@@ -1,38 +1,71 @@
-sst_analytics_per_course query — output column names MUST match DE attributes exactly:
-surveyId, CourseName, TotalResponses, UniqueRespondents, CompletedRespondents, CompletionRatePct, FirstActivityDate, LastActivityDate
-(Wrong aliases like TotalActivity or CompletedSurvey leave TotalResponses / CompletedRespondents NULL in the DE.)
-
-SELECT
-    r.SurveyID AS surveyId,
-    LTRIM(RTRIM(r.CourseName)) AS CourseName,
-    COUNT(DISTINCT CASE WHEN ISNULL(r.QuestionID, '') != 'SURVEY_OPEN' THEN r.Contact END) AS UniqueRespondents,
-    COUNT(DISTINCT CASE WHEN LTRIM(RTRIM(ISNULL(r.Status, ''))) = 'Completed' THEN r.Contact END) AS CompletedRespondents,
-    CAST(
-        ISNULL(
-            COUNT(DISTINCT CASE WHEN LTRIM(RTRIM(ISNULL(r.Status, ''))) = 'Completed' THEN r.Contact END) * 100.0
-            / NULLIF(COUNT(DISTINCT CASE WHEN ISNULL(r.QuestionID, '') != 'SURVEY_OPEN' THEN r.Contact END), 0),
-            0
-        )
-    AS DECIMAL(5, 2)) AS CompletionRatePct,
-    MIN(r.LastUpdated) AS FirstActivityDate,
-    MAX(r.LastUpdated) AS LastActivityDate,
-    ISNULL(SUM(CASE WHEN ISNULL(r.QuestionID, '') != 'SURVEY_OPEN' THEN 1 ELSE 0 END), 0) AS TotalResponses
-FROM SST_SP_Survey_Responses_DE r
-WHERE r.SurveyID IS NOT NULL
-  AND r.CourseName IS NOT NULL
-  AND LTRIM(RTRIM(r.CourseName)) <> ''
-GROUP BY
-    r.SurveyID,
-    LTRIM(RTRIM(r.CourseName))
-
-After changing SQL: re-run the query activity (overwrite/update target DE), then refresh Survey Results CloudPage.
-
-TextPageNumber batch — one sequence per SurveyID + QuestionID (20 non-empty text rows per page).
-PageNumber batch — one sequence per SurveyID (20 response rows per page, ordered by LastUpdated ASC).
-Re-run PageNumber/TextPageNumber query and update SST_SP_Survey_Responses_DE when batch logic changes.
-
-Survey Results reads course cards/chart from sst_analytics_per_course (TotalResponses, CompletedRespondents, UniqueRespondents, CompletionRatePct).
-
-Detailed CSV export (server): same CloudPage with export=csv and surveyid (optional exportCourse when a course card filter is active). Loops PageNumber 1..max from SST_SP_Survey_Responses_DE; skips SURVEY_OPEN. Does not apply the table search box filter.
-
-Detailed table course filter: course card click sets detailCourse on the URL (with view=responses and detailPage=1). Server loads matching rows across the full survey (not only the current PageNumber batch). Pagination keeps detailCourse on each page.
+sst_analytics_per_course query — output column names MUST match DE attributes exactly:
+surveyId, CourseName, TotalResponses, UniqueRespondents, CompletedRespondents, CompletionRatePct, FirstActivityDate, LastActivityDate
+(Wrong aliases like TotalActivity or CompletedSurvey leave TotalResponses / CompletedRespondents NULL in the DE.)
+
+SELECT
+    r.SurveyID AS surveyId,
+    LTRIM(RTRIM(r.CourseName)) AS CourseName,
+    COUNT(DISTINCT CASE WHEN ISNULL(r.QuestionID, '') != 'SURVEY_OPEN' THEN r.Contact END) AS UniqueRespondents,
+    COUNT(DISTINCT CASE WHEN LTRIM(RTRIM(ISNULL(r.Status, ''))) = 'Completed' THEN r.Contact END) AS CompletedRespondents,
+    CAST(
+        ISNULL(
+            COUNT(DISTINCT CASE WHEN LTRIM(RTRIM(ISNULL(r.Status, ''))) = 'Completed' THEN r.Contact END) * 100.0
+            / NULLIF(COUNT(DISTINCT CASE WHEN ISNULL(r.QuestionID, '') != 'SURVEY_OPEN' THEN r.Contact END), 0),
+            0
+        )
+    AS DECIMAL(5, 2)) AS CompletionRatePct,
+    MIN(r.LastUpdated) AS FirstActivityDate,
+    MAX(r.LastUpdated) AS LastActivityDate,
+    ISNULL(SUM(CASE WHEN ISNULL(r.QuestionID, '') != 'SURVEY_OPEN' THEN 1 ELSE 0 END), 0) AS TotalResponses
+FROM SST_SP_Survey_Responses_DE r
+WHERE r.SurveyID IS NOT NULL
+  AND r.CourseName IS NOT NULL
+  AND LTRIM(RTRIM(r.CourseName)) <> ''
+GROUP BY
+    r.SurveyID,
+    LTRIM(RTRIM(r.CourseName))
+
+---
+
+sst_analytics_per_survey — one row per survey (Survey Results header + Survey Landing cards/metrics).
+DE columns: surveyId, UniqueRespondents, OpenedSurvey, CompletedSurvey, TotalActivity
+
+SELECT
+    r.SurveyID AS surveyId,
+    COUNT(DISTINCT CASE WHEN ISNULL(r.QuestionID, '') != 'SURVEY_OPEN' THEN r.Contact END) AS UniqueRespondents,
+    ISNULL(SUM(CASE WHEN r.QuestionID = 'SURVEY_OPEN' THEN 1 ELSE 0 END), 0) AS OpenedSurvey,
+    COUNT(DISTINCT CASE WHEN LTRIM(RTRIM(ISNULL(r.Status, ''))) = 'Completed' THEN r.Contact END) AS CompletedSurvey,
+    ISNULL(SUM(CASE WHEN ISNULL(r.QuestionID, '') != 'SURVEY_OPEN' THEN 1 ELSE 0 END), 0) AS TotalActivity
+FROM SST_SP_Survey_Responses_DE r
+WHERE r.SurveyID IS NOT NULL
+GROUP BY r.SurveyID
+
+---
+
+sst_analytics_responses_by_month — Survey Landing “Survey Response Trends” chart (Recent Activity).
+DE columns: ResponseMonth (Text, yyyy-MM), ResponseCount (Number)
+Counts completed answer rows (excludes SURVEY_OPEN). Chart JS maps the rolling last 12 calendar months to these rows.
+
+SELECT
+    SUBSTRING(CONVERT(VARCHAR(20), r.LastUpdated, 120), 1, 7) AS ResponseMonth,
+    COUNT(*) AS ResponseCount
+FROM SST_SP_Survey_Responses_DE r
+WHERE r.LastUpdated IS NOT NULL
+  AND LTRIM(RTRIM(ISNULL(r.Status, ''))) = 'Completed'
+  AND ISNULL(r.QuestionID, '') != 'SURVEY_OPEN'
+GROUP BY SUBSTRING(CONVERT(VARCHAR(20), r.LastUpdated, 120), 1, 7)
+
+After changing SQL: re-run each query activity (overwrite/update target DE), then refresh CloudPages.
+
+TextPageNumber batch — one sequence per SurveyID + QuestionID (20 non-empty text rows per page).
+PageNumber batch — one sequence per SurveyID (20 response rows per page, ordered by LastUpdated ASC).
+Re-run PageNumber/TextPageNumber query and update SST_SP_Survey_Responses_DE when batch logic changes.
+
+Survey Results reads course cards/chart from sst_analytics_per_course (TotalResponses, CompletedRespondents, UniqueRespondents, CompletionRatePct).
+
+Detailed CSV export (server): same CloudPage with export=csv and surveyid (optional exportCourse when a course card filter is active). Loops PageNumber 1..max from SST_SP_Survey_Responses_DE; skips SURVEY_OPEN. Does not apply the table search box filter.
+
+Detailed table course filter: course card click sets detailCourse on the URL (with view=responses and detailPage=1). Server loads matching rows across the full survey (not only the current PageNumber batch). Pagination keeps detailCourse on each page.
+
+Survey Landing no longer Retrieve()s the full responses DE. It reads sst_analytics_per_survey (grid open counts + stat cards) and sst_analytics_responses_by_month (activity chart). Schedule the same refresh cadence as other analytics DEs.
+

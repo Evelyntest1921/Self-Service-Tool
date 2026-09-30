@@ -77,12 +77,30 @@ IF @testCount > 0 THEN
 ELSE
   SET @dataExists = "false"
 ENDIF
+SET @landingSurveyCount = 0
+SET @landingActiveSurveyCount = 0
+SET @landingTotalCompleted = 0
+SET @landingTotalResponses = 0
+SET @landingTotalOpened = 0
+SET @landingResp1 = 0
+SET @landingResp2 = 0
+SET @landingResp3 = 0
+SET @landingResp4 = 0
+SET @landingResp5 = 0
+SET @landingResp6 = 0
+SET @landingResp7 = 0
+SET @landingResp8 = 0
+SET @landingResp9 = 0
+SET @landingResp10 = 0
+SET @landingResp11 = 0
+SET @landingResp12 = 0
 
 ]%%
 <script runat="server" language="javascript">
   Platform.Load("Core", "1.1");
   var SURVEYS_DE = "SST_SP_Surveys_Master_DE";
-  var RESPONSES_DE = "SST_SP_Survey_Responses_DE";
+  var ANALYTICS_PER_SURVEY_DE = "sst_analytics_per_survey";
+  var ANALYTICS_MONTHLY_DE = "sst_analytics_responses_by_month";
   var SURVEY_PAGE_SIZE = 20;
   var SURVEY_CARD_ICON_SVG =
     '<svg class="stat-icon-svg" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="M19 21H5V5h2v2h10V5h2v2.172l1-1V4h-3V3h-3a2 2 0 0 0-4 0H7v1H4v18h16V11.828l-1 1zM8 4h3V2.615A.615.615 0 0 1 11.614 2h.771a.615.615 0 0 1 .615.615V4h3v2H8zm14.646 1.646l.707.707-8.853 8.854-3.854-3.854.707-.707 3.147 3.147z"/></svg>';
@@ -277,13 +295,6 @@ ENDIF
     return [];
   }
   function loadSurveyMasterRows() {
-    var rows = [];
-    try {
-      rows = coerceDeRows(DataExtension.Init(SURVEYS_DE).Rows.Retrieve());
-    } catch (deEx) {}
-    if (rows.length) {
-      return rows;
-    }
     var statuses = ["Active", "Completed", "Draft"];
     var seen = {};
     var out = [];
@@ -355,24 +366,95 @@ ENDIF
     }
     return rows;
   }
+  function loadAnalyticsPerSurveyRows() {
+    var rows = [];
+    try {
+      rows = coerceDeRows(DataExtension.Init(ANALYTICS_PER_SURVEY_DE).Rows.Retrieve());
+    } catch (deEx) {}
+    if (rows.length) {
+      return rows;
+    }
+    try {
+      return coerceRows(Platform.Function.LookupOrderedRows(ANALYTICS_PER_SURVEY_DE, 3000, "surveyId ASC"));
+    } catch (lookupEx) {}
+    return [];
+  }
   function loadOpenCountsBySurveyId() {
     var map = {};
-    var respRows, ri, rid, qid;
-    try {
-      respRows = coerceDeRows(DataExtension.Init(RESPONSES_DE).Rows.Retrieve());
-      for (ri = 0; ri < respRows.length; ri++) {
-        qid = String(fieldFromRow(respRows[ri], ["QuestionID", "QuestionId"]));
-        if (qid !== "SURVEY_OPEN") {
-          continue;
-        }
-        rid = String(fieldFromRow(respRows[ri], ["SurveyID", "SurveyId"]));
-        if (!rid) {
-          continue;
-        }
-        map[rid] = (map[rid] || 0) + 1;
+    var rows = loadAnalyticsPerSurveyRows();
+    var i, sid, opens;
+    for (i = 0; i < rows.length; i++) {
+      sid = String(fieldFromRow(rows[i], ["surveyId", "SurveyID", "SurveyId"]));
+      opens = parseInt(fieldFromRow(rows[i], ["OpenedSurvey", "openedSurvey"]), 10);
+      if (!sid) {
+        continue;
       }
-    } catch (openEx) {}
+      if (isNaN(opens)) {
+        opens = 0;
+      }
+      map[sid] = opens;
+    }
     return map;
+  }
+  function ymKeyFromDate(d) {
+    var m = d.getMonth() + 1;
+    return d.getFullYear() + "-" + (m < 10 ? "0" + m : String(m));
+  }
+  function buildLast12MonthKeys() {
+    var keys = [];
+    var now = new Date();
+    var i, d;
+    for (i = 11; i >= 0; i--) {
+      d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      keys.push(ymKeyFromDate(d));
+    }
+    return keys;
+  }
+  function loadMonthlyResponseMap() {
+    var map = {};
+    var rows = [];
+    var i, monthKey, countVal;
+    try {
+      rows = coerceDeRows(DataExtension.Init(ANALYTICS_MONTHLY_DE).Rows.Retrieve());
+    } catch (deEx) {}
+    for (i = 0; i < rows.length; i++) {
+      monthKey = String(fieldFromRow(rows[i], ["ResponseMonth", "responseMonth"]));
+      countVal = parseInt(fieldFromRow(rows[i], ["ResponseCount", "responseCount"]), 10);
+      if (monthKey) {
+        map[monthKey] = isNaN(countVal) ? 0 : countVal;
+      }
+    }
+    return map;
+  }
+  function setLandingDashboardMetrics(surveyRows) {
+    var analytics = loadAnalyticsPerSurveyRows();
+    var opened = 0;
+    var completed = 0;
+    var responses = 0;
+    var active = 0;
+    var i;
+    var st;
+    for (i = 0; i < analytics.length; i++) {
+      opened += parseInt(fieldFromRow(analytics[i], ["OpenedSurvey", "openedSurvey"]), 10) || 0;
+      completed += parseInt(fieldFromRow(analytics[i], ["CompletedSurvey", "completedSurvey"]), 10) || 0;
+      responses += parseInt(fieldFromRow(analytics[i], ["TotalActivity", "totalActivity"]), 10) || 0;
+    }
+    for (i = 0; i < surveyRows.length; i++) {
+      st = String(fieldFromRow(surveyRows[i], ["SurveyStatus", "surveyStatus"])).replace(/^\s+|\s+$/g, "");
+      if (st === "Active") {
+        active++;
+      }
+    }
+    setV("landingTotalOpened", String(opened));
+    setV("landingTotalCompleted", String(completed));
+    setV("landingTotalResponses", String(responses));
+    setV("landingActiveSurveyCount", String(active));
+    setV("landingSurveyCount", String(surveyRows.length));
+    var monthMap = loadMonthlyResponseMap();
+    var keys = buildLast12MonthKeys();
+    for (i = 0; i < 12; i++) {
+      setV("landingResp" + (i + 1), String(monthMap[keys[i]] || 0));
+    }
   }
   function surveyProgress(statusRaw, openCount) {
     var status, labelClass, fillClass, label, width;
@@ -429,6 +511,7 @@ ENDIF
       }
       var surveyRows = loadSurveyMasterRows();
       sortRowsBySurveyCreatedDate(surveyRows);
+      setLandingDashboardMetrics(surveyRows);
       var openCounts = loadOpenCountsBySurveyId();
       var rowCount = surveyRows.length;
       var totalPages = rowCount > 0 ? Math.ceil(rowCount / SURVEY_PAGE_SIZE) : 1;
@@ -594,19 +677,10 @@ ENDIF
         VAR @surveyCount, @activeCount, @completedCount, @totalResponses, @allSurveys
         
         IF @dataExists == "true" THEN
-          /* Use the new SP Data Extensions */
-          /* Get all surveys from SST_SP_Surveys_Master_DE */
-          SET @allSurveys = LookupRows("SST_SP_Surveys_Master_DE", "SurveyStatus", "Active")
-          SET @surveyCount = RowCount(@allSurveys)
-          
-          SET @activeCount = LookupRows("SST_SP_Surveys_Master_DE", "SurveyStatus", "Active")
-          SET @activeCount = RowCount(@activeCount)
-          
-          SET @completedCount = LookupRows("SST_SP_Survey_Responses_DE", "QuestionID", "QSURV_20250807_113246_1")
-          SET @completedCount = RowCount(@completedCount)
-          
-          SET @totalResponses = LookupRows("SST_SP_Survey_Responses_DE", "Status", "Completed")
-          SET @totalResponses = RowCount(@totalResponses)
+          SET @surveyCount = @landingSurveyCount
+          SET @activeCount = @landingActiveSurveyCount
+          SET @completedCount = @landingTotalCompleted
+          SET @totalResponses = @landingTotalResponses
         ELSE
           /* Demo data when data extensions don't exist */
           SET @surveyCount = 0
@@ -702,104 +776,18 @@ ENDIF
       SET @month12 = Format(@date12, "MMM")
       
       IF @dataExists == "true" THEN
-        /* Real monthly aggregation based on LastUpdated field */
-        
-        /* Calculate target months in YYYY-MM format for filtering */
-        VAR @targetMonth1, @targetMonth2, @targetMonth3, @targetMonth4, @targetMonth5, @targetMonth6
-        VAR @targetMonth7, @targetMonth8, @targetMonth9, @targetMonth10, @targetMonth11, @targetMonth12
-        
-        SET @targetMonth1 = Format(@date1, "yyyy-MM")
-        SET @targetMonth2 = Format(@date2, "yyyy-MM")
-        SET @targetMonth3 = Format(@date3, "yyyy-MM")
-        SET @targetMonth4 = Format(@date4, "yyyy-MM")
-        SET @targetMonth5 = Format(@date5, "yyyy-MM")
-        SET @targetMonth6 = Format(@date6, "yyyy-MM")
-        SET @targetMonth7 = Format(@date7, "yyyy-MM")
-        SET @targetMonth8 = Format(@date8, "yyyy-MM")
-        SET @targetMonth9 = Format(@date9, "yyyy-MM")
-        SET @targetMonth10 = Format(@date10, "yyyy-MM")
-        SET @targetMonth11 = Format(@date11, "yyyy-MM")
-        SET @targetMonth12 = Format(@date12, "yyyy-MM")
-        
-        /* Get all completed responses ordered by LastUpdated */
-        VAR @allResponseRows, @allResponseCount
-        SET @allResponseRows = LookupOrderedRows("SST_SP_Survey_Responses_DE", 50, "LastUpdated DESC", "Status", "Completed")
-        
-        
-        SET @allResponseCount = RowCount(@allResponseRows)
-        
-        /* Initialize counters for each month */
-        SET @responses1 = 0.1
-        SET @responses2 = 0.1
-        SET @responses3 = 0.1
-        SET @responses4 = 0.1
-        SET @responses5 = 0.1
-        SET @responses6 = 0.1
-        SET @responses7 = 0.1
-        SET @responses8 = 0.1
-        SET @responses9 = 0.1
-        SET @responses10 = 0.1
-        SET @responses11 = 0.1
-        SET @responses12 = 0.1
-        
-        /* Loop through all responses and count by month */
-        /* Debug info: Processing up to %%=v(@allResponseCount)=%% responses */
-        IF @allResponseCount > 0 THEN
-          VAR @i, @currentRow, @lastUpdated, @responseMonth
-          VAR @debugCounter
-          SET @debugCounter = 0
-          
-          FOR @i = 1 TO @allResponseCount DO
-            SET @currentRow = Row(@allResponseRows, @i)
-            SET @lastUpdated = Field(@currentRow, "LastUpdated")
-            
-            /* Enhanced timestamp processing for format: 2025-08-05 12:05:54.673 */
-            VAR @parsedDate, @rawTimestamp
-            SET @rawTimestamp = @lastUpdated
-            
-            /* Handle different timestamp formats and ensure proper parsing */
-            IF NOT EMPTY(@lastUpdated) THEN
-              /* AMPscript should automatically handle timestamp parsing */
-              /* For timestamp "2025-08-05 12:05:54.673", Format should extract "2025-08" */
-              SET @responseMonth = Format(@lastUpdated, "yyyy-MM")
-              
-              /* Track successful processing */
-              SET @debugCounter = Add(@debugCounter, 1)
-            ELSE
-              SET @responseMonth = ""
-            ENDIF
-            
-            /* Count responses for each target month */
-            IF @responseMonth == @targetMonth1 THEN
-              SET @responses1 = Add(@responses1, 1)
-            ELSEIF @responseMonth == @targetMonth2 THEN
-              SET @responses2 = Add(@responses2, 1)
-            ELSEIF @responseMonth == @targetMonth3 THEN
-              SET @responses3 = Add(@responses3, 1)
-            ELSEIF @responseMonth == @targetMonth4 THEN
-              SET @responses4 = Add(@responses4, 1)
-            ELSEIF @responseMonth == @targetMonth5 THEN
-              SET @responses5 = Add(@responses5, 1)
-            ELSEIF @responseMonth == @targetMonth6 THEN
-              SET @responses6 = Add(@responses6, 1)
-            ELSEIF @responseMonth == @targetMonth7 THEN
-              SET @responses7 = Add(@responses7, 1)
-            ELSEIF @responseMonth == @targetMonth8 THEN
-              SET @responses8 = Add(@responses8, 1)
-            ELSEIF @responseMonth == @targetMonth9 THEN
-              SET @responses9 = Add(@responses9, 1)
-            ELSEIF @responseMonth == @targetMonth10 THEN
-              SET @responses10 = Add(@responses10, 1)
-            ELSEIF @responseMonth == @targetMonth11 THEN
-              SET @responses11 = Add(@responses11, 1)
-            ELSEIF @responseMonth == @targetMonth12 THEN
-              SET @responses12 = Add(@responses12, 1)
-            ENDIF
-          NEXT @i
-        ENDIF
-       
-        
-        
+        SET @responses1 = @landingResp1
+        SET @responses2 = @landingResp2
+        SET @responses3 = @landingResp3
+        SET @responses4 = @landingResp4
+        SET @responses5 = @landingResp5
+        SET @responses6 = @landingResp6
+        SET @responses7 = @landingResp7
+        SET @responses8 = @landingResp8
+        SET @responses9 = @landingResp9
+        SET @responses10 = @landingResp10
+        SET @responses11 = @landingResp11
+        SET @responses12 = @landingResp12
       ELSE
         /* Demo data with realistic patterns */
         SET @surveys1 = 8
@@ -850,15 +838,9 @@ ENDIF
       VAR @activitySurveyCount, @activityTotalResponses
       
       IF @dataExists == "true" THEN
-        SET @activitySurveyCount = LookupRows("SST_SP_Surveys_Master_DE", "SurveyStatus", "Active")
-        SET @activitySurveyCount = RowCount(@activitySurveyCount)
-        
-        SET @activityTotalResponses = LookupRows("SST_SP_Survey_Responses_DE", "Status", "Completed")
-        SET @activityTotalResponses = RowCount(@activityTotalResponses)
-        
-        SET @activityTotalOpened = LookupRows("SST_SP_Survey_Responses_DE", "Status", "Opened")
-        SET @activityTotalOpened = RowCount(@activityTotalOpened)
-        
+        SET @activitySurveyCount = @landingActiveSurveyCount
+        SET @activityTotalResponses = @landingTotalResponses
+        SET @activityTotalOpened = @landingTotalOpened
       ELSE
         SET @activitySurveyCount = 500
         SET @activityTotalResponses = 501
