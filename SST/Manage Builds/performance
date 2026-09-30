@@ -21,6 +21,7 @@ VAR @perfSentLabels, @perfSentCounts, @perfEventLabels, @perfEventOpens, @perfEv
 VAR @valSent, @valOpen, @valClk, @valUnsub, @valUnreg, @lblDay, @editSidebarHtml
 VAR @contactUiPage, @contactTotalPages, @contactPageSize, @contactBatchRowCount, @contactMaxPageRows, @contactMaxPageNum
 VAR @contactTotalPagesFromField, @contactDePageKey, @contactStartRow, @contactEndRow, @contactNavBase, @contactNavQueryPos, @contactRem
+VAR @contactRecordsOnlyMode, @performanceBackUrl, @journeyDisplayName
 
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
@@ -57,6 +58,7 @@ SET @dispSurveyId = ""
 SET @isSurveyBuild = "false"
 SET @buildNavContext = "false"
 SET @buildNavActive = "performance"
+SET @journeyDisplayName = "Build performance"
 IF NOT Empty(@jid) THEN
  SET @buildNavContext = "true"
  SET @detailRows = LookupRows("Bd_journey_analytics","journeyId",@jid)
@@ -65,6 +67,10 @@ IF NOT Empty(@jid) THEN
    SET @dispSurveyId = Trim(Field(@detailRow,"surveyId"))
    IF IndexOf(Field(@detailRow,"journeyType"),"Survey") > 0 THEN
      SET @isSurveyBuild = "true"
+   ENDIF
+   SET @journeyDisplayName = Trim(Field(@detailRow,"journeyName"))
+   IF Empty(@journeyDisplayName) THEN
+     SET @journeyDisplayName = "Build performance"
    ENDIF
  ENDIF
 ENDIF
@@ -192,6 +198,16 @@ IF NOT Empty(@jid) AND Empty(@configError) THEN
       SET @contactEndRow = Add(@contactStartRow, Subtract(@contactPageSize, 1))
     ENDIF
   ENDIF
+ENDIF
+SET @contactRecordsOnlyMode = false
+SET @performanceBackUrl = ""
+IF @contactUiPage > 1 THEN
+  SET @contactRecordsOnlyMode = true
+ENDIF
+IF NOT Empty(@contactNavBase) THEN
+  SET @performanceBackUrl = Concat(@contactNavBase, "1")
+ELSEIF NOT Empty(@jid) AND NOT Empty(@PERFORMANCE_URL) THEN
+  SET @performanceBackUrl = Concat(@PERFORMANCE_URL, "?journeyId=", @jid, "&contactPage=1")
 ENDIF
 SET @openedCount = 0
 SET @bouncedCount = 0
@@ -1276,6 +1292,57 @@ pre.log.show{display:block}
                margin-top: 8px;
            }
        }
+
+       .performance-records-header {
+           margin-bottom: 24px;
+           padding: 20px 24px 0;
+       }
+
+       .breadcrumb-section {
+           padding: 4px 0 20px;
+       }
+
+       .breadcrumb-nav {
+           display: flex;
+           align-items: center;
+           flex-wrap: wrap;
+           font-size: 14px;
+           gap: 4px;
+       }
+
+       .breadcrumb-section .breadcrumb-link {
+           display: inline-flex;
+           align-items: center;
+           color: var(--primary-color);
+           text-decoration: none;
+           font-weight: 500;
+           font-size: 16px;
+       }
+
+       .breadcrumb-section .breadcrumb-link:hover {
+           color: var(--primary-dark);
+           text-decoration: underline;
+       }
+
+       .breadcrumb-section .breadcrumb-link svg {
+           flex-shrink: 0;
+       }
+
+       .breadcrumb-separator {
+           margin: 0 8px;
+           color: var(--gray-400);
+           font-weight: 400;
+           user-select: none;
+       }
+
+       .breadcrumb-section .breadcrumb-current {
+           font-weight: 600;
+           color: var(--gray-900);
+       }
+
+       .performance-dashboard.performance-records-only .responses-section {
+           margin-top: 0;
+       }
 </style>
 </head>
 <body>
@@ -1290,7 +1357,7 @@ pre.log.show{display:block}
 %%[ ENDIF ]%%
 <main class="maker-main">
 <div class="maker-main-inner">
-<div class="performance-dashboard">
+<div class="performance-dashboard%%[ IF @contactRecordsOnlyMode THEN ]%% performance-records-only%%[ ENDIF ]%%">
    <div class="survey-container">
       <div class="survey-content">
           %%[ IF NOT Empty(@configError) THEN ]%%
@@ -1309,13 +1376,28 @@ pre.log.show{display:block}
               </div>
           </div>
           %%[ ELSEIF @totalRecords > 0 OR @contactBatchRowCount > 0 OR (@contactTotalPages > 1 AND NOT Empty(@jid)) THEN ]%%
+          %%[ IF @contactRecordsOnlyMode THEN ]%%
+           <div class="performance-records-header">
+               <div class="breadcrumb-section">
+                   <nav class="breadcrumb-nav" aria-label="Breadcrumb">
+                       <a href="%%=v(@performanceBackUrl)=%%" class="breadcrumb-link">
+                           <svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+                           Back
+                       </a>
+                       <span class="breadcrumb-separator" aria-hidden="true">/</span>
+                       <span class="breadcrumb-current">Individual Records</span>
+                   </nav>
+               </div>
+           </div>
+          %%[ ELSE ]%%
            <h1 style="
     padding: 20px 0px 0px 24px;
-    /* margin: 24px; */
 ">Build perfomance</h1>
         <p style="
     padding: 0px 10px 0px 24px;
 ">See how your build perfomed, measure your metrics, and gaing insights into your audience</p>
+          %%[ ENDIF ]%%
+          %%[ IF NOT @contactRecordsOnlyMode THEN ]%%
            <div class="chart-container">
                <div class="chart-header">
                    <div class="chart-number">☈</div>
@@ -1387,6 +1469,7 @@ pre.log.show{display:block}
                    <canvas id="specialtyChart"></canvas>
                </div>
            </div>
+          %%[ ENDIF ]%%
            <div class="responses-section">
                <div class="responses-header">
                    <div class="chart-number">🖄</div>
