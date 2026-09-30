@@ -1,12 +1,6 @@
 %%[
 VAR @submitted, @surveyId, @contact, @surveyName, @fullSurveyName, @questionCount, @questions, @isFirstVisit
-VAR @saveStep, @saveStepDone, @saveStepOk, @saveStepError, @saveStepResponse, @saveStepOkPart, @saveStepErrSafe
-VAR @saveQuestionNumber, @saveAnswerValue, @saveQuestionId, @saveQuestionText, @saveQuestionType, @i, @row
-SET @saveStepDone = "false"
-SET @saveStepOk = "false"
-SET @saveStepError = ""
 SET @submitted = RequestParameter("submitted")
-SET @saveStep = RequestParameter("saveStep")
 SET @surveyId = RequestParameter("id")
 IF EMPTY(@surveyId) THEN
  SET @surveyId = QueryParameter("id")
@@ -34,6 +28,7 @@ SET @fullSurveyName = @surveyName
 
 
 
+/* Check if this is the first visit to the survey */
 SET @isFirstVisit = RequestParameter("firstVisit")
 IF EMPTY(@isFirstVisit) THEN
   SET @isFirstVisit = "true"
@@ -71,85 +66,6 @@ IF NOT EMPTY(@surveyId) THEN
   SET @questionCount = RowCount(@questions)
 ENDIF
 
-IF @saveStep == "1" AND @submitted != "true" THEN
-  SET @saveQuestionNumber = RequestParameter("questionNumber")
-  SET @saveAnswerValue = RequestParameter("answer")
-  SET @surveyId = RequestParameter("id")
-  IF EMPTY(@surveyId) THEN
-    SET @surveyId = QueryParameter("id")
-  ENDIF
-  SET @contact = RequestParameter("contact")
-  IF EMPTY(@contact) THEN
-    SET @contact = QueryParameter("contact")
-  ENDIF
-  IF EMPTY(@saveAnswerValue) AND NOT EMPTY(@saveQuestionNumber) THEN
-    SET @saveAnswerValue = RequestParameter(Concat("q", @saveQuestionNumber))
-  ENDIF
-  SET @saveStepError = ""
-  IF EMPTY(@contact) THEN
-    SET @saveStepError = "missing_contact"
-  ENDIF
-  IF EMPTY(@saveStepError) AND EMPTY(@surveyId) THEN
-    SET @saveStepError = "missing_survey_id"
-  ENDIF
-  IF EMPTY(@saveStepError) AND EMPTY(@saveQuestionNumber) THEN
-    SET @saveStepError = "missing_question_number"
-  ENDIF
-  IF EMPTY(@saveStepError) AND EMPTY(@saveAnswerValue) THEN
-    SET @saveStepError = "missing_answer"
-  ENDIF
-  IF EMPTY(@saveStepError) THEN
-    SET @questions = LookupRows("SST_SP_Survey_Questions_DE", "SurveyID", @surveyId)
-    SET @questionCount = RowCount(@questions)
-    SET @surveyName = Trim(RequestParameter("surveyName"))
-    IF EMPTY(@surveyName) THEN
-      SET @surveyName = Trim(Lookup("SST_SP_Surveys_Master_DE", "SurveyName", "SurveyID", @surveyId))
-    ENDIF
-    IF EMPTY(@surveyName) THEN
-      SET @surveyName = Concat("Survey ", @surveyId)
-    ENDIF
-    SET @fullSurveyName = @surveyName
-    SET @saveQuestionId = ""
-    SET @saveQuestionText = ""
-    SET @saveQuestionType = ""
-    IF @questionCount > 0 THEN
-      FOR @i = 1 TO @questionCount DO
-        SET @row = Row(@questions, @i)
-        IF Field(@row, "QuestionNumber") == @saveQuestionNumber THEN
-          SET @saveQuestionId = Field(@row, "QuestionID")
-          SET @saveQuestionText = Field(@row, "QuestionText")
-          SET @saveQuestionType = Field(@row, "QuestionType")
-        ENDIF
-      NEXT @i
-    ENDIF
-    IF NOT EMPTY(@saveQuestionId) THEN
-      UPSERTDE(
-        "SST_SP_Survey_Responses_DE", 3,
-        "Contact", @contact,
-        "SurveyID", @surveyId,
-        "QuestionID", @saveQuestionId,
-        "QuestionNumber", @saveQuestionNumber,
-        "QuestionText", @saveQuestionText,
-        "QuestionType", @saveQuestionType,
-        "Response", @saveAnswerValue,
-        "Status", "Opened",
-        "CourseName", @fullSurveyName,
-        "LastUpdated", NOW()
-      )
-      SET @saveStepOk = "true"
-    ENDIF
-    IF @saveStepOk != "true" AND EMPTY(@saveQuestionId) THEN
-      SET @saveStepError = "unknown_question"
-    ENDIF
-  ENDIF
-  SET @saveStepDone = "true"
-  SET @saveStepOkPart = "false"
-  IF @saveStepOk == "true" THEN
-    SET @saveStepOkPart = "true"
-  ENDIF
-  SET @saveStepErrSafe = Replace(@saveStepError, Char(34), "")
-  SET @saveStepResponse = Concat('{"ok":', @saveStepOkPart, ',"error":"', @saveStepErrSafe, '"}')
-ENDIF
 
 /* Handle form submission */
 IF @submitted == "true" THEN
@@ -193,9 +109,6 @@ ENDIF
 
 
 
-%%[ IF @saveStepDone == "true" THEN ]%%
-%%=v(@saveStepResponse)=%%
-%%[ ELSE ]%%
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1654,7 +1567,7 @@ color: #000000;
      <input type="hidden" name="submitted" value="true">
      <input type="hidden" name="firstVisit" value="false">
      <input type="hidden" name="id" value="%%=v(@surveyId)=%%">
-     <input type="hidden" name="contact" value="%%=Replace(@contact, '"', '&quot;')=%%">
+     <input type="hidden" name="contact" value="%%=v(@contact)=%%">
      <input type="hidden" name="surveyName" value="%%=Replace(@fullSurveyName,'"','')=%%">
             %%[ FOR @i = 1 TO @questionCount DO
       SET @row = Row(@questions, @i)
@@ -1741,87 +1654,6 @@ text-align: -webkit-center;">
 
 
 <script>
-let hiddenQuestionsHistory = [];
-
-function storeAnswerLocally(questionName, answer) {
-  if (!window.pendingAnswers) {
-    window.pendingAnswers = {};
-  }
-  window.pendingAnswers[questionName] = answer;
-}
-
-function getSurveySavePostUrl() {
-  const form = document.getElementById('surveyForm');
-  if (form) {
-    const action = String(form.getAttribute('action') || form.action || '').trim();
-    if (action && action !== '#' && action.indexOf('javascript:') !== 0) {
-      return action;
-    }
-  }
-  return window.location.href.split('#')[0];
-}
-
-function persistAnswerToServer(questionName, answer) {
-  const form = document.getElementById('surveyForm');
-  if (!form || answer === null || answer === undefined) {
-    return;
-  }
-  const trimmed = String(answer).trim();
-  if (trimmed === '') {
-    return;
-  }
-  const idInput = form.querySelector('[name="id"]');
-  const contactInput = form.querySelector('[name="contact"]');
-  const surveyId = idInput ? String(idInput.value || '').trim() : '';
-  const contact = contactInput ? String(contactInput.value || '').trim() : '';
-  if (!surveyId || !contact) {
-    console.warn('Survey autosave skipped: missing id or contact');
-    return;
-  }
-  const qnum = String(questionName).replace(/^q/i, '');
-  const surveyNameInput = form.querySelector('[name="surveyName"]');
-  const surveyName = surveyNameInput ? String(surveyNameInput.value || '') : '';
-  const body = new URLSearchParams();
-  body.append('saveStep', '1');
-  body.append('questionNumber', qnum);
-  body.append('answer', trimmed);
-  body.append('firstVisit', 'false');
-  body.append('id', surveyId);
-  body.append('contact', contact);
-  body.append('surveyName', surveyName);
-  let saveUrl = getSurveySavePostUrl();
-  try {
-    const urlObj = new URL(saveUrl, window.location.href);
-    urlObj.searchParams.set('id', surveyId);
-    urlObj.searchParams.set('contact', contact);
-    saveUrl = urlObj.toString();
-  } catch (urlErr) {
-    saveUrl = window.location.href.split('#')[0];
-  }
-  fetch(saveUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-    body: body.toString(),
-    credentials: 'same-origin'
-  })
-    .then(function(res) { return res.text(); })
-    .then(function(text) {
-      var data = null;
-      try {
-        data = JSON.parse(text);
-      } catch (parseErr) {
-        console.warn('Survey autosave returned non-JSON response:', text ? text.substring(0, 200) : text);
-        return;
-      }
-      if (!data || !data.ok) {
-        console.warn('Survey autosave failed:', data);
-      }
-    })
-    .catch(function(err) {
-      console.warn('Survey autosave request failed:', err);
-    });
-}
-
 // Enhanced radio option selection functionality
 function setupRadioOptions() {
   const radioOptions = document.querySelectorAll('.radio-option');
@@ -1887,11 +1719,14 @@ function setupRadioOptions() {
 
 
 
-function saveAnswer(questionName, answer, options) {
-  storeAnswerLocally(questionName, answer);
-  if (!options || !options.skipServer) {
-    persistAnswerToServer(questionName, answer);
+    // Function to store answers locally (will be saved on final submission)
+function saveAnswer(questionName, answer) {
+  console.log('Storing answer locally:', questionName, answer);
+  // Store the answer to be saved on final form submission
+  if (!window.pendingAnswers) {
+    window.pendingAnswers = {};
   }
+  window.pendingAnswers[questionName] = answer;
 }
 
 
@@ -2157,6 +1992,10 @@ function debouncedUpdateProgress() {
 
 
 
+
+
+// Back button functionality - store history of hidden questions
+let hiddenQuestionsHistory = [];
 
 
 
@@ -2572,8 +2411,12 @@ if (form) {
   // Delay initial progress update to ensure DOM is fully loaded
   setTimeout(() => {
     updateProgress();
+    // Initialize back button visibility
     updateBackButtonVisibility();
+    // Check if all required questions are answered
     checkRequiredQuestionsAndShowSubmit();
+ 
+    // Check if current question is last and hide Next button
     checkIfLastQuestionAndHideNext();
   }, 200);
   setupRadioOptions();
@@ -2582,5 +2425,4 @@ if (form) {
 </script>
 </body>
 </html>
-%%[ ENDIF ]%%
 
