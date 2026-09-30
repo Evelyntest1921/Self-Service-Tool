@@ -1,5 +1,5 @@
 %%[
-VAR @submitted, @surveyId, @contact, @surveyName, @fullSurveyName, @questionCount, @questions, @isFirstVisit, @saveMode, @saveQid, @saveQnum, @saveAnswer, @saveOk, @savePK
+VAR @submitted, @surveyId, @contact, @surveyName, @fullSurveyName, @questionCount, @questions, @isFirstVisit, @saveMode, @saveQid, @saveQnum, @saveAnswer, @saveOk, @savePK, @saveQtext, @saveQtype, @saveCourse
 SET @saveMode = RequestParameter("saveStep")
 SET @saveOk = "false"
 IF @saveMode == "1" THEN
@@ -8,9 +8,15 @@ IF @saveMode == "1" THEN
   SET @saveQid = RequestParameter("qid")
   SET @saveQnum = RequestParameter("qnum")
   SET @saveAnswer = RequestParameter("answer")
+  SET @saveQtext = RequestParameter("qtext")
+  SET @saveQtype = RequestParameter("qtype")
+  SET @saveCourse = RequestParameter("coursename")
+  IF EMPTY(@saveCourse) THEN
+    SET @saveCourse = RequestParameter("surveyName")
+  ENDIF
   IF NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) AND NOT EMPTY(@saveQid) AND NOT EMPTY(@saveAnswer) THEN
     SET @savePK = Concat(@contact, "_", @surveyId, "_", @saveQid)
-    UpsertData("SST_SP_Survey_Responses_DE", 1, "ResponsePK", @savePK, "Contact", @contact, "SurveyID", @surveyId, "QuestionID", @saveQid, "QuestionNumber", @saveQnum, "Response", @saveAnswer, "Status", "Opened", "LastUpdated", NOW())
+    UpsertData("SST_SP_Survey_Responses_DE", 1, "ResponsePK", @savePK, "Contact", @contact, "SurveyID", @surveyId, "QuestionID", @saveQid, "QuestionNumber", @saveQnum, "QuestionText", @saveQtext, "QuestionType", @saveQtype, "Response", @saveAnswer, "Status", "Opened", "CourseName", @saveCourse, "LastUpdated", NOW())
     SET @saveOk = "true"
   ENDIF
 ENDIF
@@ -1579,7 +1585,7 @@ color: #000000;
       SET @required = Field(@row, "Required")
       SET @orderIndex = Field(@row, "OrderIndex")
     ]%%
-    <div class="question-card" data-question="%%=v(@i)=%%" data-qid="%%=v(@questionId)=%%" %%[ IF @i > 1 THEN ]%%style="display: none;"%%[ ENDIF ]%%>
+    <div class="question-card" data-question="%%=v(@i)=%%" data-qid="%%=v(@questionId)=%%" data-qtype="%%=v(@questionType)=%%" %%[ IF @i > 1 THEN ]%%style="display: none;"%%[ ENDIF ]%%>
       <div class="question-header">
         <div class="question-number">%%=v(@questionNumber)=%%</div>
         <div class="question-content">
@@ -1680,7 +1686,12 @@ function persistAnswerToServer(questionName, answer) {
     return;
   }
   const qnum = questionName.replace("q", "");
-  const body = "saveStep=1&contact=" + encodeURIComponent(contact) + "&id=" + encodeURIComponent(surveyId) + "&qid=" + encodeURIComponent(qid) + "&qnum=" + encodeURIComponent(qnum) + "&answer=" + encodeURIComponent(answer);
+  const qtype = card ? (card.getAttribute("data-qtype") || "") : "";
+  const textEl = card ? card.querySelector(".question-text") : null;
+  const qtext = textEl ? textEl.textContent.trim() : "";
+  const courseField = form ? form.querySelector('input[name="surveyName"]') : null;
+  const courseName = courseField ? courseField.value : "";
+  const body = "saveStep=1&contact=" + encodeURIComponent(contact) + "&id=" + encodeURIComponent(surveyId) + "&qid=" + encodeURIComponent(qid) + "&qnum=" + encodeURIComponent(qnum) + "&answer=" + encodeURIComponent(answer) + "&qtext=" + encodeURIComponent(qtext) + "&qtype=" + encodeURIComponent(qtype) + "&coursename=" + encodeURIComponent(courseName);
   fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -1708,7 +1719,9 @@ function logSurveyOpen() {
     if (!endpoint) {
       return;
     }
-    const body = "saveStep=1&contact=" + encodeURIComponent(contact) + "&id=" + encodeURIComponent(surveyId) + "&qid=" + encodeURIComponent("SURVEY_OPEN") + "&qnum=" + encodeURIComponent("0") + "&answer=" + encodeURIComponent("Survey opened");
+    const courseField = form.querySelector('input[name="surveyName"]');
+    const courseName = courseField ? courseField.value : "";
+    const body = "saveStep=1&contact=" + encodeURIComponent(contact) + "&id=" + encodeURIComponent(surveyId) + "&qid=" + encodeURIComponent("SURVEY_OPEN") + "&qnum=" + encodeURIComponent("0") + "&answer=" + encodeURIComponent("Survey opened") + "&qtext=" + encodeURIComponent("Survey Opened") + "&qtype=" + encodeURIComponent("log") + "&coursename=" + encodeURIComponent(courseName);
     fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
