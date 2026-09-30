@@ -1,5 +1,5 @@
 %%[
-VAR @submitted, @surveyId, @contact, @surveyName, @fullSurveyName, @questionCount, @questions, @isFirstVisit
+VAR @submitted, @surveyId, @contact, @surveyName, @fullSurveyName, @questionCount, @questions, @isFirstVisit, @alreadyOpened
 VAR @saveStep, @saveStepDone, @saveStepOk, @saveStepError
 VAR @saveQuestionNumber, @saveAnswerValue, @saveQuestionId, @saveQuestionText, @saveQuestionType, @i, @row
 SET @saveStepDone = "false"
@@ -35,8 +35,13 @@ SET @fullSurveyName = @surveyName
 
 
 SET @isFirstVisit = RequestParameter("firstVisit")
-IF @saveStep != "1" AND @submitted != "true" THEN
-  IF (EMPTY(@isFirstVisit) OR @isFirstVisit == "true") AND NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) THEN
+IF EMPTY(@isFirstVisit) THEN
+  SET @isFirstVisit = "true"
+  SET @alreadyOpened = ""
+  IF NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) THEN
+    SET @alreadyOpened = Lookup("SST_SP_Survey_Responses_DE", "Status", "Contact", @contact, "SurveyID", @surveyId)
+  ENDIF
+  IF NOT EMPTY(@contact) AND NOT EMPTY(@surveyId) AND EMPTY(@alreadyOpened) THEN
     TRY
       UPSERTDE(
         "SST_SP_Survey_Responses_DE", 3,
@@ -119,25 +124,20 @@ IF @saveStep == "1" AND @submitted != "true" THEN
       NEXT @i
     ENDIF
     IF NOT EMPTY(@saveQuestionId) THEN
-      TRY
-        UPSERTDE(
-          "SST_SP_Survey_Responses_DE", 3,
-          "Contact", @contact,
-          "SurveyID", @surveyId,
-          "QuestionID", @saveQuestionId,
-          "QuestionNumber", @saveQuestionNumber,
-          "QuestionText", @saveQuestionText,
-          "QuestionType", @saveQuestionType,
-          "Response", @saveAnswerValue,
-          "Status", "Opened",
-          "CourseName", @fullSurveyName,
-          "LastUpdated", NOW()
-        )
-        SET @saveStepOk = "true"
-      CATCH
-        SET @saveStepOk = "false"
-        SET @saveStepError = "upsert_failed"
-      ENDIF
+      UPSERTDE(
+        "SST_SP_Survey_Responses_DE", 3,
+        "Contact", @contact,
+        "SurveyID", @surveyId,
+        "QuestionID", @saveQuestionId,
+        "QuestionNumber", @saveQuestionNumber,
+        "QuestionText", @saveQuestionText,
+        "QuestionType", @saveQuestionType,
+        "Response", @saveAnswerValue,
+        "Status", "Opened",
+        "CourseName", @fullSurveyName,
+        "LastUpdated", NOW()
+      )
+      SET @saveStepOk = "true"
     ENDIF
     IF EMPTY(@saveQuestionId) THEN
       SET @saveStepError = "unknown_question"
