@@ -1,4 +1,5 @@
 %%[
+VAR @contactUiPage, @contactTotalPages, @contactPageSize, @contactStartRow, @contactEndRow, @contactNavBase, @contactNavQueryPos, @tableServerPaging, @tableTotalRows
 
 SET @BU = "PROD"
 SET @configError = ""
@@ -57,6 +58,30 @@ IF RequestParameter("do") == "addContact" AND NOT EMPTY(RequestParameter("contac
   SET @contactIdToAdd = RequestParameter("contactId")
   Redirect(Concat(@articlePreviewUrl, "?subscriberKey=", @contactIdToAdd))
 ENDIF
+
+SET @contactUiPage = Trim(RequestParameter("contactPage"))
+IF EMPTY(@contactUiPage) THEN
+  SET @contactUiPage = Trim(QueryParameter("contactPage"))
+ENDIF
+IF EMPTY(@contactUiPage) THEN
+  SET @contactUiPage = 1
+ENDIF
+SET @contactUiPage = Add(0, @contactUiPage)
+IF @contactUiPage < 1 THEN
+  SET @contactUiPage = 1
+ENDIF
+SET @contactPageSize = 20
+SET @contactTotalPages = 1
+SET @contactStartRow = 0
+SET @contactEndRow = 0
+SET @tableServerPaging = "0"
+SET @tableTotalRows = "0"
+SET @contactNavBase = RequestParameter("PAGEURL")
+SET @contactNavQueryPos = IndexOf(@contactNavBase, "?")
+IF @contactNavQueryPos > 0 THEN
+  SET @contactNavBase = Substring(@contactNavBase, 1, Subtract(@contactNavQueryPos, 1))
+ENDIF
+SET @contactNavBase = Concat(@contactNavBase, "?contactPage=")
 
 ]%%
 <script runat="server">
@@ -284,7 +309,10 @@ function formatRateLabel(numerator, denominator) {
 
 var skipTableLoad = String(Variable.GetValue("@skipTableLoad") || "") === "1";
 var tableMaxRows = 200;
+var tablePageSize = 20;
 var tableFetchPool = 2500;
+var pushTableFilterCols = ["Source", "validated"];
+var pushTableFilterVals = ["Push Advice", "Yes"];
 var tableFieldSep = "\u001f";
 var tableLoadError = "";
 var tableLoadMethod = "";
@@ -371,15 +399,16 @@ function buildTableEntry(rowData) {
   ].join(tableFieldSep);
 }
 
-function finalizeTablePayload(entries) {
+function finalizeTablePayload(entries, maxRowsCap) {
   entries.sort(function (a, b) {
     if (b.sortTs !== a.sortTs) {
       return b.sortTs - a.sortTs;
     }
     return b.idx - a.idx;
   });
-  if (entries.length > tableMaxRows) {
-    entries = entries.slice(0, tableMaxRows);
+  var rowCap = maxRowsCap > 0 ? maxRowsCap : tableMaxRows;
+  if (entries.length > rowCap) {
+    entries = entries.slice(0, rowCap);
   }
   var payload = "";
   var truncated = "0";
@@ -393,6 +422,104 @@ function finalizeTablePayload(entries) {
     }
   }
   return { payload: payload, truncated: truncated, count: entries.length };
+}
+
+function getContactUiPage() {
+  var page = parseInt(String(Variable.GetValue("@contactUiPage") || "1"), 10);
+  var qsPage = Request.GetQueryStringParameter("contactPage");
+  if (qsPage) {
+    page = parseInt(String(qsPage), 10);
+  }
+  if (isNaN(page) || page < 1) {
+    page = 1;
+  }
+  return page;
+}
+
+function readPushTablePagingMeta(deName) {
+  var totalPages = 1;
+  try {
+    var maxRows = Platform.Function.LookupOrderedRows(
+      deName,
+      1,
+      "PageNumber DESC",
+      pushTableFilterCols,
+      pushTableFilterVals
+    );
+    if (maxRows && maxRows.length > 0) {
+      var totalPagesField = rowVal(maxRows[0], "TotalPages");
+      var maxPageField = rowVal(maxRows[0], "PageNumber");
+      if (totalPagesField) {
+        totalPages = parseInt(String(totalPagesField), 10) || 1;
+      } else if (maxPageField) {
+        totalPages = parseInt(String(maxPageField), 10) || 1;
+      }
+    }
+  } catch (metaErr) {}
+  if (totalPages < 1) {
+    totalPages = 1;
+  }
+  return { totalPages: totalPages };
+}
+
+function loadTableViaPageNumber() {
+  var currentPage = getContactUiPage();
+  var deNames = ["PA_Server_Side_Engagement", analyticsCustomerKey];
+  for (var di = 0; di < deNames.length; di++) {
+    try {
+      var pagingMeta = readPushTablePagingMeta(deNames[di]);
+      var totalPages = pagingMeta.totalPages;
+      if (currentPage > totalPages) {
+        currentPage = totalPages;
+      }
+      var pageKey = String(currentPage);
+      var lookupCols = pushTableFilterCols.concat(["PageNumber"]);
+      var lookupVals = pushTableFilterVals.concat([pageKey]);
+      var rows = Platform.Function.LookupRows(deNames[di], lookupCols, lookupVals);
+      if (!rows || !rows.length) {
+        lookupVals = pushTableFilterVals.concat([currentPage]);
+        rows = Platform.Function.LookupRows(deNames[di], lookupCols, lookupVals);
+      }
+      if ((!rows || !rows.length) && currentPage === 1) {
+        rows = Platform.Function.LookupOrderedRows(
+          deNames[di],
+          tablePageSize,
+          "LastSent DESC",
+          pushTableFilterCols,
+          pushTableFilterVals
+        );
+      }
+      if (!rows || !rows.length) {
+        continue;
+      }
+      var entries = [];
+      for (var ri = 0; ri < rows.length; ri++) {
+        var rowData = rowToObject(rows[ri]);
+        entries.push({
+          payload: buildTableEntry(rowData) + "|||",
+          sortTs: getSortTimestamp(tableRowSortDate(rowData)),
+          idx: ri
+        });
+      }
+      var finalized = finalizeTablePayload(entries, tablePageSize);
+      var startRow = (currentPage - 1) * tablePageSize + 1;
+      var endRow = finalized.count > 0 ? startRow + finalized.count - 1 : startRow - 1;
+      return {
+        ok: true,
+        result: finalized,
+        method: "PageNumber",
+        paging: {
+          currentPage: currentPage,
+          totalPages: totalPages,
+          pageSize: tablePageSize,
+          startRow: startRow,
+          endRow: endRow,
+          totalRowsEstimate: totalPages * tablePageSize
+        }
+      };
+    } catch (pageErr) {}
+  }
+  return { ok: false };
 }
 
 function loadTableViaLookupRows() {
@@ -699,7 +826,10 @@ function retrieveDeRows(deName, filterCol, filterVal, sortCol, sortDir) {
 
 if (!skipTableLoad) {
   try {
-    var tableLoad = loadTableViaLookupRows();
+    var tableLoad = loadTableViaPageNumber();
+    if (!tableLoad.ok) {
+      tableLoad = loadTableViaLookupRows();
+    }
     if (!tableLoad.ok) {
       tableLoad = loadTableViaLookupOrdered();
     }
@@ -714,11 +844,24 @@ if (!skipTableLoad) {
       tableResponsesData = tableLoad.result.payload;
       tableResponsesDataTruncated = tableLoad.result.truncated;
       tableRowCount = tableLoad.result.count;
+      if (tableLoad.paging) {
+        Variable.SetValue("@tableServerPaging", "1");
+        Variable.SetValue("@contactUiPage", String(tableLoad.paging.currentPage));
+        Variable.SetValue("@contactTotalPages", String(tableLoad.paging.totalPages));
+        Variable.SetValue("@contactStartRow", String(tableLoad.paging.startRow));
+        Variable.SetValue("@contactEndRow", String(tableLoad.paging.endRow));
+        Variable.SetValue("@tableTotalRows", String(tableLoad.paging.totalRowsEstimate));
+        Variable.SetValue("@tableMaxRowsN", String(tableLoad.paging.pageSize));
+      } else {
+        Variable.SetValue("@tableServerPaging", "0");
+      }
     } else {
       tableLoadError = tableLoad.error || "Could not load table rows from engagement DE.";
+      Variable.SetValue("@tableServerPaging", "0");
     }
   } catch (tableErr) {
     tableLoadError = String(tableErr);
+    Variable.SetValue("@tableServerPaging", "0");
   }
 }
 
@@ -874,6 +1017,12 @@ try {
 }
 
 Variable.SetValue("@totalRecords", chartTotalRecords);
+if (String(Variable.GetValue("@tableServerPaging") || "") === "1") {
+  var kpiTotalRecords = parseInt(String(chartTotalRecords || "0"), 10);
+  if (kpiTotalRecords > 0) {
+    Variable.SetValue("@tableTotalRows", String(kpiTotalRecords));
+  }
+}
 Variable.SetValue("@openedCount", chartOpenedCount);
 Variable.SetValue("@bouncedCount", chartBouncedCount);
 Variable.SetValue("@didNotOpenCount", chartDidNotOpenCount);
@@ -2895,7 +3044,7 @@ if (action === "syncAutomation" && confirm === "1") {
                    <div class="chart-number">🖄</div>
                    <div class="chart-content">
                        <div class="responses-title">Individual Records</div>
-                       <div class="responses-subtitle">%%=v(@tableRowCount)=%% most recent records via %%=v(@tableLoadMethod)=%% (max %%=v(@tableMaxRowsN)=%%)</div>
+                       <div class="responses-subtitle">%%[ IF @tableServerPaging == "1" THEN ]%%Paged batch (%%=v(@tableLoadMethod)=%%, %%=v(@contactPageSize)=%% per page)%%[ ELSE ]%%%%=v(@tableRowCount)=%% most recent records via %%=v(@tableLoadMethod)=%% (max %%=v(@tableMaxRowsN)=%%)%%[ ENDIF ]%%</div>
                    </div>
                </div>
                <div class="filter-controls">
@@ -3025,6 +3174,7 @@ if (action === "syncAutomation" && confirm === "1") {
                        </tbody>
                    </table>
                </div>
+               <div id="contactTablePagingConfig" style="display:none" data-current-page="%%=v(@contactUiPage)=%%" data-total-pages="%%=v(@contactTotalPages)=%%" data-total-rows="%%=v(@tableTotalRows)=%%" data-start-row="%%=v(@contactStartRow)=%%" data-end-row="%%=v(@contactEndRow)=%%" data-nav-base="%%=v(@contactNavBase)=%%" data-page-size="%%=v(@contactPageSize)=%%" data-server-paging="%%=v(@tableServerPaging)=%%"></div>
                <div class="pagination" id="pagination"></div>
            
            </div>
@@ -4005,8 +4155,27 @@ if (action === "syncAutomation" && confirm === "1") {
        let allResponses = [];
        let filteredResponses = [];
        let currentPage = 1;
-       const rowsPerPage = 10; 
+       let rowsPerPage = 20;
+       let serverContactPaging = false;
+       let contactTotalPages = 1;
+       let contactTotalRows = 0;
+       let contactNavBase = "";
+       let contactStartRow = 0;
+       let contactEndRow = 0;
 
+       function loadContactPagingConfig() {
+           const cfg = document.getElementById("contactTablePagingConfig");
+           if (!cfg) return;
+           serverContactPaging = cfg.getAttribute("data-server-paging") === "1";
+           currentPage = parseInt(cfg.getAttribute("data-current-page"), 10) || 1;
+           contactTotalPages = parseInt(cfg.getAttribute("data-total-pages"), 10) || 1;
+           contactTotalRows = parseInt(cfg.getAttribute("data-total-rows"), 10) || 0;
+           contactStartRow = parseInt(cfg.getAttribute("data-start-row"), 10) || 0;
+           contactEndRow = parseInt(cfg.getAttribute("data-end-row"), 10) || 0;
+           contactNavBase = cfg.getAttribute("data-nav-base") || "";
+           const ps = parseInt(cfg.getAttribute("data-page-size"), 10);
+           if (!isNaN(ps) && ps > 0) rowsPerPage = ps;
+       }
 
        function parseCustomDate(dateString) {
            if (!dateString || dateString === 'N/A') return null;
@@ -4356,9 +4525,9 @@ if (action === "syncAutomation" && confirm === "1") {
            const tbody = document.getElementById('responsesTableBody');
            if (!tbody) return;
            const dataToShow = filteredResponses.length > 0 ? filteredResponses : allResponses;
-           const startIndex = (currentPage - 1) * rowsPerPage;
-           const endIndex = startIndex + rowsPerPage;
-           const pageData = dataToShow.slice(startIndex, endIndex);
+           const pageData = serverContactPaging && filteredResponses.length === 0
+             ? dataToShow
+             : dataToShow.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
            if (pageData.length === 0) {
                tbody.innerHTML = '<tr><td colspan="12" style="text-align: center; padding: 24px; color: var(--text-secondary);">No records found</td></tr>';
                return;
@@ -4411,6 +4580,23 @@ if (action === "syncAutomation" && confirm === "1") {
            const paginationContainer = document.getElementById('pagination');
            if (!paginationContainer) return;
            const dataToShow = filteredResponses.length > 0 ? filteredResponses : allResponses;
+           if (serverContactPaging && filteredResponses.length === 0) {
+               const totalPages = contactTotalPages > 0 ? contactTotalPages : 1;
+               const startIndex = contactStartRow > 0 ? contactStartRow : 1;
+               const endIndex = contactEndRow > 0 ? contactEndRow : dataToShow.length;
+               const totalRows = contactTotalRows > 0 ? contactTotalRows : endIndex;
+               if (totalPages <= 1) {
+                   paginationContainer.innerHTML = `<div class="pagination-info">Showing ${startIndex}-${endIndex} of ${totalRows} records</div>`;
+                   return;
+               }
+               let paginationHTML = "";
+               paginationHTML += `<button class="pagination-button" ${currentPage === 1 ? "disabled" : ""} onclick="goToPage(${currentPage - 1})">Previous</button>`;
+               paginationHTML += `<button class="pagination-button active">${currentPage}</button>`;
+               paginationHTML += `<button class="pagination-button" ${currentPage === totalPages ? "disabled" : ""} onclick="goToPage(${currentPage + 1})">Next</button>`;
+               paginationHTML += `<div class="pagination-info">Showing ${startIndex}-${endIndex} of ${totalRows} records (page ${currentPage} of ${totalPages})</div>`;
+               paginationContainer.innerHTML = paginationHTML;
+               return;
+           }
            const totalPages = Math.ceil(dataToShow.length / rowsPerPage);
            if (totalPages <= 1) {
                paginationContainer.innerHTML = `<div class="pagination-info">Showing ${dataToShow.length} of ${dataToShow.length} records</div>`;
@@ -4448,13 +4634,24 @@ if (action === "syncAutomation" && confirm === "1") {
 
 
        function goToPage(page) {
+           if (serverContactPaging && filteredResponses.length === 0) {
+               const totalPages = contactTotalPages > 0 ? contactTotalPages : 1;
+               if (page < 1 || page > totalPages) return;
+               if (contactNavBase) {
+                   window.location.href = contactNavBase + String(page) + "#filterscrollto";
+                   return;
+               }
+           }
            const dataToShow = filteredResponses.length > 0 ? filteredResponses : allResponses;
            const totalPages = Math.ceil(dataToShow.length / rowsPerPage);
            if (page < 1 || page > totalPages) return;
            currentPage = page;
            renderResponsesTable();
            renderPagination();
-           window.scrollTo({ top: document.getElementById('downloadBtn').offsetTop - 200, behavior: 'smooth' });
+           const scrollAnchor = document.getElementById("downloadBtn");
+           if (scrollAnchor) {
+               window.scrollTo({ top: scrollAnchor.offsetTop - 200, behavior: "smooth" });
+           }
        } 
 
 
@@ -4472,6 +4669,7 @@ if (action === "syncAutomation" && confirm === "1") {
               openTimeAvgEl.textContent = formatOpenTimeAvgLabel(decodeAmpData('%%=v(@openTimeAvgMinutesEnc)=%%'));
           }
            if (!skipTableLoad) {
+           loadContactPagingConfig();
            allResponses = parseResponsesData();
            filteredResponses = [];
            populateFilters();

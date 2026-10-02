@@ -1,3 +1,6 @@
+sst_open_time_chart — Performance opened send-time bar chart (per journey).
+DE columns: JourneyId, Scope, HourIndex (0–23), OpenCount
+
 SELECT
     e.JourneyID AS JourneyId,
     e.JourneyID AS Scope,
@@ -10,3 +13,20 @@ WHERE e.JourneyID IS NOT NULL
 GROUP BY
     e.JourneyID,
     DATEPART(HOUR, e.LastSent)
+
+---
+
+PA_Server_Side_Engagement PageNumber batch — push_adv_prf Individual Records (20 rows per page, Source = Push Advice, validated = Yes). Update PageNumber and TotalPages on the DE; CloudPage uses URL contactPage= and LookupRows(Source, validated, PageNumber).
+
+SELECT
+    UniqueKey,
+    CAST(((ROW_NUMBER() OVER (
+        PARTITION BY Source
+        ORDER BY LastSent DESC, Contact_Id, JobID, UniqueKey
+    ) - 1) / 20) + 1 AS INT) AS PageNumber,
+    CAST(((COUNT(1) OVER (
+        PARTITION BY Source
+    ) - 1) / 20) + 1 AS INT) AS TotalPages
+FROM PA_Server_Side_Engagement
+WHERE Source = 'Push Advice'
+  AND LTRIM(RTRIM(ISNULL(validated, ''))) = 'Yes'
