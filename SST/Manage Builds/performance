@@ -62,6 +62,9 @@ SET @journeyDisplayName = "Build performance"
 IF NOT Empty(@jid) THEN
  SET @buildNavContext = "true"
  SET @detailRows = LookupRows("Bd_journey_analytics","journeyId",@jid)
+ IF RowCount(@detailRows) == 0 THEN
+   SET @detailRows = LookupRows("Bd_journey_analytics","JourneyID",@jid)
+ ENDIF
  IF RowCount(@detailRows) > 0 THEN
    SET @detailRow = Row(@detailRows,1)
    SET @dispSurveyId = Trim(Field(@detailRow,"surveyId"))
@@ -137,6 +140,12 @@ IF NOT Empty(@jid) THEN
 ENDIF
 IF NOT Empty(@jid) AND Empty(@configError) THEN
   SET @contactMaxPageRows = LookupOrderedRows("bd_self_service_engagement", 1, "PageNumber DESC", "JourneyID", @jid)
+  IF RowCount(@contactMaxPageRows) == 0 THEN
+    SET @contactMaxPageRows = LookupOrderedRows("bd_self_service_engagement", 1, "PageNumber DESC", "JourneyId", @jid)
+  ENDIF
+  IF RowCount(@contactMaxPageRows) == 0 THEN
+    SET @contactMaxPageRows = LookupOrderedRows("bd_self_service_engagement", 1, "PageNumber DESC", "journeyId", @jid)
+  ENDIF
   IF RowCount(@contactMaxPageRows) > 0 THEN
     SET @contactMaxPageNum = Field(Row(@contactMaxPageRows, 1), "PageNumber")
     IF NOT Empty(@contactMaxPageNum) THEN
@@ -166,17 +175,63 @@ IF NOT Empty(@jid) AND Empty(@configError) THEN
     SET @analyticsData = LookupRows("bd_self_service_engagement", "JourneyID", @jid, "PageNumber", @contactUiPage)
     SET @contactBatchRowCount = RowCount(@analyticsData)
   ENDIF
-  IF @contactBatchRowCount == 0 AND @contactUiPage == 1 AND @contactTotalPages <= 1 THEN
-    SET @analyticsData = LookupRows("bd_self_service_engagement", "JourneyID", @jid)
+  IF @contactBatchRowCount == 0 THEN
+    SET @analyticsData = LookupRows("bd_self_service_engagement", "JourneyId", @jid, "PageNumber", @contactDePageKey)
     SET @contactBatchRowCount = RowCount(@analyticsData)
-    IF @contactBatchRowCount > 0 AND @contactTotalPages == 1 THEN
-      SET @contactRem = Mod(@contactBatchRowCount, @contactPageSize)
-      SET @contactTotalPages = Divide(Subtract(@contactBatchRowCount, @contactRem), @contactPageSize)
-      IF @contactRem > 0 THEN
-        SET @contactTotalPages = Add(@contactTotalPages, 1)
+    IF @contactBatchRowCount == 0 THEN
+      SET @analyticsData = LookupRows("bd_self_service_engagement", "JourneyId", @jid, "PageNumber", @contactUiPage)
+      SET @contactBatchRowCount = RowCount(@analyticsData)
+    ENDIF
+  ENDIF
+  IF @contactBatchRowCount == 0 THEN
+    SET @analyticsData = LookupRows("bd_self_service_engagement", "journeyId", @jid, "PageNumber", @contactDePageKey)
+    SET @contactBatchRowCount = RowCount(@analyticsData)
+    IF @contactBatchRowCount == 0 THEN
+      SET @analyticsData = LookupRows("bd_self_service_engagement", "journeyId", @jid, "PageNumber", @contactUiPage)
+      SET @contactBatchRowCount = RowCount(@analyticsData)
+    ENDIF
+  ENDIF
+  IF @contactBatchRowCount == 0 AND @contactUiPage == 1 THEN
+    SET @analyticsData = LookupOrderedRows("bd_self_service_engagement", @contactPageSize, "LastSent ASC", "JourneyID", @jid)
+    SET @contactBatchRowCount = RowCount(@analyticsData)
+    IF @contactBatchRowCount == 0 THEN
+      SET @analyticsData = LookupOrderedRows("bd_self_service_engagement", @contactPageSize, "LastSent ASC", "JourneyId", @jid)
+      SET @contactBatchRowCount = RowCount(@analyticsData)
+    ENDIF
+    IF @contactBatchRowCount == 0 THEN
+      SET @analyticsData = LookupOrderedRows("bd_self_service_engagement", @contactPageSize, "LastSent ASC", "journeyId", @jid)
+      SET @contactBatchRowCount = RowCount(@analyticsData)
+    ENDIF
+    IF @contactBatchRowCount > 0 AND @contactTotalPages <= 1 THEN
+      SET @analyticsData = LookupRows("bd_self_service_engagement", "JourneyID", @jid)
+      SET @contactBatchRowCount = RowCount(@analyticsData)
+      IF @contactBatchRowCount == 0 THEN
+        SET @analyticsData = LookupRows("bd_self_service_engagement", "JourneyId", @jid)
+        SET @contactBatchRowCount = RowCount(@analyticsData)
       ENDIF
-      IF @contactTotalPages < 1 THEN
-        SET @contactTotalPages = 1
+      IF @contactBatchRowCount == 0 THEN
+        SET @analyticsData = LookupRows("bd_self_service_engagement", "journeyId", @jid)
+        SET @contactBatchRowCount = RowCount(@analyticsData)
+      ENDIF
+      IF @contactBatchRowCount > 0 THEN
+        SET @contactRem = Mod(@contactBatchRowCount, @contactPageSize)
+        SET @contactTotalPages = Divide(Subtract(@contactBatchRowCount, @contactRem), @contactPageSize)
+        IF @contactRem > 0 THEN
+          SET @contactTotalPages = Add(@contactTotalPages, 1)
+        ENDIF
+        IF @contactTotalPages < 1 THEN
+          SET @contactTotalPages = 1
+        ENDIF
+        SET @analyticsData = LookupOrderedRows("bd_self_service_engagement", @contactPageSize, "LastSent ASC", "JourneyID", @jid)
+        SET @contactBatchRowCount = RowCount(@analyticsData)
+        IF @contactBatchRowCount == 0 THEN
+          SET @analyticsData = LookupOrderedRows("bd_self_service_engagement", @contactPageSize, "LastSent ASC", "JourneyId", @jid)
+          SET @contactBatchRowCount = RowCount(@analyticsData)
+        ENDIF
+        IF @contactBatchRowCount == 0 THEN
+          SET @analyticsData = LookupOrderedRows("bd_self_service_engagement", @contactPageSize, "LastSent ASC", "journeyId", @jid)
+          SET @contactBatchRowCount = RowCount(@analyticsData)
+        ENDIF
       ENDIF
     ENDIF
   ENDIF
