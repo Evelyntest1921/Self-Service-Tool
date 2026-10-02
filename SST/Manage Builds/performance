@@ -17,8 +17,9 @@ VAR @stateName, @stateOpenedCount, @stateBouncedCount, @stateDidNotOpenCount, @s
 VAR @specialtyLabels, @specialtyOpenedData, @specialtyDidNotOpenData, @specialtyBouncedData, @specialtyClickedData, @specialtyTotalData
 VAR @specialtyName, @specialtyOpenedCount, @specialtyBouncedCount, @specialtyDidNotOpenCount, @specialtyClickedCount, @specialtyTotalCount
 VAR @metricsRows, @metricsRow, @sentRows, @sentRow, @si, @eventRows, @eventRow, @stRows, @stRow, @spRows, @spRow
-VAR @perfSentLabels, @perfSentCounts, @perfEventLabels, @perfEventOpens, @perfEventClicks, @perfEventUnsubs, @perfEventUnregOpens
+VAR @perfSentLabels, @perfSentCounts, @perfEventLabels, @perfEventOpens, @perfEventClicks, @perfEventUnsubs, @perfEventUnregOpens, @perfOpenHourCounts
 VAR @valSent, @valOpen, @valClk, @valUnsub, @valUnreg, @lblDay, @editSidebarHtml
+VAR @openHourRows, @openHourRow, @hourIdx, @hourVal, @h
 VAR @contactUiPage, @contactTotalPages, @contactPageSize, @contactBatchRowCount, @contactMaxPageRows, @contactMaxPageNum
 VAR @contactTotalPagesFromField, @contactDePageKey, @contactStartRow, @contactEndRow, @contactNavBase, @contactNavQueryPos, @contactRem
 VAR @contactRecordsOnlyMode, @performanceBackUrl, @journeyDisplayName
@@ -289,6 +290,7 @@ SET @perfEventOpens = ""
 SET @perfEventClicks = ""
 SET @perfEventUnsubs = ""
 SET @perfEventUnregOpens = ""
+SET @perfOpenHourCounts = ""
 SET @stateCount = 0
 IF NOT Empty(@jid) AND Empty(@configError) THEN
   TRY
@@ -424,6 +426,31 @@ IF NOT Empty(@jid) AND Empty(@configError) THEN
         SET @specialtyTotalData = Concat(@specialtyTotalData, ",", @specialtyTotalCount)
       ENDIF
     NEXT @si
+    SET @openHourRows = LookupOrderedRows("sst_open_time_chart", 24, "HourIndex ASC", "Scope", @jid)
+    IF RowCount(@openHourRows) == 0 THEN
+      SET @openHourRows = LookupOrderedRows("sst_open_time_chart", 24, "HourIndex ASC", "scope", @jid)
+    ENDIF
+    FOR @h = 0 TO 23 DO
+      SET @hourVal = 0
+      FOR @si = 1 TO RowCount(@openHourRows) DO
+        SET @openHourRow = Row(@openHourRows, @si)
+        SET @hourIdx = Field(@openHourRow, "HourIndex")
+        IF NOT Empty(@hourIdx) THEN
+          SET @hourIdx = Add(0, @hourIdx)
+          IF @hourIdx == @h THEN
+            SET @hourVal = Field(@openHourRow, "OpenCount")
+            IF Empty(@hourVal) THEN
+              SET @hourVal = 0
+            ENDIF
+          ENDIF
+        ENDIF
+      NEXT @si
+      IF Empty(@perfOpenHourCounts) THEN
+        SET @perfOpenHourCounts = @hourVal
+      ELSE
+        SET @perfOpenHourCounts = Concat(@perfOpenHourCounts, ",", @hourVal)
+      ENDIF
+    NEXT @h
   CATCH
   ENDTRY
 ENDIF
@@ -1479,6 +1506,18 @@ pre.log.show{display:block}
                    <canvas id="opensClicksChart"></canvas>
                </div>
            </div>
+           <div class="chart-container">
+               <div class="chart-header">
+                   <div class="chart-number">⏰</div>
+                   <div class="chart-content">
+                       <div class="chart-text">Opened Send Time Distribution</div>
+                       <div class="chart-type">Opens by hour of day for this build (send time, opened emails)</div>
+                   </div>
+               </div>
+               <div class="chart-wrapper">
+                   <canvas id="openedSendTimeChart"></canvas>
+               </div>
+           </div>
            <div class="analytics-grid">
                <div class="analytics-card" style="grid-column: span %%[ IF @stateCount > 3 THEN ]%%2%%[ ELSE ]%%1%%[ ENDIF ]%%;">
                    <div class="analytics-header">
@@ -1652,6 +1691,7 @@ pre.log.show{display:block}
        <textarea id="perfRawSpecialtyBounced" readonly>%%=v(@specialtyBouncedData)=%%</textarea>
        <textarea id="perfRawSpecialtyClicked" readonly>%%=v(@specialtyClickedData)=%%</textarea>
        <textarea id="perfRawSpecialtyTotal" readonly>%%=v(@specialtyTotalData)=%%</textarea>
+       <textarea id="perfRawOpenHourCounts" readonly>%%=v(@perfOpenHourCounts)=%%</textarea>
    </div>
    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
    <script>
@@ -2086,6 +2126,72 @@ pre.log.show{display:block}
                }
            });
        } 
+
+       function createOpenedSendTimeChart() {
+           const ctx = document.getElementById('openedSendTimeChart');
+           if (!ctx) return;
+           const rawCounts = perfEmbeddedText('perfRawOpenHourCounts');
+           const counts = rawCounts ? rawCounts.split(',').map(function (n) { return parseInt(n, 10) || 0; }) : [];
+           if (counts.length === 0 || counts.every(function (count) { return !count; })) {
+               ctx.parentElement.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">No opened send-time data available for this build</div>';
+               return;
+           }
+           while (counts.length < 24) {
+               counts.push(0);
+           }
+           const labels = ['12 AM', '1 AM', '2 AM', '3 AM', '4 AM', '5 AM', '6 AM', '7 AM', '8 AM', '9 AM', '10 AM', '11 AM', '12 PM', '1 PM', '2 PM', '3 PM', '4 PM', '5 PM', '6 PM', '7 PM', '8 PM', '9 PM', '10 PM', '11 PM'];
+           new Chart(ctx, {
+               type: 'bar',
+               data: {
+                   labels: labels,
+                   datasets: [{
+                       label: 'Opened Emails',
+                       data: counts.slice(0, 24),
+                       backgroundColor: '#6366f1',
+                       borderWidth: 0
+                   }]
+               },
+               options: {
+                   responsive: true,
+                   maintainAspectRatio: false,
+                   plugins: {
+                       legend: {
+                           display: false
+                       },
+                       tooltip: {
+                           backgroundColor: 'rgba(17, 24, 39, 0.95)',
+                           titleColor: '#ffffff',
+                           bodyColor: '#ffffff'
+                       }
+                   },
+                   scales: {
+                       x: {
+                           ticks: {
+                               maxRotation: 45,
+                               minRotation: 45,
+                               color: '#6b7280',
+                               font: {
+                                   size: 11
+                               }
+                           },
+                           grid: {
+                               display: false
+                           }
+                       },
+                       y: {
+                           beginAtZero: true,
+                           ticks: {
+                               color: '#6b7280',
+                               precision: 0
+                           },
+                           grid: {
+                               color: 'rgba(0, 0, 0, 0.08)'
+                           }
+                       }
+                   }
+               }
+           });
+       }
 
       function createCombinedEngagementChart() {
           const ctx = document.getElementById('combinedEngagementChart');
@@ -2861,6 +2967,7 @@ pre.log.show{display:block}
        document.addEventListener('DOMContentLoaded', function () {
            createResponseChart();
            createOpensClicksChart();
+           createOpenedSendTimeChart();
            createCombinedEngagementChart();
            createStateChart();
            createSpecialtyChart();
