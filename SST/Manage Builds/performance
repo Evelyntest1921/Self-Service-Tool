@@ -22,7 +22,7 @@ VAR @valSent, @valOpen, @valClk, @valUnsub, @valUnreg, @lblDay, @editSidebarHtml
 VAR @openHourRows, @openHourRow, @hourIdx, @hourVal, @h
 VAR @contactUiPage, @contactTotalPages, @contactPageSize, @contactBatchRowCount, @contactMaxPageRows, @contactMaxPageNum
 VAR @contactTotalPagesFromField, @contactDePageKey, @contactStartRow, @contactEndRow, @contactNavBase, @contactNavQueryPos, @contactRem
-VAR @contactRecordsOnlyMode, @performanceBackUrl, @journeyDisplayName
+VAR @contactRecordsOnlyMode, @performanceBackUrl, @journeyDisplayName, @tableExport, @runCsvExport
 
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
@@ -265,6 +265,11 @@ IF NOT Empty(@contactNavBase) THEN
 ELSEIF NOT Empty(@jid) AND NOT Empty(@PERFORMANCE_URL) THEN
   SET @performanceBackUrl = Concat(@PERFORMANCE_URL, "?journeyId=", @jid, "&contactPage=1")
 ENDIF
+SET @tableExport = Trim(RequestParameter("export"))
+IF Empty(@tableExport) THEN
+  SET @tableExport = Trim(QueryParameter("export"))
+ENDIF
+SET @runCsvExport = "false"
 SET @openedCount = 0
 SET @bouncedCount = 0
 SET @didNotOpenCount = 0
@@ -525,7 +530,119 @@ NEXT @i
 ENDIF
 
 SET @editSidebarHtml = ContentBlockByName("sst_shell_edit_sidebar")
+
+IF @tableExport == "csv" AND NOT Empty(@jid) AND Empty(@configError) THEN
+  SET @runCsvExport = "true"
+ENDIF
+IF @runCsvExport == "true" THEN
+  VAR @exportPageNum, @exportMaxPage, @exportBatchRows, @exportRowIdx, @exportRow, @exportDePageKey, @exportMaxPageRows, @exportMaxPageNum, @exportLine, @exportCell, @exportLastSent, @exportContactId
+  ResponseContentType("text/csv")
+  SET @exportMaxPage = @contactTotalPages
+  IF @exportMaxPage < 1 THEN
+    SET @exportMaxPage = 1
+  ENDIF
+  SET @exportMaxPageRows = LookupOrderedRows("bd_self_service_engagement", 1, "PageNumber DESC", "JourneyID", @jid)
+  IF RowCount(@exportMaxPageRows) == 0 THEN
+    SET @exportMaxPageRows = LookupOrderedRows("bd_self_service_engagement", 1, "PageNumber DESC", "JourneyId", @jid)
+  ENDIF
+  IF RowCount(@exportMaxPageRows) == 0 THEN
+    SET @exportMaxPageRows = LookupOrderedRows("bd_self_service_engagement", 1, "PageNumber DESC", "journeyId", @jid)
+  ENDIF
+  IF RowCount(@exportMaxPageRows) > 0 THEN
+    SET @exportMaxPageNum = Field(Row(@exportMaxPageRows, 1), "TotalPages")
+    IF NOT Empty(@exportMaxPageNum) THEN
+      SET @exportMaxPageNum = Add(0, @exportMaxPageNum)
+      IF @exportMaxPageNum > 0 THEN
+        SET @exportMaxPage = @exportMaxPageNum
+      ENDIF
+    ELSE
+      SET @exportMaxPageNum = Field(Row(@exportMaxPageRows, 1), "PageNumber")
+      IF NOT Empty(@exportMaxPageNum) THEN
+        SET @exportMaxPageNum = Add(0, @exportMaxPageNum)
+        IF @exportMaxPageNum > 0 THEN
+          SET @exportMaxPage = @exportMaxPageNum
+        ENDIF
+      ENDIF
+    ENDIF
+  ENDIF
+  SET @exportLine = "Contact_Id,Email,LastSent,Engagement,Primary_Specialty,Related_Account_Primary_State,JobID,Related_Account_Name,First_Name,Last_Name,Designation,Role,Mobile,Auth0UserId,Campaign,email_name,ClickCount,BotOrHuman,contact_url,view_email_url"
+]%%%%=Concat(@exportLine, Char(10))=%%%%[
+  FOR @exportPageNum = 1 TO @exportMaxPage DO
+    SET @exportDePageKey = Concat("", @exportPageNum)
+    SET @exportBatchRows = LookupRows("bd_self_service_engagement", "JourneyID", @jid, "PageNumber", @exportDePageKey)
+    IF RowCount(@exportBatchRows) == 0 THEN
+      SET @exportBatchRows = LookupRows("bd_self_service_engagement", "JourneyID", @jid, "PageNumber", @exportPageNum)
+    ENDIF
+    IF RowCount(@exportBatchRows) == 0 THEN
+      SET @exportBatchRows = LookupRows("bd_self_service_engagement", "JourneyId", @jid, "PageNumber", @exportDePageKey)
+    ENDIF
+    IF RowCount(@exportBatchRows) == 0 THEN
+      SET @exportBatchRows = LookupRows("bd_self_service_engagement", "JourneyId", @jid, "PageNumber", @exportPageNum)
+    ENDIF
+    IF RowCount(@exportBatchRows) == 0 AND @exportPageNum == 1 THEN
+      SET @exportBatchRows = LookupRows("bd_self_service_engagement", "JourneyID", @jid)
+      IF RowCount(@exportBatchRows) == 0 THEN
+        SET @exportBatchRows = LookupRows("bd_self_service_engagement", "JourneyId", @jid)
+      ENDIF
+      SET @exportMaxPage = 1
+    ENDIF
+    FOR @exportRowIdx = 1 TO RowCount(@exportBatchRows) DO
+      SET @exportRow = Row(@exportBatchRows, @exportRowIdx)
+      SET @exportLastSent = Field(@exportRow, "LastSent")
+      SET @exportContactId = Field(@exportRow, "Contact_Id")
+      SET @exportLine = Concat('"', Replace(@exportContactId, '"', '""'), '"')
+      SET @exportCell = Concat('"', Replace(Field(@exportRow, "Email"), '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @exportCell = Concat('"', Replace(@exportLastSent, '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @exportCell = Concat('"', Replace(Field(@exportRow, "Engagement"), '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @exportCell = Concat('"', Replace(Field(@exportRow, "Primary_Specialty"), '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @exportCell = Concat('"', Replace(Field(@exportRow, "Related_Account_Primary_State"), '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @exportCell = Concat('"', Replace(Field(@exportRow, "JobID"), '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @exportCell = Concat('"', Replace(Field(@exportRow, "Related_Account_Name"), '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @exportCell = Concat('"', Replace(Field(@exportRow, "First_Name"), '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @exportCell = Concat('"', Replace(Field(@exportRow, "Last_Name"), '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @exportCell = Concat('"', Replace(Field(@exportRow, "Designation"), '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @exportCell = Concat('"', Replace(Field(@exportRow, "Role"), '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @exportCell = Concat('"', Replace(Field(@exportRow, "Mobile"), '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @exportCell = Concat('"', Replace(Field(@exportRow, "Auth0UserId"), '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @exportCell = Concat('"', Replace(Field(@exportRow, "campaign_type"), '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @exportCell = Concat('"', Replace(Field(@exportRow, "email_name"), '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @exportCell = Concat('"', Replace(Field(@exportRow, "ClickCount"), '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @exportCell = Concat('"', Replace(Field(@exportRow, "BotOrHuman"), '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @contactUrl = ""
+      IF NOT Empty(@exportContactId) THEN
+        IF @BU == "UAT" THEN
+          SET @contactUrl = Concat("https://magmutual--uat.sandbox.lightning.force.com/lightning/r/Contact/", @exportContactId, "/view")
+        ELSE
+          SET @contactUrl = Concat("https://magmutual.lightning.force.com/lightning/r/Contact/", @exportContactId, "/view")
+        ENDIF
+      ENDIF
+      SET @exportCell = Concat('"', Replace(@contactUrl, '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+      SET @exportCell = Concat('"', Replace(Field(@exportRow, "view_email_url"), '"', '""'), '"')
+      SET @exportLine = Concat(@exportLine, ",", @exportCell)
+]%%%%=Concat(@exportLine, Char(10))=%%%%[
+    NEXT @exportRowIdx
+  NEXT @exportPageNum
+ENDIF
 ]%%
+%%[ IF @runCsvExport != "true" THEN ]%%
 
 <!DOCTYPE html>
 <html lang="en">
@@ -2794,6 +2911,13 @@ pre.log.show{display:block}
       }
 
        function downloadFilteredData() {
+           if (filteredResponses.length === 0 && serverContactPaging) {
+               const url = new URL(window.location.href);
+               url.searchParams.set("export", "csv");
+               url.searchParams.delete("contactPage");
+               window.location.href = url.toString();
+               return;
+           }
            const dataToDownload = filteredResponses.length > 0 ? filteredResponses : allResponses;
            if (dataToDownload.length === 0) {
                alert('No data to download');
@@ -2831,7 +2955,7 @@ pre.log.show{display:block}
            const link = document.createElement('a');
            const url = URL.createObjectURL(blob);
            link.setAttribute('href', url);
-           link.setAttribute('download', `Push_Advice_Email_Engagement_${new Date().toISOString().split('T')[0]}.csv`);
+           link.setAttribute('download', `Build_Performance_Engagement_${new Date().toISOString().split('T')[0]}.csv`);
            link.style.visibility = 'hidden';
            document.body.appendChild(link);
            link.click();
@@ -3079,6 +3203,7 @@ background-color: #ff0000;
 </div>
 </body>
 </html>
+%%[ ENDIF ]%%
 
 
 
