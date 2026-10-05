@@ -339,7 +339,11 @@ function automationStatusNote(code, label) {
 }
 function humanScheduleText(schedule) {
   var ical = strTrim(schedule.icalRecur || "");
-  var start = strTrim(schedule.startDate || "");
+  var startRaw = strTrim(schedule.startDate || "");
+  var startParts = easternPartsFromScheduleApi(startRaw);
+  var start = startParts
+    ? monthNameEnglish(startParts.mo) + " " + startParts.d + ", " + startParts.y + " at " + formatHour12AmPm(startParts.h, startParts.mi)
+    : startRaw;
   var timing = "";
   if (ical.indexOf("MINUTELY") >= 0) timing = "Runs every few minutes";
   else if (ical.indexOf("HOURLY") >= 0) timing = "Runs every hour";
@@ -479,7 +483,7 @@ function formatHour12AmPm(hour24, minute) {
 }
 function businessScheduleStartText(obj) {
   var schedule = obj && obj.schedule ? obj.schedule : {};
-  var parts = parseScheduleStartParts(schedule.startDate || schedule.startDateTime || "");
+  var parts = easternPartsFromScheduleApi(schedule.startDate || schedule.startDateTime || "");
   if (!parts) return "";
   return (
     "Schedule will start " +
@@ -530,6 +534,65 @@ function isUsEasternDST(y, mo, d, hour, minute) {
 function easternOffsetHoursForParts(y, mo, d, hour, minute) {
   return isUsEasternDST(y, mo, d, hour, minute) ? 4 : 5;
 }
+function centralOffsetHoursForParts(y, mo, d, hour, minute) {
+  return isUsEasternDST(y, mo, d, hour, minute) ? 5 : 6;
+}
+function easternWallPartsToUtcMs(parts) {
+  var off = easternOffsetHoursForParts(parts.y, parts.mo, parts.d, parts.h, parts.mi);
+  return Date.UTC(parts.y, parts.mo - 1, parts.d, parts.h + off, parts.mi, 0);
+}
+function utcMsToCentralWallParts(utcMs) {
+  var offHours;
+  for (offHours = 5; offHours <= 6; offHours++) {
+    var shifted = utcMs - offHours * 3600000;
+    var d = new Date(shifted);
+    var y = d.getUTCFullYear();
+    var mo = d.getUTCMonth() + 1;
+    var day = d.getUTCDate();
+    var h = d.getUTCHours();
+    var mi = d.getUTCMinutes();
+    if (centralOffsetHoursForParts(y, mo, day, h, mi) === offHours) {
+      return { y: y, mo: mo, d: day, h: h, mi: mi };
+    }
+  }
+  var fallback = new Date(utcMs - 6 * 3600000);
+  return {
+    y: fallback.getUTCFullYear(),
+    mo: fallback.getUTCMonth() + 1,
+    d: fallback.getUTCDate(),
+    h: fallback.getUTCHours(),
+    mi: fallback.getUTCMinutes()
+  };
+}
+function formatNaiveDateTimeSeconds(parts) {
+  return parts.y + "-" + pad2(parts.mo) + "-" + pad2(parts.d) + "T" + pad2(parts.h) + ":" + pad2(parts.mi) + ":00";
+}
+function easternFormToSoapStartDateTime(easternNaive) {
+  var parts = parseScheduleStartParts(easternNaive);
+  if (!parts) return stripTimezoneFromIso(easternNaive);
+  return formatNaiveDateTimeSeconds(utcMsToCentralWallParts(easternWallPartsToUtcMs(parts)));
+}
+function scheduleApiStartHasExplicitOffset(raw) {
+  var s = strTrim(raw);
+  return s.indexOf("Z") >= 0 || s.indexOf("+") >= 11 || (s.length > 19 && s.charAt(19) === "-" && s.indexOf("T") === 10);
+}
+function soapStartToEasternFormValue(soapRaw) {
+  var raw = strTrim(soapRaw);
+  if (!raw) return "";
+  if (scheduleApiStartHasExplicitOffset(raw)) {
+    return datetimeLocalValueFromScheduleStart(raw);
+  }
+  var parts = parseScheduleStartParts(raw);
+  if (!parts) return datetimeLocalValueFromScheduleStart(raw);
+  var off = centralOffsetHoursForParts(parts.y, parts.mo, parts.d, parts.h, parts.mi);
+  var utcMs = Date.UTC(parts.y, parts.mo - 1, parts.d, parts.h + off, parts.mi, 0);
+  return formatEasternDateTimeParts(utcMsToEasternParts(utcMs));
+}
+function easternPartsFromScheduleApi(raw) {
+  var formVal = soapStartToEasternFormValue(raw);
+  if (!formVal) return null;
+  return parseScheduleStartParts(formVal + ":00");
+}
 function utcMsToEasternParts(utcMs) {
   var offHours;
   for (offHours = 4; offHours <= 5; offHours++) {
@@ -576,7 +639,7 @@ function scheduleStartFromAutomation(obj) {
   var schedule = obj && obj.schedule ? obj.schedule : {};
   var raw = strTrim(schedule.startDate || schedule.startDateTime || "");
   if (!raw) return "";
-  return datetimeLocalValueFromScheduleStart(raw);
+  return soapStartToEasternFormValue(raw);
 }
 function localEasternDateTime(startDate) {
   var s = strTrim(startDate);
@@ -587,8 +650,9 @@ function buildSchedulePayload(freq, startDate, minuteInterval) {
   var frequency = strTrim(freq).toLowerCase() || "hourly";
   var minuteVal = parseInt(strTrim(minuteInterval) || "15", 10);
   if (minuteVal != 15 && minuteVal != 30 && minuteVal != 45) minuteVal = 15;
-  var startDateForApi = localEasternDateTime(startDate);
-  var dateMatch = startDateForApi.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+  var easternNaive = localEasternDateTime(startDate);
+  var startDateForApi = easternFormToSoapStartDateTime(easternNaive);
+  var dateMatch = easternNaive.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
   var untilDate = new Date();
   if (dateMatch) {
     untilDate = new Date(Date.UTC(parseInt(dateMatch[1], 10), parseInt(dateMatch[2], 10) - 1, parseInt(dateMatch[3], 10)));
@@ -596,7 +660,9 @@ function buildSchedulePayload(freq, startDate, minuteInterval) {
   untilDate.setUTCDate(untilDate.getUTCDate() + 365);
   var untilCompact = String(untilDate.getUTCFullYear()) + pad2(untilDate.getUTCMonth() + 1) + pad2(untilDate.getUTCDate());
   var endDate = dateMatch
-    ? (parseInt(dateMatch[1], 10) + 1) + "-" + dateMatch[2] + "-" + dateMatch[3] + "T" + dateMatch[4] + ":" + dateMatch[5] + ":" + dateMatch[6]
+    ? easternFormToSoapStartDateTime(
+        (parseInt(dateMatch[1], 10) + 1) + "-" + dateMatch[2] + "-" + dateMatch[3] + "T" + dateMatch[4] + ":" + dateMatch[5] + ":" + dateMatch[6]
+      )
     : untilCompact + "T00:00:00";
   var recurRule = "FREQ=HOURLY;INTERVAL=1;UNTIL=" + untilCompact;
   if (frequency == "once") recurRule = "FREQ=HOURLY;INTERVAL=1;COUNT=1";
