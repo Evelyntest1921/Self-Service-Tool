@@ -1,11 +1,11 @@
 %%[
 VAR @HOME_URL, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @JOURNEY_VIEW_URL, @SURVEY_ANALYTICS_URL
 VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow
-VAR @automationId, @automationCustomerKey, @connectedAutomationName, @journeyAutomationId, @detailRows, @detailRow, @jid, @buildNavContext, @buildNavActive, @isSurveyBuild, @dispSurveyId
+VAR @automationId, @automationCustomerKey, @connectedAutomationName, @journeyAutomationId, @detailRows, @detailRow, @jid, @sourceDeName, @buildNavContext, @buildNavActive, @isSurveyBuild, @dispSurveyId
 VAR @pageStatus, @loadError, @authOk, @accessToken, @subdomain
 VAR @authRow, @authR, @clientId, @clientSecret, @accountId, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader
 VAR @authPending
-VAR @editSidebarHtml, @automationMetaHtml, @automationStepsHtml, @automationFlowHtml, @automationSchedulePanelHtml, @automationStudioUrl, @apiAutomationName, @automationRunning, @automationActivityCount, @scheduleEditorOpen
+VAR @editSidebarHtml, @automationMetaHtml, @automationStepsHtml, @automationFlowHtml, @automationSchedulePanelHtml, @automationStudioUrl, @apiAutomationName, @automationRunning, @automationActivityCount, @scheduleEditorOpen, @runOnceConfirmOpen
 VAR @autoAction, @autoActionOn, @schedFreq, @schedStart, @schedMinute, @actionOk, @actionMsg
 
 SET @HOME_URL = ""
@@ -40,6 +40,8 @@ SET @automationSchedulePanelHtml = ""
 SET @automationRunning = "false"
 SET @automationActivityCount = "0"
 SET @scheduleEditorOpen = "false"
+SET @runOnceConfirmOpen = "false"
+SET @sourceDeName = ""
 SET @actionOk = ""
 SET @actionMsg = ""
 SET @autoAction = Lowercase(Trim(RequestParameter("automationAction")))
@@ -48,6 +50,9 @@ IF RequestParameter("confirmAutomationAction") == "1" THEN
  SET @autoActionOn = "true"
  IF @autoAction == "activate" OR @autoAction == "pause" THEN
   SET @scheduleEditorOpen = "true"
+ ENDIF
+ IF @autoAction == "runonce" THEN
+  SET @runOnceConfirmOpen = "true"
  ENDIF
 ENDIF
 SET @schedFreq = Trim(RequestParameter("automationFrequency"))
@@ -85,6 +90,7 @@ IF NOT Empty(@jid) THEN
   SET @automationId = Trim(Field(@detailRow,"automationGuid"))
   SET @automationCustomerKey = Trim(Field(@detailRow,"automationCustomerKey"))
   SET @connectedAutomationName = Trim(Field(@detailRow,"automationName"))
+  SET @sourceDeName = Trim(Field(@detailRow,"deName"))
   IF Empty(@automationId) THEN
    SET @automationId = @automationCustomerKey
   ENDIF
@@ -214,7 +220,8 @@ function activityTypeLabel(typeId) {
     426: "Verification",
     467: "Wait",
     725: "Refresh group",
-    771: "Verification"
+    771: "Verification",
+    952: "Journey"
   };
   if (map[id]) return map[id];
   if (!isNaN(id) && id > 0) return "Activity " + id;
@@ -565,9 +572,56 @@ function buildFlowHtml(obj) {
   if (!wrote) return '<p class="recent-empty">This automation has no steps to show in the flow.</p>';
   return html;
 }
-function buildSchedulePanelHtml(jid, freq, startDate, minuteInterval, running, scheduleSummary, editorOpen) {
+function analyzeRunOnceWarning(obj, sourceDeName) {
+  var steps = obj.steps || [];
+  var has952 = false;
+  var has300 = false;
+  var activityCount = 0;
+  var otherActivity = false;
+  var s;
+  var a;
+  for (s = 0; s < steps.length; s++) {
+    var activities = (steps[s] || {}).activities || [];
+    for (a = 0; a < activities.length; a++) {
+      activityCount++;
+      var tid = parseInt((activities[a] || {}).objectTypeId, 10);
+      if (tid === 952) has952 = true;
+      else if (tid === 300) has300 = true;
+      else otherActivity = true;
+    }
+  }
+  var de = strTrim(sourceDeName);
+  if (has952) {
+    var journeyMsg = "Warning: This automation includes a Journey step. Running it once may send emails to contacts";
+    if (de) journeyMsg += ' in the source data extension "' + de + '"';
+    else journeyMsg += " from the audience tied to this build";
+    journeyMsg += ".";
+    return { warnClass: "run-once-warning-danger", confirmClass: "btn-run-confirm-danger", message: journeyMsg };
+  }
+  if (has300 && !has952 && !otherActivity && activityCount > 0) {
+    return {
+      warnClass: "run-once-warning-safe",
+      confirmClass: "btn-run-confirm-safe",
+      message: "This automation only runs a Query step. It refreshes data and does not send emails through a Journey. Confirm only if you intend to refresh that data now."
+    };
+  }
+  if (has300 && !has952) {
+    return {
+      warnClass: "run-once-warning-danger",
+      confirmClass: "btn-run-confirm-danger",
+      message: "This automation has more than a query step and no Journey step was detected. Review the flow before you run it once."
+    };
+  }
+  return {
+    warnClass: "run-once-warning-danger",
+    confirmClass: "btn-run-confirm-danger",
+    message: "Running this automation once may update data or start customer-facing steps. Review the activities below before you confirm."
+  };
+}
+function buildSchedulePanelHtml(jid, freq, startDate, minuteInterval, running, scheduleSummary, editorOpen, runOnceOpen, runOnceWarning) {
   var panelClass = "panel schedule-panel";
   if (editorOpen) panelClass += " is-editing";
+  if (runOnceOpen) panelClass += " is-run-once-open";
   var html = '<div class="' + panelClass + '" id="schedulePanel">';
   html += '<h2 class="panel-title">Schedule</h2>';
   html += '<p class="flow-hint schedule-panel-lead">' + htmlSafe(scheduleSummary) + "</p>";
@@ -581,13 +635,21 @@ function buildSchedulePanelHtml(jid, freq, startDate, minuteInterval, running, s
   }
   html += '<button type="button" class="btn-sst-black" id="scheduleEditOpenBtn">Edit schedule</button>';
   if (!running) {
-    html += '<form method="post" action="" class="schedule-inline-form" onsubmit="return confirm(\'Run this automation once now?\');">';
-    html += '<input type="hidden" name="journeyId" value="' + htmlSafe(jid) + '">';
-    html += '<input type="hidden" name="automationAction" value="runonce">';
-    html += '<button type="submit" name="confirmAutomationAction" value="1" class="btn-sst-black">Run Automation Once</button>';
-    html += "</form>";
+    html += '<button type="button" class="btn-sst-black" id="runOnceOpenBtn">Run Automation Once</button>';
   }
   html += "</div>";
+  if (!running && runOnceWarning) {
+    var w = runOnceWarning;
+    html += '<div class="run-once-confirm" id="runOnceConfirm"' + (runOnceOpen ? "" : ' hidden="hidden"') + ">";
+    html += '<p class="run-once-warning ' + htmlSafe(w.warnClass) + '">' + htmlSafe(w.message) + "</p>";
+    html += '<form method="post" action="" class="run-once-form" id="runOnceForm">';
+    html += '<input type="hidden" name="journeyId" value="' + htmlSafe(jid) + '">';
+    html += '<input type="hidden" name="automationAction" value="runonce">';
+    html += '<div class="run-once-actions">';
+    html += '<button type="button" class="btn-run-cancel" id="runOnceCancelBtn">Cancel</button>';
+    html += '<button type="submit" name="confirmAutomationAction" value="1" class="' + htmlSafe(w.confirmClass) + '">Confirm</button>';
+    html += "</div></form></div>";
+  }
   html += '<div class="schedule-panel-editor" id="schedulePanelEditor">';
   if (!running) {
     html += '<form method="post" action="" class="schedule-form" onsubmit="return confirm(\'Stop this run if the automation is currently running?\');">';
@@ -733,6 +795,7 @@ try {
       Platform.Variable.SetValue("@automationRunning", runningNow ? "true" : "false");
       Platform.Variable.SetValue("@automationActivityCount", String(countAutomationActivities(obj)));
       Platform.Variable.SetValue("@automationFlowHtml", buildFlowHtml(obj));
+      var runOnceWarning = analyzeRunOnceWarning(obj, Platform.Variable.GetValue("@sourceDeName") || "");
       Platform.Variable.SetValue("@automationSchedulePanelHtml", buildSchedulePanelHtml(
         Platform.Variable.GetValue("@jid") || "",
         Platform.Variable.GetValue("@schedFreq") || "hourly",
@@ -740,7 +803,9 @@ try {
         Platform.Variable.GetValue("@schedMinute") || "15",
         runningNow,
         buildScheduleSummary(obj),
-        String(Platform.Variable.GetValue("@scheduleEditorOpen") || "") === "true"
+        String(Platform.Variable.GetValue("@scheduleEditorOpen") || "") === "true",
+        String(Platform.Variable.GetValue("@runOnceConfirmOpen") || "") === "true",
+        runOnceWarning
       ));
     } else {
       Platform.Variable.SetValue("@pageStatus", "apifail");
@@ -814,6 +879,17 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 .schedule-panel.is-editing .schedule-panel-editor{display:block}
 .schedule-panel.is-editing .schedule-panel-summary{display:none}
 .schedule-inline-form{margin:0;display:inline}
+.run-once-confirm{margin-top:16px;padding-top:16px;border-top:1px solid var(--border-color)}
+.run-once-warning{margin:0 0 14px 0;padding:14px 16px;font-size:14px;line-height:1.5;color:#000}
+.run-once-warning-danger{background:#fef2f2;border:1px solid #fecaca}
+.run-once-warning-safe{background:#f0fdf4;border:1px solid #bbf7d0}
+.run-once-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-start;gap:10px}
+.run-once-form{margin:0}
+.btn-run-cancel{display:inline-flex;align-items:center;justify-content:center;padding:11px 18px;font-size:14px;font-weight:600;border-radius:0;border:1px solid #d1d5db;background:#e5e7eb;color:#111;cursor:pointer;font-family:inherit;line-height:1.2}
+.btn-run-confirm-danger{display:inline-flex;align-items:center;justify-content:center;padding:11px 18px;font-size:14px;font-weight:600;border-radius:0;border:1px solid #dc2626;background:#dc2626;color:#fff;cursor:pointer;font-family:inherit;line-height:1.2}
+.btn-run-confirm-safe{display:inline-flex;align-items:center;justify-content:center;padding:11px 18px;font-size:14px;font-weight:600;border-radius:0;border:1px solid #16a34a;background:#16a34a;color:#fff;cursor:pointer;font-family:inherit;line-height:1.2}
+.schedule-panel.is-run-once-open .schedule-panel-summary{display:none}
+.schedule-panel.is-run-once-open .run-once-confirm{display:block}
 .contacts-table-wrap{overflow-x:auto;border:1px solid var(--border-color);border-radius:8px;background:#fff}
 .contacts-table{width:100%;border-collapse:collapse;font-size:14px}
 .contacts-table th,.contacts-table td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--border-color);vertical-align:top}
@@ -890,9 +966,27 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 (function(){
   var schedulePanel = document.getElementById("schedulePanel");
   var scheduleOpenBtn = document.getElementById("scheduleEditOpenBtn");
+  var runOnceOpenBtn = document.getElementById("runOnceOpenBtn");
+  var runOnceCancelBtn = document.getElementById("runOnceCancelBtn");
+  var runOnceConfirm = document.getElementById("runOnceConfirm");
   if (schedulePanel && scheduleOpenBtn) {
     scheduleOpenBtn.addEventListener("click", function() {
+      schedulePanel.classList.remove("is-run-once-open");
+      if (runOnceConfirm) runOnceConfirm.setAttribute("hidden", "hidden");
       schedulePanel.classList.add("is-editing");
+    });
+  }
+  if (schedulePanel && runOnceOpenBtn && runOnceConfirm) {
+    runOnceOpenBtn.addEventListener("click", function() {
+      schedulePanel.classList.remove("is-editing");
+      schedulePanel.classList.add("is-run-once-open");
+      runOnceConfirm.removeAttribute("hidden");
+    });
+  }
+  if (schedulePanel && runOnceCancelBtn && runOnceConfirm) {
+    runOnceCancelBtn.addEventListener("click", function() {
+      schedulePanel.classList.remove("is-run-once-open");
+      runOnceConfirm.setAttribute("hidden", "hidden");
     });
   }
 })();
