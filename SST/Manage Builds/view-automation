@@ -6,7 +6,7 @@ VAR @pageStatus, @loadError, @authOk, @accessToken, @subdomain
 VAR @authRow, @authR, @clientId, @clientSecret, @accountId, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader
 VAR @authPending
 VAR @editSidebarHtml, @automationMetaHtml, @automationStepsHtml, @automationFlowHtml, @automationSchedulePanelHtml, @automationStudioUrl, @apiAutomationName, @automationRunning, @automationActivityCount, @scheduleEditorOpen, @runOnceConfirmOpen
-VAR @autoAction, @autoActionOn, @schedFreq, @schedStart, @schedMinute, @actionOk, @actionMsg
+VAR @autoAction, @autoActionOn, @schedFreq, @schedStart, @schedMinute, @schedEnd, @schedEndDate, @schedOccurrences, @actionOk, @actionMsg
 
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
@@ -58,6 +58,9 @@ ENDIF
 SET @schedFreq = Trim(RequestParameter("automationFrequency"))
 SET @schedStart = Trim(RequestParameter("automationStartDate"))
 SET @schedMinute = Trim(RequestParameter("automationMinuteInterval"))
+SET @schedEnd = Lowercase(Trim(RequestParameter("automationScheduleEnd")))
+SET @schedEndDate = Trim(RequestParameter("automationScheduleEndDate"))
+SET @schedOccurrences = Trim(RequestParameter("automationScheduleOccurrences"))
 SET @editSidebarHtml = ""
 
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
@@ -366,6 +369,39 @@ function applyScheduleFormDefaultsFromAutomation(obj) {
     minuteVal = postedMinute;
   }
   Platform.Variable.SetValue("@schedMinute", minuteVal);
+  var postedEnd = strTrim(Platform.Variable.GetValue("@schedEnd") || "");
+  var endDefaults = scheduleEndDefaultsFromAutomation(obj);
+  var endMode = postedEnd || endDefaults.mode || "occurrences";
+  Platform.Variable.SetValue("@schedEnd", endMode);
+  var postedEndDate = strTrim(Platform.Variable.GetValue("@schedEndDate") || "");
+  Platform.Variable.SetValue("@schedEndDate", postedEndDate || endDefaults.endDate || "");
+  var postedOcc = strTrim(Platform.Variable.GetValue("@schedOccurrences") || "");
+  Platform.Variable.SetValue("@schedOccurrences", postedOcc || endDefaults.occurrences || "2");
+}
+function dateKeyFromIsoValue(value) {
+  var match = strTrim(value).match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : "";
+}
+function scheduleEndDefaultsFromAutomation(obj) {
+  var schedule = obj && obj.schedule ? obj.schedule : {};
+  var ical = strTrim(schedule.icalRecur || "");
+  var endRaw = strTrim(schedule.endDate || schedule.endDateTime || "");
+  if (ical.indexOf("COUNT=1") >= 0) {
+    return { mode: "occurrences", occurrences: "1", endDate: "" };
+  }
+  var countMatch = ical.match(/COUNT=(\d+)/);
+  if (countMatch && countMatch[1] !== "1") {
+    return { mode: "occurrences", occurrences: countMatch[1], endDate: "" };
+  }
+  if (ical.indexOf("UNTIL=20991231") >= 0 || endRaw.indexOf("2099-12-31") >= 0) {
+    return { mode: "never", occurrences: "2", endDate: "" };
+  }
+  var endKey = dateKeyFromIsoValue(soapStartToEasternFormValue(endRaw) + ":00");
+  if (!endKey) endKey = dateKeyFromIsoValue(endRaw);
+  if (endKey) {
+    return { mode: "enddate", occurrences: "2", endDate: endKey };
+  }
+  return { mode: "occurrences", occurrences: "2", endDate: "" };
 }
 function humanScheduleText(schedule) {
   var ical = strTrim(schedule.icalRecur || "");
@@ -676,30 +712,69 @@ function localEasternDateTime(startDate) {
   if (!s) return defaultEasternStartDateTime();
   return stripTimezoneFromIso(s);
 }
-function buildSchedulePayload(freq, startDate, minuteInterval) {
+var SCHEDULE_NEVER_END_EASTERN = "2099-12-31T23:59:00";
+function untilCompactFromDateKey(dateKey) {
+  var match = strTrim(dateKey).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return "";
+  return match[1] + match[2] + match[3];
+}
+function buildSchedulePayload(freq, startDate, minuteInterval, endMode, endDateKey, occurrences) {
   var frequency = strTrim(freq).toLowerCase() || "hourly";
   var minuteVal = parseInt(strTrim(minuteInterval) || "15", 10);
   if (minuteVal != 15 && minuteVal != 30 && minuteVal != 45) minuteVal = 15;
   var easternNaive = localEasternDateTime(startDate);
   var startDateForApi = easternFormToSoapStartDateTime(easternNaive);
   var dateMatch = easternNaive.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
-  var untilDate = new Date();
-  if (dateMatch) {
-    untilDate = new Date(Date.UTC(parseInt(dateMatch[1], 10), parseInt(dateMatch[2], 10) - 1, parseInt(dateMatch[3], 10)));
+  var mode = strTrim(endMode).toLowerCase();
+  var occurVal = parseInt(strTrim(occurrences) || "2", 10);
+  if (isNaN(occurVal) || occurVal < 1) occurVal = 2;
+  var endRangeType = "EndOn";
+  var endSuffix = "";
+  var endDateForSoap = startDateForApi;
+  if (frequency === "once") {
+    mode = "occurrences";
+    occurVal = 1;
   }
-  untilDate.setUTCDate(untilDate.getUTCDate() + 365);
-  var untilCompact = String(untilDate.getUTCFullYear()) + pad2(untilDate.getUTCMonth() + 1) + pad2(untilDate.getUTCDate());
-  var endDate = dateMatch
-    ? easternFormToSoapStartDateTime(
-        (parseInt(dateMatch[1], 10) + 1) + "-" + dateMatch[2] + "-" + dateMatch[3] + "T" + dateMatch[4] + ":" + dateMatch[5] + ":" + dateMatch[6]
-      )
-    : untilCompact + "T00:00:00";
-  var recurRule = "FREQ=HOURLY;INTERVAL=1;UNTIL=" + untilCompact;
+  if (mode === "never") {
+    endDateForSoap = easternFormToSoapStartDateTime(SCHEDULE_NEVER_END_EASTERN);
+    endSuffix = ";UNTIL=20991231";
+  } else if (mode === "enddate") {
+    var endKey = dateKeyFromIsoValue(endDateKey);
+    if (!endKey && dateMatch) {
+      endKey = (parseInt(dateMatch[1], 10) + 1) + "-" + dateMatch[2] + "-" + dateMatch[3];
+    }
+    var endEastern = (endKey || "2099-12-31") + "T23:59:00";
+    endDateForSoap = easternFormToSoapStartDateTime(endEastern);
+    var untilCompact = untilCompactFromDateKey(endKey);
+    if (untilCompact) endSuffix = ";UNTIL=" + untilCompact;
+  } else {
+    endRangeType = "EndAfter";
+    endSuffix = ";COUNT=" + occurVal;
+    endDateForSoap = startDateForApi;
+  }
+  if (!endSuffix && dateMatch) {
+    var untilDate = new Date(Date.UTC(parseInt(dateMatch[1], 10), parseInt(dateMatch[2], 10) - 1, parseInt(dateMatch[3], 10)));
+    untilDate.setUTCDate(untilDate.getUTCDate() + 365);
+    endSuffix = ";UNTIL=" + String(untilDate.getUTCFullYear()) + pad2(untilDate.getUTCMonth() + 1) + pad2(untilDate.getUTCDate());
+    endDateForSoap = easternFormToSoapStartDateTime(
+      (parseInt(dateMatch[1], 10) + 1) + "-" + dateMatch[2] + "-" + dateMatch[3] + "T23:59:00"
+    );
+  }
+  var recurRule = "FREQ=HOURLY;INTERVAL=1" + endSuffix;
   if (frequency == "once") recurRule = "FREQ=HOURLY;INTERVAL=1;COUNT=1";
-  else if (frequency == "minute") recurRule = "FREQ=MINUTELY;INTERVAL=" + minuteVal + ";UNTIL=" + untilCompact;
-  else if (frequency == "daily") recurRule = "FREQ=DAILY;INTERVAL=1;UNTIL=" + untilCompact;
-  else if (frequency == "weekly") recurRule = "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO;UNTIL=" + untilCompact;
-  return { ok: true, icalRecur: recurRule, startDate: startDateForApi, endDate: endDate, timezoneId: "76", minuteInterval: minuteVal };
+  else if (frequency == "minute") recurRule = "FREQ=MINUTELY;INTERVAL=" + minuteVal + endSuffix;
+  else if (frequency == "daily") recurRule = "FREQ=DAILY;INTERVAL=1" + endSuffix;
+  else if (frequency == "weekly") recurRule = "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO" + endSuffix;
+  return {
+    ok: true,
+    icalRecur: recurRule,
+    startDate: startDateForApi,
+    endDate: endDateForSoap,
+    timezoneId: "76",
+    minuteInterval: minuteVal,
+    endRangeType: endRangeType,
+    occurrences: occurVal
+  };
 }
 function soapSchedule(sub, token, objectId, customerKey, actionName, schedule) {
   var recurrence = '<Recurrence xsi:type="HourlyRecurrence"><HourlyRecurrencePatternType>Interval</HourlyRecurrencePatternType><HourInterval>1</HourInterval></Recurrence><RecurrenceType>Hourly</RecurrenceType>';
@@ -714,7 +789,24 @@ function soapSchedule(sub, token, objectId, customerKey, actionName, schedule) {
     } else if (ical.indexOf("WEEKLY") >= 0) {
       recurrence = '<Recurrence xsi:type="WeeklyRecurrence"><WeeklyRecurrencePatternType>ByDay</WeeklyRecurrencePatternType><WeekInterval>1</WeekInterval><Sunday>false</Sunday><Monday>true</Monday><Tuesday>false</Tuesday><Wednesday>false</Wednesday><Thursday>false</Thursday><Friday>false</Friday><Saturday>false</Saturday></Recurrence><RecurrenceType>Weekly</RecurrenceType>';
     }
-    if (ical.indexOf("COUNT=1") < 0 && schedule.startDate) {
+    var countMatch = ical.match(/COUNT=(\d+)/);
+    if (countMatch) {
+      var countNum = parseInt(countMatch[1], 10);
+      if (isNaN(countNum) || countNum < 1) countNum = 1;
+      range =
+        "<RecurrenceRangeType>EndAfter</RecurrenceRangeType><StartDateTime>" +
+        xmlSafe(schedule.startDate) +
+        "</StartDateTime><Occurrences>" +
+        countNum +
+        "</Occurrences>";
+    } else if (schedule.endRangeType === "EndAfter" && schedule.occurrences) {
+      range =
+        "<RecurrenceRangeType>EndAfter</RecurrenceRangeType><StartDateTime>" +
+        xmlSafe(schedule.startDate) +
+        "</StartDateTime><Occurrences>" +
+        xmlSafe(String(schedule.occurrences)) +
+        "</Occurrences>";
+    } else if (schedule.startDate) {
       range = "<RecurrenceRangeType>EndOn</RecurrenceRangeType><StartDateTime>" + xmlSafe(schedule.startDate) + "</StartDateTime><EndDateTime>" + xmlSafe(schedule.endDate || schedule.startDate) + "</EndDateTime>";
     }
   }
@@ -821,7 +913,12 @@ function analyzeRunOnceWarning(obj, sourceDeName) {
     message: "Running this automation once may update data or start customer-facing steps. Review the activities below before you confirm."
   };
 }
-function buildSchedulePanelHtml(jid, freq, startDate, minuteInterval, running, paused, scheduleSummary, editorOpen, runOnceOpen, runOnceWarning) {
+function endOptionChecked(current, value) {
+  var mode = strTrim(current).toLowerCase();
+  if (!mode || (mode !== "enddate" && mode !== "never")) mode = "occurrences";
+  return mode === value ? " checked" : "";
+}
+function buildSchedulePanelHtml(jid, freq, startDate, minuteInterval, endMode, endDateVal, occurrences, running, paused, scheduleSummary, editorOpen, runOnceOpen, runOnceWarning) {
   var panelClass = "panel schedule-panel";
   if (editorOpen) panelClass += " is-editing";
   if (runOnceOpen) panelClass += " is-run-once-open";
@@ -880,6 +977,23 @@ function buildSchedulePanelHtml(jid, freq, startDate, minuteInterval, running, p
   html += "</select></div>";
   html += '<div class="schedule-field"><label for="automationStartDate">Start (Eastern)</label><input id="automationStartDate" type="datetime-local" class="schedule-control" name="automationStartDate" value="' + htmlSafe(datetimeLocalValueFromScheduleStart(startDate)) + '"></div>';
   html += '<p class="schedule-eastern-note">Start time is always Eastern Time (US &amp; Canada), including daylight saving.</p>';
+  if (strTrim(freq).toLowerCase() !== "once") {
+    html += '<div class="schedule-field" id="automationScheduleEndWrap">';
+    html += '<span class="schedule-radio-title">End</span>';
+    html += '<div class="schedule-end-group">';
+    html += '<label class="schedule-end-option"><input type="radio" name="automationScheduleEnd" value="occurrences"' + endOptionChecked(endMode, "occurrences") + ">";
+    html += "<span>After</span>";
+    html += '<input type="number" min="1" max="9999" class="schedule-control schedule-end-inline" name="automationScheduleOccurrences" id="automationScheduleOccurrences" value="' + htmlSafe(occurrences || "2") + '">';
+    html += "<span>occurrence(s)</span></label>";
+    html += '<label class="schedule-end-option"><input type="radio" name="automationScheduleEnd" value="endDate"' + endOptionChecked(endMode, "enddate") + ">";
+    html += "<span>On date</span>";
+    html += '<input type="date" class="schedule-control schedule-end-inline schedule-end-date" name="automationScheduleEndDate" id="automationScheduleEndDate" value="' + htmlSafe(endDateVal || "") + '"></label>';
+    html += '<label class="schedule-end-option"><input type="radio" name="automationScheduleEnd" value="never"' + endOptionChecked(endMode, "never") + ">";
+    html += "<span>Never</span></label>";
+    html += "</div>";
+    html += '<p class="schedule-eastern-note">On date ends at 11:59 PM Eastern. Never uses a far-future end date in Automation Studio.</p>';
+    html += "</div>";
+  }
   html += '<button type="submit" name="confirmAutomationAction" value="1" class="btn-activate-schedule">Activate schedule</button>';
   html += "</form>";
   html += "</div></div>";
@@ -978,7 +1092,10 @@ try {
       var schedulePayload = buildSchedulePayload(
         Platform.Variable.GetValue("@schedFreq") || "",
         Platform.Variable.GetValue("@schedStart") || "",
-        Platform.Variable.GetValue("@schedMinute") || ""
+        Platform.Variable.GetValue("@schedMinute") || "",
+        Platform.Variable.GetValue("@schedEnd") || "",
+        Platform.Variable.GetValue("@schedEndDate") || "",
+        Platform.Variable.GetValue("@schedOccurrences") || ""
       );
       var activateResp = soapSchedule(subdomain, accessToken, targetId, customerKey, "start", schedulePayload);
       Platform.Variable.SetValue("@actionOk", activateResp.ok ? "true" : "false");
@@ -1010,6 +1127,9 @@ try {
         Platform.Variable.GetValue("@schedFreq") || "hourly",
         schedStartVal,
         Platform.Variable.GetValue("@schedMinute") || "15",
+        Platform.Variable.GetValue("@schedEnd") || "occurrences",
+        Platform.Variable.GetValue("@schedEndDate") || "",
+        Platform.Variable.GetValue("@schedOccurrences") || "2",
         runningNow,
         pausedNow,
         buildScheduleSummary(obj),
@@ -1083,6 +1203,12 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 .schedule-field label{display:block;font-size:0.8125rem;font-weight:600;color:var(--text-secondary);margin-bottom:6px}
 .schedule-control{width:100%;padding:10px 12px;border:1px solid var(--border-color);border-radius:8px;font:inherit;background:#fff}
 .schedule-eastern-note{font-size:0.8125rem;color:var(--text-secondary);margin:6px 0 12px}
+.schedule-radio-title{display:block;font-size:0.8125rem;font-weight:600;color:var(--text-secondary);margin-bottom:6px}
+.schedule-end-group{display:flex;flex-direction:column;gap:10px;margin-top:8px}
+.schedule-end-option{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border-color);border-radius:8px;cursor:pointer}
+.schedule-end-option input[type="radio"]{margin:0}
+.schedule-end-inline{width:auto;max-width:120px;padding:8px 10px}
+.schedule-end-date{max-width:180px}
 .schedule-panel-lead{margin-bottom:12px}
 .schedule-panel-summary{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:4px}
 .schedule-panel-editor{display:none;margin-top:16px;padding-top:16px;border-top:1px solid var(--border-color)}
@@ -1229,11 +1355,59 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
   function syncScheduleFrequencyFields() {
     if (!scheduleFreq || !minuteWrap) return;
     minuteWrap.hidden = scheduleFreq.value !== "minute";
+    if (typeof syncAutomationEndWrapVisibility === "function") syncAutomationEndWrapVisibility();
   }
+  var endRadios = document.querySelectorAll('input[name="automationScheduleEnd"]');
+  var endDateInput = document.getElementById("automationScheduleEndDate");
+  var occurInput = document.getElementById("automationScheduleOccurrences");
+  var endWrap = document.getElementById("automationScheduleEndWrap");
+  function padLocal(n) {
+    return n < 10 ? "0" + n : String(n);
+  }
+  function futureDateString(daysAhead) {
+    var d = new Date();
+    d.setDate(d.getDate() + daysAhead);
+    return d.getFullYear() + "-" + padLocal(d.getMonth() + 1) + "-" + padLocal(d.getDate());
+  }
+  function selectedAutomationEndMode() {
+    var e;
+    for (e = 0; e < endRadios.length; e++) {
+      if (endRadios[e].checked) return endRadios[e].value;
+    }
+    return "occurrences";
+  }
+  function addYearsToDateKey(dateKey, years) {
+    if (!dateKey || dateKey.length < 10) return futureDateString(365);
+    var parts = dateKey.split("-");
+    var y = parseInt(parts[0], 10) + years;
+    return y + "-" + parts[1] + "-" + parts[2];
+  }
+  function syncAutomationEndFields() {
+    var mode = selectedAutomationEndMode();
+    if (occurInput) occurInput.disabled = mode !== "occurrences";
+    if (endDateInput) {
+      endDateInput.disabled = mode !== "endDate";
+      if (mode === "endDate" && !endDateInput.value) {
+        var base = startInput && startInput.value ? startInput.value.split("T")[0] : futureDateString(0);
+        endDateInput.value = addYearsToDateKey(base, 1);
+        endDateInput.min = base;
+      }
+    }
+  }
+  function syncAutomationEndWrapVisibility() {
+    if (!endWrap || !scheduleFreq) return;
+    endWrap.hidden = scheduleFreq.value === "once";
+  }
+  var er;
+  for (er = 0; er < endRadios.length; er++) {
+    endRadios[er].addEventListener("change", syncAutomationEndFields);
+  }
+  if (startInput) startInput.addEventListener("change", syncAutomationEndFields);
   if (scheduleFreq) {
-    scheduleFreq.addEventListener("change", syncScheduleFrequencyFields);
-    syncScheduleFrequencyFields();
+    scheduleFreq.addEventListener("change", syncAutomationEndWrapVisibility);
   }
+  syncAutomationEndWrapVisibility();
+  syncAutomationEndFields();
 })();
 function openAutomationStudio(el) {
   var name = el.getAttribute("data-automation-name") || "";
