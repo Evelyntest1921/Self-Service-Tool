@@ -5,7 +5,7 @@ VAR @automationId, @automationCustomerKey, @connectedAutomationName, @journeyAut
 VAR @pageStatus, @loadError, @authOk, @accessToken, @subdomain
 VAR @authRow, @authR, @clientId, @clientSecret, @accountId, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader
 VAR @authPending
-VAR @editSidebarHtml, @automationMetaHtml, @automationStepsHtml, @automationFlowHtml, @automationActionsHtml, @automationStudioUrl, @apiAutomationName
+VAR @editSidebarHtml, @automationMetaHtml, @automationStepsHtml, @automationFlowHtml, @automationActionsHtml, @automationStudioUrl, @apiAutomationName, @automationRunning
 VAR @autoAction, @autoActionOn, @schedFreq, @schedStart, @schedMinute, @actionOk, @actionMsg
 
 SET @HOME_URL = ""
@@ -37,6 +37,7 @@ SET @automationStudioUrl = ""
 SET @apiAutomationName = ""
 SET @automationFlowHtml = ""
 SET @automationActionsHtml = ""
+SET @automationRunning = "false"
 SET @actionOk = ""
 SET @actionMsg = ""
 SET @autoAction = Lowercase(Trim(RequestParameter("automationAction")))
@@ -234,6 +235,18 @@ function metaRow(label, value) {
   if (!shown) shown = "Not set";
   return "<dt>" + htmlSafe(label) + "</dt><dd>" + htmlSafe(shown) + "</dd>";
 }
+function metaStatusRow(status) {
+  var raw = objStatusRaw(status);
+  var label = statusLabel(raw);
+  var cls = "status-value";
+  if (raw === "3") cls += " status-running";
+  else if (raw === "4" || raw === "5") cls += " status-paused-stopped";
+  return "<dt>Status</dt><dd><span class=\"" + cls + "\">" + htmlSafe(label) + "</span></dd>";
+}
+function objStatusRaw(status) {
+  if (status === undefined || status === null) return "";
+  return String(status);
+}
 function getAutomation(sub, token, automationId) {
   var base = "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/automations/";
   var first = httpJson(token, "GET", base + encodeURIComponent(automationId));
@@ -261,10 +274,10 @@ function getAutomation(sub, token, automationId) {
     msg: "Automation GET HTTP " + first.status + (detail ? " " + detail : "")
   };
 }
-function buildMetaHtml(obj, studioUrl, automationName) {
+function buildMetaHtml(obj) {
   var schedule = obj.schedule || {};
   var html = '<dl class="journey-meta-dl">';
-  html += metaRow("Status", statusLabel(obj.status));
+  html += metaStatusRow(obj.status);
   html += metaRow("Key", obj.key);
   html += metaRow("Object Id", obj.id);
   html += metaRow("Description", obj.description);
@@ -275,7 +288,6 @@ function buildMetaHtml(obj, studioUrl, automationName) {
   html += metaRow("Timezone", schedule.timezoneName);
   html += metaRow("Last run", obj.lastRunTime);
   html += "</dl>";
-  html += '<p class="journey-meta-action"><button type="button" class="btn-sst-black" data-studio-url="' + htmlSafe(studioUrl) + '" data-automation-name="' + htmlSafe(automationName) + '" onclick="openAutomationStudio(this)">Open in Automation Studio</button> <span class="copy-hint"></span></p>';
   return html;
 }
 function clip(text, maxLen) {
@@ -438,14 +450,27 @@ function buildFlowHtml(obj) {
   if (!wrote) return '<p class="recent-empty">This automation has no steps to show in the flow.</p>';
   return html;
 }
-function buildActionsHtml(jid, freq, startDate, minuteInterval, running) {
-  var html = "";
-  html += '<form method="post" action="" class="automation-schedule-form" onsubmit="return confirm(\'Stop this run if the automation is currently running?\');">';
-  html += '<input type="hidden" name="journeyId" value="' + htmlSafe(jid) + '">';
-  html += '<input type="hidden" name="automationAction" value="stop">';
-  html += '<button type="submit" name="confirmAutomationAction" value="1" class="btn-sst-black">Stop if running</button>';
-  html += '<p class="flow-hint">' + (running ? "This automation is running. Stop ends the current run." : "Stop runs only when the automation status is Running.") + "</p>";
-  html += "</form>";
+function buildActionsHtml(jid, freq, startDate, minuteInterval, running, studioUrl, automationName) {
+  var html = '<div class="automation-toolbar">';
+  html += '<button type="button" class="btn-sst-black" data-studio-url="' + htmlSafe(studioUrl) + '" data-automation-name="' + htmlSafe(automationName) + '" onclick="openAutomationStudio(this)">Open in Automation Studio</button>';
+  html += '<span class="copy-hint"></span>';
+  if (running) {
+    html += '<form method="post" action="" class="automation-inline-form" onsubmit="return confirm(\'Stop this automation run?\');">';
+    html += '<input type="hidden" name="journeyId" value="' + htmlSafe(jid) + '">';
+    html += '<input type="hidden" name="automationAction" value="stop">';
+    html += '<button type="submit" name="confirmAutomationAction" value="1" class="btn-sst-black">Stop automation</button>';
+    html += "</form>";
+  }
+  html += '<button type="button" class="btn-sst-outline" id="editScheduleBtn" onclick="toggleScheduleEditor()">Edit schedule</button>';
+  html += "</div>";
+  html += '<div id="scheduleEditorPanel" class="schedule-editor-panel" hidden>';
+  if (!running) {
+    html += '<form method="post" action="" class="automation-schedule-form" onsubmit="return confirm(\'Stop this run if the automation is currently running?\');">';
+    html += '<input type="hidden" name="journeyId" value="' + htmlSafe(jid) + '">';
+    html += '<input type="hidden" name="automationAction" value="stop">';
+    html += '<button type="submit" name="confirmAutomationAction" value="1" class="btn-sst-black">Stop if running</button>';
+    html += "</form>";
+  }
   html += '<form method="post" action="" class="automation-schedule-form" onsubmit="return confirm(\'Activate this schedule? If a run is in progress, it will be stopped first.\');">';
   html += '<input type="hidden" name="journeyId" value="' + htmlSafe(jid) + '">';
   html += '<input type="hidden" name="automationAction" value="activate">';
@@ -472,6 +497,7 @@ function buildActionsHtml(jid, freq, startDate, minuteInterval, running) {
   html += '<input type="hidden" name="automationAction" value="pause">';
   html += '<button type="submit" name="confirmAutomationAction" value="1" class="btn-sst-black">Pause schedule</button>';
   html += "</form>";
+  html += "</div>";
   return html;
 }
 function buildStepsHtml(obj) {
@@ -567,15 +593,19 @@ try {
       var obj = fetched.obj;
       apiName = obj.name ? String(obj.name) : "";
       studioUrl = MC_CLOUD + "#app/Automation%20Studio/AutomationStudioFuel3/";
-      metaHtml = buildMetaHtml(obj, studioUrl, apiName);
+      var runningNow = isRunningStatus(obj);
+      metaHtml = buildMetaHtml(obj);
       stepsHtml = buildStepsHtml(obj);
+      Platform.Variable.SetValue("@automationRunning", runningNow ? "true" : "false");
       Platform.Variable.SetValue("@automationFlowHtml", buildFlowHtml(obj));
       Platform.Variable.SetValue("@automationActionsHtml", buildActionsHtml(
         Platform.Variable.GetValue("@jid") || "",
         Platform.Variable.GetValue("@schedFreq") || "hourly",
         Platform.Variable.GetValue("@schedStart") || "",
         Platform.Variable.GetValue("@schedMinute") || "15",
-        isRunningStatus(obj)
+        runningNow,
+        studioUrl,
+        apiName
       ));
     } else {
       Platform.Variable.SetValue("@pageStatus", "apifail");
@@ -627,6 +657,13 @@ h1{font-size:1.65rem;margin:0;font-weight:700}
 .schedule-control{width:100%;padding:10px 12px;border:1px solid var(--border-color);border-radius:8px;font:inherit;background:#fff}
 .flow-hint{margin:8px 0 0;color:var(--text-secondary);font-size:13px}
 .copy-hint{margin-left:10px;color:var(--text-secondary);font-size:13px}
+.status-value{display:inline-block;padding:4px 10px;border-radius:999px;font-size:14px;font-weight:700}
+.status-running{color:#166534;background:#dcfce7;border:1px solid #86efac}
+.status-paused-stopped{color:#854d0e;background:#fef9c3;border:1px solid #fde047}
+.automation-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.automation-inline-form{margin:0;display:inline}
+.schedule-editor-panel{margin-top:18px;padding-top:18px;border-top:1px solid var(--border-color)}
+.btn-sst-outline{display:inline-flex;align-items:center;justify-content:center;padding:11px 18px;font-size:14px;font-weight:600;border:1px solid var(--border-color);background:#fff;color:var(--gray-900);cursor:pointer;border-radius:8px}
 button.btn-sst-black{cursor:pointer;border-radius:8px}
 .recent-empty{color:var(--text-secondary);font-size:14px}
 .journey-meta-dl{margin:0}
@@ -685,30 +722,46 @@ button.btn-sst-black{cursor:pointer;border-radius:8px}
 <div class="banner %%[ IF @actionOk == "true" THEN ]%%good%%[ ELSE ]%%bad%%[ ENDIF ]%%">%%=v(@actionMsg)=%%</div>
 %%[ ENDIF ]%%
 <div class="panel">
-  <h2 class="panel-title">Flow</h2>
-  %%[ IF NOT Empty(@automationFlowHtml) THEN ]%%%%=TreatAsContent(@automationFlowHtml)=%%%%[ ENDIF ]%%
-</div>
-<div class="panel">
-  <h2 class="panel-title">Schedule</h2>
-  %%[ IF NOT Empty(@automationActionsHtml) THEN ]%%%%=TreatAsContent(@automationActionsHtml)=%%%%[ ENDIF ]%%
-</div>
-<div class="panel">
   <h2 class="panel-title">Details</h2>
   %%[ IF NOT Empty(@automationMetaHtml) THEN ]%%%%=TreatAsContent(@automationMetaHtml)=%%%%[ ENDIF ]%%
+</div>
+%%[ IF @automationRunning != "true" THEN ]%%
+<div class="panel">
+  <h2 class="panel-title">Flow</h2>
+  %%[ IF NOT Empty(@automationFlowHtml) THEN ]%%%%=TreatAsContent(@automationFlowHtml)=%%%%[ ENDIF ]%%
 </div>
 <div class="panel">
   <h2 class="panel-title">Steps</h2>
   %%[ IF NOT Empty(@automationStepsHtml) THEN ]%%%%=TreatAsContent(@automationStepsHtml)=%%%%[ ENDIF ]%%
 </div>
 %%[ ENDIF ]%%
+<div class="panel">
+  <h2 class="panel-title">Actions</h2>
+  %%[ IF NOT Empty(@automationActionsHtml) THEN ]%%%%=TreatAsContent(@automationActionsHtml)=%%%%[ ENDIF ]%%
+</div>
+%%[ ENDIF ]%%
 </div>
 </main>
 </div>
 <script>
+function toggleScheduleEditor() {
+  var panel = document.getElementById("scheduleEditorPanel");
+  var btn = document.getElementById("editScheduleBtn");
+  if (!panel) return;
+  var open = panel.hasAttribute("hidden");
+  if (open) {
+    panel.removeAttribute("hidden");
+    if (btn) btn.textContent = "Hide schedule";
+  } else {
+    panel.setAttribute("hidden", "hidden");
+    if (btn) btn.textContent = "Edit schedule";
+  }
+}
 function openAutomationStudio(el) {
   var name = el.getAttribute("data-automation-name") || "";
   var url = el.getAttribute("data-studio-url") || "";
-  var hint = el.parentNode ? el.parentNode.querySelector(".copy-hint") : null;
+  var toolbar = el.closest ? el.closest(".automation-toolbar") : null;
+  var hint = toolbar ? toolbar.querySelector(".copy-hint") : null;
   window.open(url, "_blank", "noopener");
   function markCopied(ok) {
     if (hint) hint.textContent = ok ? "Automation name copied." : "Could not copy the name.";
