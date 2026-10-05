@@ -293,31 +293,67 @@ function metaStatusRow(obj) {
   var code = automationStatusCode(obj);
   var label = automationStatusLabel(obj);
   var cls = statusClassForCode(code, label);
-  return "<dt>Status</dt><dd><span class=\"" + cls + "\">" + htmlSafe(label) + "</span><p class=\"journey-meta-note\">" + htmlSafe(automationStatusNote(code)) + "</p></dd>";
+  return "<dt>Status</dt><dd><span class=\"" + cls + "\">" + htmlSafe(label) + "</span><p class=\"journey-meta-note\">" + htmlSafe(automationStatusNote(code, label)) + "</p></dd>";
 }
-function automationStatusNote(code) {
+function automationStatusNote(code, label) {
   var raw = strTrim(code);
-  if (raw === "3") return "A run is in progress. Stop the automation or wait for it to finish before changing schedule.";
-  if (raw === "4") return "Schedule is paused. Activate again when you want runs to resume.";
-  if (raw === "5") return "Automation is stopped. Activate the schedule to run on the next interval.";
-  if (raw === "6") return "Schedule is active. The automation runs on the configured Eastern Time schedule.";
-  if (raw === "2") return "Ready to run when the schedule or a manual start triggers it.";
-  if (raw === "1" || raw === "8") return "Automation is not running yet. Building or inactive until you activate or schedule it.";
-  if (raw === "7") return "Waiting for a file or trigger before the automation can run.";
-  if (raw === "-1" || raw === "0") return "Last run or build failed. Check Automation Studio for error details.";
-  return "Current state from Automation Studio.";
+  var lower = strTrim(label).toLowerCase();
+  if (raw === "3" || lower === "running") {
+    return "Your job is running right now (for example refreshing data or moving files). You can stop it if you need to make a change, or wait until it finishes and refresh this page.";
+  }
+  if (raw === "4" || lower === "paused") {
+    return "The automatic schedule is turned off. Nothing will run on its own until you turn the schedule back on with Activate schedule.";
+  }
+  if (raw === "5" || lower === "stopped") {
+    return "This job is stopped. It will not run until you turn the schedule on again or use Run Automation Once for a single run.";
+  }
+  if (raw === "6" || lower === "scheduled") {
+    return "The schedule is on. This job will run by itself at the times you configured. All schedule times on this page use Eastern Time.";
+  }
+  if (raw === "2" || lower === "ready") {
+    return "The job is set up and idle. It will run on the next scheduled time, or immediately if you choose Run Automation Once.";
+  }
+  if (raw === "1" || lower === "building") {
+    return "Salesforce is still preparing this job. Wait a few minutes and refresh the page before you change the schedule or run it.";
+  }
+  if (raw === "8" || lower === "inactive") {
+    return "The trigger that starts this job is turned off in Automation Studio. It will not run until your admin fixes or re-enables that trigger.";
+  }
+  if (raw === "7" || lower === "waiting") {
+    return "This job is waiting for something else first, such as a file to land or a manual start in Automation Studio.";
+  }
+  if (raw === "-1" || lower === "failed") {
+    return "The last run did not finish successfully. Open Automation Studio (button above) to see the error and what to fix.";
+  }
+  if (raw === "0" || lower === "build failed") {
+    return "This job could not be built correctly. Your technical team needs to review it in Automation Studio.";
+  }
+  return "This is the latest status from Automation Studio. If it looks wrong, wait a moment and refresh the page.";
+}
+function humanScheduleText(schedule) {
+  var ical = strTrim(schedule.icalRecur || "");
+  var start = strTrim(schedule.startDate || "");
+  var timing = "";
+  if (ical.indexOf("MINUTELY") >= 0) timing = "Runs every few minutes";
+  else if (ical.indexOf("HOURLY") >= 0) timing = "Runs every hour";
+  else if (ical.indexOf("DAILY") >= 0) timing = "Runs once per day";
+  else if (ical.indexOf("WEEKLY") >= 0) timing = "Runs once per week";
+  else if (strTrim(schedule.scheduleStatus)) timing = "Schedule is " + strTrim(schedule.scheduleStatus);
+  if (timing && start) return timing + ", starting " + start + ".";
+  if (timing) return timing + ".";
+  if (start) return "Scheduled to start " + start + ".";
+  return "";
 }
 function buildScheduleSummary(obj) {
   var schedule = obj.schedule || {};
   var raw = automationStatusCode(obj);
-  if (raw === "3") return "This automation is running.";
-  var bits = [];
-  var ical = strTrim(schedule.icalRecur || schedule.scheduleStatus);
-  if (ical) bits.push(ical);
-  if (schedule.startDate) bits.push("Start " + schedule.startDate);
-  bits.push("Eastern Time (US & Canada)");
-  if (!ical && raw !== "6") return "No active schedule. Edit schedule to activate or pause.";
-  return bits.join(". ") + ".";
+  if (raw === "3") return "A run is in progress right now.";
+  if (raw === "4") return "The automatic schedule is paused. Use Edit schedule when you are ready to turn it on again.";
+  if (raw === "5") return "This job is stopped. Use Edit schedule or Run Automation Once when you want it to run.";
+  var human = humanScheduleText(schedule);
+  if (human) return human + " All times are Eastern Time (US and Canada).";
+  if (raw === "6") return "A schedule is active. This job will run automatically on that timetable (Eastern Time).";
+  return "No automatic schedule is set up yet. Click Edit schedule to choose when this job should run.";
 }
 function countAutomationActivities(obj) {
   var steps = obj.steps || [];
@@ -825,7 +861,7 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 <div class="journey-page-heading">
   <h1>%%[ IF NOT Empty(@apiAutomationName) THEN ]%%%%=v(@apiAutomationName)=%%%%[ ELSEIF NOT Empty(@connectedAutomationName) THEN ]%%%%=v(@connectedAutomationName)=%%%%[ ELSE ]%%Automation%%[ ENDIF ]%%</h1>
 </div>
-<p class="sub">Review the connected Automation Studio definition, schedule, and each activity step. Use Automation Studio for the full canvas.</p>
+<p class="sub">See whether your background job is running, when it is scheduled, and what steps it performs. Open Automation Studio for full details, run the job once, or change the schedule below.</p>
 %%[ IF NOT Empty(@actionMsg) THEN ]%%
 <div class="banner %%[ IF @actionOk == "true" THEN ]%%good%%[ ELSE ]%%bad%%[ ENDIF ]%%">%%=v(@actionMsg)=%%</div>
 %%[ ENDIF ]%%
