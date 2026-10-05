@@ -5,7 +5,8 @@ VAR @automationId, @automationCustomerKey, @connectedAutomationName, @journeyAut
 VAR @pageStatus, @loadError, @authOk, @accessToken, @subdomain
 VAR @authRow, @authR, @clientId, @clientSecret, @accountId, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader
 VAR @authPending
-VAR @editSidebarHtml, @automationMetaHtml, @automationStepsHtml, @automationStudioUrl, @apiAutomationName
+VAR @editSidebarHtml, @automationMetaHtml, @automationStepsHtml, @automationFlowHtml, @automationActionsHtml, @automationStudioUrl, @apiAutomationName
+VAR @autoAction, @autoActionOn, @schedFreq, @schedStart, @schedOffset, @schedTz, @schedMinute, @actionOk, @actionMsg
 
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
@@ -34,6 +35,24 @@ SET @automationMetaHtml = ""
 SET @automationStepsHtml = ""
 SET @automationStudioUrl = ""
 SET @apiAutomationName = ""
+SET @automationFlowHtml = ""
+SET @automationActionsHtml = ""
+SET @actionOk = ""
+SET @actionMsg = ""
+SET @autoAction = Lowercase(Trim(RequestParameter("automationAction")))
+SET @autoActionOn = "false"
+IF RequestParameter("confirmAutomationAction") == "1" THEN
+ SET @autoActionOn = "true"
+ENDIF
+SET @schedFreq = Trim(RequestParameter("automationFrequency"))
+IF Empty(@schedFreq) THEN SET @schedFreq = "hourly" ENDIF
+SET @schedStart = Trim(RequestParameter("automationStartDate"))
+SET @schedOffset = Trim(RequestParameter("automationStartOffset"))
+IF Empty(@schedOffset) THEN SET @schedOffset = "-05:00" ENDIF
+SET @schedTz = Trim(RequestParameter("automationTimezoneId"))
+IF Empty(@schedTz) THEN SET @schedTz = "1" ENDIF
+SET @schedMinute = Trim(RequestParameter("automationMinuteInterval"))
+IF Empty(@schedMinute) THEN SET @schedMinute = "15" ENDIF
 SET @editSidebarHtml = ""
 
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
@@ -265,6 +284,186 @@ function buildMetaHtml(obj, studioUrl) {
   }
   return html;
 }
+function clip(text, maxLen) {
+  var s = toJsString(text);
+  var n = s.length;
+  if (n > maxLen) n = maxLen;
+  var out = "";
+  var i;
+  for (i = 0; i < n; i++) out += s.charAt(i);
+  return out;
+}
+function xmlSafe(v) {
+  return htmlSafe(v);
+}
+function isRunningStatus(obj) {
+  var raw = obj && obj.status !== undefined && obj.status !== null ? String(obj.status) : "";
+  return raw === "3" || statusLabel(raw).toLowerCase() === "running";
+}
+function postJsonAction(sub, token, automationId, actionName) {
+  try {
+    var req = new Script.Util.HttpRequest(
+      "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/automations/" + encodeURIComponent(automationId) + "/actions/" + actionName
+    );
+    req.emptyContentHandling = 0;
+    req.retries = 2;
+    req.continueOnError = true;
+    req.setHeader("Authorization", "Bearer " + token);
+    req.contentType = "application/json";
+    req.method = "POST";
+    req.postData = "{}";
+    var resp = req.send();
+    return { status: resp.statusCode, body: resp.content ? String(resp.content) : "" };
+  } catch (actionEx) {
+    return { status: 0, body: actionEx.message || String(actionEx) };
+  }
+}
+function pad2(n) {
+  var v = parseInt(n, 10);
+  if (isNaN(v)) v = 0;
+  return (v < 10 ? "0" : "") + v;
+}
+function buildSchedulePayload(freq, startDate, startOffset, timezoneId, minuteInterval) {
+  var frequency = strTrim(freq).toLowerCase() || "hourly";
+  var minuteVal = parseInt(strTrim(minuteInterval) || "15", 10);
+  if (minuteVal != 15 && minuteVal != 30 && minuteVal != 45) minuteVal = 15;
+  var off = strTrim(startOffset) || "-05:00";
+  if (off.charAt(0) != "-" && off.charAt(0) != "+") off = "-" + off;
+  var startDateForApi = strTrim(startDate);
+  if (!startDateForApi) {
+    var now = new Date();
+    now.setMinutes(now.getMinutes() + 10);
+    startDateForApi = now.getFullYear() + "-" + pad2(now.getMonth() + 1) + "-" + pad2(now.getDate()) + "T" + pad2(now.getHours()) + ":" + pad2(now.getMinutes());
+  }
+  if (startDateForApi.length == 16) {
+    startDateForApi += ":00" + off;
+  } else if (startDateForApi.indexOf("T") > 0 && startDateForApi.indexOf("+") < 0 && startDateForApi.indexOf("-", 11) < 0 && startDateForApi.length == 19) {
+    startDateForApi += off;
+  }
+  var untilDate = new Date();
+  untilDate.setDate(untilDate.getDate() + 365);
+  var untilCompact = String(untilDate.getFullYear()) + pad2(untilDate.getMonth() + 1) + pad2(untilDate.getDate());
+  var recurRule = "FREQ=HOURLY;INTERVAL=1;UNTIL=" + untilCompact;
+  if (frequency == "once") recurRule = "FREQ=HOURLY;INTERVAL=1;COUNT=1";
+  else if (frequency == "minute") recurRule = "FREQ=MINUTELY;INTERVAL=" + minuteVal + ";UNTIL=" + untilCompact;
+  else if (frequency == "daily") recurRule = "FREQ=DAILY;INTERVAL=1;UNTIL=" + untilCompact;
+  else if (frequency == "weekly") recurRule = "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO;UNTIL=" + untilCompact;
+  var tzId = parseInt(strTrim(timezoneId) || "1", 10);
+  if (isNaN(tzId) || tzId < 1) tzId = 1;
+  var endDate = String(untilDate.getFullYear()) + "-" + pad2(untilDate.getMonth() + 1) + "-" + pad2(untilDate.getDate()) + "T00:00:00" + off;
+  return { ok: true, icalRecur: recurRule, startDate: startDateForApi, endDate: endDate, timezoneId: String(tzId), minuteInterval: minuteVal };
+}
+function soapSchedule(sub, token, objectId, customerKey, actionName, schedule) {
+  var recurrence = '<Recurrence xsi:type="HourlyRecurrence"><HourlyRecurrencePatternType>Interval</HourlyRecurrencePatternType><HourInterval>1</HourInterval></Recurrence><RecurrenceType>Hourly</RecurrenceType>';
+  var range = "<RecurrenceRangeType>EndAfter</RecurrenceRangeType><StartDateTime>" + xmlSafe(schedule ? schedule.startDate : "") + "</StartDateTime><Occurrences>1</Occurrences>";
+  if (schedule && schedule.icalRecur) {
+    var ical = schedule.icalRecur;
+    if (ical.indexOf("MINUTELY") >= 0) {
+      var minuteInterval = schedule.minuteInterval || 15;
+      recurrence = '<Recurrence xsi:type="MinutelyRecurrence"><MinutelyRecurrencePatternType>Interval</MinutelyRecurrencePatternType><MinuteInterval>' + minuteInterval + "</MinuteInterval></Recurrence><RecurrenceType>Minutely</RecurrenceType>";
+    } else if (ical.indexOf("DAILY") >= 0) {
+      recurrence = '<Recurrence xsi:type="DailyRecurrence"><DailyRecurrencePatternType>Interval</DailyRecurrencePatternType><DayInterval>1</DayInterval></Recurrence><RecurrenceType>Daily</RecurrenceType>';
+    } else if (ical.indexOf("WEEKLY") >= 0) {
+      recurrence = '<Recurrence xsi:type="WeeklyRecurrence"><WeeklyRecurrencePatternType>ByDay</WeeklyRecurrencePatternType><WeekInterval>1</WeekInterval><Sunday>false</Sunday><Monday>true</Monday><Tuesday>false</Tuesday><Wednesday>false</Wednesday><Thursday>false</Thursday><Friday>false</Friday><Saturday>false</Saturday></Recurrence><RecurrenceType>Weekly</RecurrenceType>';
+    }
+    if (ical.indexOf("COUNT=1") < 0 && schedule.startDate) {
+      range = "<RecurrenceRangeType>EndOn</RecurrenceRangeType><StartDateTime>" + xmlSafe(schedule.startDate) + "</StartDateTime><EndDateTime>" + xmlSafe(schedule.endDate || schedule.startDate) + "</EndDateTime>";
+    }
+  }
+  var scheduleXml = actionName == "pause" ? "<Schedule></Schedule>" : "<Schedule><PartnerKey xsi:nil=\"true\" /><ObjectID xsi:nil=\"true\" />" + recurrence + range + "<TimeZone><PartnerKey xsi:nil=\"true\" /><ID>" + xmlSafe(schedule ? schedule.timezoneId : "1") + "</ID><ObjectID xsi:nil=\"true\" /></TimeZone></Schedule>";
+  var envelope = '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing"><s:Header>' +
+    '<a:Action s:mustUnderstand="1">Schedule</a:Action>' +
+    '<a:To s:mustUnderstand="1">https://' + xmlSafe(sub) + '.soap.marketingcloudapis.com/Service.asmx</a:To>' +
+    '<fueloauth xmlns="http://exacttarget.com">' + xmlSafe(token) + '</fueloauth></s:Header>' +
+    '<s:Body xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">' +
+    '<ScheduleRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI"><Action>' + xmlSafe(actionName) + '</Action>' +
+    scheduleXml +
+    '<Interactions><Interaction xsi:type="Automation"><PartnerKey xsi:nil="true" /><ObjectID>' + xmlSafe(objectId) + '</ObjectID>' +
+    (customerKey ? '<CustomerKey>' + xmlSafe(customerKey) + '</CustomerKey>' : '') +
+    '</Interaction></Interactions></ScheduleRequestMsg></s:Body></s:Envelope>';
+  try {
+    var req = new Script.Util.HttpRequest("https://" + sub + ".soap.marketingcloudapis.com/Service.asmx");
+    req.emptyContentHandling = 0;
+    req.retries = 2;
+    req.continueOnError = true;
+    req.contentType = "text/xml";
+    req.setHeader("SOAPAction", "Schedule");
+    req.method = "POST";
+    req.postData = envelope;
+    var resp = req.send();
+    var body = resp.content ? String(resp.content) : "";
+    var lower = body.toLowerCase();
+    var failed = resp.statusCode != 200 || lower.indexOf("<overallstatus>error</overallstatus>") >= 0 || lower.indexOf("<statuscode>error</statuscode>") >= 0;
+    return { ok: !failed, status: resp.statusCode, body: clip(body, 240) };
+  } catch (soapEx) {
+    return { ok: false, status: 0, body: soapEx.message || String(soapEx) };
+  }
+}
+function optionSelected(current, value) {
+  return strTrim(current) == value ? " selected" : "";
+}
+function buildFlowHtml(obj) {
+  var steps = obj.steps || [];
+  var html = '<div class="journey-flow-scroll"><div class="journey-flow">';
+  html += '<div class="journey-flow-node"><div class="journey-flow-type">Start</div><div class="journey-flow-name">Automation</div></div>';
+  var s;
+  var wrote = false;
+  for (s = 0; s < steps.length; s++) {
+    var step = steps[s] || {};
+    var activities = step.activities || [];
+    var a;
+    if (!activities.length) {
+      html += '<span class="journey-flow-arrow-h">→</span><div class="journey-flow-node"><div class="journey-flow-type">Step ' + htmlSafe(step.step || (s + 1)) + '</div><div class="journey-flow-name">Empty step</div></div>';
+      wrote = true;
+    }
+    for (a = 0; a < activities.length; a++) {
+      var act = activities[a] || {};
+      html += '<span class="journey-flow-arrow-h">→</span><div class="journey-flow-node"><div class="journey-flow-type">' + htmlSafe(activityTypeLabel(act.objectTypeId)) + '</div><div class="journey-flow-name">' + htmlSafe(act.name || "Activity") + '</div></div>';
+      wrote = true;
+    }
+  }
+  html += "</div></div>";
+  if (!wrote) return '<p class="recent-empty">This automation has no steps to show in the flow.</p>';
+  return html;
+}
+function buildActionsHtml(jid, freq, startDate, offset, timezoneId, minuteInterval, running) {
+  var html = "";
+  html += '<form method="post" action="" class="automation-schedule-form" onsubmit="return confirm(\'Stop this run if the automation is currently running?\');">';
+  html += '<input type="hidden" name="journeyId" value="' + htmlSafe(jid) + '">';
+  html += '<input type="hidden" name="automationAction" value="stop">';
+  html += '<button type="submit" name="confirmAutomationAction" value="1" class="btn-sst-black">Stop if running</button>';
+  html += '<p class="flow-hint">' + (running ? "This automation is running. Stop ends the current run." : "Stop runs only when the automation status is Running.") + "</p>";
+  html += "</form>";
+  html += '<form method="post" action="" class="automation-schedule-form" onsubmit="return confirm(\'Activate this schedule? If a run is in progress, it will be stopped first.\');">';
+  html += '<input type="hidden" name="journeyId" value="' + htmlSafe(jid) + '">';
+  html += '<input type="hidden" name="automationAction" value="activate">';
+  html += '<div class="schedule-grid">';
+  html += '<div class="schedule-field"><label for="automationFrequency">Frequency</label><select id="automationFrequency" name="automationFrequency" class="schedule-control">';
+  html += '<option value="once"' + optionSelected(freq, "once") + ">Once</option>";
+  html += '<option value="minute"' + optionSelected(freq, "minute") + ">Minute</option>";
+  html += '<option value="hourly"' + optionSelected(freq, "hourly") + ">Hourly</option>";
+  html += '<option value="daily"' + optionSelected(freq, "daily") + ">Daily</option>";
+  html += '<option value="weekly"' + optionSelected(freq, "weekly") + ">Weekly (Monday)</option>";
+  html += "</select></div>";
+  html += '<div class="schedule-field"><label for="automationMinuteInterval">Every minutes</label><select id="automationMinuteInterval" name="automationMinuteInterval" class="schedule-control">';
+  html += '<option value="15"' + optionSelected(minuteInterval, "15") + ">15</option>";
+  html += '<option value="30"' + optionSelected(minuteInterval, "30") + ">30</option>";
+  html += '<option value="45"' + optionSelected(minuteInterval, "45") + ">45</option>";
+  html += "</select></div>";
+  html += '<div class="schedule-field"><label for="automationStartDate">Start</label><input id="automationStartDate" type="datetime-local" class="schedule-control" name="automationStartDate" value="' + htmlSafe(startDate) + '"></div>';
+  html += '<div class="schedule-field"><label for="automationStartOffset">UTC offset</label><input id="automationStartOffset" type="text" class="schedule-control" name="automationStartOffset" value="' + htmlSafe(offset) + '"></div>';
+  html += '<div class="schedule-field"><label for="automationTimezoneId">Timezone ID</label><input id="automationTimezoneId" type="text" class="schedule-control" name="automationTimezoneId" value="' + htmlSafe(timezoneId) + '"></div>';
+  html += "</div>";
+  html += '<div class="schedule-submit"><button type="submit" name="confirmAutomationAction" value="1" class="btn-sst-black">Activate schedule</button></div>';
+  html += "</form>";
+  html += '<form method="post" action="" class="automation-schedule-form" onsubmit="return confirm(\'Pause this automation schedule?\');">';
+  html += '<input type="hidden" name="journeyId" value="' + htmlSafe(jid) + '">';
+  html += '<input type="hidden" name="automationAction" value="pause">';
+  html += '<button type="submit" name="confirmAutomationAction" value="1" class="btn-sst-black">Pause schedule</button>';
+  html += "</form>";
+  return html;
+}
 function buildStepsHtml(obj) {
   var steps = obj.steps;
   if (!steps || !steps.length) {
@@ -318,6 +517,43 @@ var apiName = "";
 
 try {
   if (pageStatus === "view" && authOk === "true" && accessToken && subdomain && automationId) {
+    var actionOn = String(Platform.Variable.GetValue("@autoActionOn") || "") === "true";
+    var actionName = strTrim(Platform.Variable.GetValue("@autoAction") || "").toLowerCase();
+    var customerKey = strTrim(Platform.Variable.GetValue("@automationCustomerKey") || "");
+    var beforeAction = actionOn ? getAutomation(subdomain, accessToken, automationId) : { ok: false, obj: null };
+    if (actionOn && actionName === "stop") {
+      if (beforeAction.ok && isRunningStatus(beforeAction.obj)) {
+        var stopResp = postJsonAction(subdomain, accessToken, beforeAction.obj.id || automationId, "stop");
+        Platform.Variable.SetValue("@actionOk", stopResp.status == 200 || stopResp.status == 202 ? "true" : "false");
+        Platform.Variable.SetValue("@actionMsg", stopResp.status == 200 || stopResp.status == 202 ? "Stop requested." : "Stop failed HTTP " + stopResp.status + " " + clip(stopResp.body, 180));
+      } else {
+        Platform.Variable.SetValue("@actionOk", "false");
+        Platform.Variable.SetValue("@actionMsg", "Automation is not running. Stop was not sent.");
+      }
+    }
+    if (actionOn && actionName === "pause") {
+      var pauseResp = soapSchedule(subdomain, accessToken, (beforeAction.obj && beforeAction.obj.id) || automationId, customerKey, "pause", null);
+      Platform.Variable.SetValue("@actionOk", pauseResp.ok ? "true" : "false");
+      Platform.Variable.SetValue("@actionMsg", pauseResp.ok ? "Pause requested." : "Pause failed HTTP " + pauseResp.status + " " + pauseResp.body);
+    }
+    if (actionOn && actionName === "activate") {
+      var notes = "";
+      var targetId = (beforeAction.obj && beforeAction.obj.id) || automationId;
+      if (beforeAction.ok && isRunningStatus(beforeAction.obj)) {
+        var preStop = postJsonAction(subdomain, accessToken, targetId, "stop");
+        notes = preStop.status == 200 || preStop.status == 202 ? "Running instance stop requested. " : "Stop before activate failed HTTP " + preStop.status + ". ";
+      }
+      var schedulePayload = buildSchedulePayload(
+        Platform.Variable.GetValue("@schedFreq") || "",
+        Platform.Variable.GetValue("@schedStart") || "",
+        Platform.Variable.GetValue("@schedOffset") || "",
+        Platform.Variable.GetValue("@schedTz") || "",
+        Platform.Variable.GetValue("@schedMinute") || ""
+      );
+      var activateResp = soapSchedule(subdomain, accessToken, targetId, customerKey, "start", schedulePayload);
+      Platform.Variable.SetValue("@actionOk", activateResp.ok ? "true" : "false");
+      Platform.Variable.SetValue("@actionMsg", notes + (activateResp.ok ? "Activate schedule requested." : "Activate failed HTTP " + activateResp.status + " " + activateResp.body));
+    }
     var fetched = getAutomation(subdomain, accessToken, automationId);
     if (fetched.ok && fetched.obj) {
       var obj = fetched.obj;
@@ -326,6 +562,16 @@ try {
       studioUrl = MC_CLOUD + "#app/Automation%20Studio/AutomationStudioFuel3/%23ActivityDetails/" + encodeURIComponent(objectId);
       metaHtml = buildMetaHtml(obj, studioUrl);
       stepsHtml = buildStepsHtml(obj);
+      Platform.Variable.SetValue("@automationFlowHtml", buildFlowHtml(obj));
+      Platform.Variable.SetValue("@automationActionsHtml", buildActionsHtml(
+        Platform.Variable.GetValue("@jid") || "",
+        Platform.Variable.GetValue("@schedFreq") || "hourly",
+        Platform.Variable.GetValue("@schedStart") || "",
+        Platform.Variable.GetValue("@schedOffset") || "-05:00",
+        Platform.Variable.GetValue("@schedTz") || "1",
+        Platform.Variable.GetValue("@schedMinute") || "15",
+        isRunningStatus(obj)
+      ));
     } else {
       Platform.Variable.SetValue("@pageStatus", "apifail");
       Platform.Variable.SetValue("@loadError", fetched.msg || "Could not load automation.");
@@ -363,6 +609,19 @@ h1{font-size:1.65rem;margin:0;font-weight:700}
 .panel-title{font-size:1rem;font-weight:700;margin:0 0 16px}
 .banner{padding:14px 16px;border-radius:10px;margin-bottom:16px;font-size:14px;border:1px solid var(--border-color)}
 .banner.bad{border-color:#fecaca;background:var(--dangerbg);color:var(--danger)}
+.banner.good{border-color:#bbf7d0;background:#f0fdf4;color:#166534}
+.journey-flow-scroll{width:100%;overflow-x:auto;overflow-y:hidden;padding:8px 4px 16px}
+.journey-flow{display:flex;flex-direction:row;align-items:center;flex-wrap:nowrap;width:max-content;min-width:100%;padding:4px 8px}
+.journey-flow-node{border:1px solid #cbd5e1;border-radius:10px;background:#fff;padding:12px 14px;min-width:150px;max-width:200px;width:180px;text-align:center;box-shadow:var(--shadow-sm);flex-shrink:0}
+.journey-flow-type{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-bottom:4px;overflow-wrap:anywhere}
+.journey-flow-name{font-size:14px;font-weight:700;color:var(--gray-900);line-height:1.25;overflow-wrap:anywhere}
+.journey-flow-arrow-h{color:#94a3b8;font-size:22px;line-height:1;padding:0 6px;flex-shrink:0;font-weight:600}
+.automation-schedule-form{margin:0 0 18px}
+.schedule-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px}
+.schedule-field label{display:block;font-size:12px;font-weight:600;color:var(--gray-600);margin-bottom:6px}
+.schedule-control{width:100%;padding:10px 12px;border:1px solid var(--border-color);border-radius:8px;font:inherit;background:#fff}
+.flow-hint{margin:8px 0 0;color:var(--text-secondary);font-size:13px}
+button.btn-sst-black{cursor:pointer;border-radius:8px}
 .recent-empty{color:var(--text-secondary);font-size:14px}
 .journey-meta-dl{margin:0}
 .journey-meta-dl dt{font-size:11px;color:var(--gray-600);text-transform:uppercase;font-weight:600;letter-spacing:.05em;margin:16px 0 4px}
@@ -415,7 +674,18 @@ h1{font-size:1.65rem;margin:0;font-weight:700}
 <div class="journey-page-heading">
   <h1>%%[ IF NOT Empty(@apiAutomationName) THEN ]%%%%=v(@apiAutomationName)=%%%%[ ELSEIF NOT Empty(@connectedAutomationName) THEN ]%%%%=v(@connectedAutomationName)=%%%%[ ELSE ]%%Automation%%[ ENDIF ]%%</h1>
 </div>
-<p class="sub">Live Automation Studio definition: status, schedule, and each step. This page does not change the automation.</p>
+<p class="sub">Live Automation Studio definition. Stop a running automation, or activate and pause its schedule.</p>
+%%[ IF NOT Empty(@actionMsg) THEN ]%%
+<div class="banner %%[ IF @actionOk == "true" THEN ]%%good%%[ ELSE ]%%bad%%[ ENDIF ]%%">%%=v(@actionMsg)=%%</div>
+%%[ ENDIF ]%%
+<div class="panel">
+  <h2 class="panel-title">Flow</h2>
+  %%[ IF NOT Empty(@automationFlowHtml) THEN ]%%%%=TreatAsContent(@automationFlowHtml)=%%%%[ ENDIF ]%%
+</div>
+<div class="panel">
+  <h2 class="panel-title">Schedule</h2>
+  %%[ IF NOT Empty(@automationActionsHtml) THEN ]%%%%=TreatAsContent(@automationActionsHtml)=%%%%[ ENDIF ]%%
+</div>
 <div class="panel">
   <h2 class="panel-title">Details</h2>
   %%[ IF NOT Empty(@automationMetaHtml) THEN ]%%%%=TreatAsContent(@automationMetaHtml)=%%%%[ ENDIF ]%%
