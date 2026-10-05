@@ -1,7 +1,7 @@
 %%[
 VAR @HOME_URL, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @JOURNEY_VIEW_URL, @SURVEY_ANALYTICS_URL
 VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow
-VAR @automationId, @jid, @buildNavContext, @buildNavActive, @isSurveyBuild, @dispSurveyId
+VAR @automationId, @automationCustomerKey, @connectedAutomationName, @journeyAutomationId, @detailRows, @detailRow, @jid, @buildNavContext, @buildNavActive, @isSurveyBuild, @dispSurveyId
 VAR @pageStatus, @loadError, @authOk, @accessToken, @subdomain
 VAR @authRow, @authR, @clientId, @clientSecret, @accountId, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader
 VAR @tokPos, @tokRest, @tokEndPos, @tokNeedle, @tokStart, @tokRemain
@@ -12,10 +12,10 @@ SET @BUILD_PAGE_SELF = ""
 SET @PERFORMANCE_URL = ""
 SET @JOURNEY_VIEW_URL = ""
 SET @SURVEY_ANALYTICS_URL = ""
-SET @automationId = Trim(RequestParameter("automationId"))
-IF Empty(@automationId) THEN
- SET @automationId = Trim(QueryParameter("automationId"))
-ENDIF
+SET @automationId = ""
+SET @automationCustomerKey = ""
+SET @connectedAutomationName = ""
+SET @journeyAutomationId = ""
 SET @jid = Trim(RequestParameter("journeyId"))
 IF Empty(@jid) THEN
  SET @jid = Trim(QueryParameter("journeyId"))
@@ -54,10 +54,39 @@ ENDIF
 
 IF NOT Empty(@jid) THEN
  SET @buildNavContext = "true"
+ SET @detailRows = LookupRows("Bd_journey_analytics","journeyId",@jid)
+ IF RowCount(@detailRows) == 0 THEN
+  SET @detailRows = LookupRows("Bd_journey_analytics","JourneyID",@jid)
+ ENDIF
+ IF RowCount(@detailRows) > 0 THEN
+  SET @detailRow = Row(@detailRows,1)
+  TRY
+   SET @automationId = Trim(Field(@detailRow,"automationGuid"))
+  CATCH
+   SET @automationId = ""
+  ENDTRY
+  TRY
+   SET @automationCustomerKey = Trim(Field(@detailRow,"automationCustomerKey"))
+  CATCH
+   SET @automationCustomerKey = ""
+  ENDTRY
+  TRY
+   SET @connectedAutomationName = Trim(Field(@detailRow,"automationName"))
+  CATCH
+   SET @connectedAutomationName = ""
+  ENDTRY
+  IF Empty(@automationId) THEN
+   SET @automationId = @automationCustomerKey
+  ENDIF
+ ENDIF
+ SET @journeyAutomationId = @automationId
 ENDIF
 
-IF Empty(@automationId) THEN
+IF Empty(@jid) THEN
  SET @pageStatus = "nodata"
+ELSEIF Empty(@automationId) THEN
+ SET @pageStatus = "noconnect"
+ SET @loadError = "Bd_journey_analytics has no automationGuid or automationCustomerKey for this journey."
 ELSE
  SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
  IF RowCount(@authRow) > 0 THEN
@@ -373,7 +402,13 @@ h1{font-size:1.65rem;margin:0;font-weight:700}
 <div class="maker-main-inner">
 %%[ IF @pageStatus == "nodata" THEN ]%%
 <h1>Automation</h1>
-<p class="sub">Open this page with <strong>automationId</strong> in the URL. Use the Automation Studio object id or customer key.</p>
+<p class="sub">Open this page from a build. It reads <strong>automationGuid</strong> and <strong>automationCustomerKey</strong> on <strong>Bd_journey_analytics</strong> for the <strong>journeyId</strong> in the URL.</p>
+%%[ ELSEIF @pageStatus == "noconnect" THEN ]%%
+<h1>No connected automation</h1>
+<div class="banner bad">%%=v(@loadError)=%%</div>
+%%[ IF NOT Empty(@jid) AND NOT Empty(@BUILD_PAGE_SELF) THEN ]%%
+<p class="sub"><a class="breadcrumb-link" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Back to manage build</a></p>
+%%[ ENDIF ]%%
 %%[ ELSEIF @pageStatus == "authfail" OR @pageStatus == "apifail" THEN ]%%
 <h1>Could not load automation</h1>
 <div class="banner bad">%%=v(@loadError)=%%</div>
@@ -382,7 +417,7 @@ h1{font-size:1.65rem;margin:0;font-weight:700}
 %%[ ENDIF ]%%
 %%[ ELSE ]%%
 <div class="journey-page-heading">
-  <h1>%%[ IF NOT Empty(@apiAutomationName) THEN ]%%%%=v(@apiAutomationName)=%%%%[ ELSE ]%%Automation%%[ ENDIF ]%%</h1>
+  <h1>%%[ IF NOT Empty(@apiAutomationName) THEN ]%%%%=v(@apiAutomationName)=%%%%[ ELSEIF NOT Empty(@connectedAutomationName) THEN ]%%%%=v(@connectedAutomationName)=%%%%[ ELSE ]%%Automation%%[ ENDIF ]%%</h1>
 </div>
 <p class="sub">Live Automation Studio definition: status, schedule, and each step. This page does not change the automation.</p>
 <div class="panel">
