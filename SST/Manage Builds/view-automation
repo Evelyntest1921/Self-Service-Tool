@@ -261,7 +261,7 @@ function getAutomation(sub, token, automationId) {
     msg: "Automation GET HTTP " + first.status + (detail ? " " + detail : "")
   };
 }
-function buildMetaHtml(obj, studioUrl) {
+function buildMetaHtml(obj, studioUrl, automationName) {
   var schedule = obj.schedule || {};
   var html = '<dl class="journey-meta-dl">';
   html += metaRow("Status", statusLabel(obj.status));
@@ -275,9 +275,7 @@ function buildMetaHtml(obj, studioUrl) {
   html += metaRow("Timezone", schedule.timezoneName);
   html += metaRow("Last run", obj.lastRunTime);
   html += "</dl>";
-  if (studioUrl) {
-    html += '<p class="journey-meta-action"><a class="btn-sst-black" href="' + htmlSafe(studioUrl) + '" target="_blank" rel="noopener">Open in Automation Studio</a></p>';
-  }
+  html += '<p class="journey-meta-action"><button type="button" class="btn-sst-black" data-studio-url="' + htmlSafe(studioUrl) + '" data-automation-name="' + htmlSafe(automationName) + '" onclick="openAutomationStudio(this)">Open in Automation Studio</button> <span class="copy-hint"></span></p>';
   return html;
 }
 function clip(text, maxLen) {
@@ -568,9 +566,8 @@ try {
     if (fetched.ok && fetched.obj) {
       var obj = fetched.obj;
       apiName = obj.name ? String(obj.name) : "";
-      var objectId = obj.id ? String(obj.id) : automationId;
-      studioUrl = MC_CLOUD + "#app/Automation%20Studio/AutomationStudioFuel3/%23ActivityDetails/" + encodeURIComponent(objectId);
-      metaHtml = buildMetaHtml(obj, studioUrl);
+      studioUrl = MC_CLOUD + "#app/Automation%20Studio/AutomationStudioFuel3/";
+      metaHtml = buildMetaHtml(obj, studioUrl, apiName);
       stepsHtml = buildStepsHtml(obj);
       Platform.Variable.SetValue("@automationFlowHtml", buildFlowHtml(obj));
       Platform.Variable.SetValue("@automationActionsHtml", buildActionsHtml(
@@ -629,6 +626,7 @@ h1{font-size:1.65rem;margin:0;font-weight:700}
 .schedule-field label{display:block;font-size:12px;font-weight:600;color:var(--gray-600);margin-bottom:6px}
 .schedule-control{width:100%;padding:10px 12px;border:1px solid var(--border-color);border-radius:8px;font:inherit;background:#fff}
 .flow-hint{margin:8px 0 0;color:var(--text-secondary);font-size:13px}
+.copy-hint{margin-left:10px;color:var(--text-secondary);font-size:13px}
 button.btn-sst-black{cursor:pointer;border-radius:8px}
 .recent-empty{color:var(--text-secondary);font-size:14px}
 .journey-meta-dl{margin:0}
@@ -706,5 +704,31 @@ button.btn-sst-black{cursor:pointer;border-radius:8px}
 </div>
 </main>
 </div>
+<script>
+function openAutomationStudio(el) {
+  var name = el.getAttribute("data-automation-name") || "";
+  var url = el.getAttribute("data-studio-url") || "";
+  var hint = el.parentNode ? el.parentNode.querySelector(".copy-hint") : null;
+  window.open(url, "_blank", "noopener");
+  function markCopied(ok) {
+    if (hint) hint.textContent = ok ? "Automation name copied." : "Could not copy the name.";
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(name).then(function () { markCopied(true); }, function () { markCopied(fallbackCopy(name)); });
+  } else {
+    markCopied(fallbackCopy(name));
+  }
+}
+function fallbackCopy(name) {
+  var box = document.createElement("textarea");
+  box.value = name;
+  document.body.appendChild(box);
+  box.select();
+  var ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+  document.body.removeChild(box);
+  return ok;
+}
+</script>
 </body>
 </html>
