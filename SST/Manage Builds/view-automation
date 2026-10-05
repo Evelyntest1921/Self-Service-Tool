@@ -220,49 +220,96 @@ function activityTypeLabel(typeId) {
   if (!isNaN(id) && id > 0) return "Activity " + id;
   return "Activity";
 }
-function statusLabel(status) {
-  var raw = strTrim(status);
+function statusLabelForCode(code) {
+  var raw = strTrim(code);
   var labels = {
+    "-1": "Failed",
+    "0": "Build failed",
     "1": "Building",
     "2": "Ready",
     "3": "Running",
     "4": "Paused",
     "5": "Stopped",
     "6": "Scheduled",
-    "7": "Error",
-    "8": "Building"
+    "7": "Waiting",
+    "8": "Inactive"
   };
   if (labels[raw]) return labels[raw];
   return raw || "Unknown";
+}
+function automationStatusCode(obj) {
+  if (!obj) return "";
+  if (obj.statusId !== undefined && obj.statusId !== null && String(obj.statusId) !== "") {
+    return String(obj.statusId);
+  }
+  var statusVal = obj.status;
+  if (statusVal === undefined || statusVal === null) return "";
+  var raw = strTrim(String(statusVal));
+  if (/^-?\d+$/.test(raw)) return raw;
+  var byName = {
+    failed: "-1",
+    "build failed": "0",
+    building: "1",
+    ready: "2",
+    running: "3",
+    paused: "4",
+    stopped: "5",
+    scheduled: "6",
+    waiting: "7",
+    error: "7",
+    inactive: "8"
+  };
+  var mapped = byName[raw.toLowerCase()];
+  if (mapped) return mapped;
+  return raw;
+}
+function automationStatusLabel(obj) {
+  var statusVal = obj && obj.status !== undefined && obj.status !== null ? strTrim(String(obj.status)) : "";
+  if (statusVal && !/^-?\d+$/.test(statusVal)) return statusVal;
+  return statusLabelForCode(automationStatusCode(obj));
+}
+function statusClassForCode(code, label) {
+  var base = "journey-meta-value";
+  var raw = strTrim(code);
+  if (raw === "3") return base + " status-running";
+  if (raw === "4" || raw === "5" || raw === "6") return base + " status-paused-schedule";
+  if (raw === "2") return base + " status-ready";
+  if (raw === "1" || raw === "8") return base + " status-building";
+  if (raw === "-1" || raw === "0" || raw === "7") return base + " status-error";
+  var lower = strTrim(label).toLowerCase();
+  if (lower === "running") return base + " status-running";
+  if (lower === "paused" || lower === "stopped" || lower === "scheduled") return base + " status-paused-schedule";
+  if (lower === "ready") return base + " status-ready";
+  if (lower === "building" || lower === "inactive") return base + " status-building";
+  if (lower === "failed" || lower === "build failed" || lower === "waiting" || lower === "error") return base + " status-error";
+  return base + " status-unknown";
 }
 function metaRow(label, value) {
   var shown = strTrim(value);
   if (!shown) shown = "Not set";
   return "<dt>" + htmlSafe(label) + "</dt><dd>" + htmlSafe(shown) + "</dd>";
 }
-function metaStatusRow(status) {
-  var raw = objStatusRaw(status);
-  var label = statusLabel(raw);
-  var cls = "journey-meta-value";
-  if (raw === "3") cls += " status-running";
-  else if (raw === "4" || raw === "5" || raw === "6") cls += " status-paused-schedule";
-  return "<dt>Status</dt><dd><span class=\"" + cls + "\">" + htmlSafe(label) + "</span><p class=\"journey-meta-note\">" + htmlSafe(automationStatusNote(raw)) + "</p></dd>";
+function metaStatusRow(obj) {
+  var code = automationStatusCode(obj);
+  var label = automationStatusLabel(obj);
+  var cls = statusClassForCode(code, label);
+  return "<dt>Status</dt><dd><span class=\"" + cls + "\">" + htmlSafe(label) + "</span><p class=\"journey-meta-note\">" + htmlSafe(automationStatusNote(code)) + "</p></dd>";
 }
-function objStatusRaw(status) {
-  if (status === undefined || status === null) return "";
-  return String(status);
-}
-function automationStatusNote(raw) {
+function automationStatusNote(code) {
+  var raw = strTrim(code);
   if (raw === "3") return "A run is in progress. Stop the automation or wait for it to finish before changing schedule.";
   if (raw === "4") return "Schedule is paused. Activate again when you want runs to resume.";
   if (raw === "5") return "Automation is stopped. Activate the schedule to run on the next interval.";
   if (raw === "6") return "Schedule is active. The automation runs on the configured Eastern Time schedule.";
   if (raw === "2") return "Ready to run when the schedule or a manual start triggers it.";
+  if (raw === "1" || raw === "8") return "Automation is not running yet. Building or inactive until you activate or schedule it.";
+  if (raw === "7") return "Waiting for a file or trigger before the automation can run.";
+  if (raw === "-1" || raw === "0") return "Last run or build failed. Check Automation Studio for error details.";
   return "Current state from Automation Studio.";
 }
 function buildScheduleSummary(obj) {
   var schedule = obj.schedule || {};
-  var raw = objStatusRaw(obj.status);
+  var raw = automationStatusCode(obj);
   if (raw === "3") return "This automation is running.";
   var bits = [];
   var ical = strTrim(schedule.icalRecur || schedule.scheduleStatus);
@@ -311,7 +358,7 @@ function getAutomation(sub, token, automationId) {
 }
 function buildMetaHtml(obj, studioUrl, automationName) {
   var html = '<dl class="journey-meta-dl">';
-  html += metaStatusRow(obj.status);
+  html += metaStatusRow(obj);
   html += metaRow("Key", obj.key);
   html += metaRow("Object Id", obj.id);
   html += metaRow("Description", obj.description);
@@ -334,8 +381,9 @@ function xmlSafe(v) {
   return htmlSafe(v);
 }
 function isRunningStatus(obj) {
-  var raw = obj && obj.status !== undefined && obj.status !== null ? String(obj.status) : "";
-  return raw === "3" || statusLabel(raw).toLowerCase() === "running";
+  var code = automationStatusCode(obj);
+  if (code === "3") return true;
+  return automationStatusLabel(obj).toLowerCase() === "running";
 }
 function postJsonAction(sub, token, automationId, actionName) {
   try {
@@ -702,9 +750,13 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 .journey-meta-dl dt{font-size:11px;color:var(--gray-600);text-transform:uppercase;font-weight:600;letter-spacing:0.05em;margin:16px 0 4px 0}
 .journey-meta-dl dt:first-child{margin-top:0}
 .journey-meta-dl dd{font-weight:600;font-size:1rem;margin:0;padding:0;color:var(--gray-900);word-break:break-word}
-.journey-meta-value{display:inline-block;padding:4px 10px;font-size:14px;font-weight:700;color:#000}
-.journey-meta-value.status-running{background:#86efac}
-.journey-meta-value.status-paused-schedule{background:#fdba74}
+.journey-meta-dl dd .journey-meta-value{display:inline-block;padding:4px 10px;font-size:14px;font-weight:700;color:#000;background:#e5e7eb}
+.journey-meta-dl dd .journey-meta-value.status-running{background:#86efac;color:#000}
+.journey-meta-dl dd .journey-meta-value.status-paused-schedule{background:#fdba74;color:#000}
+.journey-meta-dl dd .journey-meta-value.status-ready{background:#bfdbfe;color:#000}
+.journey-meta-dl dd .journey-meta-value.status-building{background:#e5e7eb;color:#000}
+.journey-meta-dl dd .journey-meta-value.status-error{background:#fca5a5;color:#000}
+.journey-meta-dl dd .journey-meta-value.status-unknown{background:#f3f4f6;color:#000}
 .journey-meta-note{font-weight:400;font-size:13px;line-height:1.45;color:var(--text-secondary);margin:6px 0 0;padding:0}
 .journey-meta-action{margin:0}
 .flow-hint{font-size:13px;color:var(--text-secondary);margin:0 0 14px 0}
