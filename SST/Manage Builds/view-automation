@@ -1,0 +1,396 @@
+%%[
+VAR @HOME_URL, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @JOURNEY_VIEW_URL, @SURVEY_ANALYTICS_URL
+VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow
+VAR @automationId, @jid, @buildNavContext, @buildNavActive, @isSurveyBuild, @dispSurveyId
+VAR @pageStatus, @loadError, @authOk, @accessToken, @subdomain
+VAR @authRow, @authR, @clientId, @clientSecret, @accountId, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader
+VAR @tokPos, @tokRest, @tokEndPos
+VAR @editSidebarHtml, @automationMetaHtml, @automationStepsHtml, @automationStudioUrl, @apiAutomationName
+
+SET @HOME_URL = ""
+SET @BUILD_PAGE_SELF = ""
+SET @PERFORMANCE_URL = ""
+SET @JOURNEY_VIEW_URL = ""
+SET @SURVEY_ANALYTICS_URL = ""
+SET @automationId = Trim(RequestParameter("automationId"))
+IF Empty(@automationId) THEN
+ SET @automationId = Trim(QueryParameter("automationId"))
+ENDIF
+SET @jid = Trim(RequestParameter("journeyId"))
+IF Empty(@jid) THEN
+ SET @jid = Trim(QueryParameter("journeyId"))
+ENDIF
+SET @buildNavContext = "false"
+SET @buildNavActive = "automation"
+SET @isSurveyBuild = "false"
+SET @dispSurveyId = ""
+SET @pageStatus = "view"
+SET @loadError = ""
+SET @authOk = "false"
+SET @accessToken = ""
+SET @subdomain = ""
+SET @automationMetaHtml = ""
+SET @automationStepsHtml = ""
+SET @automationStudioUrl = ""
+SET @apiAutomationName = ""
+SET @editSidebarHtml = ""
+
+SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
+IF RowCount(@navRows) > 0 THEN
+ SET @navRow = Row(@navRows,1)
+ SET @HOME_URL = Field(@navRow,"ss_home")
+ SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit")
+ SET @PERFORMANCE_URL = Field(@navRow,"ss_performance")
+ SET @JOURNEY_VIEW_URL = Field(@navRow,"ss_build_journey")
+ENDIF
+SET @surveyUrlRows = LookupRows("SST_SP_Survey_Url_DE","user","admin")
+IF RowCount(@surveyUrlRows) > 0 THEN
+ SET @surveyUrlRow = Row(@surveyUrlRows,1)
+ SET @SURVEY_ANALYTICS_URL = Trim(Field(@surveyUrlRow,"Analytics"))
+ IF Empty(@SURVEY_ANALYTICS_URL) THEN
+  SET @SURVEY_ANALYTICS_URL = Trim(Field(@surveyUrlRow,"analytics"))
+ ENDIF
+ENDIF
+
+IF NOT Empty(@jid) THEN
+ SET @buildNavContext = "true"
+ENDIF
+
+IF Empty(@automationId) THEN
+ SET @pageStatus = "nodata"
+ELSE
+ SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
+ IF RowCount(@authRow) > 0 THEN
+  SET @authR = Row(@authRow,1)
+  SET @clientId = Field(@authR,"clientId")
+  SET @clientSecret = Field(@authR,"clientSecret")
+  SET @subdomain = Field(@authR,"subdomain")
+  IF NOT Empty(@clientId) AND NOT Empty(@clientSecret) AND NOT Empty(@subdomain) THEN
+   SET @authUrl = Concat("https://",@subdomain,".auth.marketingcloudapis.com/v2/token")
+   SET @accountId = Trim(Field(@authR,"accountId"))
+   SET @authPayload = Concat('{"grant_type":"client_credentials","client_id":"',@clientId,'","client_secret":"',@clientSecret,'"')
+   IF NOT Empty(@accountId) THEN
+    SET @authPayload = Concat(@authPayload,',"account_id":"',@accountId,'"')
+   ENDIF
+   SET @authPayload = Concat(@authPayload,'}')
+   SET @authStatus = HTTPPost2(@authUrl,"application/json",@authPayload,false,@authResponse,@authResponseHeader)
+   IF @authStatus == 200 THEN
+    SET @accessToken = ""
+    SET @tokPos = IndexOf(@authResponse, '"access_token":"')
+    IF @tokPos > 0 THEN
+     SET @tokRest = Substring(@authResponse, Add(@tokPos, 16), 800)
+     SET @tokEndPos = IndexOf(@tokRest, '"')
+     IF @tokEndPos > 1 THEN
+      SET @accessToken = Substring(@tokRest, 1, Subtract(@tokEndPos, 1))
+     ENDIF
+    ENDIF
+    IF NOT Empty(@accessToken) THEN
+     SET @authOk = "true"
+    ELSE
+     SET @loadError = "Auth response missing access token."
+     SET @pageStatus = "authfail"
+    ENDIF
+   ELSE
+    SET @loadError = Concat("Auth HTTP ",@authStatus)
+    SET @pageStatus = "authfail"
+   ENDIF
+  ELSE
+   SET @loadError = "SFMC_AUTH incomplete for subdomain or credentials."
+   SET @pageStatus = "authfail"
+  ENDIF
+ ELSE
+  SET @loadError = "SFMC_AUTH has no Admin row."
+  SET @pageStatus = "authfail"
+ ENDIF
+ENDIF
+]%%
+<script runat="server">
+Platform.Load("core", "1");
+
+var MC_CLOUD = "https://mc.s13.exacttarget.com/cloud/";
+
+function isWsChar(c) {
+  return c === " " || c === "\t" || c === "\n" || c === "\r";
+}
+function toJsString(v) {
+  if (v === null || typeof v === "undefined") return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return v + "";
+  try {
+    var s = v + "";
+    if (s && s.indexOf("[object") !== 0) return s;
+  } catch (coerceEx) {}
+  return "";
+}
+function strTrim(v) {
+  var s = toJsString(v);
+  var start = 0;
+  var end = s.length;
+  while (start < end && isWsChar(s.charAt(start))) start += 1;
+  while (end > start && isWsChar(s.charAt(end - 1))) end -= 1;
+  return s.substring(start, end);
+}
+function strReplaceAll(s, find, repl) {
+  var text = toJsString(s);
+  if (!find || text.indexOf(find) < 0) return text;
+  return text.split(find).join(repl);
+}
+function htmlSafe(v) {
+  var s = strTrim(v);
+  s = strReplaceAll(s, "&", "&amp;");
+  s = strReplaceAll(s, "<", "&lt;");
+  s = strReplaceAll(s, ">", "&gt;");
+  s = strReplaceAll(s, '"', "&quot;");
+  return s;
+}
+function parseJsonSafe(text) {
+  var raw = toJsString(text);
+  if (!raw) return null;
+  try { return Platform.Function.ParseJSON(raw); } catch (e1) {}
+  try {
+    if (typeof Script.Util.JSON !== "undefined" && Script.Util.JSON.parse) {
+      return Script.Util.JSON.parse(raw);
+    }
+  } catch (e2) {}
+  return null;
+}
+function httpJson(token, method, url) {
+  try {
+    var req = new Script.Util.HttpRequest(url);
+    req.emptyContentHandling = 0;
+    req.retries = 2;
+    req.continueOnError = true;
+    req.setHeader("Authorization", "Bearer " + token);
+    req.method = method;
+    var resp = req.send();
+    return { status: resp.statusCode, body: resp.content ? String(resp.content) : "" };
+  } catch (httpEx) {
+    return { status: 0, body: httpEx.message || String(httpEx) };
+  }
+}
+function activityTypeLabel(typeId) {
+  var id = parseInt(typeId, 10);
+  var map = {
+    42: "Import",
+    43: "Report",
+    45: "File transfer",
+    53: "Data extract",
+    73: "Filter",
+    84: "Data extract",
+    300: "Query",
+    303: "Filter",
+    423: "Script",
+    425: "Script",
+    426: "Verification",
+    467: "Wait",
+    725: "Refresh group",
+    771: "Verification"
+  };
+  if (map[id]) return map[id];
+  if (!isNaN(id) && id > 0) return "Activity " + id;
+  return "Activity";
+}
+function statusLabel(status) {
+  var raw = strTrim(status);
+  var labels = {
+    "1": "Building",
+    "2": "Ready",
+    "3": "Running",
+    "4": "Paused",
+    "5": "Stopped",
+    "6": "Scheduled",
+    "7": "Error",
+    "8": "Building"
+  };
+  if (labels[raw]) return labels[raw];
+  return raw || "Unknown";
+}
+function metaRow(label, value) {
+  var shown = strTrim(value);
+  if (!shown) shown = "Not set";
+  return "<dt>" + htmlSafe(label) + "</dt><dd>" + htmlSafe(shown) + "</dd>";
+}
+function getAutomation(sub, token, automationId) {
+  var base = "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/automations/";
+  var first = httpJson(token, "GET", base + encodeURIComponent(automationId));
+  if (first.status == 200) {
+    var obj = parseJsonSafe(first.body);
+    if (obj && (obj.id || obj.name || obj.key)) return { ok: true, obj: obj, msg: "" };
+  }
+  var second = httpJson(token, "GET", base + "key:" + encodeURIComponent(automationId));
+  if (second.status == 200) {
+    var keyed = parseJsonSafe(second.body);
+    if (keyed && (keyed.id || keyed.name || keyed.key)) return { ok: true, obj: keyed, msg: "" };
+  }
+  var detail = first.body ? first.body.substring(0, 220) : "";
+  return {
+    ok: false,
+    obj: null,
+    msg: "Automation GET HTTP " + first.status + (detail ? " " + detail : "")
+  };
+}
+function buildMetaHtml(obj, studioUrl) {
+  var schedule = obj.schedule || {};
+  var html = '<dl class="journey-meta-dl">';
+  html += metaRow("Status", statusLabel(obj.status));
+  html += metaRow("Key", obj.key);
+  html += metaRow("Object Id", obj.id);
+  html += metaRow("Description", obj.description);
+  html += metaRow("Type", obj.type);
+  html += metaRow("Schedule", schedule.icalRecur || schedule.scheduleStatus);
+  html += metaRow("Start", schedule.startDate);
+  html += metaRow("End", schedule.endDate);
+  html += metaRow("Timezone", schedule.timezoneName);
+  html += metaRow("Last run", obj.lastRunTime);
+  html += "</dl>";
+  if (studioUrl) {
+    html += '<p class="journey-meta-action"><a class="btn-sst-black" href="' + htmlSafe(studioUrl) + '" target="_blank" rel="noopener">Open in Automation Studio</a></p>';
+  }
+  return html;
+}
+function buildStepsHtml(obj) {
+  var steps = obj.steps;
+  if (!steps || !steps.length) {
+    return '<p class="recent-empty">This automation has no steps.</p>';
+  }
+  var html = '<div class="contacts-table-wrap"><table class="contacts-table"><thead><tr><th>Step</th><th>Activity</th><th>Type</th><th>Activity object id</th></tr></thead><tbody>';
+  var s;
+  for (s = 0; s < steps.length; s++) {
+    var step = steps[s] || {};
+    var activities = step.activities || [];
+    var stepLabel = step.name ? String(step.name) : "";
+    var stepNum = step.step !== undefined && step.step !== null ? String(step.step) : String(s + 1);
+    if (!activities.length) {
+      html += "<tr><td>" + htmlSafe(stepNum) + "</td><td>" + htmlSafe(stepLabel || "Empty step") + "</td><td></td><td></td></tr>";
+    }
+    var a;
+    for (a = 0; a < activities.length; a++) {
+      var act = activities[a] || {};
+      html += "<tr><td>" + htmlSafe(stepNum + (stepLabel ? " " + stepLabel : "")) + "</td>";
+      html += "<td>" + htmlSafe(act.name) + "</td>";
+      html += "<td>" + htmlSafe(activityTypeLabel(act.objectTypeId)) + "</td>";
+      html += '<td class="contacts-mono">' + htmlSafe(act.activityObjectId || act.id) + "</td></tr>";
+    }
+  }
+  html += "</tbody></table></div>";
+  return html;
+}
+
+var pageStatus = Platform.Variable.GetValue("@pageStatus") || "";
+var authOk = Platform.Variable.GetValue("@authOk") || "";
+var accessToken = Platform.Variable.GetValue("@accessToken") || "";
+var subdomain = Platform.Variable.GetValue("@subdomain") || "";
+var automationId = strTrim(Platform.Variable.GetValue("@automationId") || "");
+var metaHtml = "";
+var stepsHtml = "";
+var studioUrl = "";
+var apiName = "";
+
+try {
+  if (pageStatus === "view" && authOk === "true" && accessToken && subdomain && automationId) {
+    var fetched = getAutomation(subdomain, accessToken, automationId);
+    if (fetched.ok && fetched.obj) {
+      var obj = fetched.obj;
+      apiName = obj.name ? String(obj.name) : "";
+      var objectId = obj.id ? String(obj.id) : automationId;
+      studioUrl = MC_CLOUD + "#app/Automation%20Studio/AutomationStudioFuel3/%23ActivityDetails/" + encodeURIComponent(objectId);
+      metaHtml = buildMetaHtml(obj, studioUrl);
+      stepsHtml = buildStepsHtml(obj);
+    } else {
+      Platform.Variable.SetValue("@pageStatus", "apifail");
+      Platform.Variable.SetValue("@loadError", fetched.msg || "Could not load automation.");
+    }
+  }
+} catch (loadEx) {
+  Platform.Variable.SetValue("@pageStatus", "apifail");
+  Platform.Variable.SetValue("@loadError", "Could not load automation: " + (loadEx.message || String(loadEx)));
+}
+
+Platform.Variable.SetValue("@automationMetaHtml", metaHtml);
+Platform.Variable.SetValue("@automationStepsHtml", stepsHtml);
+Platform.Variable.SetValue("@automationStudioUrl", studioUrl);
+Platform.Variable.SetValue("@apiAutomationName", apiName);
+</script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Automation • SST</title>
+<link rel="icon" href="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&amp;w=640&amp;q=75" type="image/png">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+:root{--primary-color:#6366f1;--primary-dark:#4f46e5;--text-primary:#111827;--text-secondary:#6b7280;--bg-secondary:#f9fafb;--border-color:#e5e7eb;--shadow-sm:0 1px 2px 0 rgba(0,0,0,.05);--radius-lg:12px;--gray-400:#9ca3af;--gray-600:#4b5563;--gray-900:#111827;--danger:#b91c1c;--dangerbg:#fef2f2}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg-secondary);color:var(--text-primary);line-height:1.55}
+.dashboard-layout{display:flex;height:100vh;min-height:100vh;overflow:hidden}
+.maker-main{flex:1;min-width:0;height:100vh;overflow:hidden;display:flex;flex-direction:column;background:var(--bg-secondary)}
+.maker-main-inner{flex:1;overflow-y:auto;padding:32px 40px 48px}
+h1{font-size:1.65rem;margin:0;font-weight:700}
+.journey-page-heading{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.sub{color:var(--text-secondary);margin-bottom:22px}
+.panel{background:#fff;border:1px solid var(--border-color);border-radius:var(--radius-lg);padding:26px 30px;margin-bottom:20px}
+.panel-title{font-size:1rem;font-weight:700;margin:0 0 16px}
+.banner{padding:14px 16px;border-radius:10px;margin-bottom:16px;font-size:14px;border:1px solid var(--border-color)}
+.banner.bad{border-color:#fecaca;background:var(--dangerbg);color:var(--danger)}
+.recent-empty{color:var(--text-secondary);font-size:14px}
+.journey-meta-dl{margin:0}
+.journey-meta-dl dt{font-size:11px;color:var(--gray-600);text-transform:uppercase;font-weight:600;letter-spacing:.05em;margin:16px 0 4px}
+.journey-meta-dl dt:first-child{margin-top:0}
+.journey-meta-dl dd{font-weight:600;font-size:1rem;margin:0;color:var(--gray-900);word-break:break-word}
+.journey-meta-action{margin:18px 0 0}
+.contacts-table-wrap{overflow-x:auto;border:1px solid var(--border-color);border-radius:8px;background:#fff}
+.contacts-table{width:100%;border-collapse:collapse;font-size:14px}
+.contacts-table th,.contacts-table td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--border-color);vertical-align:top}
+.contacts-table th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--gray-600);background:#fafafa}
+.contacts-table tbody tr:last-child td{border-bottom:none}
+.contacts-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}
+.breadcrumb-link{color:var(--primary-color);font-weight:500;text-decoration:none}
+.btn-sst-black{display:inline-flex;align-items:center;justify-content:center;padding:11px 18px;font-size:14px;font-weight:600;border:1px solid #000;background:#000;color:#fff;text-decoration:none}
+@media (max-width:768px){
+.dashboard-layout{flex-direction:column;height:auto;overflow:visible}
+.maker-main{height:auto;overflow:visible}
+.maker-main-inner{padding:16px}
+}
+</style>
+</head>
+<body>
+%%[ SET @editSidebarHtml = ContentBlockByKey("sst_shell_edit_sidebar") ]%%
+<div class="dashboard-layout">
+%%[ IF NOT Empty(@editSidebarHtml) THEN ]%%
+%%=TreatAsContent(@editSidebarHtml)=%%
+%%[ ELSE ]%%
+<aside class="maker-sidebar sidebar" aria-label="Primary">
+  <p class="sub">Publish Content Block sst_shell_edit_sidebar.</p>
+</aside>
+%%[ ENDIF ]%%
+<main class="maker-main">
+<div class="maker-main-inner">
+%%[ IF @pageStatus == "nodata" THEN ]%%
+<h1>Automation</h1>
+<p class="sub">Open this page with <strong>automationId</strong> in the URL. Use the Automation Studio object id or customer key.</p>
+%%[ ELSEIF @pageStatus == "authfail" OR @pageStatus == "apifail" THEN ]%%
+<h1>Could not load automation</h1>
+<div class="banner bad">%%=v(@loadError)=%%</div>
+%%[ IF NOT Empty(@jid) AND NOT Empty(@BUILD_PAGE_SELF) THEN ]%%
+<p class="sub"><a class="breadcrumb-link" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Back to manage build</a></p>
+%%[ ENDIF ]%%
+%%[ ELSE ]%%
+<div class="journey-page-heading">
+  <h1>%%[ IF NOT Empty(@apiAutomationName) THEN ]%%%%=v(@apiAutomationName)=%%%%[ ELSE ]%%Automation%%[ ENDIF ]%%</h1>
+</div>
+<p class="sub">Live Automation Studio definition: status, schedule, and each step. This page does not change the automation.</p>
+<div class="panel">
+  <h2 class="panel-title">Details</h2>
+  %%[ IF NOT Empty(@automationMetaHtml) THEN ]%%%%=TreatAsContent(@automationMetaHtml)=%%%%[ ENDIF ]%%
+</div>
+<div class="panel">
+  <h2 class="panel-title">Steps</h2>
+  %%[ IF NOT Empty(@automationStepsHtml) THEN ]%%%%=TreatAsContent(@automationStepsHtml)=%%%%[ ENDIF ]%%
+</div>
+%%[ ENDIF ]%%
+</div>
+</main>
+</div>
+</body>
+</html>
