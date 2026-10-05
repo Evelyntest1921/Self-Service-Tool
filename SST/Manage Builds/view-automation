@@ -451,30 +451,78 @@ function pad2(n) {
   if (isNaN(v)) v = 0;
   return (v < 10 ? "0" : "") + v;
 }
-function nthSundayUtc(year, monthIndex, n, hourUtc) {
-  var first = new Date(Date.UTC(year, monthIndex, 1, hourUtc, 0, 0));
-  var day = 1 + ((7 - first.getUTCDay()) % 7) + (n - 1) * 7;
-  return Date.UTC(year, monthIndex, day, hourUtc, 0, 0);
+function nthSundayDay(year, monthOneBased, n) {
+  var first = new Date(Date.UTC(year, monthOneBased - 1, 1));
+  var firstDay = first.getUTCDay();
+  return 1 + ((7 - firstDay) % 7) + (n - 1) * 7;
 }
-function easternWallClock(dateUtc) {
-  var year = dateUtc.getUTCFullYear();
-  var dstStart = nthSundayUtc(year, 2, 2, 7);
-  var dstEnd = nthSundayUtc(year, 10, 1, 6);
-  var t = dateUtc.getTime();
-  var offsetHours = t >= dstStart && t < dstEnd ? 4 : 5;
-  var wall = new Date(t - offsetHours * 60 * 60 * 1000);
-  return wall.getUTCFullYear() + "-" + pad2(wall.getUTCMonth() + 1) + "-" + pad2(wall.getUTCDate()) + "T" + pad2(wall.getUTCHours()) + ":" + pad2(wall.getUTCMinutes());
+function isUsEasternDST(y, mo, d, hour, minute) {
+  var springDay = nthSundayDay(y, 3, 2);
+  var fallDay = nthSundayDay(y, 11, 1);
+  if (mo < 3 || (mo === 3 && d < springDay)) return false;
+  if (mo > 11 || (mo === 11 && d > fallDay)) return false;
+  if (mo > 3 && mo < 11) return true;
+  if (mo === 3 && d > springDay) return true;
+  if (mo === 11 && d < fallDay) return true;
+  if (mo === 3 && d === springDay) return (hour || 0) >= 2;
+  if (mo === 11 && d === fallDay) return (hour || 0) < 2;
+  return false;
 }
-function localEasternDateTime(startDate) {
-  var s = strTrim(startDate);
-  if (!s) {
-    var soon = new Date();
-    soon.setUTCMinutes(soon.getUTCMinutes() + 10);
-    s = easternWallClock(soon);
+function easternOffsetHoursForParts(y, mo, d, hour, minute) {
+  return isUsEasternDST(y, mo, d, hour, minute) ? 4 : 5;
+}
+function utcMsToEasternParts(utcMs) {
+  var offHours;
+  for (offHours = 4; offHours <= 5; offHours++) {
+    var shifted = utcMs - offHours * 3600000;
+    var d = new Date(shifted);
+    var y = d.getUTCFullYear();
+    var mo = d.getUTCMonth() + 1;
+    var day = d.getUTCDate();
+    var h = d.getUTCHours();
+    var mi = d.getUTCMinutes();
+    if (easternOffsetHoursForParts(y, mo, day, h, mi) === offHours) {
+      return { y: y, mo: mo, d: day, h: h, mi: mi };
+    }
   }
+  var fallback = new Date(utcMs - 5 * 3600000);
+  return {
+    y: fallback.getUTCFullYear(),
+    mo: fallback.getUTCMonth() + 1,
+    d: fallback.getUTCDate(),
+    h: fallback.getUTCHours(),
+    mi: fallback.getUTCMinutes()
+  };
+}
+function datetimeLocalValueFromScheduleStart(s) {
+  var norm = stripTimezoneFromIso(s);
+  var match = norm.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})/);
+  if (match) return match[1];
+  return strTrim(s);
+}
+function formatEasternDateTimeParts(parts) {
+  return parts.y + "-" + pad2(parts.mo) + "-" + pad2(parts.d) + "T" + pad2(parts.h) + ":" + pad2(parts.mi);
+}
+function defaultEasternStartDateTime() {
+  var utcMs = (new Date()).getTime() + 10 * 60 * 1000;
+  return formatEasternDateTimeParts(utcMsToEasternParts(utcMs)) + ":00";
+}
+function stripTimezoneFromIso(value) {
+  var s = strTrim(value);
   var match = s.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(?::(\d{2}))?/);
   if (match) return match[1] + ":" + (match[2] || "00");
   return s;
+}
+function scheduleStartFromAutomation(obj) {
+  var schedule = obj && obj.schedule ? obj.schedule : {};
+  var raw = strTrim(schedule.startDate || schedule.startDateTime || "");
+  if (!raw) return "";
+  return datetimeLocalValueFromScheduleStart(raw);
+}
+function localEasternDateTime(startDate) {
+  var s = strTrim(startDate);
+  if (!s) return defaultEasternStartDateTime();
+  return stripTimezoneFromIso(s);
 }
 function buildSchedulePayload(freq, startDate, minuteInterval) {
   var frequency = strTrim(freq).toLowerCase() || "hourly";
@@ -673,7 +721,7 @@ function buildSchedulePanelHtml(jid, freq, startDate, minuteInterval, running, s
   html += '<option value="30"' + optionSelected(minuteInterval, "30") + ">30</option>";
   html += '<option value="45"' + optionSelected(minuteInterval, "45") + ">45</option>";
   html += "</select></div>";
-  html += '<div class="schedule-field"><label for="automationStartDate">Start (Eastern)</label><input id="automationStartDate" type="datetime-local" class="schedule-control" name="automationStartDate" value="' + htmlSafe(startDate) + '"></div>';
+  html += '<div class="schedule-field"><label for="automationStartDate">Start (Eastern)</label><input id="automationStartDate" type="datetime-local" class="schedule-control" name="automationStartDate" value="' + htmlSafe(datetimeLocalValueFromScheduleStart(startDate)) + '"></div>';
   html += '<p class="schedule-eastern-note">Start time is always Eastern Time (US &amp; Canada), including daylight saving.</p>';
   html += '<button type="submit" name="confirmAutomationAction" value="1" class="btn-sst-black">Activate schedule</button>';
   html += "</form>";
@@ -796,10 +844,17 @@ try {
       Platform.Variable.SetValue("@automationActivityCount", String(countAutomationActivities(obj)));
       Platform.Variable.SetValue("@automationFlowHtml", buildFlowHtml(obj));
       var runOnceWarning = analyzeRunOnceWarning(obj, Platform.Variable.GetValue("@sourceDeName") || "");
+      var schedStartVal = strTrim(Platform.Variable.GetValue("@schedStart") || "");
+      if (!schedStartVal) {
+        schedStartVal = scheduleStartFromAutomation(obj);
+        if (!schedStartVal) schedStartVal = defaultEasternStartDateTime();
+      }
+      schedStartVal = datetimeLocalValueFromScheduleStart(schedStartVal);
+      Platform.Variable.SetValue("@schedStart", schedStartVal);
       Platform.Variable.SetValue("@automationSchedulePanelHtml", buildSchedulePanelHtml(
         Platform.Variable.GetValue("@jid") || "",
         Platform.Variable.GetValue("@schedFreq") || "hourly",
-        Platform.Variable.GetValue("@schedStart") || "",
+        schedStartVal,
         Platform.Variable.GetValue("@schedMinute") || "15",
         runningNow,
         buildScheduleSummary(obj),
@@ -988,6 +1043,29 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
       schedulePanel.classList.remove("is-run-once-open");
       runOnceConfirm.setAttribute("hidden", "hidden");
     });
+  }
+  var startInput = document.getElementById("automationStartDate");
+  if (startInput && !startInput.value) {
+    try {
+      var easternNow = new Date(Date.now() + 10 * 60 * 1000);
+      var parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/New_York",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false
+      }).formatToParts(easternNow);
+      var map = {};
+      var i;
+      for (i = 0; i < parts.length; i++) {
+        if (parts[i].type !== "literal") map[parts[i].type] = parts[i].value;
+      }
+      if (map.year && map.month && map.day && map.hour && map.minute) {
+        startInput.value = map.year + "-" + map.month + "-" + map.day + "T" + map.hour + ":" + map.minute;
+      }
+    } catch (prefillEx) {}
   }
 })();
 function openAutomationStudio(el) {
