@@ -6,7 +6,7 @@ VAR @pageStatus, @loadError, @authOk, @accessToken, @subdomain
 VAR @authRow, @authR, @clientId, @clientSecret, @accountId, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader
 VAR @authPending
 VAR @editSidebarHtml, @automationMetaHtml, @automationStepsHtml, @automationFlowHtml, @automationActionsHtml, @automationStudioUrl, @apiAutomationName
-VAR @autoAction, @autoActionOn, @schedFreq, @schedStart, @schedOffset, @schedTz, @schedMinute, @actionOk, @actionMsg
+VAR @autoAction, @autoActionOn, @schedFreq, @schedStart, @schedMinute, @actionOk, @actionMsg
 
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
@@ -47,10 +47,6 @@ ENDIF
 SET @schedFreq = Trim(RequestParameter("automationFrequency"))
 IF Empty(@schedFreq) THEN SET @schedFreq = "hourly" ENDIF
 SET @schedStart = Trim(RequestParameter("automationStartDate"))
-SET @schedOffset = Trim(RequestParameter("automationStartOffset"))
-IF Empty(@schedOffset) THEN SET @schedOffset = "-05:00" ENDIF
-SET @schedTz = Trim(RequestParameter("automationTimezoneId"))
-IF Empty(@schedTz) THEN SET @schedTz = "1" ENDIF
 SET @schedMinute = Trim(RequestParameter("automationMinuteInterval"))
 IF Empty(@schedMinute) THEN SET @schedMinute = "15" ENDIF
 SET @editSidebarHtml = ""
@@ -323,35 +319,52 @@ function pad2(n) {
   if (isNaN(v)) v = 0;
   return (v < 10 ? "0" : "") + v;
 }
-function buildSchedulePayload(freq, startDate, startOffset, timezoneId, minuteInterval) {
+function nthSundayUtc(year, monthIndex, n, hourUtc) {
+  var first = new Date(Date.UTC(year, monthIndex, 1, hourUtc, 0, 0));
+  var day = 1 + ((7 - first.getUTCDay()) % 7) + (n - 1) * 7;
+  return Date.UTC(year, monthIndex, day, hourUtc, 0, 0);
+}
+function easternWallClock(dateUtc) {
+  var year = dateUtc.getUTCFullYear();
+  var dstStart = nthSundayUtc(year, 2, 2, 7);
+  var dstEnd = nthSundayUtc(year, 10, 1, 6);
+  var t = dateUtc.getTime();
+  var offsetHours = t >= dstStart && t < dstEnd ? 4 : 5;
+  var wall = new Date(t - offsetHours * 60 * 60 * 1000);
+  return wall.getUTCFullYear() + "-" + pad2(wall.getUTCMonth() + 1) + "-" + pad2(wall.getUTCDate()) + "T" + pad2(wall.getUTCHours()) + ":" + pad2(wall.getUTCMinutes());
+}
+function localEasternDateTime(startDate) {
+  var s = strTrim(startDate);
+  if (!s) {
+    var soon = new Date();
+    soon.setUTCMinutes(soon.getUTCMinutes() + 10);
+    s = easternWallClock(soon);
+  }
+  var match = s.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(?::(\d{2}))?/);
+  if (match) return match[1] + ":" + (match[2] || "00");
+  return s;
+}
+function buildSchedulePayload(freq, startDate, minuteInterval) {
   var frequency = strTrim(freq).toLowerCase() || "hourly";
   var minuteVal = parseInt(strTrim(minuteInterval) || "15", 10);
   if (minuteVal != 15 && minuteVal != 30 && minuteVal != 45) minuteVal = 15;
-  var off = strTrim(startOffset) || "-05:00";
-  if (off.charAt(0) != "-" && off.charAt(0) != "+") off = "-" + off;
-  var startDateForApi = strTrim(startDate);
-  if (!startDateForApi) {
-    var now = new Date();
-    now.setMinutes(now.getMinutes() + 10);
-    startDateForApi = now.getFullYear() + "-" + pad2(now.getMonth() + 1) + "-" + pad2(now.getDate()) + "T" + pad2(now.getHours()) + ":" + pad2(now.getMinutes());
-  }
-  if (startDateForApi.length == 16) {
-    startDateForApi += ":00" + off;
-  } else if (startDateForApi.indexOf("T") > 0 && startDateForApi.indexOf("+") < 0 && startDateForApi.indexOf("-", 11) < 0 && startDateForApi.length == 19) {
-    startDateForApi += off;
-  }
+  var startDateForApi = localEasternDateTime(startDate);
+  var dateMatch = startDateForApi.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
   var untilDate = new Date();
-  untilDate.setDate(untilDate.getDate() + 365);
-  var untilCompact = String(untilDate.getFullYear()) + pad2(untilDate.getMonth() + 1) + pad2(untilDate.getDate());
+  if (dateMatch) {
+    untilDate = new Date(Date.UTC(parseInt(dateMatch[1], 10), parseInt(dateMatch[2], 10) - 1, parseInt(dateMatch[3], 10)));
+  }
+  untilDate.setUTCDate(untilDate.getUTCDate() + 365);
+  var untilCompact = String(untilDate.getUTCFullYear()) + pad2(untilDate.getUTCMonth() + 1) + pad2(untilDate.getUTCDate());
+  var endDate = dateMatch
+    ? (parseInt(dateMatch[1], 10) + 1) + "-" + dateMatch[2] + "-" + dateMatch[3] + "T" + dateMatch[4] + ":" + dateMatch[5] + ":" + dateMatch[6]
+    : untilCompact + "T00:00:00";
   var recurRule = "FREQ=HOURLY;INTERVAL=1;UNTIL=" + untilCompact;
   if (frequency == "once") recurRule = "FREQ=HOURLY;INTERVAL=1;COUNT=1";
   else if (frequency == "minute") recurRule = "FREQ=MINUTELY;INTERVAL=" + minuteVal + ";UNTIL=" + untilCompact;
   else if (frequency == "daily") recurRule = "FREQ=DAILY;INTERVAL=1;UNTIL=" + untilCompact;
   else if (frequency == "weekly") recurRule = "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO;UNTIL=" + untilCompact;
-  var tzId = parseInt(strTrim(timezoneId) || "1", 10);
-  if (isNaN(tzId) || tzId < 1) tzId = 1;
-  var endDate = String(untilDate.getFullYear()) + "-" + pad2(untilDate.getMonth() + 1) + "-" + pad2(untilDate.getDate()) + "T00:00:00" + off;
-  return { ok: true, icalRecur: recurRule, startDate: startDateForApi, endDate: endDate, timezoneId: String(tzId), minuteInterval: minuteVal };
+  return { ok: true, icalRecur: recurRule, startDate: startDateForApi, endDate: endDate, timezoneId: "76", minuteInterval: minuteVal };
 }
 function soapSchedule(sub, token, objectId, customerKey, actionName, schedule) {
   var recurrence = '<Recurrence xsi:type="HourlyRecurrence"><HourlyRecurrencePatternType>Interval</HourlyRecurrencePatternType><HourInterval>1</HourInterval></Recurrence><RecurrenceType>Hourly</RecurrenceType>';
@@ -370,7 +383,7 @@ function soapSchedule(sub, token, objectId, customerKey, actionName, schedule) {
       range = "<RecurrenceRangeType>EndOn</RecurrenceRangeType><StartDateTime>" + xmlSafe(schedule.startDate) + "</StartDateTime><EndDateTime>" + xmlSafe(schedule.endDate || schedule.startDate) + "</EndDateTime>";
     }
   }
-  var scheduleXml = actionName == "pause" ? "<Schedule></Schedule>" : "<Schedule><PartnerKey xsi:nil=\"true\" /><ObjectID xsi:nil=\"true\" />" + recurrence + range + "<TimeZone><PartnerKey xsi:nil=\"true\" /><ID>" + xmlSafe(schedule ? schedule.timezoneId : "1") + "</ID><ObjectID xsi:nil=\"true\" /></TimeZone></Schedule>";
+  var scheduleXml = actionName == "pause" ? "<Schedule></Schedule>" : "<Schedule><PartnerKey xsi:nil=\"true\" /><ObjectID xsi:nil=\"true\" />" + recurrence + range + "<TimeZone><PartnerKey xsi:nil=\"true\" /><ID>" + xmlSafe(schedule && schedule.timezoneId ? schedule.timezoneId : "76") + "</ID><ObjectID xsi:nil=\"true\" /></TimeZone></Schedule>";
   var envelope = '<?xml version="1.0" encoding="UTF-8"?>' +
     '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing"><s:Header>' +
     '<a:Action s:mustUnderstand="1">Schedule</a:Action>' +
@@ -427,7 +440,7 @@ function buildFlowHtml(obj) {
   if (!wrote) return '<p class="recent-empty">This automation has no steps to show in the flow.</p>';
   return html;
 }
-function buildActionsHtml(jid, freq, startDate, offset, timezoneId, minuteInterval, running) {
+function buildActionsHtml(jid, freq, startDate, minuteInterval, running) {
   var html = "";
   html += '<form method="post" action="" class="automation-schedule-form" onsubmit="return confirm(\'Stop this run if the automation is currently running?\');">';
   html += '<input type="hidden" name="journeyId" value="' + htmlSafe(jid) + '">';
@@ -451,10 +464,9 @@ function buildActionsHtml(jid, freq, startDate, offset, timezoneId, minuteInterv
   html += '<option value="30"' + optionSelected(minuteInterval, "30") + ">30</option>";
   html += '<option value="45"' + optionSelected(minuteInterval, "45") + ">45</option>";
   html += "</select></div>";
-  html += '<div class="schedule-field"><label for="automationStartDate">Start</label><input id="automationStartDate" type="datetime-local" class="schedule-control" name="automationStartDate" value="' + htmlSafe(startDate) + '"></div>';
-  html += '<div class="schedule-field"><label for="automationStartOffset">UTC offset</label><input id="automationStartOffset" type="text" class="schedule-control" name="automationStartOffset" value="' + htmlSafe(offset) + '"></div>';
-  html += '<div class="schedule-field"><label for="automationTimezoneId">Timezone ID</label><input id="automationTimezoneId" type="text" class="schedule-control" name="automationTimezoneId" value="' + htmlSafe(timezoneId) + '"></div>';
+  html += '<div class="schedule-field"><label for="automationStartDate">Start (Eastern)</label><input id="automationStartDate" type="datetime-local" class="schedule-control" name="automationStartDate" value="' + htmlSafe(startDate) + '"></div>';
   html += "</div>";
+  html += '<p class="flow-hint">Start time is always Eastern Time (US &amp; Canada), including daylight saving.</p>';
   html += '<div class="schedule-submit"><button type="submit" name="confirmAutomationAction" value="1" class="btn-sst-black">Activate schedule</button></div>';
   html += "</form>";
   html += '<form method="post" action="" class="automation-schedule-form" onsubmit="return confirm(\'Pause this automation schedule?\');">';
@@ -546,8 +558,6 @@ try {
       var schedulePayload = buildSchedulePayload(
         Platform.Variable.GetValue("@schedFreq") || "",
         Platform.Variable.GetValue("@schedStart") || "",
-        Platform.Variable.GetValue("@schedOffset") || "",
-        Platform.Variable.GetValue("@schedTz") || "",
         Platform.Variable.GetValue("@schedMinute") || ""
       );
       var activateResp = soapSchedule(subdomain, accessToken, targetId, customerKey, "start", schedulePayload);
@@ -567,8 +577,6 @@ try {
         Platform.Variable.GetValue("@jid") || "",
         Platform.Variable.GetValue("@schedFreq") || "hourly",
         Platform.Variable.GetValue("@schedStart") || "",
-        Platform.Variable.GetValue("@schedOffset") || "-05:00",
-        Platform.Variable.GetValue("@schedTz") || "1",
         Platform.Variable.GetValue("@schedMinute") || "15",
         isRunningStatus(obj)
       ));
