@@ -315,7 +315,7 @@ function automationStatusNote(code, label) {
     return "This job is stopped. It will not run until you turn the schedule on again or use Run Automation Once for a single run.";
   }
   if (raw === "6" || lower === "scheduled") {
-    return "The schedule is on. This job will run by itself at the times you configured. All schedule times on this page use Eastern Time.";
+    return "The schedule is on. This job will run automatically at the times you configured (Eastern Time).";
   }
   if (raw === "2" || lower === "ready") {
     return "The job is set up and idle. It will run on the next scheduled time, or immediately if you choose Run Automation Once.";
@@ -357,6 +357,10 @@ function buildScheduleSummary(obj) {
   if (raw === "3") return "A run is in progress right now.";
   if (raw === "4") return "The automatic schedule is paused. Use Edit schedule when you are ready to turn it on again.";
   if (raw === "5") return "This job is stopped. Use Edit schedule or Run Automation Once when you want it to run.";
+  if (isScheduledStatus(obj)) {
+    var startLine = businessScheduleStartText(obj);
+    if (startLine) return startLine + ".";
+  }
   var human = humanScheduleText(schedule);
   if (human) return human + " All times are Eastern Time (US and Canada).";
   if (raw === "6") return "A schedule is active. This job will run automatically on that timetable (Eastern Time).";
@@ -402,6 +406,10 @@ function getAutomation(sub, token, automationId) {
 function buildMetaHtml(obj, studioUrl, automationName) {
   var html = '<dl class="journey-meta-dl">';
   html += metaStatusRow(obj);
+  if (isScheduledStatus(obj)) {
+    var scheduleDateLine = businessScheduleStartText(obj);
+    if (scheduleDateLine) html += metaRow("Date", scheduleDateLine);
+  }
   html += metaRow("Key", obj.key);
   html += metaRow("Object Id", obj.id);
   html += metaRow("Description", obj.description);
@@ -427,6 +435,57 @@ function isRunningStatus(obj) {
   var code = automationStatusCode(obj);
   if (code === "3") return true;
   return automationStatusLabel(obj).toLowerCase() === "running";
+}
+function isPausedStatus(obj) {
+  var code = automationStatusCode(obj);
+  if (code === "4") return true;
+  return automationStatusLabel(obj).toLowerCase() === "paused";
+}
+function isScheduledStatus(obj) {
+  var code = automationStatusCode(obj);
+  if (code === "6") return true;
+  return automationStatusLabel(obj).toLowerCase() === "scheduled";
+}
+function monthNameEnglish(monthOneBased) {
+  var names = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
+  var idx = parseInt(monthOneBased, 10) - 1;
+  if (idx >= 0 && idx < names.length) return names[idx];
+  return String(monthOneBased);
+}
+function parseScheduleStartParts(startRaw) {
+  var norm = stripTimezoneFromIso(strTrim(startRaw));
+  var match = norm.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!match) return null;
+  return {
+    y: parseInt(match[1], 10),
+    mo: parseInt(match[2], 10),
+    d: parseInt(match[3], 10),
+    h: parseInt(match[4], 10),
+    mi: parseInt(match[5], 10)
+  };
+}
+function formatHour12AmPm(hour24, minute) {
+  var h = parseInt(hour24, 10);
+  var mi = parseInt(minute, 10);
+  if (isNaN(h)) h = 0;
+  if (isNaN(mi)) mi = 0;
+  var ampm = h >= 12 ? "PM" : "AM";
+  var h12 = h % 12;
+  if (h12 === 0) h12 = 12;
+  return h12 + ":" + pad2(mi) + " " + ampm;
+}
+function businessScheduleStartText(obj) {
+  var schedule = obj && obj.schedule ? obj.schedule : {};
+  var parts = parseScheduleStartParts(schedule.startDate || schedule.startDateTime || "");
+  if (!parts) return "";
+  return (
+    "Schedule will start " +
+    monthNameEnglish(parts.mo) + " " + parts.d + ", " + parts.y +
+    " at " + formatHour12AmPm(parts.h, parts.mi) + " Eastern"
+  );
 }
 function postJsonAction(sub, token, automationId, actionName) {
   try {
@@ -666,7 +725,7 @@ function analyzeRunOnceWarning(obj, sourceDeName) {
     message: "Running this automation once may update data or start customer-facing steps. Review the activities below before you confirm."
   };
 }
-function buildSchedulePanelHtml(jid, freq, startDate, minuteInterval, running, scheduleSummary, editorOpen, runOnceOpen, runOnceWarning) {
+function buildSchedulePanelHtml(jid, freq, startDate, minuteInterval, running, paused, scheduleSummary, editorOpen, runOnceOpen, runOnceWarning) {
   var panelClass = "panel schedule-panel";
   if (editorOpen) panelClass += " is-editing";
   if (runOnceOpen) panelClass += " is-run-once-open";
@@ -699,7 +758,7 @@ function buildSchedulePanelHtml(jid, freq, startDate, minuteInterval, running, s
     html += "</div></form></div>";
   }
   html += '<div class="schedule-panel-editor" id="schedulePanelEditor">';
-  if (!running) {
+  if (!running && !paused) {
     html += '<form method="post" action="" class="schedule-form" onsubmit="return confirm(\'Stop this run if the automation is currently running?\');">';
     html += '<input type="hidden" name="journeyId" value="' + htmlSafe(jid) + '">';
     html += '<input type="hidden" name="automationAction" value="stop">';
@@ -725,11 +784,13 @@ function buildSchedulePanelHtml(jid, freq, startDate, minuteInterval, running, s
   html += '<p class="schedule-eastern-note">Start time is always Eastern Time (US &amp; Canada), including daylight saving.</p>';
   html += '<button type="submit" name="confirmAutomationAction" value="1" class="btn-sst-black">Activate schedule</button>';
   html += "</form>";
-  html += '<form method="post" action="" class="schedule-form" onsubmit="return confirm(\'Pause this automation schedule?\');">';
-  html += '<input type="hidden" name="journeyId" value="' + htmlSafe(jid) + '">';
-  html += '<input type="hidden" name="automationAction" value="pause">';
-  html += '<button type="submit" name="confirmAutomationAction" value="1" class="btn-sst-black">Pause schedule</button>';
-  html += "</form>";
+  if (!paused) {
+    html += '<form method="post" action="" class="schedule-form" onsubmit="return confirm(\'Pause this automation schedule?\');">';
+    html += '<input type="hidden" name="journeyId" value="' + htmlSafe(jid) + '">';
+    html += '<input type="hidden" name="automationAction" value="pause">';
+    html += '<button type="submit" name="confirmAutomationAction" value="1" class="btn-sst-black">Pause schedule</button>';
+    html += "</form>";
+  }
   html += "</div></div>";
   return html;
 }
@@ -838,6 +899,7 @@ try {
       apiName = obj.name ? String(obj.name) : "";
       studioUrl = MC_CLOUD + "#app/Automation%20Studio/AutomationStudioFuel3/";
       var runningNow = isRunningStatus(obj);
+      var pausedNow = isPausedStatus(obj);
       metaHtml = buildMetaHtml(obj, studioUrl, apiName);
       stepsHtml = buildStepsHtml(obj);
       Platform.Variable.SetValue("@automationRunning", runningNow ? "true" : "false");
@@ -857,6 +919,7 @@ try {
         schedStartVal,
         Platform.Variable.GetValue("@schedMinute") || "15",
         runningNow,
+        pausedNow,
         buildScheduleSummary(obj),
         String(Platform.Variable.GetValue("@scheduleEditorOpen") || "") === "true",
         String(Platform.Variable.GetValue("@runOnceConfirmOpen") || "") === "true",
