@@ -6,7 +6,7 @@ VAR @pageStatus, @loadError, @authOk, @accessToken, @subdomain
 VAR @authRow, @authR, @clientId, @clientSecret, @accountId, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader
 VAR @authPending
 VAR @editSidebarHtml, @automationMetaHtml, @automationStepsHtml, @automationFlowHtml, @automationSchedulePanelHtml, @automationStudioUrl, @apiAutomationName, @automationRunning, @automationActivityCount, @scheduleEditorOpen, @runOnceConfirmOpen
-VAR @autoAction, @autoActionOn, @schedFreq, @schedStart, @schedMinute, @schedEnd, @schedEndDate, @schedOccurrences, @actionOk, @actionMsg
+VAR @autoAction, @autoActionOn, @schedFreq, @schedStart, @schedMinute, @schedInterval, @schedWeekdays, @schedEnd, @schedEndDate, @schedOccurrences, @actionOk, @actionMsg
 
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
@@ -58,6 +58,8 @@ ENDIF
 SET @schedFreq = Trim(RequestParameter("automationFrequency"))
 SET @schedStart = Trim(RequestParameter("automationStartDate"))
 SET @schedMinute = Trim(RequestParameter("automationMinuteInterval"))
+SET @schedInterval = Trim(RequestParameter("automationScheduleInterval"))
+SET @schedWeekdays = Trim(RequestParameter("automationScheduleWeekdays"))
 SET @schedEnd = Lowercase(Trim(RequestParameter("automationScheduleEnd")))
 SET @schedEndDate = Trim(RequestParameter("automationScheduleEndDate"))
 SET @schedOccurrences = Trim(RequestParameter("automationScheduleOccurrences"))
@@ -338,40 +340,74 @@ function automationStatusNote(code, label) {
   }
   return "This is the latest status from Automation Studio. If it looks wrong, wait a moment and refresh the page.";
 }
+function parseIcalValue(ical, key) {
+  var re = new RegExp(key + "=([^;]+)", "i");
+  var match = strTrim(ical || "").match(re);
+  return match ? match[1] : "";
+}
 function scheduleFrequencyFromObj(obj) {
   var ical = strTrim((obj && obj.schedule ? obj.schedule : {}).icalRecur || "");
   if (!ical) return "";
-  if (ical.indexOf("MINUTELY") >= 0) return "minute";
-  if (ical.indexOf("DAILY") >= 0) return "daily";
-  if (ical.indexOf("WEEKLY") >= 0) return "weekly";
   if (ical.indexOf("COUNT=1") >= 0) return "once";
+  if (ical.indexOf("MINUTELY") >= 0) return "minute";
+  if (ical.indexOf("YEARLY") >= 0) return "yearly";
+  if (ical.indexOf("MONTHLY") >= 0) return "monthly";
+  if (ical.indexOf("WEEKLY") >= 0) return "weekly";
+  if (ical.indexOf("DAILY") >= 0) {
+    var byDay = parseIcalValue(ical, "BYDAY").toUpperCase();
+    if (byDay.indexOf("MO") >= 0 && byDay.indexOf("FR") >= 0 && byDay.indexOf("SA") < 0 && byDay.indexOf("SU") < 0) {
+      return "weekdays";
+    }
+    return "daily";
+  }
   if (ical.indexOf("HOURLY") >= 0) return "hourly";
   return "";
 }
-function scheduleMinuteIntervalFromIcal(ical) {
+function scheduleIntervalFromIcal(ical, freq) {
   var rule = strTrim(ical || "");
   var match = rule.match(/INTERVAL=(\d+)/);
-  if (match) {
-    var v = parseInt(match[1], 10);
+  var v = match ? parseInt(match[1], 10) : 1;
+  if (isNaN(v) || v < 1) v = 1;
+  if (strTrim(freq).toLowerCase() === "minute") {
     if (v === 15 || v === 30 || v === 45) return String(v);
+    return "15";
   }
-  return "15";
+  return String(v);
+}
+function scheduleWeekdaysFromIcal(ical) {
+  var byDay = parseIcalValue(ical, "BYDAY").toUpperCase();
+  if (!byDay) return "mon";
+  var map = { MO: "mon", TU: "tue", WE: "wed", TH: "thu", FR: "fri", SA: "sat", SU: "sun" };
+  var tokens = byDay.split(",");
+  var out = [];
+  var i;
+  for (i = 0; i < tokens.length; i++) {
+    var t = strTrim(tokens[i]).toUpperCase();
+    if (map[t]) out.push(map[t]);
+  }
+  return out.length ? out.join(",") : "mon";
 }
 function applyScheduleFormDefaultsFromAutomation(obj) {
   var postedFreq = strTrim(Platform.Variable.GetValue("@schedFreq") || "");
   var freq = postedFreq || scheduleFrequencyFromObj(obj) || "hourly";
   Platform.Variable.SetValue("@schedFreq", freq);
+  var ical = strTrim((obj.schedule || {}).icalRecur || "");
+  var postedInterval = strTrim(Platform.Variable.GetValue("@schedInterval") || "");
+  var intervalVal = postedInterval || scheduleIntervalFromIcal(ical, freq);
+  Platform.Variable.SetValue("@schedInterval", intervalVal);
   var postedMinute = strTrim(Platform.Variable.GetValue("@schedMinute") || "");
-  var minuteVal = "15";
   if (freq === "minute") {
-    minuteVal = postedMinute || scheduleMinuteIntervalFromIcal((obj.schedule || {}).icalRecur || "") || "15";
+    Platform.Variable.SetValue("@schedMinute", postedMinute || intervalVal || "15");
   } else if (postedMinute) {
-    minuteVal = postedMinute;
+    Platform.Variable.SetValue("@schedMinute", postedMinute);
+  } else {
+    Platform.Variable.SetValue("@schedMinute", "15");
   }
-  Platform.Variable.SetValue("@schedMinute", minuteVal);
+  var postedWeekdays = strTrim(Platform.Variable.GetValue("@schedWeekdays") || "");
+  Platform.Variable.SetValue("@schedWeekdays", postedWeekdays || scheduleWeekdaysFromIcal(ical));
   var postedEnd = strTrim(Platform.Variable.GetValue("@schedEnd") || "");
   var endDefaults = scheduleEndDefaultsFromAutomation(obj);
-  var endMode = postedEnd || endDefaults.mode || "occurrences";
+  var endMode = postedEnd || endDefaults.mode || "never";
   Platform.Variable.SetValue("@schedEnd", endMode);
   var postedEndDate = strTrim(Platform.Variable.GetValue("@schedEndDate") || "");
   Platform.Variable.SetValue("@schedEndDate", postedEndDate || endDefaults.endDate || "");
@@ -412,9 +448,12 @@ function humanScheduleText(schedule) {
     : startRaw;
   var timing = "";
   if (ical.indexOf("MINUTELY") >= 0) timing = "Runs every few minutes";
-  else if (ical.indexOf("HOURLY") >= 0) timing = "Runs every hour";
+  else if (ical.indexOf("YEARLY") >= 0) timing = "Runs on a yearly schedule";
+  else if (ical.indexOf("MONTHLY") >= 0) timing = "Runs on a monthly schedule";
+  else if (ical.indexOf("WEEKLY") >= 0) timing = "Runs on a weekly schedule";
+  else if (ical.indexOf("DAILY") >= 0 && ical.indexOf("BYDAY=MO,TU,WE,TH,FR") >= 0) timing = "Runs on weekdays";
   else if (ical.indexOf("DAILY") >= 0) timing = "Runs once per day";
-  else if (ical.indexOf("WEEKLY") >= 0) timing = "Runs once per week";
+  else if (ical.indexOf("HOURLY") >= 0) timing = "Runs every hour";
   else if (strTrim(schedule.scheduleStatus)) timing = "Schedule is " + strTrim(schedule.scheduleStatus);
   if (timing && start) return timing + ", starting " + start + ".";
   if (timing) return timing + ".";
@@ -718,9 +757,38 @@ function untilCompactFromDateKey(dateKey) {
   if (!match) return "";
   return match[1] + match[2] + match[3];
 }
-function buildSchedulePayload(freq, startDate, minuteInterval, endMode, endDateKey, occurrences) {
+function weekdaySoapFlags(weekdaysRaw) {
+  var set = {};
+  var tokens = strTrim(weekdaysRaw || "mon").toLowerCase().split(/[,;\s]+/);
+  var i;
+  for (i = 0; i < tokens.length; i++) {
+    if (tokens[i]) set[tokens[i]] = true;
+  }
+  return {
+    sun: !!set.sun,
+    mon: !!set.mon,
+    tue: !!set.tue,
+    wed: !!set.wed,
+    thu: !!set.thu,
+    fri: !!set.fri,
+    sat: !!set.sat
+  };
+}
+function icalByDayFromWeekdays(weekdaysRaw) {
+  var map = { sun: "SU", mon: "MO", tue: "TU", wed: "WE", thu: "TH", fri: "FR", sat: "SA" };
+  var tokens = strTrim(weekdaysRaw || "mon").toLowerCase().split(/[,;\s]+/);
+  var out = [];
+  var i;
+  for (i = 0; i < tokens.length; i++) {
+    if (map[tokens[i]]) out.push(map[tokens[i]]);
+  }
+  return out.length ? out.join(",") : "MO";
+}
+function buildSchedulePayload(freq, startDate, scheduleInterval, minuteInterval, weekdaysRaw, endMode, endDateKey, occurrences) {
   var frequency = strTrim(freq).toLowerCase() || "hourly";
-  var minuteVal = parseInt(strTrim(minuteInterval) || "15", 10);
+  var intervalVal = parseInt(strTrim(scheduleInterval) || "1", 10);
+  if (isNaN(intervalVal) || intervalVal < 1) intervalVal = 1;
+  var minuteVal = parseInt(strTrim(minuteInterval) || strTrim(scheduleInterval) || "15", 10);
   if (minuteVal != 15 && minuteVal != 30 && minuteVal != 45) minuteVal = 15;
   var easternNaive = localEasternDateTime(startDate);
   var startDateForApi = easternFormToSoapStartDateTime(easternNaive);
@@ -738,6 +806,7 @@ function buildSchedulePayload(freq, startDate, minuteInterval, endMode, endDateK
   if (mode === "never") {
     endDateForSoap = easternFormToSoapStartDateTime(SCHEDULE_NEVER_END_EASTERN);
     endSuffix = ";UNTIL=20991231";
+    endRangeType = "EndOn";
   } else if (mode === "enddate") {
     var endKey = dateKeyFromIsoValue(endDateKey);
     if (!endKey && dateMatch) {
@@ -745,26 +814,23 @@ function buildSchedulePayload(freq, startDate, minuteInterval, endMode, endDateK
     }
     var endEastern = (endKey || "2099-12-31") + "T23:59:00";
     endDateForSoap = easternFormToSoapStartDateTime(endEastern);
-    var untilCompact = untilCompactFromDateKey(endKey);
-    if (untilCompact) endSuffix = ";UNTIL=" + untilCompact;
+    var untilCompactEnd = untilCompactFromDateKey(endKey);
+    if (untilCompactEnd) endSuffix = ";UNTIL=" + untilCompactEnd;
   } else {
     endRangeType = "EndAfter";
     endSuffix = ";COUNT=" + occurVal;
     endDateForSoap = startDateForApi;
   }
-  if (!endSuffix && dateMatch) {
-    var untilDate = new Date(Date.UTC(parseInt(dateMatch[1], 10), parseInt(dateMatch[2], 10) - 1, parseInt(dateMatch[3], 10)));
-    untilDate.setUTCDate(untilDate.getUTCDate() + 365);
-    endSuffix = ";UNTIL=" + String(untilDate.getUTCFullYear()) + pad2(untilDate.getUTCMonth() + 1) + pad2(untilDate.getUTCDate());
-    endDateForSoap = easternFormToSoapStartDateTime(
-      (parseInt(dateMatch[1], 10) + 1) + "-" + dateMatch[2] + "-" + dateMatch[3] + "T23:59:00"
-    );
-  }
-  var recurRule = "FREQ=HOURLY;INTERVAL=1" + endSuffix;
-  if (frequency == "once") recurRule = "FREQ=HOURLY;INTERVAL=1;COUNT=1";
-  else if (frequency == "minute") recurRule = "FREQ=MINUTELY;INTERVAL=" + minuteVal + endSuffix;
-  else if (frequency == "daily") recurRule = "FREQ=DAILY;INTERVAL=1" + endSuffix;
-  else if (frequency == "weekly") recurRule = "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO" + endSuffix;
+  var freqBody = "FREQ=HOURLY;INTERVAL=" + intervalVal;
+  if (frequency === "once") freqBody = "FREQ=HOURLY;INTERVAL=1;COUNT=1";
+  else if (frequency === "minute") freqBody = "FREQ=MINUTELY;INTERVAL=" + minuteVal;
+  else if (frequency === "hourly") freqBody = "FREQ=HOURLY;INTERVAL=" + intervalVal;
+  else if (frequency === "daily") freqBody = "FREQ=DAILY;INTERVAL=" + intervalVal;
+  else if (frequency === "weekdays") freqBody = "FREQ=DAILY;INTERVAL=1;BYDAY=MO,TU,WE,TH,FR";
+  else if (frequency === "weekly") freqBody = "FREQ=WEEKLY;INTERVAL=" + intervalVal + ";BYDAY=" + icalByDayFromWeekdays(weekdaysRaw);
+  else if (frequency === "monthly") freqBody = "FREQ=MONTHLY;INTERVAL=" + intervalVal;
+  else if (frequency === "yearly") freqBody = "FREQ=YEARLY;INTERVAL=" + intervalVal;
+  var recurRule = frequency === "once" ? freqBody : freqBody + endSuffix;
   return {
     ok: true,
     icalRecur: recurRule,
@@ -772,23 +838,46 @@ function buildSchedulePayload(freq, startDate, minuteInterval, endMode, endDateK
     endDate: endDateForSoap,
     timezoneId: "76",
     minuteInterval: minuteVal,
+    repeatInterval: intervalVal,
+    repeatType: frequency,
+    weekdaysRaw: weekdaysRaw || "mon",
     endRangeType: endRangeType,
     occurrences: occurVal
   };
+}
+function buildRecurrenceSoapFromSchedule(schedule) {
+  var ical = schedule.icalRecur || "";
+  var freq = strTrim(schedule.repeatType || "").toLowerCase();
+  var interval = parseInt(schedule.repeatInterval || schedule.minuteInterval || "1", 10);
+  if (isNaN(interval) || interval < 1) interval = 1;
+  if (freq === "minute" || ical.indexOf("MINUTELY") >= 0) {
+    var minuteInterval = schedule.minuteInterval || 15;
+    return '<Recurrence xsi:type="MinutelyRecurrence"><MinutelyRecurrencePatternType>Interval</MinutelyRecurrencePatternType><MinuteInterval>' + minuteInterval + "</MinuteInterval></Recurrence><RecurrenceType>Minutely</RecurrenceType>";
+  }
+  if (freq === "weekdays") {
+    return '<Recurrence xsi:type="DailyRecurrence"><DailyRecurrencePatternType>DailyEveryWeekDay</DailyRecurrencePatternType></Recurrence><RecurrenceType>Daily</RecurrenceType>';
+  }
+  if (freq === "daily" || ical.indexOf("DAILY") >= 0) {
+    return '<Recurrence xsi:type="DailyRecurrence"><DailyRecurrencePatternType>Interval</DailyRecurrencePatternType><DayInterval>' + interval + "</DayInterval></Recurrence><RecurrenceType>Daily</RecurrenceType>";
+  }
+  if (freq === "weekly" || ical.indexOf("WEEKLY") >= 0) {
+    var flags = weekdaySoapFlags(schedule.weekdaysRaw || "mon");
+    return '<Recurrence xsi:type="WeeklyRecurrence"><WeeklyRecurrencePatternType>ByDay</WeeklyRecurrencePatternType><WeekInterval>' + interval + "</WeekInterval><Sunday>" + (flags.sun ? "true" : "false") + "</Sunday><Monday>" + (flags.mon ? "true" : "false") + "</Monday><Tuesday>" + (flags.tue ? "true" : "false") + "</Tuesday><Wednesday>" + (flags.wed ? "true" : "false") + "</Wednesday><Thursday>" + (flags.thu ? "true" : "false") + "</Thursday><Friday>" + (flags.fri ? "true" : "false") + "</Friday><Saturday>" + (flags.sat ? "true" : "false") + "</Saturday></Recurrence><RecurrenceType>Weekly</RecurrenceType>";
+  }
+  if (freq === "monthly" || ical.indexOf("MONTHLY") >= 0) {
+    return '<Recurrence xsi:type="MonthlyRecurrence"><MonthlyRecurrencePatternType>Interval</MonthlyRecurrencePatternType><MonthInterval>' + interval + "</MonthInterval></Recurrence><RecurrenceType>Monthly</RecurrenceType>";
+  }
+  if (freq === "yearly" || ical.indexOf("YEARLY") >= 0) {
+    return '<Recurrence xsi:type="YearlyRecurrence"><YearlyRecurrencePatternType>Interval</YearlyRecurrencePatternType><YearInterval>' + interval + "</YearInterval></Recurrence><RecurrenceType>Yearly</RecurrenceType>";
+  }
+  return '<Recurrence xsi:type="HourlyRecurrence"><HourlyRecurrencePatternType>Interval</HourlyRecurrencePatternType><HourInterval>' + interval + "</HourInterval></Recurrence><RecurrenceType>Hourly</RecurrenceType>";
 }
 function soapSchedule(sub, token, objectId, customerKey, actionName, schedule) {
   var recurrence = '<Recurrence xsi:type="HourlyRecurrence"><HourlyRecurrencePatternType>Interval</HourlyRecurrencePatternType><HourInterval>1</HourInterval></Recurrence><RecurrenceType>Hourly</RecurrenceType>';
   var range = "<RecurrenceRangeType>EndAfter</RecurrenceRangeType><StartDateTime>" + xmlSafe(schedule ? schedule.startDate : "") + "</StartDateTime><Occurrences>1</Occurrences>";
   if (schedule && schedule.icalRecur) {
     var ical = schedule.icalRecur;
-    if (ical.indexOf("MINUTELY") >= 0) {
-      var minuteInterval = schedule.minuteInterval || 15;
-      recurrence = '<Recurrence xsi:type="MinutelyRecurrence"><MinutelyRecurrencePatternType>Interval</MinutelyRecurrencePatternType><MinuteInterval>' + minuteInterval + "</MinuteInterval></Recurrence><RecurrenceType>Minutely</RecurrenceType>";
-    } else if (ical.indexOf("DAILY") >= 0) {
-      recurrence = '<Recurrence xsi:type="DailyRecurrence"><DailyRecurrencePatternType>Interval</DailyRecurrencePatternType><DayInterval>1</DayInterval></Recurrence><RecurrenceType>Daily</RecurrenceType>';
-    } else if (ical.indexOf("WEEKLY") >= 0) {
-      recurrence = '<Recurrence xsi:type="WeeklyRecurrence"><WeeklyRecurrencePatternType>ByDay</WeeklyRecurrencePatternType><WeekInterval>1</WeekInterval><Sunday>false</Sunday><Monday>true</Monday><Tuesday>false</Tuesday><Wednesday>false</Wednesday><Thursday>false</Thursday><Friday>false</Friday><Saturday>false</Saturday></Recurrence><RecurrenceType>Weekly</RecurrenceType>';
-    }
+    recurrence = buildRecurrenceSoapFromSchedule(schedule);
     var countMatch = ical.match(/COUNT=(\d+)/);
     if (countMatch) {
       var countNum = parseInt(countMatch[1], 10);
@@ -915,10 +1004,20 @@ function analyzeRunOnceWarning(obj, sourceDeName) {
 }
 function endOptionChecked(current, value) {
   var mode = strTrim(current).toLowerCase();
-  if (!mode || (mode !== "enddate" && mode !== "never")) mode = "occurrences";
+  if (!mode || (mode !== "enddate" && mode !== "never" && mode !== "occurrences")) mode = "never";
   return mode === value ? " checked" : "";
 }
-function buildSchedulePanelHtml(jid, freq, startDate, minuteInterval, endMode, endDateVal, occurrences, running, paused, scheduleSummary, editorOpen, runOnceOpen, runOnceWarning) {
+function weekdayChipChecked(weekdaysRaw, token) {
+  var set = {};
+  var parts = strTrim(weekdaysRaw || "mon").toLowerCase().split(/[,;\s]+/);
+  var i;
+  for (i = 0; i < parts.length; i++) {
+    if (parts[i]) set[parts[i]] = true;
+  }
+  if (!set.mon && !set.tue && !set.wed && !set.thu && !set.fri && !set.sat && !set.sun) set.mon = true;
+  return set[token] ? " checked" : "";
+}
+function buildSchedulePanelHtml(jid, freq, startDate, scheduleInterval, endMode, endDateVal, occurrences, weekdaysRaw, running, paused, scheduleSummary, editorOpen, runOnceOpen, runOnceWarning) {
   var panelClass = "panel schedule-panel";
   if (editorOpen) panelClass += " is-editing";
   if (runOnceOpen) panelClass += " is-run-once-open";
@@ -961,20 +1060,35 @@ function buildSchedulePanelHtml(jid, freq, startDate, minuteInterval, endMode, e
   html += '<form method="post" action="" class="schedule-form" onsubmit="return confirm(\'Activate this schedule? If a run is in progress, it will be stopped first.\');">';
   html += '<input type="hidden" name="journeyId" value="' + htmlSafe(jid) + '">';
   html += '<input type="hidden" name="automationAction" value="activate">';
-  html += '<div class="schedule-field"><label for="automationFrequency">Frequency</label><select id="automationFrequency" name="automationFrequency" class="schedule-control">';
-  html += '<option value="once"' + optionSelected(freq, "once") + ">Once</option>";
-  html += '<option value="minute"' + optionSelected(freq, "minute") + ">Minute</option>";
+  html += '<input type="hidden" name="automationScheduleWeekdays" id="automationScheduleWeekdays" value="' + htmlSafe(weekdaysRaw || "mon") + '">';
+  html += '<div class="schedule-field"><label for="automationFrequency">Repeat</label><select id="automationFrequency" name="automationFrequency" class="schedule-control">';
+  html += '<option value="minute"' + optionSelected(freq, "minute") + ">Minutes</option>";
   html += '<option value="hourly"' + optionSelected(freq, "hourly") + ">Hourly</option>";
   html += '<option value="daily"' + optionSelected(freq, "daily") + ">Daily</option>";
-  html += '<option value="weekly"' + optionSelected(freq, "weekly") + ">Weekly (Monday)</option>";
+  html += '<option value="weekdays"' + optionSelected(freq, "weekdays") + ">Weekdays</option>";
+  html += '<option value="weekly"' + optionSelected(freq, "weekly") + ">Weekly</option>";
+  html += '<option value="monthly"' + optionSelected(freq, "monthly") + ">Monthly</option>";
+  html += '<option value="yearly"' + optionSelected(freq, "yearly") + ">Yearly</option>";
+  html += '<option value="once"' + optionSelected(freq, "once") + ">Once</option>";
   html += "</select></div>";
-  var minuteFieldHidden = strTrim(freq).toLowerCase() !== "minute";
-  html += '<div class="schedule-field" id="automationMinuteIntervalWrap"' + (minuteFieldHidden ? ' hidden="hidden"' : "") + ">";
-  html += '<label for="automationMinuteInterval">Every (minutes)</label><select id="automationMinuteInterval" name="automationMinuteInterval" class="schedule-control">';
-  html += '<option value="15"' + optionSelected(minuteInterval, "15") + ">15</option>";
-  html += '<option value="30"' + optionSelected(minuteInterval, "30") + ">30</option>";
-  html += '<option value="45"' + optionSelected(minuteInterval, "45") + ">45</option>";
-  html += "</select></div>";
+  var repeatKey = strTrim(freq).toLowerCase() || "hourly";
+  var everyHidden = repeatKey === "once";
+  html += '<div class="schedule-field schedule-every-row" id="automationEveryWrap"' + (everyHidden ? ' hidden="hidden"' : "") + ">";
+  html += '<label for="automationScheduleInterval">Every</label>';
+  html += '<input type="number" min="1" max="9999" class="schedule-control schedule-every-input" name="automationScheduleInterval" id="automationScheduleInterval" value="' + htmlSafe(scheduleInterval || "1") + '">';
+  html += '<span class="schedule-every-unit" id="automationEveryUnitLabel">hours</span>';
+  html += "</div>";
+  html += '<div id="automationWeeklyDayPanel" class="schedule-weekday-panel' + (repeatKey === "weekly" ? " is-visible" : "") + '">';
+  html += "<label>On the selected days</label><div class=\"schedule-weekday-row\">";
+  html += '<label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="sun"' + weekdayChipChecked(weekdaysRaw, "sun") + "> Sun</label>";
+  html += '<label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="mon"' + weekdayChipChecked(weekdaysRaw, "mon") + "> Mon</label>";
+  html += '<label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="tue"' + weekdayChipChecked(weekdaysRaw, "tue") + "> Tue</label>";
+  html += '<label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="wed"' + weekdayChipChecked(weekdaysRaw, "wed") + "> Wed</label>";
+  html += '<label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="thu"' + weekdayChipChecked(weekdaysRaw, "thu") + "> Thu</label>";
+  html += '<label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="fri"' + weekdayChipChecked(weekdaysRaw, "fri") + "> Fri</label>";
+  html += '<label class="schedule-weekday-chip"><input type="checkbox" class="schedule-weekday-cb" value="sat"' + weekdayChipChecked(weekdaysRaw, "sat") + "> Sat</label>";
+  html += "</div></div>";
+  html += '<input type="hidden" name="automationMinuteInterval" id="automationMinuteInterval" value="' + htmlSafe(scheduleInterval || "15") + '">';
   html += '<div class="schedule-field"><label for="automationStartDate">Start (Eastern)</label><input id="automationStartDate" type="datetime-local" class="schedule-control" name="automationStartDate" value="' + htmlSafe(datetimeLocalValueFromScheduleStart(startDate)) + '"></div>';
   html += '<p class="schedule-eastern-note">Start time is always Eastern Time (US &amp; Canada), including daylight saving.</p>';
   if (strTrim(freq).toLowerCase() !== "once") {
@@ -1092,7 +1206,9 @@ try {
       var schedulePayload = buildSchedulePayload(
         Platform.Variable.GetValue("@schedFreq") || "",
         Platform.Variable.GetValue("@schedStart") || "",
+        Platform.Variable.GetValue("@schedInterval") || "",
         Platform.Variable.GetValue("@schedMinute") || "",
+        Platform.Variable.GetValue("@schedWeekdays") || "",
         Platform.Variable.GetValue("@schedEnd") || "",
         Platform.Variable.GetValue("@schedEndDate") || "",
         Platform.Variable.GetValue("@schedOccurrences") || ""
@@ -1126,10 +1242,11 @@ try {
         Platform.Variable.GetValue("@jid") || "",
         Platform.Variable.GetValue("@schedFreq") || "hourly",
         schedStartVal,
-        Platform.Variable.GetValue("@schedMinute") || "15",
-        Platform.Variable.GetValue("@schedEnd") || "occurrences",
+        Platform.Variable.GetValue("@schedInterval") || "1",
+        Platform.Variable.GetValue("@schedEnd") || "never",
         Platform.Variable.GetValue("@schedEndDate") || "",
         Platform.Variable.GetValue("@schedOccurrences") || "2",
+        Platform.Variable.GetValue("@schedWeekdays") || "mon",
         runningNow,
         pausedNow,
         buildScheduleSummary(obj),
@@ -1209,6 +1326,13 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 .schedule-end-option input[type="radio"]{margin:0}
 .schedule-end-inline{width:auto;max-width:120px;padding:8px 10px}
 .schedule-end-date{max-width:180px}
+.schedule-every-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.schedule-every-input{width:auto;max-width:120px;padding:8px 10px}
+.schedule-every-unit{font-size:0.875rem;font-weight:600;color:var(--text-secondary)}
+.schedule-weekday-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.schedule-weekday-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--border-color);border-radius:8px;font-size:0.8125rem;cursor:pointer}
+.schedule-weekday-panel{display:none;margin-bottom:16px}
+.schedule-weekday-panel.is-visible{display:block}
 .schedule-panel-lead{margin-bottom:12px}
 .schedule-panel-summary{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:4px}
 .schedule-panel-editor{display:none;margin-top:16px;padding-top:16px;border-top:1px solid var(--border-color)}
@@ -1351,11 +1475,49 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
     } catch (prefillEx) {}
   }
   var scheduleFreq = document.getElementById("automationFrequency");
-  var minuteWrap = document.getElementById("automationMinuteIntervalWrap");
+  var everyWrap = document.getElementById("automationEveryWrap");
+  var intervalInput = document.getElementById("automationScheduleInterval");
+  var unitLabel = document.getElementById("automationEveryUnitLabel");
+  var weeklyPanel = document.getElementById("automationWeeklyDayPanel");
+  var weekdayHidden = document.getElementById("automationScheduleWeekdays");
+  var minuteHidden = document.getElementById("automationMinuteInterval");
+  var weekdayChecks = document.querySelectorAll(".schedule-weekday-cb");
+  function syncWeekdayHidden() {
+    if (!weekdayHidden) return;
+    var parts = [];
+    var wi;
+    for (wi = 0; wi < weekdayChecks.length; wi++) {
+      if (weekdayChecks[wi].checked) parts.push(weekdayChecks[wi].value);
+    }
+    weekdayHidden.value = parts.length ? parts.join(",") : "mon";
+  }
   function syncScheduleFrequencyFields() {
-    if (!scheduleFreq || !minuteWrap) return;
-    minuteWrap.hidden = scheduleFreq.value !== "minute";
-    if (typeof syncAutomationEndWrapVisibility === "function") syncAutomationEndWrapVisibility();
+    if (!scheduleFreq) return;
+    var repeat = scheduleFreq.value;
+    if (everyWrap) everyWrap.hidden = repeat === "once";
+    if (weeklyPanel) weeklyPanel.classList.toggle("is-visible", repeat === "weekly");
+    if (unitLabel) {
+      var units = { minute: "minutes", hourly: "hours", daily: "days", weekdays: "days", weekly: "weeks", monthly: "months", yearly: "years" };
+      unitLabel.textContent = units[repeat] || "hours";
+    }
+    if (intervalInput) {
+      intervalInput.disabled = repeat === "weekdays";
+      if (repeat === "weekdays") intervalInput.value = "1";
+      if (repeat === "minute") {
+        intervalInput.min = "15";
+        intervalInput.max = "45";
+        intervalInput.step = "15";
+        if (intervalInput.value !== "15" && intervalInput.value !== "30" && intervalInput.value !== "45") intervalInput.value = "15";
+      } else {
+        intervalInput.min = "1";
+        intervalInput.max = "9999";
+        intervalInput.step = "1";
+        if (!intervalInput.value || parseInt(intervalInput.value, 10) < 1) intervalInput.value = "1";
+      }
+    }
+    if (minuteHidden && intervalInput && repeat === "minute") minuteHidden.value = intervalInput.value;
+    syncWeekdayHidden();
+    syncAutomationEndWrapVisibility();
   }
   var endRadios = document.querySelectorAll('input[name="automationScheduleEnd"]');
   var endDateInput = document.getElementById("automationScheduleEndDate");
@@ -1403,11 +1565,29 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
     endRadios[er].addEventListener("change", syncAutomationEndFields);
   }
   if (startInput) startInput.addEventListener("change", syncAutomationEndFields);
-  if (scheduleFreq) {
-    scheduleFreq.addEventListener("change", syncAutomationEndWrapVisibility);
+  var wi2;
+  for (wi2 = 0; wi2 < weekdayChecks.length; wi2++) {
+    weekdayChecks[wi2].addEventListener("change", syncWeekdayHidden);
   }
-  syncAutomationEndWrapVisibility();
-  syncAutomationEndFields();
+  if (intervalInput) {
+    intervalInput.addEventListener("change", function() {
+      if (scheduleFreq && scheduleFreq.value === "minute" && minuteHidden) minuteHidden.value = intervalInput.value;
+    });
+  }
+  var activateForm = document.querySelector("#schedulePanelEditor form.schedule-form input[name='automationAction'][value='activate']");
+  if (activateForm && activateForm.form) {
+    activateForm.form.addEventListener("submit", function() {
+      syncWeekdayHidden();
+      syncScheduleFrequencyFields();
+    });
+  }
+  if (scheduleFreq) {
+    scheduleFreq.addEventListener("change", syncScheduleFrequencyFields);
+    syncScheduleFrequencyFields();
+  } else {
+    syncAutomationEndWrapVisibility();
+    syncAutomationEndFields();
+  }
 })();
 function openAutomationStudio(el) {
   var name = el.getAttribute("data-automation-name") || "";
