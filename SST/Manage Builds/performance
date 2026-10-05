@@ -204,35 +204,13 @@ IF NOT Empty(@jid) AND Empty(@configError) THEN
       SET @contactBatchRowCount = RowCount(@analyticsData)
     ENDIF
     IF @contactBatchRowCount > 0 AND @contactTotalPages <= 1 THEN
-      SET @analyticsData = LookupRows("bd_self_service_engagement", "JourneyID", @jid)
-      SET @contactBatchRowCount = RowCount(@analyticsData)
-      IF @contactBatchRowCount == 0 THEN
-        SET @analyticsData = LookupRows("bd_self_service_engagement", "JourneyId", @jid)
-        SET @contactBatchRowCount = RowCount(@analyticsData)
+      SET @contactRem = Mod(@contactBatchRowCount, @contactPageSize)
+      SET @contactTotalPages = Divide(Subtract(@contactBatchRowCount, @contactRem), @contactPageSize)
+      IF @contactRem > 0 THEN
+        SET @contactTotalPages = Add(@contactTotalPages, 1)
       ENDIF
-      IF @contactBatchRowCount == 0 THEN
-        SET @analyticsData = LookupRows("bd_self_service_engagement", "journeyId", @jid)
-        SET @contactBatchRowCount = RowCount(@analyticsData)
-      ENDIF
-      IF @contactBatchRowCount > 0 THEN
-        SET @contactRem = Mod(@contactBatchRowCount, @contactPageSize)
-        SET @contactTotalPages = Divide(Subtract(@contactBatchRowCount, @contactRem), @contactPageSize)
-        IF @contactRem > 0 THEN
-          SET @contactTotalPages = Add(@contactTotalPages, 1)
-        ENDIF
-        IF @contactTotalPages < 1 THEN
-          SET @contactTotalPages = 1
-        ENDIF
-        SET @analyticsData = LookupOrderedRows("bd_self_service_engagement", @contactPageSize, "LastSent ASC", "JourneyID", @jid)
-        SET @contactBatchRowCount = RowCount(@analyticsData)
-        IF @contactBatchRowCount == 0 THEN
-          SET @analyticsData = LookupOrderedRows("bd_self_service_engagement", @contactPageSize, "LastSent ASC", "JourneyId", @jid)
-          SET @contactBatchRowCount = RowCount(@analyticsData)
-        ENDIF
-        IF @contactBatchRowCount == 0 THEN
-          SET @analyticsData = LookupOrderedRows("bd_self_service_engagement", @contactPageSize, "LastSent ASC", "journeyId", @jid)
-          SET @contactBatchRowCount = RowCount(@analyticsData)
-        ENDIF
+      IF @contactTotalPages < 1 THEN
+        SET @contactTotalPages = 1
       ENDIF
     ENDIF
   ENDIF
@@ -270,6 +248,10 @@ IF Empty(@tableExport) THEN
   SET @tableExport = Trim(QueryParameter("export"))
 ENDIF
 SET @runCsvExport = "false"
+IF @tableExport == "csv" AND NOT Empty(@jid) AND Empty(@configError) THEN
+  SET @runCsvExport = "true"
+ENDIF
+IF @runCsvExport != "true" THEN
 SET @openedCount = 0
 SET @bouncedCount = 0
 SET @didNotOpenCount = 0
@@ -530,14 +512,12 @@ NEXT @i
 ENDIF
 
 SET @editSidebarHtml = ContentBlockByName("sst_shell_edit_sidebar")
-
-IF @tableExport == "csv" AND NOT Empty(@jid) AND Empty(@configError) THEN
-  SET @runCsvExport = "true"
 ENDIF
+
 IF @runCsvExport == "true" THEN
   VAR @exportPageNum, @exportMaxPage, @exportBatchRows, @exportRowIdx, @exportRow, @exportDePageKey, @exportMaxPageRows, @exportMaxPageNum, @exportLine, @exportCell, @exportLastSent, @exportContactId
-  VAR @exportFromPage, @exportToPage, @exportFromParam, @exportToParam, @exportChunkSpan, @exportMaxChunkPages
-  SET @exportMaxChunkPages = 75
+  VAR @exportFromPage, @exportToPage, @exportFromParam, @exportToParam, @exportChunkSpan, @exportMaxChunkPages, @exportHeaderOut
+  SET @exportMaxChunkPages = 40
   ResponseContentType("text/csv")
   SET @exportMaxPage = @contactTotalPages
   IF @exportMaxPage < 1 THEN
@@ -577,10 +557,10 @@ IF @runCsvExport == "true" THEN
   IF Empty(@exportToParam) THEN
     SET @exportToParam = Trim(QueryParameter("exportTo"))
   ENDIF
-  IF NOT Empty(@exportFromParam) THEN
+  IF NOT Empty(@exportFromParam) AND IsNumber(@exportFromParam) THEN
     SET @exportFromPage = Add(0, @exportFromParam)
   ENDIF
-  IF NOT Empty(@exportToParam) THEN
+  IF NOT Empty(@exportToParam) AND IsNumber(@exportToParam) THEN
     SET @exportToPage = Add(0, @exportToParam)
   ENDIF
   IF @exportFromPage < 1 THEN
@@ -601,9 +581,12 @@ IF @runCsvExport == "true" THEN
     SET @exportToPage = Add(@exportFromPage, Subtract(@exportMaxChunkPages, 1))
   ENDIF
   SET @exportLine = "Contact_Id,Email,LastSent,Engagement,Primary_Specialty,Related_Account_Primary_State,JobID,Related_Account_Name,First_Name,Last_Name,Designation,Role,Mobile,Auth0UserId,Campaign,email_name,ClickCount,BotOrHuman,contact_url,view_email_url"
+  SET @exportHeaderOut = ""
   IF @exportFromPage == 1 THEN
-]%%%%=Concat(@exportLine, Char(10))=%%%%[
+    SET @exportHeaderOut = Concat(@exportLine, Char(10))
   ENDIF
+]%%%%=v(@exportHeaderOut)=%%%%[
+  IF @exportToPage >= @exportFromPage THEN
   FOR @exportPageNum = @exportFromPage TO @exportToPage DO
     SET @exportDePageKey = Concat("", @exportPageNum)
     SET @exportBatchRows = LookupRows("bd_self_service_engagement", "JourneyID", @jid, "PageNumber", @exportDePageKey)
@@ -670,6 +653,7 @@ IF @runCsvExport == "true" THEN
 ]%%%%=Concat(@exportLine, Char(10))=%%%%[
     NEXT @exportRowIdx
   NEXT @exportPageNum
+  ENDIF
 ENDIF
 ]%%
 %%[ IF @runCsvExport != "true" THEN ]%%
@@ -2944,7 +2928,7 @@ pre.log.show{display:block}
            if (filteredResponses.length === 0 && serverContactPaging) {
                const cfg = document.getElementById("contactTablePagingConfig");
                const totalPages = cfg ? (parseInt(cfg.getAttribute("data-total-pages"), 10) || 1) : 1;
-               const chunkPages = 75;
+               const chunkPages = 40;
                const btn = document.getElementById("downloadBtn");
                const prevLabel = btn ? btn.textContent : "";
                const totalChunks = Math.max(1, Math.ceil(totalPages / chunkPages));
@@ -2971,7 +2955,7 @@ pre.log.show{display:block}
                        }
                        const text = await resp.text();
                        if (!text || (fromPage === 1 && text.indexOf("Contact_Id") < 0)) {
-                           throw new Error("Export returned invalid data. The page may have timed out — retry Download.");
+                           throw new Error("Export returned invalid data. The page may have timed out; retry Download.");
                        }
                        parts.push(text);
                    }
