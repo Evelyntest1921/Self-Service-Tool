@@ -4,7 +4,7 @@ VAR @navRows, @navRow, @surveyUrlRows, @surveyUrlRow
 VAR @automationId, @automationCustomerKey, @connectedAutomationName, @journeyAutomationId, @detailRows, @detailRow, @jid, @buildNavContext, @buildNavActive, @isSurveyBuild, @dispSurveyId
 VAR @pageStatus, @loadError, @authOk, @accessToken, @subdomain
 VAR @authRow, @authR, @clientId, @clientSecret, @accountId, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader
-VAR @tokPos, @tokRest, @tokEndPos, @tokNeedle, @tokStart, @tokRemain
+VAR @authPending
 VAR @editSidebarHtml, @automationMetaHtml, @automationStepsHtml, @automationStudioUrl, @apiAutomationName
 
 SET @HOME_URL = ""
@@ -27,6 +27,7 @@ SET @dispSurveyId = ""
 SET @pageStatus = "view"
 SET @loadError = ""
 SET @authOk = "false"
+SET @authPending = "false"
 SET @accessToken = ""
 SET @subdomain = ""
 SET @automationMetaHtml = ""
@@ -92,26 +93,7 @@ ELSE
    SET @authPayload = Concat(@authPayload,'}')
    SET @authStatus = HTTPPost2(@authUrl,"application/json",@authPayload,false,@authResponse,@authResponseHeader)
    IF @authStatus == 200 THEN
-    SET @accessToken = ""
-    SET @tokNeedle = '"access_token":"'
-    SET @tokPos = IndexOf(@authResponse, @tokNeedle)
-    IF @tokPos > 0 THEN
-     SET @tokStart = Add(@tokPos, Length(@tokNeedle))
-     SET @tokRemain = Subtract(Length(@authResponse), Subtract(@tokStart, 1))
-     IF @tokRemain > 0 THEN
-      SET @tokRest = Substring(@authResponse, @tokStart, @tokRemain)
-      SET @tokEndPos = IndexOf(@tokRest, '"')
-      IF @tokEndPos > 1 THEN
-       SET @accessToken = Substring(@tokRest, 1, Subtract(@tokEndPos, 1))
-      ENDIF
-     ENDIF
-    ENDIF
-    IF NOT Empty(@accessToken) THEN
-     SET @authOk = "true"
-    ELSE
-     SET @loadError = "Auth response missing access token."
-     SET @pageStatus = "authfail"
-    ENDIF
+    SET @authPending = "true"
    ELSE
     SET @loadError = Concat("Auth HTTP ",@authStatus)
     SET @pageStatus = "authfail"
@@ -244,7 +226,10 @@ function getAutomation(sub, token, automationId) {
     var keyed = parseJsonSafe(second.body);
     if (keyed && (keyed.id || keyed.name || keyed.key)) return { ok: true, obj: keyed, msg: "" };
   }
-  var detail = first.body ? first.body.substring(0, 220) : "";
+  var detail = first.body ? String(first.body) : "";
+  if (detail.length > 220) {
+    detail = detail.substring(0, 220);
+  }
   return {
     ok: false,
     obj: null,
@@ -301,6 +286,19 @@ function buildStepsHtml(obj) {
 var pageStatus = Platform.Variable.GetValue("@pageStatus") || "";
 var authOk = Platform.Variable.GetValue("@authOk") || "";
 var accessToken = Platform.Variable.GetValue("@accessToken") || "";
+if (String(Platform.Variable.GetValue("@authPending") || "") === "true") {
+  var authObj = parseJsonSafe(Platform.Variable.GetValue("@authResponse") || "");
+  accessToken = authObj && authObj.access_token ? String(authObj.access_token) : "";
+  if (accessToken) {
+    authOk = "true";
+    Platform.Variable.SetValue("@accessToken", accessToken);
+    Platform.Variable.SetValue("@authOk", "true");
+  } else {
+    pageStatus = "authfail";
+    Platform.Variable.SetValue("@pageStatus", "authfail");
+    Platform.Variable.SetValue("@loadError", "Auth response missing access token.");
+  }
+}
 var subdomain = Platform.Variable.GetValue("@subdomain") || "";
 var automationId = strTrim(Platform.Variable.GetValue("@automationId") || "");
 var metaHtml = "";
