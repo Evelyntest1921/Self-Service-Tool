@@ -536,6 +536,8 @@ IF @tableExport == "csv" AND NOT Empty(@jid) AND Empty(@configError) THEN
 ENDIF
 IF @runCsvExport == "true" THEN
   VAR @exportPageNum, @exportMaxPage, @exportBatchRows, @exportRowIdx, @exportRow, @exportDePageKey, @exportMaxPageRows, @exportMaxPageNum, @exportLine, @exportCell, @exportLastSent, @exportContactId
+  VAR @exportFromPage, @exportToPage, @exportFromParam, @exportToParam, @exportChunkSpan, @exportMaxChunkPages
+  SET @exportMaxChunkPages = 75
   ResponseContentType("text/csv")
   SET @exportMaxPage = @contactTotalPages
   IF @exportMaxPage < 1 THEN
@@ -565,9 +567,44 @@ IF @runCsvExport == "true" THEN
       ENDIF
     ENDIF
   ENDIF
+  SET @exportFromPage = 1
+  SET @exportToPage = @exportMaxPage
+  SET @exportFromParam = Trim(RequestParameter("exportFrom"))
+  IF Empty(@exportFromParam) THEN
+    SET @exportFromParam = Trim(QueryParameter("exportFrom"))
+  ENDIF
+  SET @exportToParam = Trim(RequestParameter("exportTo"))
+  IF Empty(@exportToParam) THEN
+    SET @exportToParam = Trim(QueryParameter("exportTo"))
+  ENDIF
+  IF NOT Empty(@exportFromParam) THEN
+    SET @exportFromPage = Add(0, @exportFromParam)
+  ENDIF
+  IF NOT Empty(@exportToParam) THEN
+    SET @exportToPage = Add(0, @exportToParam)
+  ENDIF
+  IF @exportFromPage < 1 THEN
+    SET @exportFromPage = 1
+  ENDIF
+  IF @exportToPage > @exportMaxPage THEN
+    SET @exportToPage = @exportMaxPage
+  ENDIF
+  IF @exportToPage < @exportFromPage THEN
+    SET @exportToPage = @exportFromPage
+  ENDIF
+  IF Empty(@exportFromParam) AND Empty(@exportToParam) AND @exportMaxPage > @exportMaxChunkPages THEN
+    SET @exportToPage = @exportMaxChunkPages
+  ENDIF
+  SET @exportChunkSpan = Subtract(@exportToPage, @exportFromPage)
+  SET @exportChunkSpan = Add(@exportChunkSpan, 1)
+  IF @exportChunkSpan > @exportMaxChunkPages THEN
+    SET @exportToPage = Add(@exportFromPage, Subtract(@exportMaxChunkPages, 1))
+  ENDIF
   SET @exportLine = "Contact_Id,Email,LastSent,Engagement,Primary_Specialty,Related_Account_Primary_State,JobID,Related_Account_Name,First_Name,Last_Name,Designation,Role,Mobile,Auth0UserId,Campaign,email_name,ClickCount,BotOrHuman,contact_url,view_email_url"
+  IF @exportFromPage == 1 THEN
 ]%%%%=Concat(@exportLine, Char(10))=%%%%[
-  FOR @exportPageNum = 1 TO @exportMaxPage DO
+  ENDIF
+  FOR @exportPageNum = @exportFromPage TO @exportToPage DO
     SET @exportDePageKey = Concat("", @exportPageNum)
     SET @exportBatchRows = LookupRows("bd_self_service_engagement", "JourneyID", @jid, "PageNumber", @exportDePageKey)
     IF RowCount(@exportBatchRows) == 0 THEN
@@ -578,13 +615,6 @@ IF @runCsvExport == "true" THEN
     ENDIF
     IF RowCount(@exportBatchRows) == 0 THEN
       SET @exportBatchRows = LookupRows("bd_self_service_engagement", "JourneyId", @jid, "PageNumber", @exportPageNum)
-    ENDIF
-    IF RowCount(@exportBatchRows) == 0 AND @exportPageNum == 1 THEN
-      SET @exportBatchRows = LookupRows("bd_self_service_engagement", "JourneyID", @jid)
-      IF RowCount(@exportBatchRows) == 0 THEN
-        SET @exportBatchRows = LookupRows("bd_self_service_engagement", "JourneyId", @jid)
-      ENDIF
-      SET @exportMaxPage = 1
     ENDIF
     FOR @exportRowIdx = 1 TO RowCount(@exportBatchRows) DO
       SET @exportRow = Row(@exportBatchRows, @exportRowIdx)
@@ -2910,12 +2940,58 @@ pre.log.show{display:block}
           }
       }
 
-       function downloadFilteredData() {
+       async function downloadFilteredData() {
            if (filteredResponses.length === 0 && serverContactPaging) {
-               const url = new URL(window.location.href);
-               url.searchParams.set("export", "csv");
-               url.searchParams.delete("contactPage");
-               window.location.href = url.toString();
+               const cfg = document.getElementById("contactTablePagingConfig");
+               const totalPages = cfg ? (parseInt(cfg.getAttribute("data-total-pages"), 10) || 1) : 1;
+               const chunkPages = 75;
+               const btn = document.getElementById("downloadBtn");
+               const prevLabel = btn ? btn.textContent : "";
+               const totalChunks = Math.max(1, Math.ceil(totalPages / chunkPages));
+               try {
+                   if (btn) {
+                       btn.setAttribute("disabled", "disabled");
+                   }
+                   const parts = [];
+                   let chunkIndex = 0;
+                   for (let fromPage = 1; fromPage <= totalPages; fromPage += chunkPages) {
+                       chunkIndex += 1;
+                       const toPage = Math.min(fromPage + chunkPages - 1, totalPages);
+                       if (btn) {
+                           btn.textContent = "Exporting " + chunkIndex + "/" + totalChunks + "...";
+                       }
+                       const url = new URL(window.location.href);
+                       url.searchParams.set("export", "csv");
+                       url.searchParams.set("exportFrom", String(fromPage));
+                       url.searchParams.set("exportTo", String(toPage));
+                       url.searchParams.delete("contactPage");
+                       const resp = await fetch(url.toString(), { credentials: "same-origin" });
+                       if (!resp.ok) {
+                           throw new Error("Export failed (HTTP " + resp.status + "). Try again or export a filtered subset.");
+                       }
+                       const text = await resp.text();
+                       if (!text || (fromPage === 1 && text.indexOf("Contact_Id") < 0)) {
+                           throw new Error("Export returned invalid data. The page may have timed out — retry Download.");
+                       }
+                       parts.push(text);
+                   }
+                   const csvContent = parts.join("");
+                   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+                   const link = document.createElement("a");
+                   link.setAttribute("href", URL.createObjectURL(blob));
+                   link.setAttribute("download", "Build_Performance_Engagement_" + new Date().toISOString().split("T")[0] + ".csv");
+                   link.style.visibility = "hidden";
+                   document.body.appendChild(link);
+                   link.click();
+                   document.body.removeChild(link);
+               } catch (err) {
+                   alert(err && err.message ? err.message : "Export failed.");
+               } finally {
+                   if (btn) {
+                       btn.removeAttribute("disabled");
+                       btn.textContent = prevLabel;
+                   }
+               }
                return;
            }
            const dataToDownload = filteredResponses.length > 0 ? filteredResponses : allResponses;
