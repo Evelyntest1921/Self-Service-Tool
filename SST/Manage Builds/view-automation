@@ -56,10 +56,8 @@ IF RequestParameter("confirmAutomationAction") == "1" THEN
  ENDIF
 ENDIF
 SET @schedFreq = Trim(RequestParameter("automationFrequency"))
-IF Empty(@schedFreq) THEN SET @schedFreq = "hourly" ENDIF
 SET @schedStart = Trim(RequestParameter("automationStartDate"))
 SET @schedMinute = Trim(RequestParameter("automationMinuteInterval"))
-IF Empty(@schedMinute) THEN SET @schedMinute = "15" ENDIF
 SET @editSidebarHtml = ""
 
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
@@ -336,6 +334,38 @@ function automationStatusNote(code, label) {
     return "This job could not be built correctly. Your technical team needs to review it in Automation Studio.";
   }
   return "This is the latest status from Automation Studio. If it looks wrong, wait a moment and refresh the page.";
+}
+function scheduleFrequencyFromObj(obj) {
+  var ical = strTrim((obj && obj.schedule ? obj.schedule : {}).icalRecur || "");
+  if (!ical) return "";
+  if (ical.indexOf("MINUTELY") >= 0) return "minute";
+  if (ical.indexOf("DAILY") >= 0) return "daily";
+  if (ical.indexOf("WEEKLY") >= 0) return "weekly";
+  if (ical.indexOf("COUNT=1") >= 0) return "once";
+  if (ical.indexOf("HOURLY") >= 0) return "hourly";
+  return "";
+}
+function scheduleMinuteIntervalFromIcal(ical) {
+  var rule = strTrim(ical || "");
+  var match = rule.match(/INTERVAL=(\d+)/);
+  if (match) {
+    var v = parseInt(match[1], 10);
+    if (v === 15 || v === 30 || v === 45) return String(v);
+  }
+  return "15";
+}
+function applyScheduleFormDefaultsFromAutomation(obj) {
+  var postedFreq = strTrim(Platform.Variable.GetValue("@schedFreq") || "");
+  var freq = postedFreq || scheduleFrequencyFromObj(obj) || "hourly";
+  Platform.Variable.SetValue("@schedFreq", freq);
+  var postedMinute = strTrim(Platform.Variable.GetValue("@schedMinute") || "");
+  var minuteVal = "15";
+  if (freq === "minute") {
+    minuteVal = postedMinute || scheduleMinuteIntervalFromIcal((obj.schedule || {}).icalRecur || "") || "15";
+  } else if (postedMinute) {
+    minuteVal = postedMinute;
+  }
+  Platform.Variable.SetValue("@schedMinute", minuteVal);
 }
 function humanScheduleText(schedule) {
   var ical = strTrim(schedule.icalRecur || "");
@@ -841,7 +871,9 @@ function buildSchedulePanelHtml(jid, freq, startDate, minuteInterval, running, p
   html += '<option value="daily"' + optionSelected(freq, "daily") + ">Daily</option>";
   html += '<option value="weekly"' + optionSelected(freq, "weekly") + ">Weekly (Monday)</option>";
   html += "</select></div>";
-  html += '<div class="schedule-field"><label for="automationMinuteInterval">Every minutes</label><select id="automationMinuteInterval" name="automationMinuteInterval" class="schedule-control">';
+  var minuteFieldHidden = strTrim(freq).toLowerCase() !== "minute";
+  html += '<div class="schedule-field" id="automationMinuteIntervalWrap"' + (minuteFieldHidden ? ' hidden="hidden"' : "") + ">";
+  html += '<label for="automationMinuteInterval">Every (minutes)</label><select id="automationMinuteInterval" name="automationMinuteInterval" class="schedule-control">';
   html += '<option value="15"' + optionSelected(minuteInterval, "15") + ">15</option>";
   html += '<option value="30"' + optionSelected(minuteInterval, "30") + ">30</option>";
   html += '<option value="45"' + optionSelected(minuteInterval, "45") + ">45</option>";
@@ -964,6 +996,7 @@ try {
       var obj = fetched.obj;
       apiName = obj.name ? String(obj.name) : "";
       studioUrl = MC_CLOUD + "#app/Automation%20Studio/AutomationStudioFuel3/";
+      applyScheduleFormDefaultsFromAutomation(obj);
       var runningNow = isRunningStatus(obj);
       var pausedNow = isPausedStatus(obj);
       metaHtml = buildMetaHtml(obj, studioUrl, apiName);
@@ -1195,6 +1228,16 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
         startInput.value = map.year + "-" + map.month + "-" + map.day + "T" + map.hour + ":" + map.minute;
       }
     } catch (prefillEx) {}
+  }
+  var scheduleFreq = document.getElementById("automationFrequency");
+  var minuteWrap = document.getElementById("automationMinuteIntervalWrap");
+  function syncScheduleFrequencyFields() {
+    if (!scheduleFreq || !minuteWrap) return;
+    minuteWrap.hidden = scheduleFreq.value !== "minute";
+  }
+  if (scheduleFreq) {
+    scheduleFreq.addEventListener("change", syncScheduleFrequencyFields);
+    syncScheduleFrequencyFields();
   }
 })();
 function openAutomationStudio(el) {
