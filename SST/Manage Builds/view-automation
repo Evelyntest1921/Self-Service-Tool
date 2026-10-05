@@ -46,7 +46,9 @@ SET @autoAction = Lowercase(Trim(RequestParameter("automationAction")))
 SET @autoActionOn = "false"
 IF RequestParameter("confirmAutomationAction") == "1" THEN
  SET @autoActionOn = "true"
- SET @scheduleEditorOpen = "true"
+ IF @autoAction == "activate" OR @autoAction == "pause" THEN
+  SET @scheduleEditorOpen = "true"
+ ENDIF
 ENDIF
 SET @schedFreq = Trim(RequestParameter("automationFrequency"))
 IF Empty(@schedFreq) THEN SET @schedFreq = "hourly" ENDIF
@@ -243,7 +245,7 @@ function metaStatusRow(status) {
   var label = statusLabel(raw);
   var cls = "journey-meta-value";
   if (raw === "3") cls += " status-running";
-  else if (raw === "4" || raw === "5") cls += " status-paused-stopped";
+  else if (raw === "4" || raw === "5" || raw === "6") cls += " status-paused-schedule";
   return "<dt>Status</dt><dd><span class=\"" + cls + "\">" + htmlSafe(label) + "</span><p class=\"journey-meta-note\">" + htmlSafe(automationStatusNote(raw)) + "</p></dd>";
 }
 function objStatusRaw(status) {
@@ -494,6 +496,13 @@ function buildSchedulePanelHtml(jid, freq, startDate, minuteInterval, running, s
     html += "</form>";
   }
   html += '<button type="button" class="btn-sst-black" id="scheduleEditOpenBtn">Edit schedule</button>';
+  if (!running) {
+    html += '<form method="post" action="" class="schedule-inline-form" onsubmit="return confirm(\'Run this automation once now?\');">';
+    html += '<input type="hidden" name="journeyId" value="' + htmlSafe(jid) + '">';
+    html += '<input type="hidden" name="automationAction" value="runonce">';
+    html += '<button type="submit" name="confirmAutomationAction" value="1" class="btn-sst-black">Run Automation Once</button>';
+    html += "</form>";
+  }
   html += "</div>";
   html += '<div class="schedule-panel-editor" id="schedulePanelEditor">';
   if (!running) {
@@ -602,6 +611,17 @@ try {
       Platform.Variable.SetValue("@actionOk", pauseResp.ok ? "true" : "false");
       Platform.Variable.SetValue("@actionMsg", pauseResp.ok ? "Pause requested." : "Pause failed HTTP " + pauseResp.status + " " + pauseResp.body);
     }
+    if (actionOn && actionName === "runonce") {
+      var runTargetId = (beforeAction.obj && beforeAction.obj.id) || automationId;
+      if (beforeAction.ok && isRunningStatus(beforeAction.obj)) {
+        Platform.Variable.SetValue("@actionOk", "false");
+        Platform.Variable.SetValue("@actionMsg", "Automation is already running. Stop it first or wait for the run to finish.");
+      } else {
+        var runResp = postJsonAction(subdomain, accessToken, runTargetId, "runallonce");
+        Platform.Variable.SetValue("@actionOk", runResp.status == 200 || runResp.status == 202 ? "true" : "false");
+        Platform.Variable.SetValue("@actionMsg", runResp.status == 200 || runResp.status == 202 ? "Run once requested." : "Run once failed HTTP " + runResp.status + " " + clip(runResp.body, 180));
+      }
+    }
     if (actionOn && actionName === "activate") {
       var notes = "";
       var targetId = (beforeAction.obj && beforeAction.obj.id) || automationId;
@@ -671,9 +691,6 @@ body{font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif;background:va
 h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 .journey-page-heading{display:flex;align-items:center;gap:10px;margin-bottom:8px}
 .journey-page-heading h1{margin:0}
-.journey-page-heading-icon{flex-shrink:0;width:40px;height:40px;line-height:0}
-.journey-page-heading-icon svg{width:40px;height:40px;display:block}
-.journey-page-heading-icon path{fill:#080341}
 .sub{color:var(--text-secondary);margin-bottom:22px}
 .panel{background:#fff;border:1px solid var(--border-color);border-radius:var(--radius-lg);padding:26px 30px;margin-bottom:20px}
 .panel-title{font-size:1rem;font-weight:700;margin:0 0 16px 0}
@@ -685,9 +702,9 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 .journey-meta-dl dt{font-size:11px;color:var(--gray-600);text-transform:uppercase;font-weight:600;letter-spacing:0.05em;margin:16px 0 4px 0}
 .journey-meta-dl dt:first-child{margin-top:0}
 .journey-meta-dl dd{font-weight:600;font-size:1rem;margin:0;padding:0;color:var(--gray-900);word-break:break-word}
-.journey-meta-value{display:inline-block;padding:4px 10px;border-radius:999px;font-size:14px;font-weight:700}
-.journey-meta-value.status-running{color:#166534;background:#dcfce7;border:1px solid #86efac}
-.journey-meta-value.status-paused-stopped{color:#854d0e;background:#fef9c3;border:1px solid #fde047}
+.journey-meta-value{display:inline-block;padding:4px 10px;font-size:14px;font-weight:700;color:#000}
+.journey-meta-value.status-running{background:#86efac}
+.journey-meta-value.status-paused-schedule{background:#fdba74}
 .journey-meta-note{font-weight:400;font-size:13px;line-height:1.45;color:var(--text-secondary);margin:6px 0 0;padding:0}
 .journey-meta-action{margin:0}
 .flow-hint{font-size:13px;color:var(--text-secondary);margin:0 0 14px 0}
@@ -754,9 +771,6 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 %%[ ENDIF ]%%
 %%[ ELSE ]%%
 <div class="journey-page-heading">
-  <span class="journey-page-heading-icon" aria-hidden="true">
-    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"></path><path fill-rule="evenodd" clip-rule="evenodd" d="M12 15.75a3.75 3.75 0 1 0 0-7.5 3.75 3.75 0 0 0 0 7.5Z"></path></svg>
-  </span>
   <h1>%%[ IF NOT Empty(@apiAutomationName) THEN ]%%%%=v(@apiAutomationName)=%%%%[ ELSEIF NOT Empty(@connectedAutomationName) THEN ]%%%%=v(@connectedAutomationName)=%%%%[ ELSE ]%%Automation%%[ ENDIF ]%%</h1>
 </div>
 <p class="sub">Review the connected Automation Studio definition, schedule, and each activity step. Use Automation Studio for the full canvas.</p>
