@@ -10,8 +10,6 @@
   VAR @specRowUnsub
   VAR @homeDo, @browseJourneys, @browseMode, @jaBrowseMarkup, @jaBrowsePagination, @jaBrowseError, @addBuildMessage, @addBuildError, @addedBuild, @browsePage, @jaBrowseHint, @buildsPage, @jaBuildsPagination
   VAR @addJourneyId, @addJourneyName
-  VAR @addBuildLookupDE, @addBuildLookupRows, @addBuildLookupRow
-  VAR @addBuildDeName, @addBuildDeId, @addBuildAutoName, @addBuildAutoGuid, @addBuildAutoKey, @addBuildType
   VAR @authRow, @authStatus, @authUrl, @authPayload, @authResponse, @authResponseHeader, @tokenPattern, @accountId, @clientId, @clientSecret, @subdomain, @accessToken
   SET @sendLogChartJson = ""
   SET @specLabelsOut = ""
@@ -135,71 +133,18 @@
     SET @addJourneyId = Trim(RequestParameter("journeyId"))
     SET @addJourneyName = Trim(RequestParameter("journeyName"))
     IF NOT Empty(@addJourneyId) AND NOT Empty(@addJourneyName) THEN
-      SET @addBuildType = "Existing Journey"
-      SET @addBuildDeName = "N/A"
-      SET @addBuildDeId = "N/A"
-      SET @addBuildAutoName = ""
-      SET @addBuildAutoGuid = ""
-      SET @addBuildAutoKey = ""
-      SET @addBuildLookupDE = "bd_sst_journey_automation_lookup"
-      IF DataExtensionRowCount(@addBuildLookupDE) == 0 THEN
-        SET @addBuildLookupDE = "Bd_sst_journey_automation_lookup"
-      ENDIF
-      IF DataExtensionRowCount(@addBuildLookupDE) > 0 THEN
-        SET @addBuildLookupRows = LookupRows(@addBuildLookupDE, "journeyId", @addJourneyId)
-        IF RowCount(@addBuildLookupRows) == 0 THEN
-          SET @addBuildLookupRows = LookupRows(@addBuildLookupDE, "JourneyID", @addJourneyId)
-        ENDIF
-        IF RowCount(@addBuildLookupRows) > 0 THEN
-          SET @addBuildLookupRow = Row(@addBuildLookupRows, 1)
-          SET @addBuildAutoName = Trim(Field(@addBuildLookupRow, "automationName"))
-          SET @addBuildAutoGuid = Trim(Field(@addBuildLookupRow, "automationGuid"))
-          SET @addBuildAutoKey = Trim(Field(@addBuildLookupRow, "automationCustomerKey"))
-          SET @addBuildDeName = Trim(Field(@addBuildLookupRow, "deName"))
-          SET @addBuildDeId = Trim(Field(@addBuildLookupRow, "deId"))
-          IF Empty(@addBuildDeName) THEN SET @addBuildDeName = "N/A" ENDIF
-          IF Empty(@addBuildDeId) THEN SET @addBuildDeId = "N/A" ENDIF
-          IF NOT Empty(Trim(Field(@addBuildLookupRow, "journeyName"))) THEN
-            SET @addJourneyName = Trim(Field(@addBuildLookupRow, "journeyName"))
-          ENDIF
-        ENDIF
-      ENDIF
-      IF NOT Empty(@addBuildAutoGuid) OR NOT Empty(@addBuildAutoKey) THEN
-        SET @addBuildType = "Journey + Automation"
-      ENDIF
-      IF Length(@addJourneyId) > 250 THEN SET @addJourneyId = Substring(@addJourneyId, 1, 250) ENDIF
-      IF Length(@addJourneyName) > 50 THEN SET @addJourneyName = Substring(@addJourneyName, 1, 50) ENDIF
-      IF Length(@addBuildType) > 50 THEN SET @addBuildType = Substring(@addBuildType, 1, 50) ENDIF
-      IF Length(@addBuildDeName) > 200 THEN SET @addBuildDeName = Substring(@addBuildDeName, 1, 200) ENDIF
-      IF Length(@addBuildDeId) > 50 THEN SET @addBuildDeId = Substring(@addBuildDeId, 1, 50) ENDIF
-      IF Length(@addBuildAutoName) > 50 THEN SET @addBuildAutoName = Substring(@addBuildAutoName, 1, 50) ENDIF
-      IF Length(@addBuildAutoGuid) > 50 THEN SET @addBuildAutoGuid = Substring(@addBuildAutoGuid, 1, 50) ENDIF
-      IF Length(@addBuildAutoKey) > 50 THEN SET @addBuildAutoKey = Substring(@addBuildAutoKey, 1, 50) ENDIF
       UpsertDE(
         "Bd_journey_analytics",
         1,
         "journeyId",
-        @addJourneyId,
-        "journeyName",
-        @addJourneyName,
-        "journeyType",
-        @addBuildType,
-        "emailName",
-        "N/A",
-        "emailId",
-        "N/A",
-        "deName",
-        @addBuildDeName,
-        "deId",
-        @addBuildDeId,
-        "automationName",
-        @addBuildAutoName,
-        "automationGuid",
-        @addBuildAutoGuid,
-        "automationCustomerKey",
-        @addBuildAutoKey,
-        "updateDate",
-        Now()
+        Substring(@addJourneyId,1,250),
+        "journeyName", Substring(@addJourneyName,1,50),
+        "journeyType", "Existing Journey",
+        "emailName", "N/A",
+        "emailId", "N/A",
+        "deName", "N/A",
+        "deId", "N/A",
+        "updateDate", Now()
       )
       IF NOT Empty(@hubUrl) THEN
         IF IndexOf(@hubUrl, "?") > 0 THEN
@@ -1826,7 +1771,7 @@
           <p class="add-journey-picker-title">Add existing journey</p>
           <button type="button" class="add-journey-picker-close" onclick="closeAddJourneyPicker()" aria-label="Close">×</button>
         </div>
-        <form method="post" action="" class="add-journey-picker-form" id="addBuildForm" onsubmit="return submitAddJourneyForm(event)">
+        <form method="post" action="%%=IIF(NOT Empty(@hubUrl), @hubUrl, '')=%%" class="add-journey-picker-form" id="addBuildForm" onsubmit="return submitAddJourneyForm(event)">
           <input type="hidden" name="do" value="addBuild">
           <input type="hidden" name="journeyId" id="addBuildJourneyId" value="">
           <input type="hidden" name="journeyName" id="addBuildJourneyName" value="">
@@ -4030,6 +3975,13 @@
     var addJourneySelect = document.getElementById('addJourneySelect');
     if (addJourneySelect) {
       addJourneySelect.addEventListener('change', onAddJourneySelectChange);
+    }
+    var addBuildForm = document.getElementById('addBuildForm');
+    if (addBuildForm) {
+      var hubForPost = hubBaseUrl();
+      if (hubForPost && !addBuildForm.getAttribute('action')) {
+        addBuildForm.setAttribute('action', hubForPost);
+      }
     }
   }
                            );
