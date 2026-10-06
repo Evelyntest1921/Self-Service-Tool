@@ -9,7 +9,9 @@
   VAR @monthLabelsOut, @monthOpensOut, @monthClicksOut, @monthUnsubOut, @monthBouncedOut, @monthOpenSum, @monthClickSum, @monthUnsubSum, @monthBounceSum, @monthLabel, @monthStartVal
   VAR @specRowUnsub
   VAR @homeDo, @browseJourneys, @browseMode, @jaBrowseMarkup, @jaBrowsePagination, @jaBrowseError, @addBuildMessage, @addBuildError, @addedBuild, @browsePage, @jaBrowseHint, @buildsPage, @jaBuildsPagination
-  VAR @addJourneyId, @addJourneyName, @addBuildRedirectTarget
+  VAR @addJourneyId, @addJourneyName
+  VAR @addBuildLookupDE, @addBuildLookupRows, @addBuildLookupRow
+  VAR @addBuildDeName, @addBuildDeId, @addBuildAutoName, @addBuildAutoGuid, @addBuildAutoKey, @addBuildType, @addBuildBuildName
   VAR @authRow, @authStatus, @authUrl, @authPayload, @authResponse, @authResponseHeader, @tokenPattern, @accountId, @clientId, @clientSecret, @subdomain, @accessToken
   SET @sendLogChartJson = ""
   SET @specLabelsOut = ""
@@ -128,6 +130,71 @@
   SET @addedBuild = RequestParameter("added")
   IF @addedBuild == "1" THEN
     SET @addBuildMessage = "Journey added to Recent builds."
+  ENDIF
+  IF @homeDo == "addBuild" THEN
+    SET @addJourneyId = Trim(RequestParameter("journeyId"))
+    SET @addJourneyName = Trim(RequestParameter("journeyName"))
+    IF NOT Empty(@addJourneyId) AND NOT Empty(@addJourneyName) THEN
+      SET @addBuildType = "Existing Journey"
+      SET @addBuildDeName = "N/A"
+      SET @addBuildDeId = "N/A"
+      SET @addBuildAutoName = ""
+      SET @addBuildAutoGuid = ""
+      SET @addBuildAutoKey = ""
+      SET @addBuildLookupDE = "bd_sst_journey_automation_lookup"
+      IF DataExtensionRowCount(@addBuildLookupDE) == 0 THEN
+        SET @addBuildLookupDE = "Bd_sst_journey_automation_lookup"
+      ENDIF
+      IF DataExtensionRowCount(@addBuildLookupDE) > 0 THEN
+        SET @addBuildLookupRows = LookupRows(@addBuildLookupDE, "journeyId", @addJourneyId)
+        IF RowCount(@addBuildLookupRows) == 0 THEN
+          SET @addBuildLookupRows = LookupRows(@addBuildLookupDE, "JourneyID", @addJourneyId)
+        ENDIF
+        IF RowCount(@addBuildLookupRows) > 0 THEN
+          SET @addBuildLookupRow = Row(@addBuildLookupRows, 1)
+          SET @addBuildAutoName = Trim(Field(@addBuildLookupRow, "automationName"))
+          SET @addBuildAutoGuid = Trim(Field(@addBuildLookupRow, "automationGuid"))
+          SET @addBuildAutoKey = Trim(Field(@addBuildLookupRow, "automationCustomerKey"))
+          SET @addBuildDeName = Trim(Field(@addBuildLookupRow, "deName"))
+          SET @addBuildDeId = Trim(Field(@addBuildLookupRow, "deId"))
+          IF Empty(@addBuildDeName) THEN SET @addBuildDeName = "N/A" ENDIF
+          IF Empty(@addBuildDeId) THEN SET @addBuildDeId = "N/A" ENDIF
+          IF NOT Empty(Field(@addBuildLookupRow, "journeyName")) AND NOT Empty(Trim(Field(@addBuildLookupRow, "journeyName"))) THEN
+            SET @addJourneyName = Trim(Field(@addBuildLookupRow, "journeyName"))
+          ENDIF
+        ENDIF
+      ENDIF
+      IF NOT Empty(@addBuildAutoGuid) OR NOT Empty(@addBuildAutoKey) THEN
+        SET @addBuildType = "Journey + Automation"
+      ENDIF
+      SET @addBuildBuildName = Substring(@addJourneyName, 1, 200)
+      UpsertDE(
+        "Bd_journey_analytics",
+        1,
+        "journeyId",
+        Substring(@addJourneyId,1,250),
+        "buildName", @addBuildBuildName,
+        "journeyName", Substring(@addJourneyName,1,50),
+        "journeyType", Substring(@addBuildType,1,50),
+        "emailName", "N/A",
+        "emailId", "N/A",
+        "deName", Substring(@addBuildDeName,1,200),
+        "deId", Substring(@addBuildDeId,1,50),
+        "automationName", Substring(@addBuildAutoName,1,50),
+        "automationGuid", Substring(@addBuildAutoGuid,1,50),
+        "automationCustomerKey", Substring(@addBuildAutoKey,1,50),
+        "updateDate", Now()
+      )
+      IF NOT Empty(@hubUrl) THEN
+        IF IndexOf(@hubUrl, "?") > 0 THEN
+          Redirect(Concat(@hubUrl, "&added=1"))
+        ELSE
+          Redirect(Concat(@hubUrl, "?added=1"))
+        ENDIF
+      ENDIF
+    ELSE
+      SET @addBuildError = "Missing journey ID or name."
+    ENDIF
   ENDIF
   IF @homePerformanceJsonMode == "1" THEN
   SET @specDE = "sst_de_specialty_log_12_months"
@@ -277,388 +344,9 @@
   ENDIF
   SET @specDeCountForCharts = DataExtensionRowCount(@specDE)
   ENDIF
-  IF NOT Empty(@addBuildRedirectTarget) THEN
-    Redirect(@addBuildRedirectTarget)
-  ENDIF
 ]%%
 <script runat="server" language="javascript">
   Platform.Load("Core", "1.1");
-  function homeStrTrim(val) {
-    return String(val == null ? "" : val).replace(/^\s+|\s+$/g, "");
-  }
-  function homeSubstring(val, maxLen) {
-    var s = String(val == null ? "" : val);
-    return s.length > maxLen ? s.substring(0, maxLen) : s;
-  }
-  function homeParseJsonSafe(body) {
-    if (!body) {
-      return null;
-    }
-    try {
-      return Platform.Function.ParseJSON(String(body));
-    } catch (homeJsonEx) {
-      return null;
-    }
-  }
-  function homeHttpGetEarly(token, url) {
-    var req = new Script.Util.HttpRequest(url);
-    req.method = "GET";
-    req.contentType = "application/json";
-    req.emptyContentHandling = 0;
-    req.retries = 1;
-    req.continueOnError = true;
-    req.setHeader("Authorization", "Bearer " + token);
-    var resp = req.send();
-    return {
-      status: resp.statusCode,
-      body: resp.content ? String(resp.content) : ""
-    };
-  }
-  function homeHttpOk(code) {
-    return Number(code) === 200 || Number(code) === 201;
-  }
-  function homeFindJourneyEntryTrigger(jObj) {
-    if (!jObj || !jObj.triggers || !jObj.triggers.length) {
-      return null;
-    }
-    var i, tr, typ, meta, eventDefId;
-    for (i = 0; i < jObj.triggers.length; i++) {
-      tr = jObj.triggers[i];
-      if (!tr) {
-        continue;
-      }
-      typ = homeStrTrim(tr.type).toUpperCase();
-      if (
-        typ === "EMAILAUDIENCE" ||
-        typ === "AUTOMATIONAUDIENCE" ||
-        typ === "DATAEXTENSION"
-      ) {
-        meta = tr.metaData || {};
-        eventDefId = homeStrTrim(meta.eventDefinitionId);
-        if (eventDefId) {
-          return { eventDefId: eventDefId, triggerType: typ };
-        }
-      }
-    }
-    return null;
-  }
-  function homeGetEventDefinition(subdomain, token, eventDefId) {
-    var url =
-      "https://" +
-      subdomain +
-      ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
-      encodeURIComponent(eventDefId);
-    var resp = homeHttpGetEarly(token, url);
-    if (!homeHttpOk(resp.status)) {
-      return null;
-    }
-    return homeParseJsonSafe(resp.body);
-  }
-  function homeDeFromEventDefinition(evObj) {
-    if (!evObj) {
-      return { deName: "N/A", deId: "N/A" };
-    }
-    var deName =
-      homeStrTrim(evObj.dataExtensionName) ||
-      homeStrTrim(evObj.name) ||
-      homeStrTrim(evObj.eventDefinitionName);
-    var deId =
-      homeStrTrim(evObj.dataExtensionKey) ||
-      homeStrTrim(evObj.dataExtensionCustomerKey) ||
-      homeStrTrim(evObj.dataExtensionId) ||
-      homeStrTrim(evObj.dataExtensionID);
-    if (!deName) {
-      deName = deId || "N/A";
-    }
-    if (!deId) {
-      deId = "N/A";
-    }
-    return { deName: deName, deId: deId };
-  }
-  function homeAutomationIdFromEventDefinition(evObj) {
-    if (!evObj) {
-      return "";
-    }
-    var args = evObj.arguments || {};
-    return homeStrTrim(
-      args.AutomationId ||
-        args.automationId ||
-        evObj.AutomationId ||
-        evObj.automationId
-    );
-  }
-  function homeGetAutomationById(subdomain, token, automationId) {
-    if (!automationId) {
-      return null;
-    }
-    var base =
-      "https://" +
-      subdomain +
-      ".rest.marketingcloudapis.com/automation/v1/automations/";
-    var resp = homeHttpGetEarly(token, base + encodeURIComponent(automationId));
-    if (homeHttpOk(resp.status)) {
-      return homeParseJsonSafe(resp.body);
-    }
-    resp = homeHttpGetEarly(
-      token,
-      base + "key:" + encodeURIComponent(automationId)
-    );
-    if (homeHttpOk(resp.status)) {
-      return homeParseJsonSafe(resp.body);
-    }
-    return null;
-  }
-  function homeAutomationReferencesJourney(autoObj, journeyId) {
-    if (!autoObj || !journeyId) {
-      return false;
-    }
-    var jid = String(journeyId);
-    var steps = autoObj.steps || [];
-    var si, ai, st, acts, a, ser;
-    for (si = 0; si < steps.length; si++) {
-      st = steps[si];
-      acts = (st && st.activities) || [];
-      for (ai = 0; ai < acts.length; ai++) {
-        a = acts[ai];
-        if (String(a.activityObjectId || "") === jid) {
-          return true;
-        }
-        ser = String(a.serializedObject || "");
-        if (ser && ser.indexOf(jid) >= 0) {
-          return true;
-        }
-      }
-    }
-    var blob = Platform.Function.Stringify(autoObj);
-    return blob.indexOf(jid) >= 0;
-  }
-  function homeFindAutomationForJourney(subdomain, token, journeyId) {
-    var endpoint =
-      "https://" +
-      subdomain +
-      ".rest.marketingcloudapis.com/automation/v1/automations";
-    var page = 1;
-    var maxPages = 12;
-    while (page <= maxPages) {
-      var listUrl = endpoint + "?$page=" + page + "&$pagesize=100";
-      var listResp = homeHttpGetEarly(token, listUrl);
-      if (!homeHttpOk(listResp.status)) {
-        break;
-      }
-      var listObj = homeParseJsonSafe(listResp.body);
-      var items = listObj && listObj.items ? listObj.items : [];
-      var i, item, detail;
-      for (i = 0; i < items.length; i++) {
-        item = items[i];
-        if (!item || !item.id) {
-          continue;
-        }
-        detail = homeGetAutomationById(subdomain, token, String(item.id));
-        if (detail && homeAutomationReferencesJourney(detail, journeyId)) {
-          return detail;
-        }
-      }
-      if (items.length < 100) {
-        break;
-      }
-      page++;
-    }
-    return null;
-  }
-  function homeResolveAddBuildFields(journeyId, journeyName, token, subdomain) {
-    var out = {
-      journeyType: "Existing Journey",
-      deName: "N/A",
-      deId: "N/A",
-      automationName: "",
-      automationGuid: "",
-      automationCustomerKey: ""
-    };
-    var jUrl =
-      "https://" +
-      subdomain +
-      ".rest.marketingcloudapis.com/interaction/v1/interactions/" +
-      encodeURIComponent(journeyId) +
-      "?extras=all";
-    var jResp = homeHttpGetEarly(token, jUrl);
-    if (!homeHttpOk(jResp.status)) {
-      return out;
-    }
-    var jObj = homeParseJsonSafe(jResp.body);
-    if (!jObj) {
-      return out;
-    }
-    if (!journeyName && jObj.name) {
-      journeyName = String(jObj.name);
-    }
-    var entry = homeFindJourneyEntryTrigger(jObj);
-    var evObj = null;
-    if (entry && entry.eventDefId) {
-      evObj = homeGetEventDefinition(subdomain, token, entry.eventDefId);
-      if (evObj) {
-        var deInfo = homeDeFromEventDefinition(evObj);
-        out.deName = deInfo.deName;
-        out.deId = deInfo.deId;
-      }
-    }
-    var automationId = homeAutomationIdFromEventDefinition(evObj);
-    var autoObj = null;
-    if (automationId) {
-      autoObj = homeGetAutomationById(subdomain, token, automationId);
-    }
-    if (!autoObj) {
-      autoObj = homeFindAutomationForJourney(subdomain, token, journeyId);
-    }
-    if (autoObj) {
-      out.journeyType = "Journey + Automation";
-      out.automationGuid = homeStrTrim(autoObj.id);
-      out.automationCustomerKey = homeStrTrim(autoObj.key);
-      out.automationName = homeStrTrim(autoObj.name);
-    }
-    out.journeyName = journeyName;
-    return out;
-  }
-  function homeRedirectWithAdded(hubUrl) {
-    if (!hubUrl) {
-      return;
-    }
-    var target =
-      hubUrl.indexOf("?") >= 0 ? hubUrl + "&added=1" : hubUrl + "?added=1";
-    Platform.Variable.SetValue("@addBuildRedirectTarget", target);
-  }
-  function homeTryHandleAddBuildPost() {
-    var doVal = Platform.Request.GetFormField("do");
-    if (doVal === null || doVal === undefined || doVal === "") {
-      doVal = Platform.Request.GetQueryStringParameter("do");
-    }
-    if (homeStrTrim(doVal) !== "addBuild") {
-      return;
-    }
-    var journeyId = homeStrTrim(Platform.Request.GetFormField("journeyId"));
-    var journeyName = homeStrTrim(Platform.Request.GetFormField("journeyName"));
-    if (!journeyId || !journeyName) {
-      Platform.Variable.SetValue("@addBuildError", "Missing journey ID or name.");
-      return;
-    }
-    var hubUrl = Platform.Variable.GetValue("@hubUrl") || "";
-    if (!hubUrl) {
-      try {
-        hubUrl =
-          Platform.Function.Lookup(
-            "bd_sst_page_navigation",
-            "ss_home",
-            "type",
-            "cloudpage"
-          ) || "";
-      } catch (hubLookupEx) {
-        hubUrl = "";
-      }
-    }
-    var authRows = [];
-    try {
-      authRows = Platform.Function.LookupRows("SFMC_AUTH", "User", "Admin");
-    } catch (authEx) {
-      Platform.Variable.SetValue(
-        "@addBuildError",
-        "Could not read SFMC_AUTH to resolve automation."
-      );
-      return;
-    }
-    if (!authRows || authRows.length === 0) {
-      Platform.Variable.SetValue("@addBuildError", "No SFMC_AUTH row for User=Admin.");
-      return;
-    }
-    var authRow = authRows[0];
-    var clientId = authRow.clientId || authRow.ClientId || "";
-    var clientSecret = authRow.clientSecret || authRow.ClientSecret || "";
-    var subdomain = authRow.subdomain || authRow.Subdomain || "";
-    var accountId = authRow.accountId || authRow.AccountId || "";
-    if (!clientId || !clientSecret || !subdomain) {
-      Platform.Variable.SetValue("@addBuildError", "Missing SFMC auth configuration.");
-      return;
-    }
-    var authPayload =
-      '{"grant_type":"client_credentials","client_id":"' +
-      clientId +
-      '","client_secret":"' +
-      clientSecret +
-      '"';
-    if (accountId) {
-      authPayload += ',"account_id":"' + accountId + '"';
-    }
-    authPayload += "}";
-    var authReq = new Script.Util.HttpRequest(
-      "https://" + subdomain + ".auth.marketingcloudapis.com/v2/token"
-    );
-    authReq.method = "POST";
-    authReq.contentType = "application/json";
-    authReq.postData = authPayload;
-    authReq.emptyContentHandling = 0;
-    authReq.retries = 1;
-    authReq.continueOnError = true;
-    var authResp = authReq.send();
-    if (!homeHttpOk(authResp.statusCode)) {
-      Platform.Variable.SetValue("@addBuildError", "Auth failed while adding journey.");
-      return;
-    }
-    var authBody = authResp.content ? String(authResp.content) : "";
-    var tokenMatch = authBody.match(/"access_token"\s*:\s*"([^"]+)"/);
-    var token = tokenMatch && tokenMatch[1] ? tokenMatch[1] : "";
-    if (!token) {
-      Platform.Variable.SetValue("@addBuildError", "Auth token missing while adding journey.");
-      return;
-    }
-    var resolved = homeResolveAddBuildFields(journeyId, journeyName, token, subdomain);
-    if (resolved.journeyName) {
-      journeyName = resolved.journeyName;
-    }
-    var buildName = homeSubstring(journeyName, 200);
-    try {
-      Platform.Function.UpsertData(
-        "Bd_journey_analytics",
-        1,
-        "journeyId",
-        homeSubstring(journeyId, 250),
-        "buildName",
-        buildName,
-        "journeyName",
-        homeSubstring(journeyName, 50),
-        "journeyType",
-        homeSubstring(resolved.journeyType, 50),
-        "emailName",
-        "N/A",
-        "emailId",
-        "N/A",
-        "deName",
-        homeSubstring(resolved.deName, 200),
-        "deId",
-        homeSubstring(resolved.deId, 50),
-        "automationName",
-        homeSubstring(resolved.automationName, 50),
-        "automationGuid",
-        homeSubstring(resolved.automationGuid, 50),
-        "automationCustomerKey",
-        homeSubstring(resolved.automationCustomerKey, 50),
-        "updateDate",
-        Platform.Function.Now()
-      );
-    } catch (upsertEx) {
-      Platform.Variable.SetValue(
-        "@addBuildError",
-        "Could not save build row: " + (upsertEx.message || String(upsertEx))
-      );
-      return;
-    }
-    homeRedirectWithAdded(hubUrl);
-  }
-  try {
-    homeTryHandleAddBuildPost();
-  } catch (homeAddBuildEx) {
-    Platform.Variable.SetValue(
-      "@addBuildError",
-      "Add journey failed: " + (homeAddBuildEx.message || String(homeAddBuildEx))
-    );
-  }
   try {
     var emptyJourneyUrl = Platform.Function.Lookup(
       "bd_sst_page_navigation",
