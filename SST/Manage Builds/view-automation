@@ -8,6 +8,7 @@ VAR @authPending
 VAR @editSidebarHtml, @automationMetaHtml, @automationStepsHtml, @automationFlowHtml, @automationSchedulePanelHtml, @automationStudioUrl, @apiAutomationName, @automationRunning, @automationActivityCount, @scheduleEditorOpen, @runOnceConfirmOpen
 VAR @autoAction, @autoActionOn, @schedFreq, @schedStart, @schedMinute, @schedInterval, @schedWeekdays, @schedEnd, @schedEndDate, @schedOccurrences, @actionOk, @actionMsg
 VAR @automationGuidBackfillReady, @automationGuidBackfillJid, @automationGuidBackfillValue, @automationGuidBackfillKey
+VAR @automationQueryJson, @automationQueryJsonMode
 
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
@@ -65,6 +66,11 @@ SET @schedEnd = Lowercase(Trim(RequestParameter("automationScheduleEnd")))
 SET @schedEndDate = Trim(RequestParameter("automationScheduleEndDate"))
 SET @schedOccurrences = Trim(RequestParameter("automationScheduleOccurrences"))
 SET @editSidebarHtml = ""
+SET @automationQueryJson = ""
+SET @automationQueryJsonMode = IIF(RequestParameter("automationQueryData") == "1", "1", "0")
+IF @automationQueryJsonMode != "1" AND QueryParameter("automationQueryData") == "1" THEN
+ SET @automationQueryJsonMode = "1"
+ENDIF
 
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
@@ -105,7 +111,9 @@ IF NOT Empty(@jid) THEN
  ENDIF
 ENDIF
 
-IF Empty(@jid) THEN
+IF @automationQueryJsonMode == "1" THEN
+ SET @pageStatus = "queryjson"
+ELSEIF Empty(@jid) THEN
  SET @pageStatus = "nodata"
 ELSEIF Empty(@automationId) AND Empty(@automationCustomerKey) THEN
  SET @pageStatus = "noconnect"
@@ -1301,12 +1309,94 @@ function buildSchedulePanelHtml(jid, freq, startDate, scheduleInterval, endMode,
   html += "</div></div>";
   return html;
 }
+function queryValue(name) {
+  var value = "";
+  try {
+    value = Platform.Request.GetQueryStringParameter(name);
+  } catch (queryEx) {}
+  if (value === null || typeof value === "undefined") value = "";
+  if (!value) {
+    try {
+      value = Platform.Request.GetFormField(name);
+    } catch (formEx) {}
+  }
+  return strTrim(value);
+}
+function isAutomationQueryDataRequest() {
+  return queryValue("automationQueryData") === "1";
+}
+function escJsonStr(s) {
+  return String(s || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n")
+    .replace(/\t/g, "\\t");
+}
+function truncQueryDisplay(text) {
+  var s = String(text || "");
+  if (s.length > 4000) {
+    return { text: s.substring(0, 4000) + "...", truncated: true };
+  }
+  return { text: s, truncated: false };
+}
+function lookupQueryByObjectId(objectId) {
+  var oid = strTrim(objectId);
+  if (!oid) {
+    return { ok: false, error: "Missing query object id." };
+  }
+  try {
+    var proxQ = new Script.Util.WSProxy();
+    var qdRes = proxQ.retrieve(
+      "QueryDefinition",
+      ["CustomerKey", "QueryText", "Name", "ObjectID"],
+      {
+        Property: "ObjectID",
+        SimpleOperator: "equals",
+        Value: oid
+      }
+    );
+    if (qdRes && qdRes.Results && qdRes.Results.length > 0) {
+      var row = qdRes.Results[0];
+      var trunc = truncQueryDisplay(row.QueryText || "");
+      return {
+        ok: true,
+        objectId: oid,
+        customerKey: String(row.CustomerKey || ""),
+        name: String(row.Name || ""),
+        queryText: trunc.text,
+        truncated: trunc.truncated
+      };
+    }
+  } catch (lookupErr) {}
+  return { ok: false, error: "Query definition not found for object id " + oid + "." };
+}
+function buildAutomationQueryJsonPayload(objectId) {
+  var result = lookupQueryByObjectId(objectId);
+  if (!result.ok) {
+    return '{"ok":false,"error":"' + escJsonStr(result.error) + '"}';
+  }
+  return (
+    '{"ok":true,"objectId":"' +
+    escJsonStr(result.objectId) +
+    '","customerKey":"' +
+    escJsonStr(result.customerKey) +
+    '","name":"' +
+    escJsonStr(result.name) +
+    '","truncated":' +
+    (result.truncated ? "true" : "false") +
+    ',"queryText":"' +
+    escJsonStr(result.queryText) +
+    '"}'
+  );
+}
 function buildStepsHtml(obj) {
   var steps = obj.steps;
   if (!steps || !steps.length) {
     return '<p class="recent-empty">This automation has no steps.</p>';
   }
-  var html = '<div class="contacts-table-wrap"><table class="contacts-table"><thead><tr><th>Step</th><th>Activity</th><th>Type</th><th>Activity object id</th></tr></thead><tbody>';
+  var html =
+    '<div class="contacts-table-wrap" id="automationActivitiesTable"><table class="contacts-table"><thead><tr><th>Step</th><th>Activity</th><th>Type</th><th>Activity object id</th></tr></thead><tbody>';
   var s;
   for (s = 0; s < steps.length; s++) {
     var step = steps[s] || {};
@@ -1319,14 +1409,50 @@ function buildStepsHtml(obj) {
     var a;
     for (a = 0; a < activities.length; a++) {
       var act = activities[a] || {};
-      html += "<tr><td>" + htmlSafe(stepNum + (stepLabel ? " " + stepLabel : "")) + "</td>";
-      html += "<td>" + htmlSafe(act.name) + "</td>";
-      html += "<td>" + htmlSafe(activityTypeLabel(act.objectTypeId)) + "</td>";
-      html += '<td class="contacts-mono">' + htmlSafe(act.activityObjectId || act.id) + "</td></tr>";
+      var typeId = parseInt(act.objectTypeId, 10);
+      var objId = strTrim(act.activityObjectId || act.id);
+      var isQuery = typeId === 300 && objId;
+      var stepCell = htmlSafe(stepNum + (stepLabel ? " " + stepLabel : ""));
+      var typeCell = htmlSafe(activityTypeLabel(act.objectTypeId));
+      var objCell = htmlSafe(objId);
+      if (isQuery) {
+        html +=
+          '<tr class="query-act-row is-query" tabindex="0" role="button" aria-expanded="false" data-query-object-id="' +
+          htmlSafe(objId) +
+          '">';
+        html += "<td>" + stepCell + "</td>";
+        html +=
+          '<td><span class="query-act-name">' +
+          htmlSafe(act.name) +
+          '</span><span class="query-act-hint">Click to view SQL</span></td>';
+        html += "<td>" + typeCell + "</td>";
+        html += '<td class="contacts-mono">' + objCell + "</td></tr>";
+        html +=
+          '<tr class="query-sql-row" data-query-for="' +
+          htmlSafe(objId) +
+          '" hidden><td colspan="4"><div class="query-sql-panel"><p class="query-sql-meta"></p><pre class="query-sql-pre"></pre></div></td></tr>';
+      } else {
+        html += "<tr><td>" + stepCell + "</td>";
+        html += "<td>" + htmlSafe(act.name) + "</td>";
+        html += "<td>" + typeCell + "</td>";
+        html += '<td class="contacts-mono">' + objCell + "</td></tr>";
+      }
     }
   }
   html += "</tbody></table></div>";
   return html;
+}
+
+if (isAutomationQueryDataRequest()) {
+  var automationQueryJson = '{"ok":false,"error":"Missing queryObjectId."}';
+  try {
+    var queryObjectIdParam = queryValue("queryObjectId");
+    automationQueryJson = buildAutomationQueryJsonPayload(queryObjectIdParam);
+  } catch (automationQueryEx) {
+    automationQueryJson =
+      '{"ok":false,"error":"' + escJsonStr(automationQueryEx.message || String(automationQueryEx)) + '"}';
+  }
+  Platform.Variable.SetValue("@automationQueryJson", automationQueryJson);
 }
 
 var pageStatus = Platform.Variable.GetValue("@pageStatus") || "";
@@ -1356,6 +1482,7 @@ var apiName = "";
 
 try {
   if (
+    !isAutomationQueryDataRequest() &&
     pageStatus === "view" &&
     authOk === "true" &&
     accessToken &&
@@ -1511,6 +1638,9 @@ IF NOT Empty(@automationGuidBackfillReady) AND @automationGuidBackfillReady == "
   SET @automationGuidBackfillReady = ""
 ENDIF
 ]%%
+%%[ IF @automationQueryJsonMode == "1" THEN ]%%
+%%=v(@automationQueryJson)=%%
+%%[ ELSE ]%%
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1604,6 +1734,15 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 .contacts-table th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--gray-600);background:#fafafa}
 .contacts-table tbody tr:last-child td{border-bottom:none}
 .contacts-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}
+.query-act-row.is-query{cursor:pointer}
+.query-act-row.is-query:hover td{background:#f3f4f6}
+.query-act-row.is-query.is-open td{background:#eef2ff}
+.query-act-name{display:block;font-weight:600}
+.query-act-hint{display:block;font-size:12px;color:var(--text-secondary);margin-top:2px}
+.query-sql-row td{padding:0 14px 16px;background:#fafafa;border-bottom:1px solid var(--border-color)}
+.query-sql-panel{padding:14px 0 4px}
+.query-sql-meta{font-size:12px;color:var(--text-secondary);margin:0 0 8px 0}
+.query-sql-pre{margin:0;padding:12px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.45;background:#fff;border:1px solid var(--border-color);white-space:pre-wrap;word-break:break-word;max-height:420px;overflow:auto}
 .breadcrumb-nav{display:flex;align-items:center;flex-wrap:wrap;font-size:16px;gap:4px;margin-bottom:20px}
 .breadcrumb-link{display:inline-flex;align-items:center;color:var(--primary-color);text-decoration:none;font-weight:500;font-size:16px}
 .breadcrumb-link:hover{color:var(--primary-dark);text-decoration:underline}
@@ -1872,6 +2011,107 @@ function fallbackCopy(name) {
   document.body.removeChild(box);
   return ok;
 }
+(function () {
+  var tableWrap = document.getElementById("automationActivitiesTable");
+  if (!tableWrap) return;
+  var queryCache = {};
+  function findSqlRow(objectId) {
+    return tableWrap.querySelector('.query-sql-row[data-query-for="' + objectId + '"]');
+  }
+  function closeOtherQueryRows(exceptObjectId) {
+    var openRows = tableWrap.querySelectorAll(".query-act-row.is-open");
+    var i;
+    for (i = 0; i < openRows.length; i++) {
+      var row = openRows[i];
+      var oid = row.getAttribute("data-query-object-id");
+      if (oid === exceptObjectId) continue;
+      row.classList.remove("is-open");
+      row.setAttribute("aria-expanded", "false");
+      var sqlRow = findSqlRow(oid);
+      if (sqlRow) sqlRow.setAttribute("hidden", "hidden");
+    }
+  }
+  function renderQueryPanel(sqlRow, payload) {
+    var meta = sqlRow.querySelector(".query-sql-meta");
+    var pre = sqlRow.querySelector(".query-sql-pre");
+    if (!meta || !pre) return;
+    if (!payload || !payload.ok) {
+      meta.textContent = payload && payload.error ? payload.error : "Could not load query.";
+      pre.textContent = "";
+      return;
+    }
+    var metaParts = [];
+    if (payload.name) metaParts.push("Name: " + payload.name);
+    if (payload.customerKey) metaParts.push("Key: " + payload.customerKey);
+    if (payload.truncated) metaParts.push("Showing first 4000 characters.");
+    meta.textContent = metaParts.length ? metaParts.join(" · ") : "Query loaded.";
+    pre.textContent = payload.queryText || "";
+  }
+  function buildQueryFetchUrl(objectId) {
+    var url = new URL(window.location.href);
+    url.searchParams.set("automationQueryData", "1");
+    url.searchParams.set("queryObjectId", objectId);
+    return url.toString();
+  }
+  function loadQuerySql(objectId, sqlRow) {
+    if (queryCache[objectId]) {
+      renderQueryPanel(sqlRow, queryCache[objectId]);
+      return;
+    }
+    var meta = sqlRow.querySelector(".query-sql-meta");
+    var pre = sqlRow.querySelector(".query-sql-pre");
+    if (meta) meta.textContent = "Loading query…";
+    if (pre) pre.textContent = "";
+    fetch(buildQueryFetchUrl(objectId), { credentials: "same-origin" })
+      .then(function (resp) {
+        return resp.text();
+      })
+      .then(function (text) {
+        var payload = null;
+        try {
+          payload = JSON.parse(text);
+        } catch (parseEx) {
+          payload = { ok: false, error: "Invalid response from server." };
+        }
+        queryCache[objectId] = payload;
+        renderQueryPanel(sqlRow, payload);
+      })
+      .catch(function () {
+        renderQueryPanel(sqlRow, { ok: false, error: "Network error loading query." });
+      });
+  }
+  function toggleQueryRow(actRow) {
+    var objectId = actRow.getAttribute("data-query-object-id");
+    if (!objectId) return;
+    var sqlRow = findSqlRow(objectId);
+    if (!sqlRow) return;
+    var isOpen = actRow.classList.contains("is-open");
+    closeOtherQueryRows(objectId);
+    if (isOpen) {
+      actRow.classList.remove("is-open");
+      actRow.setAttribute("aria-expanded", "false");
+      sqlRow.setAttribute("hidden", "hidden");
+      return;
+    }
+    actRow.classList.add("is-open");
+    actRow.setAttribute("aria-expanded", "true");
+    sqlRow.removeAttribute("hidden");
+    loadQuerySql(objectId, sqlRow);
+  }
+  tableWrap.addEventListener("click", function (ev) {
+    var actRow = ev.target.closest(".query-act-row");
+    if (!actRow || !tableWrap.contains(actRow)) return;
+    toggleQueryRow(actRow);
+  });
+  tableWrap.addEventListener("keydown", function (ev) {
+    if (ev.key !== "Enter" && ev.key !== " ") return;
+    var actRow = ev.target.closest(".query-act-row");
+    if (!actRow || !tableWrap.contains(actRow)) return;
+    ev.preventDefault();
+    toggleQueryRow(actRow);
+  });
+})();
 </script>
 </body>
 </html>
+%%[ ENDIF ]%%
