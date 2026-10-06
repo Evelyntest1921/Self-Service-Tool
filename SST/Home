@@ -9,7 +9,9 @@
   VAR @monthLabelsOut, @monthOpensOut, @monthClicksOut, @monthUnsubOut, @monthBouncedOut, @monthOpenSum, @monthClickSum, @monthUnsubSum, @monthBounceSum, @monthLabel, @monthStartVal
   VAR @specRowUnsub
   VAR @homeDo, @browseJourneys, @browseMode, @jaBrowseMarkup, @jaBrowsePagination, @jaBrowseError, @addBuildMessage, @addBuildError, @addedBuild, @browsePage, @jaBrowseHint, @buildsPage, @jaBuildsPagination
-  VAR @addJourneyId, @addJourneyName, @addBuildRedirectTarget
+  VAR @addJourneyId, @addJourneyName
+  VAR @addBuildUpsertReady, @addBuildUpsertJourneyId, @addBuildUpsertJourneyName, @addBuildUpsertJourneyType
+  VAR @addBuildUpsertDeName, @addBuildUpsertDeId, @addBuildUpsertAutoName, @addBuildUpsertAutoGuid, @addBuildUpsertAutoKey
   VAR @authRow, @authStatus, @authUrl, @authPayload, @authResponse, @authResponseHeader, @tokenPattern, @accountId, @clientId, @clientSecret, @subdomain, @accessToken
   SET @sendLogChartJson = ""
   SET @specLabelsOut = ""
@@ -128,6 +130,42 @@
   SET @addedBuild = RequestParameter("added")
   IF @addedBuild == "1" THEN
     SET @addBuildMessage = "Journey added to Recent builds."
+  ENDIF
+  IF NOT Empty(@addBuildUpsertReady) AND @addBuildUpsertReady == "1" THEN
+    UpsertDE(
+      "Bd_journey_analytics",
+      1,
+      "journeyId",
+      @addBuildUpsertJourneyId,
+      "journeyName",
+      @addBuildUpsertJourneyName,
+      "journeyType",
+      @addBuildUpsertJourneyType,
+      "emailName",
+      "N/A",
+      "emailId",
+      "N/A",
+      "deName",
+      @addBuildUpsertDeName,
+      "deId",
+      @addBuildUpsertDeId,
+      "automationName",
+      @addBuildUpsertAutoName,
+      "automationGuid",
+      @addBuildUpsertAutoGuid,
+      "automationCustomerKey",
+      @addBuildUpsertAutoKey,
+      "updateDate",
+      Now()
+    )
+    SET @addBuildUpsertReady = ""
+    IF NOT Empty(@hubUrl) THEN
+      IF IndexOf(@hubUrl, "?") > 0 THEN
+        Redirect(Concat(@hubUrl, "&added=1"))
+      ELSE
+        Redirect(Concat(@hubUrl, "?added=1"))
+      ENDIF
+    ENDIF
   ENDIF
   IF @homePerformanceJsonMode == "1" THEN
   SET @specDE = "sst_de_specialty_log_12_months"
@@ -277,9 +315,6 @@
   ENDIF
   SET @specDeCountForCharts = DataExtensionRowCount(@specDE)
   ENDIF
-  IF NOT Empty(@addBuildRedirectTarget) THEN
-    Redirect(@addBuildRedirectTarget)
-  ENDIF
 ]%%
 <script runat="server" language="javascript">
   Platform.Load("Core", "1.1");
@@ -387,93 +422,15 @@
     var autoName = homeAddBuildClip(meta.automationName, 50);
     var autoGuid = homeAddBuildClip(meta.automationGuid, 50);
     var autoKey = homeAddBuildClip(meta.automationCustomerKey, 50);
-    var nowVal = Platform.Function.Now();
-    var saved = false;
-    var upsertErr = "";
-    try {
-      Platform.Function.UpsertData(
-        "Bd_journey_analytics",
-        1,
-        "journeyId",
-        jid,
-        "journeyName",
-        jname,
-        "journeyType",
-        jtype,
-        "emailName",
-        "N/A",
-        "emailId",
-        "N/A",
-        "deName",
-        dname,
-        "deId",
-        did,
-        "automationName",
-        autoName,
-        "automationGuid",
-        autoGuid,
-        "automationCustomerKey",
-        autoKey,
-        "updateDate",
-        nowVal
-      );
-      saved = true;
-    } catch (upsertFullEx) {
-      upsertErr = upsertFullEx.message != null ? String(upsertFullEx.message) : String(upsertFullEx);
-      try {
-        Platform.Function.UpsertData(
-          "Bd_journey_analytics",
-          1,
-          "journeyId",
-          jid,
-          "journeyName",
-          jname,
-          "journeyType",
-          jtype,
-          "emailName",
-          "N/A",
-          "emailId",
-          "N/A",
-          "deName",
-          dname,
-          "deId",
-          did,
-          "updateDate",
-          nowVal
-        );
-        saved = true;
-        upsertErr = "";
-      } catch (upsertMinEx) {
-        upsertErr =
-          upsertMinEx.message != null ? String(upsertMinEx.message) : String(upsertMinEx);
-      }
-    }
-    if (!saved) {
-      Platform.Variable.SetValue(
-        "@addBuildError",
-        "Could not save build row." + (upsertErr ? " " + homeAddBuildClip(upsertErr, 220) : "")
-      );
-      return;
-    }
-    var hubUrl = Platform.Variable.GetValue("@hubUrl") || "";
-    if (!hubUrl) {
-      try {
-        hubUrl =
-          Platform.Function.Lookup(
-            "bd_sst_page_navigation",
-            "ss_home",
-            "type",
-            "cloudpage"
-          ) || "";
-      } catch (hubEx) {
-        hubUrl = "";
-      }
-    }
-    if (hubUrl) {
-      var target =
-        hubUrl.indexOf("?") >= 0 ? hubUrl + "&added=1" : hubUrl + "?added=1";
-      Platform.Variable.SetValue("@addBuildRedirectTarget", target);
-    }
+    Platform.Variable.SetValue("@addBuildUpsertReady", "1");
+    Platform.Variable.SetValue("@addBuildUpsertJourneyId", jid);
+    Platform.Variable.SetValue("@addBuildUpsertJourneyName", jname);
+    Platform.Variable.SetValue("@addBuildUpsertJourneyType", jtype);
+    Platform.Variable.SetValue("@addBuildUpsertDeName", dname);
+    Platform.Variable.SetValue("@addBuildUpsertDeId", did);
+    Platform.Variable.SetValue("@addBuildUpsertAutoName", autoName);
+    Platform.Variable.SetValue("@addBuildUpsertAutoGuid", autoGuid);
+    Platform.Variable.SetValue("@addBuildUpsertAutoKey", autoKey);
   }
   try {
     homeTryAddBuildPost();
