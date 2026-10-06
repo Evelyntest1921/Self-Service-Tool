@@ -10,8 +10,8 @@
   VAR @specRowUnsub
   VAR @homeDo, @browseJourneys, @browseMode, @jaBrowseMarkup, @jaBrowsePagination, @jaBrowseError, @addBuildMessage, @addBuildError, @addedBuild, @browsePage, @jaBrowseHint, @buildsPage, @jaBuildsPagination
   VAR @addJourneyId, @addJourneyName
-  VAR @addBuildUpsertReady, @addBuildUpsertJourneyId, @addBuildUpsertJourneyName, @addBuildUpsertJourneyType
-  VAR @addBuildUpsertDeName, @addBuildUpsertDeId, @addBuildUpsertAutoName, @addBuildUpsertAutoGuid, @addBuildUpsertAutoKey
+  VAR @addBuildLookupDE, @addBuildLookupRows, @addBuildLookupRow
+  VAR @addBuildDeName, @addBuildDeId, @addBuildAutoName, @addBuildAutoGuid, @addBuildAutoKey, @addBuildType
   VAR @authRow, @authStatus, @authUrl, @authPayload, @authResponse, @authResponseHeader, @tokenPattern, @accountId, @clientId, @clientSecret, @subdomain, @accessToken
   SET @sendLogChartJson = ""
   SET @specLabelsOut = ""
@@ -131,40 +131,85 @@
   IF @addedBuild == "1" THEN
     SET @addBuildMessage = "Journey added to Recent builds."
   ENDIF
-  IF NOT Empty(@addBuildUpsertReady) AND @addBuildUpsertReady == "1" THEN
-    UpsertDE(
-      "Bd_journey_analytics",
-      1,
-      "journeyId",
-      @addBuildUpsertJourneyId,
-      "journeyName",
-      @addBuildUpsertJourneyName,
-      "journeyType",
-      @addBuildUpsertJourneyType,
-      "emailName",
-      "N/A",
-      "emailId",
-      "N/A",
-      "deName",
-      @addBuildUpsertDeName,
-      "deId",
-      @addBuildUpsertDeId,
-      "automationName",
-      @addBuildUpsertAutoName,
-      "automationGuid",
-      @addBuildUpsertAutoGuid,
-      "automationCustomerKey",
-      @addBuildUpsertAutoKey,
-      "updateDate",
-      Now()
-    )
-    SET @addBuildUpsertReady = ""
-    IF NOT Empty(@hubUrl) THEN
-      IF IndexOf(@hubUrl, "?") > 0 THEN
-        Redirect(Concat(@hubUrl, "&added=1"))
-      ELSE
-        Redirect(Concat(@hubUrl, "?added=1"))
+  IF @homeDo == "addBuild" THEN
+    SET @addJourneyId = Trim(RequestParameter("journeyId"))
+    SET @addJourneyName = Trim(RequestParameter("journeyName"))
+    IF NOT Empty(@addJourneyId) AND NOT Empty(@addJourneyName) THEN
+      SET @addBuildType = "Existing Journey"
+      SET @addBuildDeName = "N/A"
+      SET @addBuildDeId = "N/A"
+      SET @addBuildAutoName = ""
+      SET @addBuildAutoGuid = ""
+      SET @addBuildAutoKey = ""
+      SET @addBuildLookupDE = "bd_sst_journey_automation_lookup"
+      IF DataExtensionRowCount(@addBuildLookupDE) == 0 THEN
+        SET @addBuildLookupDE = "Bd_sst_journey_automation_lookup"
       ENDIF
+      IF DataExtensionRowCount(@addBuildLookupDE) > 0 THEN
+        SET @addBuildLookupRows = LookupRows(@addBuildLookupDE, "journeyId", @addJourneyId)
+        IF RowCount(@addBuildLookupRows) == 0 THEN
+          SET @addBuildLookupRows = LookupRows(@addBuildLookupDE, "JourneyID", @addJourneyId)
+        ENDIF
+        IF RowCount(@addBuildLookupRows) > 0 THEN
+          SET @addBuildLookupRow = Row(@addBuildLookupRows, 1)
+          SET @addBuildAutoName = Trim(Field(@addBuildLookupRow, "automationName"))
+          SET @addBuildAutoGuid = Trim(Field(@addBuildLookupRow, "automationGuid"))
+          SET @addBuildAutoKey = Trim(Field(@addBuildLookupRow, "automationCustomerKey"))
+          SET @addBuildDeName = Trim(Field(@addBuildLookupRow, "deName"))
+          SET @addBuildDeId = Trim(Field(@addBuildLookupRow, "deId"))
+          IF Empty(@addBuildDeName) THEN SET @addBuildDeName = "N/A" ENDIF
+          IF Empty(@addBuildDeId) THEN SET @addBuildDeId = "N/A" ENDIF
+          IF NOT Empty(Trim(Field(@addBuildLookupRow, "journeyName"))) THEN
+            SET @addJourneyName = Trim(Field(@addBuildLookupRow, "journeyName"))
+          ENDIF
+        ENDIF
+      ENDIF
+      IF NOT Empty(@addBuildAutoGuid) OR NOT Empty(@addBuildAutoKey) THEN
+        SET @addBuildType = "Journey + Automation"
+      ENDIF
+      IF Length(@addJourneyId) > 250 THEN SET @addJourneyId = Substring(@addJourneyId, 1, 250) ENDIF
+      IF Length(@addJourneyName) > 50 THEN SET @addJourneyName = Substring(@addJourneyName, 1, 50) ENDIF
+      IF Length(@addBuildType) > 50 THEN SET @addBuildType = Substring(@addBuildType, 1, 50) ENDIF
+      IF Length(@addBuildDeName) > 200 THEN SET @addBuildDeName = Substring(@addBuildDeName, 1, 200) ENDIF
+      IF Length(@addBuildDeId) > 50 THEN SET @addBuildDeId = Substring(@addBuildDeId, 1, 50) ENDIF
+      IF Length(@addBuildAutoName) > 50 THEN SET @addBuildAutoName = Substring(@addBuildAutoName, 1, 50) ENDIF
+      IF Length(@addBuildAutoGuid) > 50 THEN SET @addBuildAutoGuid = Substring(@addBuildAutoGuid, 1, 50) ENDIF
+      IF Length(@addBuildAutoKey) > 50 THEN SET @addBuildAutoKey = Substring(@addBuildAutoKey, 1, 50) ENDIF
+      UpsertDE(
+        "Bd_journey_analytics",
+        1,
+        "journeyId",
+        @addJourneyId,
+        "journeyName",
+        @addJourneyName,
+        "journeyType",
+        @addBuildType,
+        "emailName",
+        "N/A",
+        "emailId",
+        "N/A",
+        "deName",
+        @addBuildDeName,
+        "deId",
+        @addBuildDeId,
+        "automationName",
+        @addBuildAutoName,
+        "automationGuid",
+        @addBuildAutoGuid,
+        "automationCustomerKey",
+        @addBuildAutoKey,
+        "updateDate",
+        Now()
+      )
+      IF NOT Empty(@hubUrl) THEN
+        IF IndexOf(@hubUrl, "?") > 0 THEN
+          Redirect(Concat(@hubUrl, "&added=1"))
+        ELSE
+          Redirect(Concat(@hubUrl, "?added=1"))
+        ENDIF
+      ENDIF
+    ELSE
+      SET @addBuildError = "Missing journey ID or name."
     ENDIF
   ENDIF
   IF @homePerformanceJsonMode == "1" THEN
@@ -318,132 +363,6 @@
 ]%%
 <script runat="server" language="javascript">
   Platform.Load("Core", "1.1");
-  function homeAddBuildTrim(val) {
-    return String(val == null ? "" : val).replace(/^\s+|\s+$/g, "");
-  }
-  function homeAddBuildClip(val, maxLen) {
-    var s = String(val == null ? "" : val);
-    var n = Number(maxLen);
-    if (isNaN(n) || n < 1) {
-      return "";
-    }
-    if (s.length <= n) {
-      return s;
-    }
-    return s.substring(0, n);
-  }
-  function homeAddBuildRowField(row, names) {
-    var i, v;
-    if (!row) {
-      return "";
-    }
-    for (i = 0; i < names.length; i++) {
-      v = "";
-      try {
-        v = Platform.Function.Field(row, names[i]);
-      } catch (fieldEx) {
-        v = row[names[i]];
-      }
-      if (v != null && String(v) !== "") {
-        return String(v);
-      }
-    }
-    return "";
-  }
-  function homeAddBuildLookupMeta(journeyId) {
-    var out = {
-      journeyName: "",
-      deName: "",
-      deId: "",
-      automationName: "",
-      automationGuid: "",
-      automationCustomerKey: ""
-    };
-    var deNames = ["bd_sst_journey_automation_lookup", "Bd_sst_journey_automation_lookup"];
-    var di, rows, row;
-    for (di = 0; di < deNames.length; di++) {
-      try {
-        rows = Platform.Function.LookupRows(deNames[di], "journeyId", journeyId);
-        if (!rows || rows.length === 0) {
-          rows = Platform.Function.LookupRows(deNames[di], "JourneyID", journeyId);
-        }
-        if (rows && rows.length > 0) {
-          row = rows[0];
-          out.journeyName = homeAddBuildTrim(
-            homeAddBuildRowField(row, ["journeyName", "JourneyName"])
-          );
-          out.deName = homeAddBuildTrim(homeAddBuildRowField(row, ["deName", "DeName"]));
-          out.deId = homeAddBuildTrim(homeAddBuildRowField(row, ["deId", "DeId"]));
-          out.automationName = homeAddBuildTrim(
-            homeAddBuildRowField(row, ["automationName", "AutomationName"])
-          );
-          out.automationGuid = homeAddBuildTrim(
-            homeAddBuildRowField(row, ["automationGuid", "AutomationGuid"])
-          );
-          out.automationCustomerKey = homeAddBuildTrim(
-            homeAddBuildRowField(row, ["automationCustomerKey", "AutomationCustomerKey"])
-          );
-          return out;
-        }
-      } catch (lookupEx) {
-      }
-    }
-    return out;
-  }
-  function homeTryAddBuildPost() {
-    var doVal = Platform.Request.GetFormField("do");
-    if (doVal === null || doVal === undefined || doVal === "") {
-      doVal = Platform.Request.GetQueryStringParameter("do");
-    }
-    if (homeAddBuildTrim(doVal) !== "addBuild") {
-      return;
-    }
-    var journeyId = homeAddBuildTrim(Platform.Request.GetFormField("journeyId"));
-    var journeyName = homeAddBuildTrim(Platform.Request.GetFormField("journeyName"));
-    if (!journeyId || !journeyName) {
-      Platform.Variable.SetValue("@addBuildError", "Missing journey ID or name.");
-      return;
-    }
-    var meta = homeAddBuildLookupMeta(journeyId);
-    if (meta.journeyName) {
-      journeyName = meta.journeyName;
-    }
-    var deName = meta.deName ? meta.deName : "N/A";
-    var deId = meta.deId ? meta.deId : "N/A";
-    var journeyType = "Existing Journey";
-    if (meta.automationGuid || meta.automationCustomerKey) {
-      journeyType = "Journey + Automation";
-    }
-    var jid = homeAddBuildClip(journeyId, 250);
-    var jname = homeAddBuildClip(journeyName, 50);
-    var jtype = homeAddBuildClip(journeyType, 50);
-    var dname = homeAddBuildClip(deName, 200);
-    var did = homeAddBuildClip(deId, 50);
-    var autoName = homeAddBuildClip(meta.automationName, 50);
-    var autoGuid = homeAddBuildClip(meta.automationGuid, 50);
-    var autoKey = homeAddBuildClip(meta.automationCustomerKey, 50);
-    Platform.Variable.SetValue("@addBuildUpsertReady", "1");
-    Platform.Variable.SetValue("@addBuildUpsertJourneyId", jid);
-    Platform.Variable.SetValue("@addBuildUpsertJourneyName", jname);
-    Platform.Variable.SetValue("@addBuildUpsertJourneyType", jtype);
-    Platform.Variable.SetValue("@addBuildUpsertDeName", dname);
-    Platform.Variable.SetValue("@addBuildUpsertDeId", did);
-    Platform.Variable.SetValue("@addBuildUpsertAutoName", autoName);
-    Platform.Variable.SetValue("@addBuildUpsertAutoGuid", autoGuid);
-    Platform.Variable.SetValue("@addBuildUpsertAutoKey", autoKey);
-  }
-  try {
-    homeTryAddBuildPost();
-  } catch (addBuildPostEx) {
-    Platform.Variable.SetValue(
-      "@addBuildError",
-      "Add journey failed: " +
-        homeAddBuildClip(
-          addBuildPostEx.message != null ? String(addBuildPostEx.message) : String(addBuildPostEx),
-          220
-        )
-    );
-  }
   try {
     var emptyJourneyUrl = Platform.Function.Lookup(
       "bd_sst_page_navigation",
