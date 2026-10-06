@@ -2367,18 +2367,20 @@
     padding: 40px;
     overflow-y: auto;
     background: var(--gray-50);
-  }
-  .main-content.is-page-loading > :not(.sst-page-loading-panel) {
-    display: none !important;
+    position: relative;
   }
   .sst-page-loading-panel {
     display: none;
+    position: absolute;
+    inset: 0;
+    z-index: 200;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    min-height: calc(100vh - 80px);
     padding: 48px 24px 56px;
     text-align: center;
+    background: rgba(249, 250, 251, 0.92);
+    pointer-events: auto;
   }
   .main-content.is-page-loading .sst-page-loading-panel {
     display: flex;
@@ -4778,13 +4780,49 @@
   }
 </script>
 <script>
-  document.addEventListener('DOMContentLoaded', function () {
-    setTimeout(function () {
+  (function () {
+    var homeLoadingObserver = null;
+
+    function dismissHomePageLoading() {
       var mainEl = document.querySelector('.main-content.is-page-loading');
       if (mainEl) {
         mainEl.classList.remove('is-page-loading');
       }
-    }, 2000);
-  });
+      if (homeLoadingObserver) {
+        homeLoadingObserver.disconnect();
+        homeLoadingObserver = null;
+      }
+    }
+
+    function gridReadyForHomeDismiss(grid) {
+      if (!grid) {
+        return true;
+      }
+      if (grid.querySelector('.survey-card')) {
+        return true;
+      }
+      if (grid.querySelector('.no-surveys-message')) {
+        return true;
+      }
+      return false;
+    }
+
+    function watchHomeGridForFirstCard(grid) {
+      if (gridReadyForHomeDismiss(grid)) {
+        dismissHomePageLoading();
+        return;
+      }
+      homeLoadingObserver = new MutationObserver(function () {
+        if (grid.querySelector('.survey-card')) {
+          dismissHomePageLoading();
+        }
+      });
+      homeLoadingObserver.observe(grid, { childList: true, subtree: true });
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      watchHomeGridForFirstCard(document.getElementById('surveysGrid'));
+    });
+  })();
 </script>
 %%[ ENDIF ]%%
