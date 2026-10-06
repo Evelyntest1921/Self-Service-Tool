@@ -12,6 +12,8 @@ VAR @saveScheduleRequested, @schedulePanelVisible, @scheduleEventDefId, @schedul
 VAR @entryScheduleType, @entryScheduleRepeat, @entryScheduleInterval, @entryScheduleOccurrences
 VAR @entryScheduleEnd, @entryScheduleEndDate
 VAR @entryScheduleWeekdays, @entryContactEvaluation, @entryScheduleStart
+VAR @logDeName, @logDeId
+VAR @entryDeUpsertReady, @entryDeUpsertJid, @entryDeUpsertName, @entryDeUpsertId
 
 SET @saveScheduleRequested = "0"
 SET @schedulePanelVisible = "false"
@@ -111,6 +113,12 @@ SET @apiActivityCount = "0"
 SET @buildAutomationGuid = ""
 SET @buildAutomationCustomerKey = ""
 SET @buildAutomationName = ""
+SET @logDeName = ""
+SET @logDeId = ""
+SET @entryDeUpsertReady = ""
+SET @entryDeUpsertJid = ""
+SET @entryDeUpsertName = ""
+SET @entryDeUpsertId = ""
 
 IF Empty(@jid) THEN
  SET @pageStatus = "nodata"
@@ -133,6 +141,8 @@ ELSE
    SET @buildAutomationGuid = Trim(Field(@detailRow,"automationGuid"))
    SET @buildAutomationCustomerKey = Trim(Field(@detailRow,"automationCustomerKey"))
    SET @buildAutomationName = Trim(Field(@detailRow,"automationName"))
+   SET @logDeName = Trim(Field(@detailRow,"deName"))
+   SET @logDeId = Trim(Field(@detailRow,"deId"))
   ENDIF
   SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
   IF RowCount(@authRow) > 0 THEN
@@ -1469,6 +1479,141 @@ function findDeAudienceEntry(jObj) {
   return null;
 }
 
+function findEntryEventRef(jObj) {
+  var fromAudience = findDeAudienceEntry(jObj);
+  if (fromAudience) {
+    return fromAudience;
+  }
+  var triggers = jObj.triggers;
+  if (!triggers || !triggers.length) {
+    return null;
+  }
+  var i;
+  for (i = 0; i < triggers.length; i++) {
+    var tr = triggers[i] || {};
+    var meta = tr.metaData || {};
+    var eventDefId = strTrim(meta.eventDefinitionId);
+    if (!eventDefId && tr.arguments) {
+      eventDefId = strTrim(tr.arguments.eventDefinitionId);
+    }
+    if (eventDefId) {
+      return {
+        eventDefId: eventDefId,
+        eventDefKey: strTrim(
+          meta.eventDefinitionKey ||
+            (tr.arguments ? tr.arguments.eventDefinitionKey : "")
+        )
+      };
+    }
+  }
+  return null;
+}
+
+function readEventDeObjectId(evObj) {
+  if (!evObj) {
+    return "";
+  }
+  return strTrim(evObj.dataExtensionId || evObj.dataExtensionID || "");
+}
+
+function resolveDeMetaByObjectId(objectId) {
+  var oid = strTrim(objectId);
+  if (!oid) {
+    return { customerKey: "", name: "" };
+  }
+  try {
+    var prox = new Script.Util.WSProxy();
+    var rde = prox.retrieve("DataExtension", ["CustomerKey", "Name"], {
+      Property: "ObjectID",
+      SimpleOperator: "equals",
+      Value: oid
+    });
+    if (rde && rde.Results && rde.Results.length > 0) {
+      return {
+        customerKey: String(rde.Results[0].CustomerKey || ""),
+        name: String(rde.Results[0].Name || "")
+      };
+    }
+  } catch (deMetaEx) {}
+  return { customerKey: "", name: "" };
+}
+
+function resolveLiveEntryDeFromEvent(evObj) {
+  if (!evObj) {
+    return { name: "", customerKey: "", objectId: "" };
+  }
+  var objectId = readEventDeObjectId(evObj);
+  var name = strTrim(evObj.dataExtensionName || "");
+  var customerKey = strTrim(
+    evObj.dataExtensionKey || evObj.dataExtensionCustomerKey || ""
+  );
+  if (objectId && (!name || !customerKey)) {
+    var meta = resolveDeMetaByObjectId(objectId);
+    if (!name) {
+      name = meta.name;
+    }
+    if (!customerKey) {
+      customerKey = meta.customerKey;
+    }
+  }
+  return { name: name, customerKey: customerKey, objectId: objectId };
+}
+
+function formatEntrySourceDisplay(liveDe, fallbackLabel) {
+  var live = liveDe || { name: "", customerKey: "" };
+  var name = strTrim(live.name);
+  var key = strTrim(live.customerKey);
+  if (name && key && name !== key) {
+    return name + " (" + key + ")";
+  }
+  if (name) {
+    return name;
+  }
+  if (key) {
+    return key;
+  }
+  return strTrim(fallbackLabel);
+}
+
+function normalizeLogDeField(v) {
+  var s = strTrim(v);
+  if (!s) {
+    return "";
+  }
+  if (s.toUpperCase() === "N/A") {
+    return "";
+  }
+  return s;
+}
+
+function queueEntryDeUpsertIfChanged(jid, liveDe) {
+  var journeyKey = strTrim(jid);
+  if (!journeyKey) {
+    return;
+  }
+  var live = liveDe || { name: "", customerKey: "" };
+  var liveName = strTrim(live.name);
+  var liveKey = strTrim(live.customerKey);
+  if (!liveName && !liveKey) {
+    return;
+  }
+  if (!liveName) {
+    liveName = liveKey;
+  }
+  if (!liveKey) {
+    liveKey = liveName;
+  }
+  var logName = normalizeLogDeField(Platform.Variable.GetValue("@logDeName") || "");
+  var logKey = normalizeLogDeField(Platform.Variable.GetValue("@logDeId") || "");
+  if (logName === liveName && logKey === liveKey) {
+    return;
+  }
+  Platform.Variable.SetValue("@entryDeUpsertJid", journeyKey);
+  Platform.Variable.SetValue("@entryDeUpsertName", liveName.length > 200 ? liveName.substring(0, 200) : liveName);
+  Platform.Variable.SetValue("@entryDeUpsertId", liveKey.length > 50 ? liveKey.substring(0, 50) : liveKey);
+  Platform.Variable.SetValue("@entryDeUpsertReady", "1");
+}
+
 function resolveEntrySourceLabel(jObj, activities, eventDefObj) {
   if (eventDefObj) {
     var deFromEvent = strTrim(eventDefObj.dataExtensionName);
@@ -1916,7 +2061,7 @@ try {
       var entrySourceLabel = resolveEntrySourceLabel(jObj, activities, null);
       var entryEventDefObj = null;
 
-      var deEntry = findDeAudienceEntry(jObj);
+      var deEntry = findEntryEventRef(jObj);
       var evFetched = { ok: false, obj: null, msg: "" };
       if (deEntry && deEntry.eventDefId) {
         Platform.Variable.SetValue("@schedulePanelVisible", "true");
@@ -2011,6 +2156,11 @@ try {
           );
         }
       }
+      if (entryEventDefObj) {
+        var liveEntryDe = resolveLiveEntryDeFromEvent(entryEventDefObj);
+        entrySourceLabel = formatEntrySourceDisplay(liveEntryDe, entrySourceLabel);
+        queueEntryDeUpsertIfChanged(jid, liveEntryDe);
+      }
       var buildAutomationInfo = {
         guid: strTrim(Platform.Variable.GetValue("@buildAutomationGuid") || ""),
         customerKey: strTrim(
@@ -2049,6 +2199,25 @@ Platform.Variable.SetValue("@apiJourneyStatus", apiJourneyStatus);
 Platform.Variable.SetValue("@apiJourneyVersion", apiJourneyVersion);
 Platform.Variable.SetValue("@apiActivityCount", apiActivityCount);
 </script>
+%%[
+IF NOT Empty(@entryDeUpsertReady) AND @entryDeUpsertReady == "1" AND NOT Empty(@entryDeUpsertJid) AND NOT Empty(@entryDeUpsertId) THEN
+ UpsertDE(
+  "Bd_journey_analytics",
+  1,
+  "journeyId",
+  Substring(@entryDeUpsertJid, 1, 250),
+  "deName",
+  Substring(@entryDeUpsertName, 1, 200),
+  "deId",
+  Substring(@entryDeUpsertId, 1, 50),
+  "updateDate",
+  Now()
+ )
+ SET @logDeName = @entryDeUpsertName
+ SET @logDeId = @entryDeUpsertId
+ SET @entryDeUpsertReady = ""
+ENDIF
+]%%
 <!DOCTYPE html>
 <html lang="en">
 <head>
