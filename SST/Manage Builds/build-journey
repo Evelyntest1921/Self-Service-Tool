@@ -2,6 +2,7 @@
 VAR @HOME_URL, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @JOURNEY_VIEW_URL, @SURVEY_STAGE_URL, @SURVEY_ANALYTICS_URL
 VAR @navRows, @navRow, @jid, @detailRows, @detailRow, @detailCount
 VAR @dispName, @dispType, @dispSurveyId, @isSurveyBuild, @buildNavContext, @buildNavActive
+VAR @buildAutomationGuid, @buildAutomationCustomerKey, @buildAutomationName
 VAR @surveyUrlRows, @surveyUrlRow, @pageStatus, @loadError, @isRealJourney
 VAR @authOk, @accessToken, @subdomain, @clientId, @clientSecret, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader, @tokenPattern, @accountId, @authR, @authRow
 VAR @MC_CLOUD
@@ -107,6 +108,9 @@ SET @apiJourneyName = ""
 SET @apiJourneyStatus = ""
 SET @apiJourneyVersion = ""
 SET @apiActivityCount = "0"
+SET @buildAutomationGuid = ""
+SET @buildAutomationCustomerKey = ""
+SET @buildAutomationName = ""
 
 IF Empty(@jid) THEN
  SET @pageStatus = "nodata"
@@ -126,6 +130,9 @@ ELSE
    IF IndexOf(@dispType,"Survey") > 0 THEN
     SET @isSurveyBuild = "true"
    ENDIF
+   SET @buildAutomationGuid = Trim(Field(@detailRow,"automationGuid"))
+   SET @buildAutomationCustomerKey = Trim(Field(@detailRow,"automationCustomerKey"))
+   SET @buildAutomationName = Trim(Field(@detailRow,"automationName"))
   ENDIF
   SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
   IF RowCount(@authRow) > 0 THEN
@@ -1134,7 +1141,7 @@ function journeyStatusBusinessDescription(status, lastPublishedIso) {
   return "Current state from Journey Builder. Use Journey Builder if you need to change whether the journey is live.";
 }
 
-function buildMetaHtml(jObj, logName, builderUrl, entrySourceLabel, entryEventDefObj) {
+function buildMetaHtml(jObj, logName, builderUrl, entrySourceLabel, entryEventDefObj, automationInfo) {
   var name = jObj.name ? String(jObj.name) : "";
   if (!name && logName) {
     name = logName;
@@ -1175,7 +1182,11 @@ function buildMetaHtml(jObj, logName, builderUrl, entrySourceLabel, entryEventDe
       htmlSafe(journeyStatusBusinessDescription(status, lastPub)) +
       "</p></dd>"
   );
-  var entryMeta = buildEntryMetaLines(entryEventDefObj || null, entrySourceLabel);
+  var entryMeta = buildEntryMetaLines(
+    entryEventDefObj || null,
+    entrySourceLabel,
+    automationInfo || null
+  );
   parts.push(
     "<dt>Entry</dt><dd><span class=\"journey-meta-value\">" +
       htmlSafe(entryMeta.value) +
@@ -1746,11 +1757,45 @@ function buildScheduleSummaryFromEvent(evObj) {
   return chunks.join(" · ");
 }
 
-function buildEntryMetaLines(evObj, entrySourceLabel) {
+function buildAutomationConnectedInfo(automationInfo) {
+  var info = automationInfo || {};
+  var guid = strTrim(info.guid);
+  var customerKey = strTrim(info.customerKey);
+  var name = strTrim(info.name);
+  if (!guid && !customerKey) {
+    return { connected: false, name: name };
+  }
+  return { connected: true, name: name };
+}
+
+function buildEntryMetaLines(evObj, entrySourceLabel, automationInfo) {
   var source = strTrim(entrySourceLabel);
   var fromSource = "";
   if (source && source !== "—") {
     fromSource = "Contacts enter from " + source + ". ";
+  }
+  var auto = buildAutomationConnectedInfo(automationInfo);
+  if (auto.connected) {
+    var autoPhrase = auto.name
+      ? 'automation "' + auto.name + '"'
+      : "the linked automation";
+    var note =
+      fromSource +
+      "This build is connected to " +
+      autoPhrase +
+      ". Contacts enter the journey each time that automation runs on its Automation Studio schedule (after its query step finishes)—not on a separate Journey Builder timer.";
+    if (evObj) {
+      note +=
+        " Journey entry event settings in Journey Builder: " +
+        buildScheduleSummaryFromEvent(evObj) +
+        ".";
+    } else {
+      note += " Use View Automation on Manage Build to see or change how often it runs.";
+    }
+    return {
+      value: "When automation runs",
+      note: note
+    };
   }
   if (!evObj) {
     if (fromSource) {
@@ -1966,12 +2011,20 @@ try {
           );
         }
       }
+      var buildAutomationInfo = {
+        guid: strTrim(Platform.Variable.GetValue("@buildAutomationGuid") || ""),
+        customerKey: strTrim(
+          Platform.Variable.GetValue("@buildAutomationCustomerKey") || ""
+        ),
+        name: strTrim(Platform.Variable.GetValue("@buildAutomationName") || "")
+      };
       journeyMetaHtml = buildMetaHtml(
         jObj,
         logName,
         journeyBuilderUrl,
         entrySourceLabel,
-        entryEventDefObj
+        entryEventDefObj,
+        buildAutomationInfo
       );
     } else {
       loadErrorMsg = fetched.msg || "Could not load journey.";
