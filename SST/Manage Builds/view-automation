@@ -7,6 +7,7 @@ VAR @authRow, @authR, @clientId, @clientSecret, @accountId, @authUrl, @authPaylo
 VAR @authPending
 VAR @editSidebarHtml, @automationMetaHtml, @automationStepsHtml, @automationFlowHtml, @automationSchedulePanelHtml, @automationStudioUrl, @apiAutomationName, @automationRunning, @automationActivityCount, @scheduleEditorOpen, @runOnceConfirmOpen
 VAR @autoAction, @autoActionOn, @schedFreq, @schedStart, @schedMinute, @schedInterval, @schedWeekdays, @schedEnd, @schedEndDate, @schedOccurrences, @actionOk, @actionMsg
+VAR @automationGuidBackfillReady, @automationGuidBackfillJid, @automationGuidBackfillValue, @automationGuidBackfillKey
 
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
@@ -603,6 +604,28 @@ function findAutomationInList(sub, token, customerKey, automationName) {
     page++;
   }
   return null;
+}
+function queueAutomationAnalyticsBackfill(obj, hadGuid, hadCustomerKey) {
+  var jid = strTrim(Platform.Variable.GetValue("@jid") || "");
+  var restId = obj && obj.id != null ? strTrim(String(obj.id)) : "";
+  var restKey = obj && obj.key != null ? strTrim(String(obj.key)) : "";
+  if (!jid || !restId || hadGuid) {
+    return;
+  }
+  if (restId.length > 50) {
+    restId = restId.substring(0, 50);
+  }
+  Platform.Variable.SetValue("@automationGuidBackfillJid", jid);
+  Platform.Variable.SetValue("@automationGuidBackfillValue", restId);
+  if (!hadCustomerKey && restKey) {
+    if (restKey.length > 50) {
+      restKey = restKey.substring(0, 50);
+    }
+    Platform.Variable.SetValue("@automationGuidBackfillKey", restKey);
+  } else {
+    Platform.Variable.SetValue("@automationGuidBackfillKey", "");
+  }
+  Platform.Variable.SetValue("@automationGuidBackfillReady", "1");
 }
 function getAutomation(sub, token, automationGuid, automationCustomerKey, automationName) {
   var base = "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/automations/";
@@ -1408,6 +1431,7 @@ try {
     );
     if (fetched.ok && fetched.obj) {
       var obj = fetched.obj;
+      queueAutomationAnalyticsBackfill(obj, automationGuid, automationCustomerKey);
       apiName = obj.name ? String(obj.name) : "";
       studioUrl = MC_CLOUD + "#app/Automation%20Studio/AutomationStudioFuel3/";
       applyScheduleFormDefaultsFromAutomation(obj);
@@ -1457,6 +1481,36 @@ Platform.Variable.SetValue("@automationStepsHtml", stepsHtml);
 Platform.Variable.SetValue("@automationStudioUrl", studioUrl);
 Platform.Variable.SetValue("@apiAutomationName", apiName);
 </script>
+%%[
+IF NOT Empty(@automationGuidBackfillReady) AND @automationGuidBackfillReady == "1" AND NOT Empty(@automationGuidBackfillJid) AND NOT Empty(@automationGuidBackfillValue) THEN
+  IF NOT Empty(@automationGuidBackfillKey) THEN
+    UpsertDE(
+      "Bd_journey_analytics",
+      1,
+      "journeyId",
+      Substring(@automationGuidBackfillJid, 1, 250),
+      "automationGuid",
+      Substring(@automationGuidBackfillValue, 1, 50),
+      "automationCustomerKey",
+      Substring(@automationGuidBackfillKey, 1, 50),
+      "updateDate",
+      Now()
+    )
+  ELSE
+    UpsertDE(
+      "Bd_journey_analytics",
+      1,
+      "journeyId",
+      Substring(@automationGuidBackfillJid, 1, 250),
+      "automationGuid",
+      Substring(@automationGuidBackfillValue, 1, 50),
+      "updateDate",
+      Now()
+    )
+  ENDIF
+  SET @automationGuidBackfillReady = ""
+ENDIF
+]%%
 <!DOCTYPE html>
 <html lang="en">
 <head>
