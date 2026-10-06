@@ -1134,7 +1134,7 @@ function journeyStatusBusinessDescription(status, lastPublishedIso) {
   return "Current state from Journey Builder. Use Journey Builder if you need to change whether the journey is live.";
 }
 
-function buildMetaHtml(jObj, logName, builderUrl, entrySourceLabel) {
+function buildMetaHtml(jObj, logName, builderUrl, entrySourceLabel, entryEventDefObj) {
   var name = jObj.name ? String(jObj.name) : "";
   if (!name && logName) {
     name = logName;
@@ -1173,6 +1173,14 @@ function buildMetaHtml(jObj, logName, builderUrl, entrySourceLabel) {
       htmlSafe(status) +
       "</span><p class=\"journey-meta-note\">" +
       htmlSafe(journeyStatusBusinessDescription(status, lastPub)) +
+      "</p></dd>"
+  );
+  var entryMeta = buildEntryMetaLines(entryEventDefObj || null, entrySourceLabel);
+  parts.push(
+    "<dt>Entry</dt><dd><span class=\"journey-meta-value\">" +
+      htmlSafe(entryMeta.value) +
+      "</span><p class=\"journey-meta-note\">" +
+      htmlSafe(entryMeta.note) +
       "</p></dd>"
   );
   parts.push("<dt>Version</dt><dd>" + htmlSafe(version) + "</dd>");
@@ -1738,6 +1746,41 @@ function buildScheduleSummaryFromEvent(evObj) {
   return chunks.join(" · ");
 }
 
+function buildEntryMetaLines(evObj, entrySourceLabel) {
+  var source = strTrim(entrySourceLabel);
+  var fromSource = "";
+  if (source && source !== "—") {
+    fromSource = "Contacts enter from " + source + ". ";
+  }
+  if (!evObj) {
+    if (fromSource) {
+      return {
+        value: "—",
+        note:
+          fromSource +
+          "Schedule details could not be loaded. Use the entry schedule section below or Journey Builder to see how often the audience runs."
+      };
+    }
+    return {
+      value: "—",
+      note:
+        "No scheduled data extension entry was found for this journey. Open Journey Builder to see how contacts enter."
+    };
+  }
+  var isRecurring = inferScheduleTypeFromEvent(evObj) === "recurring";
+  var value = isRecurring ? "Repeating" : "Run once";
+  var scheduleDetail = buildScheduleSummaryFromEvent(evObj);
+  if (isRecurring) {
+    scheduleDetail =
+      "The audience is evaluated on a repeating schedule: " +
+      scheduleDetail.replace(/^Recurring [^·]+ · /i, "");
+  }
+  return {
+    value: value,
+    note: fromSource + scheduleDetail
+  };
+}
+
 function syncScheduleFormFromEvent(evObj) {
   Platform.Variable.SetValue("@entryScheduleType", inferScheduleTypeFromEvent(evObj));
   Platform.Variable.SetValue("@entryScheduleRepeat", inferRepeatFromEvent(evObj));
@@ -1826,6 +1869,7 @@ try {
       journeyActivitiesHtml = buildActivitiesTableHtml(activities);
       journeyEmailsHtml = buildEmailsTableHtml(activities, senderProfileCache);
       var entrySourceLabel = resolveEntrySourceLabel(jObj, activities, null);
+      var entryEventDefObj = null;
 
       var deEntry = findDeAudienceEntry(jObj);
       var evFetched = { ok: false, obj: null, msg: "" };
@@ -1840,6 +1884,7 @@ try {
         var saveSchedule =
           Platform.Variable.GetValue("@saveScheduleRequested") === "1";
         if (evFetched.ok && evFetched.obj) {
+          entryEventDefObj = evFetched.obj;
           entrySourceLabel = resolveEntrySourceLabel(
             jObj,
             activities,
@@ -1912,12 +1957,21 @@ try {
         ) {
           syncScheduleFormFromEvent(evFetched.obj);
         }
+        if (evFetched.ok && evFetched.obj) {
+          entryEventDefObj = evFetched.obj;
+          entrySourceLabel = resolveEntrySourceLabel(
+            jObj,
+            activities,
+            evFetched.obj
+          );
+        }
       }
       journeyMetaHtml = buildMetaHtml(
         jObj,
         logName,
         journeyBuilderUrl,
-        entrySourceLabel
+        entrySourceLabel,
+        entryEventDefObj
       );
     } else {
       loadErrorMsg = fetched.msg || "Could not load journey.";
