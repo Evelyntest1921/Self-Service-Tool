@@ -94,16 +94,16 @@ IF NOT Empty(@jid) THEN
   SET @automationCustomerKey = Trim(Field(@detailRow,"automationCustomerKey"))
   SET @connectedAutomationName = Trim(Field(@detailRow,"automationName"))
   SET @sourceDeName = Trim(Field(@detailRow,"deName"))
-  IF Empty(@automationId) THEN
-   SET @automationId = @automationCustomerKey
+  SET @journeyAutomationId = @automationId
+  IF Empty(@journeyAutomationId) THEN
+   SET @journeyAutomationId = @automationCustomerKey
   ENDIF
  ENDIF
- SET @journeyAutomationId = @automationId
 ENDIF
 
 IF Empty(@jid) THEN
  SET @pageStatus = "nodata"
-ELSEIF Empty(@automationId) THEN
+ELSEIF Empty(@automationId) AND Empty(@automationCustomerKey) THEN
  SET @pageStatus = "noconnect"
  SET @loadError = "Bd_journey_analytics has no automationGuid or automationCustomerKey for this journey."
 ELSE
@@ -485,31 +485,55 @@ function countAutomationActivities(obj) {
   }
   return total;
 }
-function getAutomation(sub, token, automationId) {
+function looksLikeAutomationGuid(val) {
+  var s = strTrim(val);
+  if (!s) {
+    return false;
+  }
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
+}
+function getAutomation(sub, token, automationGuid, automationCustomerKey) {
   var base = "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/automations/";
-  var first = httpJson(token, "GET", base + encodeURIComponent(automationId));
-  if (first.status == 200) {
-    var obj = parseJsonSafe(first.body);
-    if (obj && (obj.id || obj.name || obj.key)) return { ok: true, obj: obj, msg: "" };
-  }
-  var second = httpJson(token, "GET", base + "key:" + encodeURIComponent(automationId));
-  if (second.status == 200) {
-    var keyed = parseJsonSafe(second.body);
-    if (keyed && (keyed.id || keyed.name || keyed.key)) return { ok: true, obj: keyed, msg: "" };
-  }
-  var detail = first.body ? String(first.body) : "";
-  if (detail.length > 220) {
-    var clipped = "";
-    var di;
-    for (di = 0; di < 220; di++) {
-      clipped += detail.charAt(di);
+  var guid = strTrim(automationGuid);
+  var customerKey = strTrim(automationCustomerKey);
+  var lastFail = { status: 0, body: "" };
+  if (looksLikeAutomationGuid(guid)) {
+    var byId = httpJson(token, "GET", base + encodeURIComponent(guid));
+    lastFail = byId;
+    if (byId.status == 200) {
+      var obj = parseJsonSafe(byId.body);
+      if (obj && (obj.id || obj.name || obj.key)) {
+        return { ok: true, obj: obj, msg: "" };
+      }
     }
-    detail = clipped;
+  }
+  var keyCandidates = [];
+  if (customerKey) {
+    keyCandidates.push(customerKey);
+  }
+  if (guid && !looksLikeAutomationGuid(guid)) {
+    keyCandidates.push(guid);
+  }
+  var ki, keyVal, byKey, keyed;
+  for (ki = 0; ki < keyCandidates.length; ki++) {
+    keyVal = keyCandidates[ki];
+    byKey = httpJson(token, "GET", base + "key:" + encodeURIComponent(keyVal));
+    lastFail = byKey;
+    if (byKey.status == 200) {
+      keyed = parseJsonSafe(byKey.body);
+      if (keyed && (keyed.id || keyed.name || keyed.key)) {
+        return { ok: true, obj: keyed, msg: "" };
+      }
+    }
+  }
+  var detail = lastFail.body ? String(lastFail.body) : "";
+  if (detail.length > 220) {
+    detail = clip(detail, 220);
   }
   return {
     ok: false,
     obj: null,
-    msg: "Automation GET HTTP " + first.status + (detail ? " " + detail : "")
+    msg: "Automation GET HTTP " + lastFail.status + (detail ? " " + detail : "")
   };
 }
 var AUTOMATION_GEAR_SVG_PATH =
@@ -1184,21 +1208,30 @@ if (String(Platform.Variable.GetValue("@authPending") || "") === "true") {
   }
 }
 var subdomain = Platform.Variable.GetValue("@subdomain") || "";
-var automationId = strTrim(Platform.Variable.GetValue("@automationId") || "");
+var automationGuid = strTrim(Platform.Variable.GetValue("@automationId") || "");
+var automationCustomerKey = strTrim(Platform.Variable.GetValue("@automationCustomerKey") || "");
 var metaHtml = "";
 var stepsHtml = "";
 var studioUrl = "";
 var apiName = "";
 
 try {
-  if (pageStatus === "view" && authOk === "true" && accessToken && subdomain && automationId) {
+  if (
+    pageStatus === "view" &&
+    authOk === "true" &&
+    accessToken &&
+    subdomain &&
+    (automationGuid || automationCustomerKey)
+  ) {
     var actionOn = String(Platform.Variable.GetValue("@autoActionOn") || "") === "true";
     var actionName = strTrim(Platform.Variable.GetValue("@autoAction") || "").toLowerCase();
-    var customerKey = strTrim(Platform.Variable.GetValue("@automationCustomerKey") || "");
-    var beforeAction = actionOn ? getAutomation(subdomain, accessToken, automationId) : { ok: false, obj: null };
+    var customerKey = automationCustomerKey;
+    var beforeAction = actionOn
+      ? getAutomation(subdomain, accessToken, automationGuid, automationCustomerKey)
+      : { ok: false, obj: null };
     if (actionOn && actionName === "stop") {
       if (beforeAction.ok && isRunningStatus(beforeAction.obj)) {
-        var stopResp = postJsonAction(subdomain, accessToken, beforeAction.obj.id || automationId, "stop");
+        var stopResp = postJsonAction(subdomain, accessToken, beforeAction.obj.id, "stop");
         Platform.Variable.SetValue("@actionOk", stopResp.status == 200 || stopResp.status == 202 ? "true" : "false");
         Platform.Variable.SetValue("@actionMsg", stopResp.status == 200 || stopResp.status == 202 ? "Stop requested." : "Stop failed HTTP " + stopResp.status + " " + clip(stopResp.body, 180));
       } else {
@@ -1207,12 +1240,19 @@ try {
       }
     }
     if (actionOn && actionName === "pause") {
-      var pauseResp = soapSchedule(subdomain, accessToken, (beforeAction.obj && beforeAction.obj.id) || automationId, customerKey, "pause", null);
+      var pauseResp = soapSchedule(
+        subdomain,
+        accessToken,
+        (beforeAction.obj && beforeAction.obj.id) || automationGuid,
+        customerKey || (beforeAction.obj && beforeAction.obj.key) || "",
+        "pause",
+        null
+      );
       Platform.Variable.SetValue("@actionOk", pauseResp.ok ? "true" : "false");
       Platform.Variable.SetValue("@actionMsg", pauseResp.ok ? "Pause requested." : "Pause failed HTTP " + pauseResp.status + " " + pauseResp.body);
     }
     if (actionOn && actionName === "runonce") {
-      var runTargetId = (beforeAction.obj && beforeAction.obj.id) || automationId;
+      var runTargetId = beforeAction.obj && beforeAction.obj.id;
       if (beforeAction.ok && isRunningStatus(beforeAction.obj)) {
         Platform.Variable.SetValue("@actionOk", "false");
         Platform.Variable.SetValue("@actionMsg", "Automation is already running. Stop it first or wait for the run to finish.");
@@ -1224,7 +1264,7 @@ try {
     }
     if (actionOn && actionName === "activate") {
       var notes = "";
-      var targetId = (beforeAction.obj && beforeAction.obj.id) || automationId;
+      var targetId = beforeAction.obj && beforeAction.obj.id;
       if (beforeAction.ok && isRunningStatus(beforeAction.obj)) {
         var preStop = postJsonAction(subdomain, accessToken, targetId, "stop");
         notes = preStop.status == 200 || preStop.status == 202 ? "Running instance stop requested. " : "Stop before activate failed HTTP " + preStop.status + ". ";
@@ -1243,7 +1283,7 @@ try {
       Platform.Variable.SetValue("@actionOk", activateResp.ok ? "true" : "false");
       Platform.Variable.SetValue("@actionMsg", notes + (activateResp.ok ? "Activate schedule requested." : "Activate failed HTTP " + activateResp.status + " " + activateResp.body));
     }
-    var fetched = getAutomation(subdomain, accessToken, automationId);
+    var fetched = getAutomation(subdomain, accessToken, automationGuid, automationCustomerKey);
     if (fetched.ok && fetched.obj) {
       var obj = fetched.obj;
       apiName = obj.name ? String(obj.name) : "";
