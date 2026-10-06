@@ -92,6 +92,9 @@ IF NOT Empty(@jid) THEN
   SET @detailRow = Row(@detailRows,1)
   SET @automationId = Trim(Field(@detailRow,"automationGuid"))
   SET @automationCustomerKey = Trim(Field(@detailRow,"automationCustomerKey"))
+  IF Lowercase(@automationId) == "null" OR Lowercase(@automationId) == "n/a" THEN SET @automationId = "" ENDIF
+  IF Lowercase(@automationCustomerKey) == "null" OR Lowercase(@automationCustomerKey) == "n/a" THEN SET @automationCustomerKey = "" ENDIF
+  IF @automationId == "00000000-0000-0000-0000-000000000000" THEN SET @automationId = "" ENDIF
   SET @connectedAutomationName = Trim(Field(@detailRow,"automationName"))
   SET @sourceDeName = Trim(Field(@detailRow,"deName"))
   SET @journeyAutomationId = @automationId
@@ -485,45 +488,157 @@ function countAutomationActivities(obj) {
   }
   return total;
 }
-function looksLikeAutomationGuid(val) {
+function normalizeAutomationRef(val) {
   var s = strTrim(val);
+  if (!s) {
+    return "";
+  }
+  var lower = s.toLowerCase();
+  if (lower === "null" || lower === "n/a" || lower === "undefined") {
+    return "";
+  }
+  if (/^0{8}-0{4}-0{4}-0{4}-0{12}$/i.test(s)) {
+    return "";
+  }
+  return s;
+}
+function looksLikeAutomationGuid(val) {
+  var s = normalizeAutomationRef(val);
   if (!s) {
     return false;
   }
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
 }
-function getAutomation(sub, token, automationGuid, automationCustomerKey) {
-  var base = "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/automations/";
-  var guid = strTrim(automationGuid);
-  var customerKey = strTrim(automationCustomerKey);
-  var lastFail = { status: 0, body: "" };
-  if (looksLikeAutomationGuid(guid)) {
-    var byId = httpJson(token, "GET", base + encodeURIComponent(guid));
-    lastFail = byId;
-    if (byId.status == 200) {
-      var obj = parseJsonSafe(byId.body);
-      if (obj && (obj.id || obj.name || obj.key)) {
-        return { ok: true, obj: obj, msg: "" };
+function uniqueAutomationKeyCandidates(customerKey, guid) {
+  var out = [];
+  var seen = {};
+  function add(val) {
+    var s = normalizeAutomationRef(val);
+    if (!s) {
+      return;
+    }
+    var marker = s.toLowerCase();
+    if (seen[marker]) {
+      return;
+    }
+    seen[marker] = true;
+    out.push(s);
+  }
+  add(customerKey);
+  add(guid);
+  return out;
+}
+function automationPayloadOk(obj) {
+  return !!(obj && (obj.id || obj.name || obj.key));
+}
+function getAutomationByRestId(base, token, restId) {
+  var id = normalizeAutomationRef(restId);
+  if (!id) {
+    return { ok: false, obj: null, status: 0, body: "" };
+  }
+  var resp = httpJson(token, "GET", base + encodeURIComponent(id));
+  if (resp.status == 200) {
+    var obj = parseJsonSafe(resp.body);
+    if (automationPayloadOk(obj)) {
+      return { ok: true, obj: obj, status: resp.status, body: resp.body };
+    }
+  }
+  return { ok: false, obj: null, status: resp.status, body: resp.body };
+}
+function getAutomationByCustomerKey(base, token, keyVal) {
+  var key = normalizeAutomationRef(keyVal);
+  var urls, ui, resp, obj;
+  if (!key) {
+    return { ok: false, obj: null, status: 0, body: "" };
+  }
+  urls = [base + "key:" + key, base + "key:" + encodeURIComponent(key)];
+  for (ui = 0; ui < urls.length; ui++) {
+    resp = httpJson(token, "GET", urls[ui]);
+    if (resp.status == 200) {
+      obj = parseJsonSafe(resp.body);
+      if (automationPayloadOk(obj)) {
+        return { ok: true, obj: obj, status: resp.status, body: resp.body };
       }
     }
   }
-  var keyCandidates = [];
-  if (customerKey) {
-    keyCandidates.push(customerKey);
-  }
-  if (guid && !looksLikeAutomationGuid(guid)) {
-    keyCandidates.push(guid);
-  }
-  var ki, keyVal, byKey, keyed;
-  for (ki = 0; ki < keyCandidates.length; ki++) {
-    keyVal = keyCandidates[ki];
-    byKey = httpJson(token, "GET", base + "key:" + encodeURIComponent(keyVal));
-    lastFail = byKey;
-    if (byKey.status == 200) {
-      keyed = parseJsonSafe(byKey.body);
-      if (keyed && (keyed.id || keyed.name || keyed.key)) {
-        return { ok: true, obj: keyed, msg: "" };
+  return {
+    ok: false,
+    obj: null,
+    status: resp ? resp.status : 0,
+    body: resp && resp.body ? resp.body : ""
+  };
+}
+function findAutomationInList(sub, token, customerKey, automationName) {
+  var endpoint = "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/automations";
+  var page = 1;
+  var keyNeedle = normalizeAutomationRef(customerKey);
+  var keyLower = keyNeedle ? keyNeedle.toLowerCase() : "";
+  var nameNeedle = normalizeAutomationRef(automationName);
+  while (page <= 8) {
+    var resp = httpJson(token, "GET", endpoint + "?$page=" + page + "&$pagesize=100");
+    if (resp.status != 200) {
+      break;
+    }
+    var parsed = parseJsonSafe(resp.body);
+    var items = parsed && parsed.items ? parsed.items : [];
+    var i, item, itemKey;
+    for (i = 0; i < items.length; i++) {
+      item = items[i];
+      if (!item) {
+        continue;
       }
+      if (keyLower && item.key && String(item.key).toLowerCase() === keyLower) {
+        return item;
+      }
+    }
+    for (i = 0; i < items.length; i++) {
+      item = items[i];
+      if (nameNeedle && item && item.name && String(item.name) === nameNeedle) {
+        return item;
+      }
+    }
+    if (items.length < 100) {
+      break;
+    }
+    page++;
+  }
+  return null;
+}
+function getAutomation(sub, token, automationGuid, automationCustomerKey, automationName) {
+  var base = "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/automations/";
+  var guid = normalizeAutomationRef(automationGuid);
+  var keys = uniqueAutomationKeyCandidates(automationCustomerKey, guid);
+  var lastFail = { status: 0, body: "" };
+  var ki, keyAttempt, byKey, byId, listItem, fullById;
+  for (ki = 0; ki < keys.length; ki++) {
+    keyAttempt = getAutomationByCustomerKey(base, token, keys[ki]);
+    if (keyAttempt.ok) {
+      return { ok: true, obj: keyAttempt.obj, msg: "" };
+    }
+    if (keyAttempt.status) {
+      lastFail = { status: keyAttempt.status, body: keyAttempt.body };
+    }
+  }
+  if (looksLikeAutomationGuid(guid)) {
+    byId = getAutomationByRestId(base, token, guid);
+    if (byId.ok) {
+      return { ok: true, obj: byId.obj, msg: "" };
+    }
+    if (byId.status) {
+      lastFail = { status: byId.status, body: byId.body };
+    }
+  }
+  listItem = findAutomationInList(sub, token, keys.length ? keys[0] : "", automationName);
+  if (listItem && listItem.id) {
+    fullById = getAutomationByRestId(base, token, String(listItem.id));
+    if (fullById.ok) {
+      return { ok: true, obj: fullById.obj, msg: "" };
+    }
+    if (fullById.status) {
+      lastFail = { status: fullById.status, body: fullById.body };
+    }
+    if (automationPayloadOk(listItem)) {
+      return { ok: true, obj: listItem, msg: "" };
     }
   }
   var detail = lastFail.body ? String(lastFail.body) : "";
@@ -1208,8 +1323,9 @@ if (String(Platform.Variable.GetValue("@authPending") || "") === "true") {
   }
 }
 var subdomain = Platform.Variable.GetValue("@subdomain") || "";
-var automationGuid = strTrim(Platform.Variable.GetValue("@automationId") || "");
-var automationCustomerKey = strTrim(Platform.Variable.GetValue("@automationCustomerKey") || "");
+var automationGuid = normalizeAutomationRef(Platform.Variable.GetValue("@automationId") || "");
+var automationCustomerKey = normalizeAutomationRef(Platform.Variable.GetValue("@automationCustomerKey") || "");
+var connectedAutomationName = strTrim(Platform.Variable.GetValue("@connectedAutomationName") || "");
 var metaHtml = "";
 var stepsHtml = "";
 var studioUrl = "";
@@ -1227,7 +1343,7 @@ try {
     var actionName = strTrim(Platform.Variable.GetValue("@autoAction") || "").toLowerCase();
     var customerKey = automationCustomerKey;
     var beforeAction = actionOn
-      ? getAutomation(subdomain, accessToken, automationGuid, automationCustomerKey)
+      ? getAutomation(subdomain, accessToken, automationGuid, automationCustomerKey, connectedAutomationName)
       : { ok: false, obj: null };
     if (actionOn && actionName === "stop") {
       if (beforeAction.ok && isRunningStatus(beforeAction.obj)) {
@@ -1283,7 +1399,13 @@ try {
       Platform.Variable.SetValue("@actionOk", activateResp.ok ? "true" : "false");
       Platform.Variable.SetValue("@actionMsg", notes + (activateResp.ok ? "Activate schedule requested." : "Activate failed HTTP " + activateResp.status + " " + activateResp.body));
     }
-    var fetched = getAutomation(subdomain, accessToken, automationGuid, automationCustomerKey);
+    var fetched = getAutomation(
+      subdomain,
+      accessToken,
+      automationGuid,
+      automationCustomerKey,
+      connectedAutomationName
+    );
     if (fetched.ok && fetched.obj) {
       var obj = fetched.obj;
       apiName = obj.name ? String(obj.name) : "";
