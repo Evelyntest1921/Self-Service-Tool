@@ -25,6 +25,8 @@
   SET @monthBouncedOut = ""
   SET @homePerformanceJson = ""
   SET @homePerformanceJsonMode = IIF(RequestParameter("homePerformanceData") == "1", "1", "0")
+  SET @homeJourneyPickerJson = ""
+  SET @homeJourneyPickerJsonMode = IIF(RequestParameter("homeJourneyPickerData") == "1", "1", "0")
   SET @specDeCountForCharts = "0"
   SET @browseMode = "0"
   SET @jaBrowseMarkup = ""
@@ -150,39 +152,6 @@
       ENDIF
     ELSE
       SET @addBuildError = "Missing journey ID or name."
-    ENDIF
-  ENDIF
-  IF @browseJourneys == "1" THEN
-    SET @browseMode = "1"
-    SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
-    IF RowCount(@authRow) > 0 THEN
-      SET @authRow = Row(@authRow,1)
-      SET @clientId = Field(@authRow,"clientId")
-      SET @clientSecret = Field(@authRow,"clientSecret")
-      SET @subdomain = Field(@authRow,"subdomain")
-      IF NOT Empty(@clientId) AND NOT Empty(@clientSecret) AND NOT Empty(@subdomain) THEN
-        SET @authUrl = Concat("https://",@subdomain,".auth.marketingcloudapis.com/v2/token")
-        SET @accountId = Trim(Field(@authRow,"accountId"))
-        SET @authPayload = Concat('{"grant_type":"client_credentials","client_id":"',@clientId,'","client_secret":"',@clientSecret,'"')
-        IF NOT Empty(@accountId) THEN
-          SET @authPayload = Concat(@authPayload,',"account_id":"',@accountId,'"')
-        ENDIF
-        SET @authPayload = Concat(@authPayload,'}')
-        SET @authStatus = HTTPPost2(@authUrl,"application/json",@authPayload,false,@authResponse,@authResponseHeader)
-        IF @authStatus == 200 THEN
-          SET @tokenPattern = '"access_token":"([^"]+)"'
-          SET @accessToken = RegExMatch(@authResponse,@tokenPattern,1)
-          IF Empty(@accessToken) THEN
-            SET @jaBrowseError = "Auth HTTP 200 but no access token in response."
-          ENDIF
-        ELSE
-          SET @jaBrowseError = Concat("Auth HTTP ",@authStatus," — ",Substring(IIF(NOT Empty(@authResponse),@authResponse,"(empty)"),1,200))
-        ENDIF
-      ELSE
-        SET @jaBrowseError = "Missing clientId, clientSecret, or subdomain in SFMC_AUTH."
-      ENDIF
-    ELSE
-      SET @jaBrowseError = "No SFMC_AUTH row for User=Admin."
     ENDIF
   ENDIF
   IF @homePerformanceJsonMode == "1" THEN
@@ -980,50 +949,6 @@
     }
     return page;
   }
-  function renderBrowsePagination(hubUrl, page, totalPages, totalCount) {
-    if (totalPages <= 1) {
-      return "";
-    }
-    var parts = [
-      '<div class="browse-pagination">' +
-      '<div class="browse-pagination-inner">'
-    ];
-    if (page > 1) {
-      parts.push(
-        '<a href="' +
-        esc(hubUrl) +
-        "?browseJourneys=1&amp;browsePage=" +
-        (page - 1) +
-        '" class="filter-btn">Previous</a>'
-      );
-    }
-    else {
-      parts.push('<span class="filter-btn browse-page-disabled">Previous</span>');
-    }
-    parts.push(
-      '<span class="browse-page-label">Page ' +
-      page +
-      " of " +
-      totalPages +
-      " (" +
-      totalCount +
-      " journeys)</span>"
-    );
-    if (page < totalPages) {
-      parts.push(
-        '<a href="' +
-        esc(hubUrl) +
-        "?browseJourneys=1&amp;browsePage=" +
-        (page + 1) +
-        '" class="filter-btn">Next</a>'
-      );
-    }
-    else {
-      parts.push('<span class="filter-btn browse-page-disabled">Next</span>');
-    }
-    parts.push("</div></div>");
-    return parts.join("");
-  }
   function buildTypeIconKey(type) {
     var t = String(type || "")
       .replace(/^\s+|\s+$/g, "")
@@ -1063,52 +988,78 @@
     }
     return "mail";
   }
-  function renderBrowseJourneyCards(items, existing, hubUrl) {
-    var formAction = hubUrl ? String(hubUrl) : "";
-    var browseParts = [];
-    var bx, item, jid, jname, jstatus, jdate, exists, title, statusLabel, actionHtml;
-    for (bx = 0; bx < items.length; bx++) {
-      item = items[bx];
-      jid = item.id != null ? String(item.id) : "";
-      jname = item.name != null ? String(item.name) : "Untitled journey";
-      jstatus = item.status != null ? String(item.status) : "Journey";
-      jdate = formatBrowseDate(
-        item.modifiedDate || item.lastPublishedDate || item.createdDate || ""
-      );
-      exists = jid && existing[jid.toLowerCase()];
-      title = wrapTitle(jname, 30);
-      statusLabel = esc(jstatus.length > 28 ? jstatus.substring(0, 28) + "…" : jstatus);
-      if (exists) {
-        actionHtml =
-          '<button type="button" class="btn-secondary" disabled>Already added</button>';
-      }
-      else {
-        actionHtml =
-          '<form method="post" action="' + escAttr(formAction) + '" style="margin:0;display:inline">' +
-          '<input type="hidden" name="do" value="addBuild">' +
-          '<input type="hidden" name="journeyId" value="' + escAttr(jid) + '">' +
-          '<input type="hidden" name="journeyName" value="' + escAttr(jname) + '">' +
-          '<button type="submit" class="btn-secondary">Add to builds</button>' +
-          "</form>";
-      }
-      browseParts.push(
-        '<div class="survey-card survey-card-browse">' +
-        '<div class="survey-header">' +
-        '<div class="survey-icon" data-build-icon="' + escAttr(buildTypeIconKey("Existing Journey")) + '"></div>' +
-        '<div class="survey-status status-Active">' + statusLabel + "</div>" +
-        "</div>" +
-        '<h3 class="survey-title">' + title + "</h3>" +
-        '<div class="survey-meta">' +
-        '<span class="survey-id">ID: ' + esc(jid) + "</span>" +
-        '<span class="survey-date">' + esc(jdate) + "</span>" +
-        "</div>" +
-        '<div class="survey-actions">' +
-        actionHtml +
-        "</div>" +
-        "</div>"
-      );
+  var JOURNEY_PICKER_MAX_PAGES = 10;
+  function stringifyHomeJson(payload) {
+    var raw;
+    if (typeof JSON !== "undefined" && typeof JSON.stringify === "function") {
+      raw = JSON.stringify(payload);
+    } else {
+      raw = Platform.Function.Stringify(payload);
+      raw = String(raw)
+        .replace(/\bTrue\b/g, "true")
+        .replace(/\bFalse\b/g, "false")
+        .replace(/\bNone\b/g, "null");
     }
-    return browseParts.join("");
+    return raw;
+  }
+  function buildJourneyPickerPayload() {
+    var authResult = fetchHomeRestAuth();
+    if (authResult.error) {
+      return { ok: false, error: authResult.error, journeys: [] };
+    }
+    var existing = loadExistingJourneyIds();
+    var journeys = [];
+    var page = 1;
+    var totalPages = 1;
+    while (page <= totalPages && page <= JOURNEY_PICKER_MAX_PAGES) {
+      var listUrl = buildJourneyListUrl(authResult.subdomain, page, BROWSE_PAGE_SIZE);
+      var listResp = homeHttpGet(authResult.token, listUrl);
+      if (!httpOk(listResp.status)) {
+        var listErrBody = listResp.body ? listResp.body.substring(0, 200) : "";
+        return {
+          ok: false,
+          error: "Journey API HTTP " + listResp.status + (listErrBody ? ": " + listErrBody : "."),
+          journeys: []
+        };
+      }
+      var parsed = null;
+      try {
+        parsed = Platform.Function.ParseJSON(listResp.body);
+      } catch (pickerParseEx) {
+        return { ok: false, error: "Journey API returned invalid JSON.", journeys: [] };
+      }
+      var items = parseJourneyListItems(parsed);
+      var totalCount =
+        parsed && parsed.count != null ? Number(parsed.count) : journeys.length + items.length;
+      if (isNaN(totalCount) || totalCount < 0) {
+        totalCount = journeys.length + items.length;
+      }
+      totalPages = Math.ceil(totalCount / BROWSE_PAGE_SIZE);
+      if (totalPages < 1) {
+        totalPages = 1;
+      }
+      var i, item, jid, jname, jstatus;
+      for (i = 0; i < items.length; i++) {
+        item = items[i];
+        jid = item.id != null ? String(item.id) : "";
+        if (!jid) {
+          continue;
+        }
+        jname = item.name != null ? String(item.name) : "Untitled journey";
+        jstatus = item.status != null ? String(item.status) : "";
+        journeys.push({
+          id: jid,
+          name: jname,
+          status: jstatus,
+          alreadyAdded: !!existing[jid.toLowerCase()]
+        });
+      }
+      if (!items.length) {
+        break;
+      }
+      page++;
+    }
+    return { ok: true, journeys: journeys };
   }
   function homeHttpGet(token, url) {
     var req = new Script.Util.HttpRequest(url);
@@ -1130,14 +1081,12 @@
     if (Array.isArray(parsed)) return parsed;
     return [];
   }
-  function isBrowseMode() {
-    if (getAmpVar("browseMode") === "1") return true;
-    try {
-      return Request.GetQueryStringParameter("browseJourneys") === "1";
+  function isJourneyPickerDataRequest() {
+    var v = Platform.Request.GetQueryStringParameter("homeJourneyPickerData");
+    if (v === null || v === undefined || v === "") {
+      v = Platform.Request.GetFormField("homeJourneyPickerData");
     }
-    catch (browseReqEx) {
-    }
-    return false;
+    return String(v || "") === "1";
   }
   function escAttr(s) {
     if (s == null || s === undefined) return "";
@@ -1178,8 +1127,20 @@
     }
     return String(v || "") === "1";
   }
-  if (!isPerformanceDataRequest()) {
-  if (!isBrowseMode()) {
+  if (isJourneyPickerDataRequest()) {
+    var journeyPickerJson = '{"ok":false,"error":"Could not load journeys.","journeys":[]}';
+    try {
+      journeyPickerJson = stringifyHomeJson(buildJourneyPickerPayload());
+    } catch (pickerEx) {
+      var pickerMsg = pickerEx.message != null ? String(pickerEx.message) : String(pickerEx);
+      journeyPickerJson =
+        '{"ok":false,"error":"' +
+        String(pickerMsg).replace(/\\/g, "\\\\").replace(/"/g, '\\"') +
+        '","journeys":[]}';
+    }
+    setV("homeJourneyPickerJson", journeyPickerJson);
+  }
+  if (!isPerformanceDataRequest() && !isJourneyPickerDataRequest()) {
     try {
       var hubUrl = Platform.Variable.GetValue("@hubUrl") || "";
       var buildsPage = parseBrowsePage(getAmpVar("buildsPage"));
@@ -1300,83 +1261,6 @@
       setV("jaEmpty", "1");
       setV("jaRecentBuildsMarkup", "");
       setV("jaBuildsPagination", "");
-    }
-  }
-  if (isBrowseMode()) {
-    setV("browseMode", "1");
-    var browsePage = parseBrowsePage(getAmpVar("browsePage"));
-    if (!browsePage || browsePage === 1) {
-      try {
-        browsePage = parseBrowsePage(Request.GetQueryStringParameter("browsePage"));
-      }
-      catch (browsePageEx) {
-      }
-    }
-    setV("browsePage", String(browsePage));
-    var authResult = fetchHomeRestAuth();
-    if (authResult.error) {
-      setV("jaBrowseError", authResult.error);
-    }
-    else {
-      try {
-        var listUrl = buildJourneyListUrl(authResult.subdomain, browsePage, BROWSE_PAGE_SIZE);
-        var listResp = homeHttpGet(authResult.token, listUrl);
-        if (!httpOk(listResp.status)) {
-          var listErrBody = listResp.body ? listResp.body.substring(0, 200) : "";
-          setV(
-            "jaBrowseError",
-            "Journey API HTTP " +
-            listResp.status +
-            (listErrBody ? ": " + listErrBody : ".")
-          );
-        }
-        else {
-          var parsed = null;
-          try {
-            parsed = Platform.Function.ParseJSON(listResp.body);
-          }
-          catch (listParseEx) {
-            setV("jaBrowseError", "Journey API returned invalid JSON.");
-            parsed = null;
-          }
-          var items = parseJourneyListItems(parsed);
-          var totalCount = parsed && parsed.count != null ? Number(parsed.count) : items.length;
-          if (isNaN(totalCount) || totalCount < 0) {
-            totalCount = items.length;
-          }
-          var totalPages = Math.ceil(totalCount / BROWSE_PAGE_SIZE);
-          if (totalPages < 1) {
-            totalPages = 1;
-          }
-          if (browsePage > totalPages) {
-            browsePage = totalPages;
-            setV("browsePage", String(browsePage));
-          }
-          setV(
-            "jaBrowseHint",
-            "Page " +
-            browsePage +
-            " of " +
-            totalPages +
-            ". Search filters journeys on this page."
-          );
-          if (parsed && !items.length) {
-            setV("jaBrowseError", "No journeys returned from Journey Builder.");
-          }
-          else if (items.length) {
-            var existing = loadExistingJourneyIds();
-            var hubUrl = getAmpVar("hubUrl");
-            setV("jaBrowseMarkup", renderBrowseJourneyCards(items, existing, hubUrl));
-            setV(
-              "jaBrowsePagination",
-              renderBrowsePagination(hubUrl, browsePage, totalPages, totalCount)
-            );
-          }
-        }
-      }
-      catch (browseEx) {
-        setV("jaBrowseError", browseEx.message != null ? String(browseEx.message) : String(browseEx));
-      }
     }
   }
   }
@@ -1608,7 +1492,9 @@
     setChartVar("sendLogChartJson", buildSendLogChartJson());
   }
 </script>
-%%[ IF @homePerformanceJsonMode == "1" THEN ]%%
+%%[ IF @homeJourneyPickerJsonMode == "1" THEN ]%%
+%%=v(@homeJourneyPickerJson)=%%
+%%[ ELSEIF @homePerformanceJsonMode == "1" THEN ]%%
 %%=v(@homePerformanceJson)=%%
 %%[ ELSE ]%%
 <title>Self Service Dashboard - Magmutual
@@ -1851,11 +1737,32 @@
     </script>
     <div class="section-header recent-builds-header" id="allSurveysSection">
       <div class="recent-builds-header-left">
-        <h2>Recent builds
-        </h2>
-        %%[ IF @browseMode == "1" THEN ]%%
-        <p class="recent-builds-browse-hint">%%=IIF(NOT Empty(@jaBrowseHint), @jaBrowseHint, "Select a journey to add.")=%%</p>
-        %%[ ENDIF ]%%
+        <div class="recent-builds-title-row">
+          <button type="button" class="btn-add-journey" id="browseJourneysBtn" onclick="toggleAddJourneyPicker(event)" title="Add existing journey" aria-label="Add existing journey" aria-expanded="false" aria-controls="addJourneyPicker">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+          </button>
+          <h2>Recent builds
+          </h2>
+        </div>
+        <div class="add-journey-picker" id="addJourneyPicker" hidden>
+          <form method="post" action="" class="add-journey-picker-form" id="addBuildForm" onsubmit="return submitAddJourneyForm(event)">
+            <input type="hidden" name="do" value="addBuild">
+            <input type="hidden" name="journeyId" id="addBuildJourneyId" value="">
+            <input type="hidden" name="journeyName" id="addBuildJourneyName" value="">
+            <label class="add-journey-picker-label" for="addJourneyFilter">Existing journey</label>
+            <input type="search" class="add-journey-filter" id="addJourneyFilter" placeholder="Search by name, ID, or status…" autocomplete="off">
+            <select class="add-journey-select" id="addJourneySelect" size="8" aria-label="Choose a journey">
+              <option value="">Loading journeys…</option>
+            </select>
+            <div class="add-journey-picker-actions">
+              <button type="submit" class="btn-primary" id="addJourneySubmitBtn" disabled>Add to builds</button>
+              <button type="button" class="filter-btn" onclick="closeAddJourneyPicker()">Cancel</button>
+            </div>
+          </form>
+          <p class="add-journey-picker-status" id="addJourneyPickerStatus" role="status"></p>
+        </div>
         %%[ IF NOT Empty(@addBuildMessage) THEN ]%%
         <p class="recent-builds-flash">%%=v(@addBuildMessage)=%%</p>
         %%[ ENDIF ]%%
@@ -1864,15 +1771,6 @@
         %%[ ENDIF ]%%
       </div>
       <div class="recent-builds-header-right">
-        %%[ IF @browseMode == "1" THEN ]%%
-        <a href="%%=v(@hubUrl)=%%" class="filter-btn">Cancel</a>
-        %%[ ELSE ]%%
-        <button type="button" class="btn-add-journey" id="browseJourneysBtn" onclick="openBrowseJourneys()" title="Add existing journey" aria-label="Add existing journey">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-            <path d="M12 5v14M5 12h14"/>
-          </svg>
-        </button>
-        %%[ ENDIF ]%%
         <div class="search-section">
           <input class="search-input" type="text" placeholder="Search journeys by name or ID..." id="journeySearch" onkeyup="searchJourneys()">
           <button class="filter-btn" onclick="toggleFilter()">
@@ -1885,20 +1783,7 @@
       </div>
     </div>
     <div class="surveys-grid" id="surveysGrid">
-      %%[ IF @browseMode == "1" THEN ]%%
-      %%[ IF NOT Empty(@jaBrowseError) THEN ]%%
-      <div class="no-surveys-message" style="grid-column: 1 / -1;">
-        <div class="empty-state">
-          <h3>Could not load journeys
-          </h3>
-          <p>%%=v(@jaBrowseError)=%%</p>
-          <a href="%%=v(@hubUrl)=%%" class="btn-primary" style="display:inline-block;margin-top:12px;text-decoration:none;">Back to Recent builds</a>
-        </div>
-      </div>
-      %%[ ELSE ]%%
-      %%=TreatAsContent(@jaBrowseMarkup)=%%
-      %%[ ENDIF ]%%
-      %%[ ELSEIF @recentBuildsOk == "true" AND @jaEmpty == "1" THEN ]%%
+      %%[ IF @recentBuildsOk == "true" AND @jaEmpty == "1" THEN ]%%
       <div class="no-surveys-message">
         <div class="empty-state">
           <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
@@ -1926,9 +1811,7 @@
       %%[ ENDIF ]%%
     </div>
     <div id="buildsPaginationSection">
-      %%[ IF @browseMode == "1" AND NOT Empty(@jaBrowsePagination) THEN ]%%
-      %%=TreatAsContent(@jaBrowsePagination)=%%
-      %%[ ELSEIF @browseMode != "1" AND NOT Empty(@jaBuildsPagination) THEN ]%%
+      %%[ IF NOT Empty(@jaBuildsPagination) THEN ]%%
       %%=TreatAsContent(@jaBuildsPagination)=%%
       %%[ ENDIF ]%%
     </div>
@@ -2812,6 +2695,68 @@
     flex: 1;
     min-width: 200px;
   }
+  .recent-builds-title-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .recent-builds-title-row h2 {
+    margin: 0;
+  }
+  .add-journey-picker {
+    margin-top: 14px;
+    padding: 16px;
+    border: 1px solid var(--gray-200);
+    background: #fff;
+    max-width: 520px;
+  }
+  .add-journey-picker-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .add-journey-picker-label {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--gray-600);
+  }
+  .add-journey-filter {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--gray-300);
+    font: inherit;
+    box-sizing: border-box;
+  }
+  .add-journey-select {
+    width: 100%;
+    min-height: 180px;
+    padding: 8px;
+    border: 1px solid var(--gray-300);
+    font: inherit;
+    box-sizing: border-box;
+    background: #fff;
+  }
+  .add-journey-picker-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .add-journey-picker-status {
+    margin: 10px 0 0;
+    font-size: 13px;
+    color: var(--gray-600);
+  }
+  .add-journey-picker-status.is-error {
+    color: #dc2626;
+  }
+  .btn-add-journey.is-active {
+    background: var(--gray-900);
+    color: #fff;
+    border-color: var(--gray-900);
+  }
   .recent-builds-header-right {
     display: flex;
     align-items: center;
@@ -3650,12 +3595,148 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <span id="homeHubUrlData" data-url="%%=v(@hubUrl)=%%" hidden></span>
 <script>
-  function openBrowseJourneys() {
+  var addJourneyPickerLoaded = false;
+  var addJourneyPickerItems = [];
+
+  function hubBaseUrl() {
     var dataEl = document.getElementById('homeHubUrlData');
     var base = dataEl ? (dataEl.getAttribute('data-url') || '') : '';
     if (!base) base = window.location.pathname;
+    return base;
+  }
+
+  function setAddJourneyPickerStatus(message, isError) {
+    var statusEl = document.getElementById('addJourneyPickerStatus');
+    if (!statusEl) return;
+    statusEl.textContent = message || '';
+    statusEl.classList.toggle('is-error', !!isError);
+  }
+
+  function closeAddJourneyPicker() {
+    var picker = document.getElementById('addJourneyPicker');
+    var btn = document.getElementById('browseJourneysBtn');
+    if (picker) {
+      picker.hidden = true;
+    }
+    if (btn) {
+      btn.classList.remove('is-active');
+      btn.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  function toggleAddJourneyPicker(ev) {
+    if (ev) ev.stopPropagation();
+    var picker = document.getElementById('addJourneyPicker');
+    var btn = document.getElementById('browseJourneysBtn');
+    if (!picker) return;
+    var willOpen = picker.hidden;
+    if (willOpen) {
+      picker.hidden = false;
+      if (btn) {
+        btn.classList.add('is-active');
+        btn.setAttribute('aria-expanded', 'true');
+      }
+      if (!addJourneyPickerLoaded) {
+        loadAddJourneyPickerOptions();
+      }
+    } else {
+      closeAddJourneyPicker();
+    }
+  }
+
+  function renderAddJourneySelectOptions(filterText) {
+    var select = document.getElementById('addJourneySelect');
+    var submitBtn = document.getElementById('addJourneySubmitBtn');
+    if (!select) return;
+    var term = (filterText || '').toLowerCase().trim();
+    var matched = addJourneyPickerItems.filter(function (item) {
+      if (!term) return true;
+      return (
+        (item.name || '').toLowerCase().indexOf(term) >= 0 ||
+        (item.id || '').toLowerCase().indexOf(term) >= 0 ||
+        (item.status || '').toLowerCase().indexOf(term) >= 0
+      );
+    });
+    var html = '<option value="">Choose a journey…</option>';
+    var i;
+    for (i = 0; i < matched.length; i++) {
+      var j = matched[i];
+      var label = j.name + ' — ' + j.status + ' (' + j.id + ')';
+      if (j.alreadyAdded) {
+        html += '<option value="' + j.id.replace(/"/g, '&quot;') + '" data-name="' + String(j.name).replace(/"/g, '&quot;') + '" disabled>' + label + ' (already added)</option>';
+      } else {
+        html += '<option value="' + j.id.replace(/"/g, '&quot;') + '" data-name="' + String(j.name).replace(/"/g, '&quot;') + '">' + label + '</option>';
+      }
+    }
+    select.innerHTML = html;
+    if (submitBtn) submitBtn.disabled = true;
+    document.getElementById('addBuildJourneyId').value = '';
+    document.getElementById('addBuildJourneyName').value = '';
+    if (!addJourneyPickerItems.length) {
+      select.innerHTML = '<option value="">No journeys available</option>';
+    } else if (!matched.length) {
+      select.innerHTML = '<option value="">No matches</option>';
+    }
+  }
+
+  function loadAddJourneyPickerOptions() {
+    var select = document.getElementById('addJourneySelect');
+    if (select) {
+      select.innerHTML = '<option value="">Loading journeys…</option>';
+    }
+    setAddJourneyPickerStatus('Loading journeys from Journey Builder…', false);
+    var base = hubBaseUrl();
     var sep = base.indexOf('?') >= 0 ? '&' : '?';
-    window.location.href = base + sep + 'browseJourneys=1';
+    var url = base + sep + 'homeJourneyPickerData=1';
+    fetch(url, { credentials: 'same-origin' })
+      .then(function (resp) { return resp.text(); })
+      .then(function (text) {
+        var data = JSON.parse(text);
+        if (!data.ok) {
+          throw new Error(data.error || 'Could not load journeys.');
+        }
+        addJourneyPickerItems = data.journeys || [];
+        addJourneyPickerLoaded = true;
+        renderAddJourneySelectOptions(document.getElementById('addJourneyFilter') ? document.getElementById('addJourneyFilter').value : '');
+        setAddJourneyPickerStatus(
+          addJourneyPickerItems.length
+            ? addJourneyPickerItems.length + ' journeys loaded. Pick one and click Add to builds.'
+            : 'No journeys returned from Journey Builder.',
+          false
+        );
+      })
+      .catch(function (err) {
+        addJourneyPickerLoaded = false;
+        if (select) {
+          select.innerHTML = '<option value="">Could not load journeys</option>';
+        }
+        setAddJourneyPickerStatus(err && err.message ? err.message : 'Could not load journeys.', true);
+      });
+  }
+
+  function onAddJourneySelectChange() {
+    var select = document.getElementById('addJourneySelect');
+    var submitBtn = document.getElementById('addJourneySubmitBtn');
+    if (!select || !select.selectedOptions || !select.selectedOptions.length) return;
+    var opt = select.selectedOptions[0];
+    var jid = opt.value || '';
+    var jname = opt.getAttribute('data-name') || '';
+    document.getElementById('addBuildJourneyId').value = jid;
+    document.getElementById('addBuildJourneyName').value = jname;
+    if (submitBtn) {
+      submitBtn.disabled = !jid || opt.disabled;
+    }
+  }
+
+  function submitAddJourneyForm(ev) {
+    var jid = document.getElementById('addBuildJourneyId').value;
+    var jname = document.getElementById('addBuildJourneyName').value;
+    if (!jid || !jname) {
+      if (ev) ev.preventDefault();
+      setAddJourneyPickerStatus('Choose a journey that is not already in Recent builds.', true);
+      return false;
+    }
+    return true;
   }
   // Journey roster search
   function searchJourneys() {
@@ -3771,13 +3852,31 @@
   document.addEventListener('DOMContentLoaded', function () {
     applyBuildTypeIcons();
     initializeActivityChart();
-    %%[ IF @browseMode == "1" THEN ]%%
-    showAllJourneys();
-    %%[ ENDIF ]%%
+    var addJourneyFilter = document.getElementById('addJourneyFilter');
+    if (addJourneyFilter) {
+      addJourneyFilter.addEventListener('input', function () {
+        renderAddJourneySelectOptions(addJourneyFilter.value);
+      });
+    }
+    var addJourneySelect = document.getElementById('addJourneySelect');
+    if (addJourneySelect) {
+      addJourneySelect.addEventListener('change', onAddJourneySelectChange);
+    }
   }
                            );
+  document.addEventListener('click', function (e) {
+    var picker = document.getElementById('addJourneyPicker');
+    var btn = document.getElementById('browseJourneysBtn');
+    if (!picker || picker.hidden) return;
+    if (btn && btn.contains(e.target)) return;
+    if (picker.contains(e.target)) return;
+    closeAddJourneyPicker();
+  });
   document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') closeJourneyBuilderPanel();
+    if (e.key === 'Escape') {
+      closeJourneyBuilderPanel();
+      closeAddJourneyPicker();
+    }
   }
                            );
   let homeEngagementCharts = {
