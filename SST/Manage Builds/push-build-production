@@ -813,19 +813,34 @@ function pbSoapPartnerOk(body) {
  return true;
 }
 
-function pbSoapMutationSucceeded(body) {
- if (!pbSoapPartnerOk(body)) {
-  return false;
- }
+function pbSoapStatusCodes(body) {
  var text = pbToStr(body);
  var codeTags = text.match(/<(?:[\w]+:)?StatusCode[^>]*>([^<]*)</gi);
+ var codes = [];
  if (!codeTags || !codeTags.length) {
-  return true;
+  return codes;
  }
  var ci;
  for (ci = 0; ci < codeTags.length; ci++) {
   var codeVal = pbTrim(codeTags[ci].replace(/<\/?[^>]+>/g, ""));
-  if (codeVal && codeVal.toUpperCase() !== "OK") {
+  if (codeVal) {
+   codes.push(codeVal);
+  }
+ }
+ return codes;
+}
+
+function pbSoapMutationSucceeded(body) {
+ if (!pbSoapPartnerOk(body)) {
+  return false;
+ }
+ var codes = pbSoapStatusCodes(body);
+ if (!codes.length) {
+  return false;
+ }
+ var ci;
+ for (ci = 0; ci < codes.length; ci++) {
+  if (codes[ci].toUpperCase() !== "OK") {
    return false;
   }
  }
@@ -931,6 +946,21 @@ function pbSoapErrorSummary(body) {
  }
  if (status && status.toUpperCase() !== "OK") {
   return status;
+ }
+ if (status && status.toUpperCase() === "OK") {
+  var codesOk = pbSoapStatusCodes(text);
+  if (codesOk.length) {
+   return (
+    "OverallStatus OK but Result StatusCode was not OK (" +
+    codesOk.join(", ") +
+    ")" +
+    (msg ? " — " + msg : "")
+   );
+  }
+  return (
+   "OverallStatus OK but no Result StatusCode in response (query may not have been saved). " +
+   (msg || pbTrim(pbSoapResultsSnippet(text)).substring(0, 200))
+  );
  }
  var trimmed = pbTrim(text);
  if (!trimmed) {
@@ -2370,12 +2400,20 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
  var targetDeOid = deTarget.objectId;
  var existingId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
  var queryCategoryId = pbProdResolveQueryCategoryId(sub, token);
- var attemptPlans = [
-  { targetUpdateType: "Update", useCategory: false, useDeOid: false },
-  { targetUpdateType: "Overwrite", useCategory: false, useDeOid: false },
-  { targetUpdateType: "Overwrite", useCategory: false, useDeOid: true },
-  { targetUpdateType: "Overwrite", useCategory: true, useDeOid: true }
- ];
+ var attemptPlans = existingId
+  ? [
+     { targetUpdateType: "Update", useCategory: false, useDeOid: true },
+     { targetUpdateType: "Update", useCategory: false, useDeOid: false },
+     { targetUpdateType: "Overwrite", useCategory: false, useDeOid: true },
+     { targetUpdateType: "Overwrite", useCategory: true, useDeOid: true }
+    ]
+  : [
+     { targetUpdateType: "Overwrite", useCategory: false, useDeOid: true },
+     { targetUpdateType: "Update", useCategory: false, useDeOid: true },
+     { targetUpdateType: "Overwrite", useCategory: false, useDeOid: false },
+     { targetUpdateType: "Update", useCategory: false, useDeOid: false },
+     { targetUpdateType: "Overwrite", useCategory: true, useDeOid: true }
+    ];
  var lastResp = { body: "", status: 0 };
  var lastSqlLabel = "";
  var vi;
@@ -2435,6 +2473,16 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
        ")."
      };
     }
+    return {
+     ok: true,
+     objectId: "",
+     msg:
+      "Query " +
+      (existingId ? "updated" : "created") +
+      " in Production (SOAP StatusCode OK, CustomerKey=" +
+      key +
+      "). ObjectID not returned; automation step will resolve query by key."
+    };
    }
    if (!existingId) {
     var createdId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
@@ -2455,6 +2503,16 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
    ok: true,
    objectId: objectIdFinal,
    msg: "Query resolved in Production for key " + key + "."
+  };
+ }
+ if (pbSoapMutationSucceeded(lastResp.body)) {
+  return {
+   ok: true,
+   objectId: "",
+   msg:
+    "Query saved in Production (last SOAP call StatusCode OK) for CustomerKey " +
+    key +
+    ". ObjectID could not be retrieved; automation step will resolve by key."
   };
  }
  return {
