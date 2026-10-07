@@ -153,6 +153,29 @@ function pbEscJson(s) {
  return out;
 }
 
+function pbHttpOk(statusCode) {
+ var code = parseInt(String(statusCode), 10);
+ return code === 200 || code === 201;
+}
+
+function pbExtractAccessToken(body) {
+ var text = pbToStr(body);
+ if (!text) {
+  return "";
+ }
+ try {
+  var parsed = Platform.Function.ParseJSON(text);
+  if (parsed && parsed.access_token) {
+   return pbToStr(parsed.access_token);
+  }
+  if (parsed && parsed.error) {
+   return "";
+  }
+ } catch (parseEx) {}
+ var m = text.match(/"access_token"\s*:\s*"([^"]+)"/);
+ return m ? m[1] : "";
+}
+
 function pbAuthField(row, names) {
  var i;
  for (i = 0; i < names.length; i++) {
@@ -208,24 +231,25 @@ function pbAuthForUser(userKey) {
   req.postData = payload;
   var resp = req.send();
   var body = resp.content ? pbToStr(resp.content) : "";
-  if (resp.statusCode !== 200) {
+  if (!pbHttpOk(resp.statusCode)) {
    out.msg =
     "Auth HTTP " +
     resp.statusCode +
     " for User=" +
     lookupUser +
-    " (check subdomain and account_id on that row).";
+    " — " +
+    pbTrim(body).substring(0, 160);
    return out;
   }
-  var parsed = null;
-  try {
-   parsed = Platform.Function.ParseJSON(body);
-  } catch (parseEx) {
-   parsed = null;
-  }
-  var token = parsed && parsed.access_token ? pbToStr(parsed.access_token) : "";
+  var token = pbExtractAccessToken(body);
   if (!token) {
-   out.msg = "Auth response missing access_token for User=" + lookupUser + ".";
+   out.msg =
+    "Auth HTTP " +
+    resp.statusCode +
+    " for User=" +
+    lookupUser +
+    " but no access_token — " +
+    pbTrim(body).substring(0, 160);
    return out;
   }
   out.ok = true;
