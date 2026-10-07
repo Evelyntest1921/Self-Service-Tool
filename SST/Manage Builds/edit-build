@@ -37,7 +37,6 @@ VAR @chkQueryStatus, @chkQueryMsg, @chkQueryText, @chkQueryIcon
 VAR @chkAutoStatusStatus, @chkAutoStatusMsg, @chkAutoStatusIcon
 VAR @deleteRequested, @removeLogOnly, @deleteEmailFromPost, @purgeRequested
 VAR @executeRemoveLogDelete, @redirectLogRemoved, @redirectBuildPurged, @redirectEmailDeleted
-VAR @editBuildDeOpenJson, @editBuildDeOpenJsonMode
 VAR @authOk, @accessToken, @subdomain
 VAR @resultText, @pageStatus, @detailRowsAfter
 VAR @attemptPurgeBuild, @purgeBuildLog, @purgeEmailOk
@@ -49,11 +48,6 @@ VAR @automationActionRequested, @attemptAutomationAction, @automationActionOk, @
 VAR @automationAction, @automationFrequency, @automationMinuteInterval, @automationStartDate, @automationStartOffset, @automationTimezoneId, @dispAutomationActive, @showAutomationActivate, @showAutomationPause
 
 
-SET @editBuildDeOpenJson = ""
-SET @editBuildDeOpenJsonMode = IIF(RequestParameter("editBuildDeOpenData") == "1", "1", "0")
-IF @editBuildDeOpenJsonMode != "1" AND QueryParameter("editBuildDeOpenData") == "1" THEN
- SET @editBuildDeOpenJsonMode = "1"
-ENDIF
 SET @executeRemoveLogDelete = "false"
 SET @redirectLogRemoved = "false"
 SET @redirectBuildPurged = "false"
@@ -423,57 +417,11 @@ ENDIF
 Platform.Load("core", "1");
 
 
-function isWsChar(c) {
- return c === " " || c === "\t" || c === "\n" || c === "\r";
-}
-
-
-function toJsString(v) {
- if (v === null || typeof v === "undefined") {
-  return "";
+function strTrim(s) {
+ if (s == null || s === undefined) {
+   return "";
  }
- if (typeof v === "string") {
-  return v;
- }
- if (typeof v === "number" || typeof v === "boolean") {
-  return v + "";
- }
- try {
-  var s = v + "";
-  if (s && s.indexOf("[object") !== 0) {
-   return s;
-  }
- } catch (coerceEx) {}
- return "";
-}
-
-
-function strTrim(v) {
- var s = toJsString(v);
- if (!s) {
-  return "";
- }
- var len = s.length;
- if (typeof len !== "number" || isNaN(len) || len < 0) {
-  return "";
- }
- var start = 0;
- var end = len;
- while (start < end && isWsChar(s.charAt(start))) {
-  start += 1;
- }
- while (end > start && isWsChar(s.charAt(end - 1))) {
-  end -= 1;
- }
- if (start >= end) {
-  return "";
- }
- var out = "";
- var i;
- for (i = start; i < end; i++) {
-  out += s.charAt(i);
- }
- return out;
+ return String(s).replace(/^\s+|\s+$/g, "");
 }
 
 
@@ -601,7 +549,7 @@ function logDeField(jid, colName) {
    if (val === undefined || val === null) {
      return "";
    }
-   return strTrim(soapValueToString(val));
+   return strTrim(String(val));
  } catch (logDeEx) {
    return "";
  }
@@ -673,89 +621,10 @@ function resolveJourneyEntryEventId(sub, token, jid) {
 }
 
 
-function soapValueToString(val) {
- if (val === null || typeof val === "undefined") {
-  return "";
- }
- if (typeof val === "string") {
-  return val;
- }
- try {
-  return val + "";
- } catch (coerceSoapEx) {
-  return "";
- }
-}
-
-
-function isGuidLike(id) {
- var value = strTrim(id);
- if (!value) {
-  return false;
- }
- return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
-  value
- );
-}
-
-
-function deObjectIdFromRetrieveRow(row) {
- if (!row) {
-  return "";
- }
- try {
-  var id = strTrim(soapValueToString(row.ObjectID));
-  return isGuidLike(id) ? id : "";
- } catch (rowIdEx) {
-  return "";
- }
-}
-
-
-function canRunWsProxyOnPage() {
- try {
-  var pageStatus = Platform.Variable.GetValue("@pageStatus") || "";
-  if (pageStatus !== "view") {
-   return false;
-  }
-  try {
-   var reqUri = Platform.Request.GetRequestURI();
-   if (reqUri && String(reqUri).toLowerCase().indexOf("preview") >= 0) {
-    return false;
-   }
-  } catch (uriEx) {}
-  var mid = Platform.Function.AuthenticatedMemberID();
-  if (mid === null || typeof mid === "undefined") {
-   return false;
-  }
-  var midStr = strTrim(soapValueToString(mid));
-  if (!midStr || midStr === "0") {
-   return false;
-  }
- } catch (wsCheckEx) {
-  return false;
- }
- return true;
-}
-
-
-function escJsonStr(s) {
- return String(s || "")
-  .replace(/\\/g, "\\\\")
-  .replace(/"/g, '\\"')
-  .replace(/\r/g, "\\r")
-  .replace(/\n/g, "\\n")
-  .replace(/\t/g, "\\t");
-}
-
-
 function resolveDeObjectIdByCustomerKey(customerKey) {
  var key = strTrim(customerKey);
  if (!key || key.toUpperCase() === "N/A") {
    return "";
- }
- if (isGuidLike(key)) {
-  return key;
  }
  try {
    var prox = new Script.Util.WSProxy();
@@ -764,66 +633,22 @@ function resolveDeObjectIdByCustomerKey(customerKey) {
      SimpleOperator: "equals",
      Value: key
    });
-   if (rde && rde.Results && rde.Results.length > 0) {
-     return deObjectIdFromRetrieveRow(rde.Results[0]);
+   if (rde && rde.Results && rde.Results.length > 0 && rde.Results[0].ObjectID) {
+     return String(rde.Results[0].ObjectID);
    }
  } catch (deKeyEx) {}
  return "";
 }
 
 
-function mcHostFromCloudUrl() {
- var cloud = Platform.Variable.GetValue("@MC_CLOUD") || "https://mc.s13.exacttarget.com/cloud/";
- var m = String(cloud).match(/^(https:\/\/[^/]+)/i);
- return m ? m[1] : "https://mc.s13.exacttarget.com";
-}
-
-
-function resolveDeObjectIdForOpen(deCustomerKey, deName) {
- var byKey = resolveDeObjectIdByCustomerKey(deCustomerKey);
- if (byKey) {
-  return byKey;
+function isGuidLike(id) {
+ var value = strTrim(id);
+ if (!value) {
+   return false;
  }
- var name = strTrim(deName);
- if (!name || name.toUpperCase() === "N/A") {
-  return "";
- }
- try {
-  var prox = new Script.Util.WSProxy();
-  var rde = prox.retrieve("DataExtension", ["ObjectID"], {
-   Property: "Name",
-   SimpleOperator: "equals",
-   Value: name
-  });
-  if (rde && rde.Results && rde.Results.length > 0) {
-   return deObjectIdFromRetrieveRow(rde.Results[0]);
-  }
- } catch (deNameOpenEx) {}
- return "";
-}
-
-
-function buildDataExtensionOpenUrlFromObjectId(objectId) {
- var objId = strTrim(objectId);
- if (!objId || !isGuidLike(objId)) {
-  return "";
- }
- return (
-  mcHostFromCloudUrl() +
-  "/contactsmeta/admin.html#admin/data-extension/" +
-  encodeURIComponent(objId) +
-  "/properties"
+ return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
+   value
  );
-}
-
-
-function buildDataExtensionOpenUrl(deCustomerKey, deName) {
- try {
-  var objId = resolveDeObjectIdForOpen(deCustomerKey, deName);
-  return buildDataExtensionOpenUrlFromObjectId(objId);
- } catch (deOpenBuildEx) {
-  return "";
- }
 }
 
 
@@ -2394,7 +2219,7 @@ try {
 var stackBuildPage = Platform.Variable.GetValue("@isStackBuild") || "";
 var queryKeyPage = strTrim(Platform.Variable.GetValue("@dispQueryKey") || "");
 var dispQueryTextVal = "";
-if (stackBuildPage == "true" && queryKeyPage && canRunWsProxyOnPage()) {
+if (stackBuildPage == "true" && queryKeyPage) {
  dispQueryTextVal = truncQueryDisplay(lookupQueryText(queryKeyPage));
 }
 Platform.Variable.SetValue("@dispQueryText", dispQueryTextVal);
@@ -3026,23 +2851,6 @@ try {
     Platform.Variable.SetValue("@journeyHeroAnimate", "true");
   }
 }
-
-if (Platform.Variable.GetValue("@editBuildDeOpenJsonMode") === "1") {
- var deOpenJson = '{"ok":false,"url":""}';
- try {
-  var deOpenUrlLive = buildDataExtensionOpenUrl(
-   Platform.Variable.GetValue("@dispDeId") || "",
-   Platform.Variable.GetValue("@dispDeName") || ""
-  );
-  if (deOpenUrlLive) {
-   deOpenJson = '{"ok":true,"url":"' + escJsonStr(deOpenUrlLive) + '"}';
-  }
- } catch (deOpenJsonEx) {
-  deOpenJson =
-   '{"ok":false,"error":"' + escJsonStr(deOpenJsonEx.message || String(deOpenJsonEx)) + '"}';
- }
- Platform.Variable.SetValue("@editBuildDeOpenJson", deOpenJson);
-}
 </script>
 %%[
 VAR @combinedLog, @trailBody
@@ -3238,9 +3046,6 @@ IF @isSurveyBuild == "true" THEN
 ENDIF
 SET @editSidebarHtml = ContentBlockByName("sst_shell_edit_sidebar")
 ]%%
-%%[ IF @editBuildDeOpenJsonMode == "1" THEN ]%%
-%%=v(@editBuildDeOpenJson)=%%
-%%[ ELSE ]%%
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4122,7 +3927,7 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
    <a class="btn btn-neutral js-automation-home-link" href="%%=Concat(@MC_CLOUD,"#app/Automation%20Studio/")=%%" target="_blank" rel="noopener noreferrer" data-automation-name="%%=Replace(Replace(v(@dispAutomationName),'"','&quot;'),'&','&amp;')=%%" title="%%[ IF NOT Empty(@dispAutomationName) THEN ]%%Copies automation name to clipboard%%[ ELSE ]%%Opens Automation Studio%%[ ENDIF ]%%">Open automation</a>
 %%[ ENDIF ]%%
 %%[ IF (NOT Empty(@dispDeId) AND @dispDeId != "N/A") OR (NOT Empty(@dispDeName) AND @dispDeName != "N/A") THEN ]%%
-   <button type="button" class="btn btn-neutral" id="openEntryDeBtn">Open data extension</button>
+   <a class="btn btn-neutral" href="%%=Concat(@MC_CLOUD,"#app/Contact%20Builder/")=%%" target="_blank" rel="noopener noreferrer" title="%%=Replace(Replace(IIF(NOT Empty(@dispDeName) AND @dispDeName != "N/A", @dispDeName, @dispDeId),'"','&quot;'),'&','&amp;')=%%">Open data extension</a>
 %%[ ENDIF ]%%
  </div>
 </div>
@@ -4286,47 +4091,6 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
   };
  }
 })();
-(function () {
- var openDeBtn = document.getElementById("openEntryDeBtn");
- if (!openDeBtn) {
-  return;
- }
- openDeBtn.addEventListener("click", function () {
-  var url = new URL(window.location.href);
-  url.searchParams.set("editBuildDeOpenData", "1");
-  openDeBtn.disabled = true;
-  var prevLabel = openDeBtn.textContent;
-  openDeBtn.textContent = "Opening…";
-  fetch(url.toString(), { credentials: "same-origin" })
-   .then(function (resp) {
-    return resp.text();
-   })
-   .then(function (text) {
-    var payload = null;
-    try {
-     payload = JSON.parse(text);
-    } catch (parseEx) {
-     payload = { ok: false, error: "Invalid response." };
-    }
-    if (payload && payload.ok && payload.url) {
-     window.open(payload.url, "_blank", "noopener");
-    } else {
-     alert(
-      (payload && payload.error) ||
-       "Could not resolve the data extension link. Open Contact Builder and search by DE name or customer key."
-     );
-    }
-   })
-   .catch(function () {
-    alert("Network error loading data extension link.");
-   })
-   .finally(function () {
-    openDeBtn.disabled = false;
-    openDeBtn.textContent = prevLabel;
-   });
- });
-})();
 </script>
 </body>
 </html>
-%%[ ENDIF ]%%
