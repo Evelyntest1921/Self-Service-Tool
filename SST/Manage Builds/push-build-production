@@ -1,5 +1,5 @@
 %%[
-VAR @HOME_URL, @BUILD_PAGE_SELF, @PUSH_PAGE_SELF, @jid, @confirmPush, @pushStep, @confirmStep
+VAR @HOME_URL, @BUILD_PAGE_SELF, @PUSH_PAGE_SELF, @jid, @confirmPush, @pushStep, @confirmStep, @navEnvironment
 VAR @navRows, @navRow, @detailRows, @detailRow, @detailCount
 VAR @dispName, @dispType, @dispEmailName, @dispEmailId, @dispDeName, @dispDeId
 VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationCustomerKey, @dispAutomationName, @dispCampaignId
@@ -47,6 +47,10 @@ IF RowCount(@navRows) > 0 THEN
  SET @HOME_URL = Field(@navRow,"ss_home")
  SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit")
  SET @PUSH_PAGE_SELF = Trim(Field(@navRow,"ss_push_production"))
+ SET @navEnvironment = Trim(Lowercase(Field(@navRow,"environment")))
+ENDIF
+IF Empty(@navEnvironment) THEN
+ SET @navEnvironment = "uat"
 ENDIF
 
 IF Empty(@jid) THEN
@@ -1237,7 +1241,28 @@ function pbResolveStackCampaignId(fb, liveQueryText) {
  return { campaignId: "", source: "" };
 }
 
-function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQueryText) {
+function pbStackSqlEnvironmentForPush(navEnvironment) {
+ var nav = pbTrim(navEnvironment).toLowerCase();
+ if (nav === "prod" || nav === "production") {
+  return "production";
+ }
+ return "uat";
+}
+
+function pbBuildQuerySqlForProdPush(fb, journeyId, senderProfileId, liveQueryText, navEnvironment) {
+ var liveSql = pbTrim(liveQueryText);
+ if (liveSql.length > 30) {
+  return {
+   ok: true,
+   sql: liveSql,
+   msg:
+    "Production query uses live UAT QueryText from the automation (same SQL as the working stack build)."
+  };
+ }
+ return pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQueryText, navEnvironment);
+}
+
+function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQueryText, navEnvironment) {
  var opts = fb || {};
  var audienceSource = pbTrim(opts.audienceSource || "").toLowerCase();
  if (!audienceSource || audienceSource === "campaign") {
@@ -1249,7 +1274,7 @@ function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQu
   }
  }
  var prox = new Script.Util.WSProxy();
- var prodEnv = "production";
+ var prodEnv = pbStackSqlEnvironmentForPush(navEnvironment);
  if (audienceSource === "dataextension") {
   var sourceDe = pbTrim(opts.sourceDataExtension);
   if (!sourceDe) {
@@ -1276,7 +1301,11 @@ function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQu
     msg: "Source Data Extension not found in UAT or missing SubscriberKey field."
    };
   }
-  return { ok: true, sql: deSql, msg: "Query SQL built for Production (stack DE audience rules)." };
+  return {
+  ok: true,
+  sql: deSql,
+  msg: "Query SQL rebuilt for push (sync env=" + prodEnv + ", DE audience)."
+ };
  }
  var campResolve = pbResolveStackCampaignId(opts, liveQueryText);
  var campaignId = campResolve.campaignId;
@@ -1302,7 +1331,7 @@ function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQu
  return {
   ok: true,
   sql: campSql,
-  msg: "Query SQL built for Production (stack campaign audience rules)." + campNote
+  msg: "Query SQL rebuilt for push (sync env=" + prodEnv + ", campaign audience)." + campNote
  };
 }
 
@@ -2294,17 +2323,6 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
    msg: "Query resolved in Production for key " + key + "."
   };
  }
- var wsFallback = null;
- if (xo.uatSub && xo.uatSub === sub) {
-  wsFallback = pbCreateQueryDefinitionWsProxy(key, qName, prodSql, targetDeKey, targetDeName);
-  if (wsFallback.ok && wsFallback.objectId) {
-   return {
-    ok: true,
-    objectId: wsFallback.objectId,
-    msg: wsFallback.msg
-   };
-  }
- }
  return {
   ok: false,
   objectId: "",
@@ -2317,9 +2335,8 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
    targetDeName +
    "] key " +
    targetDeKey +
-   ". Stack build uses WSProxy in the UAT business unit; Production push uses SOAP to the prod subdomain. " +
-   pbSoapFailureDetail(lastResp) +
-   (wsFallback && wsFallback.msg ? " WSProxy fallback: " + wsFallback.msg : "")
+   ". Production uses SOAP (stack build uses WSProxy in the UAT BU). " +
+   pbSoapFailureDetail(lastResp)
  };
 }
 
@@ -2956,7 +2973,14 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
   if (!deProd.ok || !deProd.objectId) {
    return { ok: false, logs: logs, msg: "Push entry DE first — not found in Production." };
   }
-  var queryBuild = pbBuildStackAudienceQueryForProd(fb, journeyId, live.senderProfileId, live.queryText);
+  var navEnv = pbTrim(Platform.Variable.GetValue("@navEnvironment") || "uat");
+  var queryBuild = pbBuildQuerySqlForProdPush(
+   fb,
+   journeyId,
+   live.senderProfileId,
+   live.queryText,
+   navEnv
+  );
   if (!queryBuild.ok || !queryBuild.sql) {
    return { ok: false, logs: logs, msg: "Query SQL FAILED: " + (queryBuild.msg || "Could not build Production SQL.") };
   }
@@ -2988,7 +3012,7 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
    deName,
    deProd.objectId,
    live.automationKey || fb.automationKey,
-   { uatSub: devAuth.subdomain }
+   {}
   );
   if (queryResult.ok) {
    log(queryResult.msg);
