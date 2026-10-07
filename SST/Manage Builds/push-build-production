@@ -6,9 +6,6 @@ VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationCustomerKey, @dispAutomat
 VAR @isStackBuild, @pageStatus, @pushBlockedMsg, @pushLogHtml, @pushResultBanner
 VAR @manifestHtml, @editSidebarHtml, @buildNavContext, @buildNavActive
 VAR @STACK_JOURNEY_TYPE, @AUTH_SOURCE_USER, @AUTH_PROD_USER
-VAR @srcClientId, @srcClientSecret, @srcSubdomain, @srcAccountId, @srcAuthUser
-VAR @prodClientId, @prodClientSecret, @prodSubdomain, @prodAccountId, @prodAuthUser
-VAR @authRows, @authRow, @authRowCount
 
 SET @STACK_JOURNEY_TYPE = "Journey + Automation"
 SET @AUTH_SOURCE_USER = "Admin"
@@ -93,53 +90,6 @@ SET @pushCampaignId = Trim(RequestParameter("campaignId"))
 SET @campaignIdFromForm = IIF(Empty(@pushCampaignId),"0","1")
 IF Empty(@pushCampaignId) THEN
  SET @pushCampaignId = @dispCampaignId
-ENDIF
-
-SET @srcClientId = ""
-SET @srcClientSecret = ""
-SET @srcSubdomain = ""
-SET @srcAccountId = ""
-SET @srcAuthUser = ""
-SET @prodClientId = ""
-SET @prodClientSecret = ""
-SET @prodSubdomain = ""
-SET @prodAccountId = ""
-SET @prodAuthUser = ""
-SET @authRows = LookupRows("SFMC_AUTH","User",@AUTH_SOURCE_USER)
-SET @authRowCount = RowCount(@authRows)
-IF @authRowCount > 0 THEN
- SET @authRow = Row(@authRows,1)
- SET @srcAuthUser = @AUTH_SOURCE_USER
- SET @srcClientId = Trim(Field(@authRow,"clientId"))
- SET @srcClientSecret = Trim(Field(@authRow,"clientSecret"))
- SET @srcSubdomain = Trim(Field(@authRow,"subdomain"))
- SET @srcAccountId = Trim(Field(@authRow,"accountId"))
-ENDIF
-SET @authRows = LookupRows("SFMC_AUTH","User",@AUTH_PROD_USER)
-SET @authRowCount = RowCount(@authRows)
-IF @authRowCount == 0 THEN
- SET @authRows = LookupRows("SFMC_AUTH","User","Admin_production")
- SET @authRowCount = RowCount(@authRows)
- IF @authRowCount > 0 THEN
-  SET @prodAuthUser = "Admin_production"
- ENDIF
-ENDIF
-IF @authRowCount == 0 THEN
- SET @authRows = LookupRows("SFMC_AUTH","User","Production_Admin")
- SET @authRowCount = RowCount(@authRows)
- IF @authRowCount > 0 THEN
-  SET @prodAuthUser = "Production_Admin"
- ENDIF
-ENDIF
-IF @authRowCount > 0 THEN
- SET @authRow = Row(@authRows,1)
- IF Empty(@prodAuthUser) THEN
-  SET @prodAuthUser = @AUTH_PROD_USER
- ENDIF
- SET @prodClientId = Trim(Field(@authRow,"clientId"))
- SET @prodClientSecret = Trim(Field(@authRow,"clientSecret"))
- SET @prodSubdomain = Trim(Field(@authRow,"subdomain"))
- SET @prodAccountId = Trim(Field(@authRow,"accountId"))
 ENDIF
 
 ]%%
@@ -267,18 +217,64 @@ function pbSetAmpVar(name, val) {
  } catch (setEx) {}
 }
 
-function pbAuthAmpPrefix(which) {
- return which === "prod" ? "prod" : "src";
+function pbLookupAuthScalar(userKey, returnField) {
+ var val = "";
+ try {
+  val = Platform.Function.Lookup("SFMC_AUTH", returnField, "User", userKey);
+ } catch (lookupEx) {
+  return "";
+ }
+ return pbTrim(val);
 }
 
-function pbAuthFromAmp(which) {
- var prefix = pbAuthAmpPrefix(which);
+function pbAuthPackForUser(userKey, fallbackKeys) {
+ var keys = [pbTrim(userKey)];
+ var fi;
+ if (fallbackKeys) {
+  for (fi = 0; fi < fallbackKeys.length; fi++) {
+   keys.push(pbTrim(fallbackKeys[fi]));
+  }
+ }
+ var ki;
+ for (ki = 0; ki < keys.length; ki++) {
+  var candidate = keys[ki];
+  if (!candidate) {
+   continue;
+  }
+  var clientId = pbLookupAuthScalar(candidate, "clientId");
+  if (!clientId) {
+   clientId = pbLookupAuthScalar(candidate, "ClientId");
+  }
+  var clientSecret = pbLookupAuthScalar(candidate, "clientSecret");
+  if (!clientSecret) {
+   clientSecret = pbLookupAuthScalar(candidate, "ClientSecret");
+  }
+  var subdomain = pbLookupAuthScalar(candidate, "subdomain");
+  if (!subdomain) {
+   subdomain = pbLookupAuthScalar(candidate, "Subdomain");
+  }
+  if (clientId && clientSecret && subdomain) {
+   var accountId = pbLookupAuthScalar(candidate, "accountId");
+   if (!accountId) {
+    accountId = pbLookupAuthScalar(candidate, "AccountId");
+   }
+   return {
+    ok: true,
+    userKey: candidate,
+    clientId: clientId,
+    clientSecret: clientSecret,
+    subdomain: subdomain,
+    accountId: accountId
+   };
+  }
+ }
  return {
-  userKey: pbTrim(Platform.Variable.GetValue("@" + prefix + "AuthUser") || ""),
-  clientId: pbTrim(Platform.Variable.GetValue("@" + prefix + "ClientId") || ""),
-  clientSecret: pbTrim(Platform.Variable.GetValue("@" + prefix + "ClientSecret") || ""),
-  subdomain: pbTrim(Platform.Variable.GetValue("@" + prefix + "Subdomain") || ""),
-  accountId: pbTrim(Platform.Variable.GetValue("@" + prefix + "AccountId") || "")
+  ok: false,
+  userKey: pbTrim(userKey),
+  clientId: "",
+  clientSecret: "",
+  subdomain: "",
+  accountId: ""
  };
 }
 
@@ -291,17 +287,15 @@ function pbAuthForUser(userKey, fallbackKeys) {
   userKey: ""
  };
  try {
-  var want = pbTrim(userKey);
-  var which = fallbackKeys && fallbackKeys.length ? "prod" : "src";
-  var packed = pbAuthFromAmp(which);
-  var lookupUser = packed.userKey || want;
+  var packed = pbAuthPackForUser(userKey, fallbackKeys);
+  var lookupUser = packed.userKey || pbTrim(userKey);
   out.userKey = lookupUser;
   var clientId = packed.clientId;
   var clientSecret = packed.clientSecret;
   var subdomain = packed.subdomain;
   var accountId = packed.accountId;
-  if (!clientId || !clientSecret || !subdomain) {
-   out.msg = "No SFMC_AUTH row loaded in AMPscript for User=" + (lookupUser || want) + ".";
+  if (!packed.ok || !clientId || !clientSecret || !subdomain) {
+   out.msg = "No SFMC_AUTH credentials for User=" + lookupUser + ".";
    return out;
   }
   var authUrl = "https://" + subdomain + ".auth.marketingcloudapis.com/v2/token";
@@ -749,7 +743,8 @@ function pbSoapCallEx(sub, token, action, bodyXml, style) {
  var soapAction = action;
  if (style === "11") {
   envelope =
-   '<?xml version="1.0" encoding="UTF-8"?>' +
+   "<" +
+   "?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
    '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">' +
    "<soap:Header>" +
    '<fueloauth xmlns="http://exacttarget.com">' +
@@ -761,7 +756,8 @@ function pbSoapCallEx(sub, token, action, bodyXml, style) {
   soapAction = '"' + action + '"';
  } else {
   envelope =
-   '<?xml version="1.0" encoding="UTF-8"?>' +
+   "<" +
+   "?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
    '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing">' +
    "<s:Header>" +
    '<a:Action s:mustUnderstand="1">' +
@@ -4362,15 +4358,27 @@ function pbCopyEmailAsset(sourceToken, sourceSub, targetToken, targetSub, assetI
  };
 }
 
-var pageStatus = pbTrim(Platform.Variable.GetValue("@pageStatus") || "review");
-var confirmStep = Platform.Variable.GetValue("@confirmStep") === "1";
-var pushStep = pbTrim(Platform.Variable.GetValue("@pushStep") || "");
-var jid = pbTrim(Platform.Variable.GetValue("@jid") || "");
-var journeyType = pbTrim(Platform.Variable.GetValue("@dispType") || "");
+var pageStatus = "review";
+var confirmStep = false;
+var pushStep = "";
+var jid = "";
+var journeyType = "";
 var stepsHtml = "";
 var pushLogHtml = "";
 var pushResultBanner = "";
-var pushBlockedMsg = pbTrim(Platform.Variable.GetValue("@pushBlockedMsg") || "");
+var pushBlockedMsg = "";
+try {
+ pageStatus = pbTrim(Platform.Variable.GetValue("@pageStatus") || "review");
+ confirmStep = Platform.Variable.GetValue("@confirmStep") === "1";
+ pushStep = pbTrim(Platform.Variable.GetValue("@pushStep") || "");
+ jid = pbTrim(Platform.Variable.GetValue("@jid") || "");
+ journeyType = pbTrim(Platform.Variable.GetValue("@dispType") || "");
+ pushBlockedMsg = pbTrim(Platform.Variable.GetValue("@pushBlockedMsg") || "");
+} catch (bootEx) {
+ pageStatus = "step_failed";
+ pushResultBanner =
+  '<div class="banner bad">Push page error: ' + pbHtmlSafe(pbToStr(bootEx.message || bootEx)) + "</div>";
+}
 
 function pbPushPageCtx() {
  return {
