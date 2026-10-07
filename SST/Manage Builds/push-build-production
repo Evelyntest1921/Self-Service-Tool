@@ -721,15 +721,28 @@ function pbSoapResultsSnippet(body) {
 }
 
 function pbParseSoapObjectId(body) {
+ var text = pbToStr(body);
+ var mNewAll = text.match(/<(?:[\w]+:)?NewObjectID[^>]*>([^<]+)</gi);
+ if (mNewAll && mNewAll.length) {
+  var ni;
+  for (ni = mNewAll.length - 1; ni >= 0; ni--) {
+   var idNew = pbTrim(mNewAll[ni].replace(/<\/?[^>]+>/g, ""));
+   if (idNew) {
+    return idNew;
+   }
+  }
+ }
+ var mNewIdAll = text.match(/<(?:[\w]+:)?NewID[^>]*>([^<]+)</gi);
+ if (mNewIdAll && mNewIdAll.length) {
+  var nj;
+  for (nj = mNewIdAll.length - 1; nj >= 0; nj--) {
+   var idN = pbTrim(mNewIdAll[nj].replace(/<\/?[^>]+>/g, ""));
+   if (idN) {
+    return idN;
+   }
+  }
+ }
  var chunk = pbSoapResultsSnippet(body);
- var mNew = chunk.match(/<(?:[\w]+:)?NewObjectID[^>]*>([^<]+)</i);
- if (mNew && pbTrim(mNew[1])) {
-  return pbTrim(mNew[1]);
- }
- var mNewId = chunk.match(/<(?:[\w]+:)?NewID[^>]*>([^<]+)</i);
- if (mNewId && pbTrim(mNewId[1])) {
-  return pbTrim(mNewId[1]);
- }
  var mObj = chunk.match(/<(?:[\w]+:)?ObjectID[^>]*>([^<]+)</i);
  return mObj ? pbTrim(mObj[1]) : "";
 }
@@ -754,6 +767,25 @@ function pbSoapPartnerOk(body) {
  }
  if (pbToStr(body).match(/<(?:[\w]+:)?StatusCode[^>]*>\s*Error\s*</i)) {
   return false;
+ }
+ return true;
+}
+
+function pbSoapMutationSucceeded(body) {
+ if (!pbSoapPartnerOk(body)) {
+  return false;
+ }
+ var text = pbToStr(body);
+ var codeTags = text.match(/<(?:[\w]+:)?StatusCode[^>]*>([^<]*)</gi);
+ if (!codeTags || !codeTags.length) {
+  return true;
+ }
+ var ci;
+ for (ci = 0; ci < codeTags.length; ci++) {
+  var codeVal = pbTrim(codeTags[ci].replace(/<\/?[^>]+>/g, ""));
+  if (codeVal && codeVal.toUpperCase() !== "OK") {
+   return false;
+  }
  }
  return true;
 }
@@ -811,6 +843,201 @@ function pbProdResolveDeCategoryId(sub, token) {
   return isNaN(cid) ? 0 : cid;
  }
  return 0;
+}
+
+function pbUatLoadDeSpec(customerKey) {
+ var ck = pbTrim(customerKey);
+ if (!ck) {
+  return null;
+ }
+ try {
+  var prox = new Script.Util.WSProxy();
+  var deR = prox.retrieve(
+   "DataExtension",
+   [
+    "Name",
+    "CustomerKey",
+    "IsSendable",
+    "IsTestable",
+    "SendableDataExtensionField",
+    "SendableSubscriberField"
+   ],
+   { Property: "CustomerKey", SimpleOperator: "equals", Value: ck }
+  );
+  if (!deR || !deR.Results || !deR.Results.length) {
+   return null;
+  }
+  var deRow = deR.Results[0];
+  var fieldsR = prox.retrieve(
+   "DataExtensionField",
+   ["Name", "FieldType", "MaxLength", "IsPrimaryKey", "IsRequired", "DefaultValue"],
+   { Property: "DataExtension.CustomerKey", SimpleOperator: "equals", Value: ck }
+  );
+  return {
+   name: pbToStr(deRow.Name || ck),
+   fields: fieldsR && fieldsR.Results ? fieldsR.Results : [],
+   sendableField: pbUatSendableDeFieldName(deRow),
+   subscriberField: pbUatSendableSubscriberFieldName(deRow)
+  };
+ } catch (uatDeEx) {
+  return null;
+ }
+}
+
+function pbUatSendableDeFieldName(deRow) {
+ if (!deRow) {
+  return "ContactId";
+ }
+ var sdef = deRow.SendableDataExtensionField;
+ if (sdef && sdef.Name) {
+  return pbToStr(sdef.Name);
+ }
+ if (typeof sdef === "string" && pbTrim(sdef)) {
+  return pbTrim(sdef);
+ }
+ return "ContactId";
+}
+
+function pbUatSendableSubscriberFieldName(deRow) {
+ if (!deRow) {
+  return "Subscriber Key";
+ }
+ var ssf = deRow.SendableSubscriberField;
+ if (ssf && ssf.Name) {
+  return pbToStr(ssf.Name);
+ }
+ if (typeof ssf === "string" && pbTrim(ssf)) {
+  return pbTrim(ssf);
+ }
+ return "Subscriber Key";
+}
+
+function pbFieldRowToXml(row) {
+ var name = pbToStr(row.Name || "");
+ if (!name) {
+  return "";
+ }
+ var fieldType = pbToStr(row.FieldType || "Text");
+ var xml =
+  '<Field xsi:type="DataExtensionField"><Name>' +
+  pbXmlSafe(name) +
+  "</Name><FieldType>" +
+  pbXmlSafe(fieldType) +
+  "</FieldType>";
+ if (row.MaxLength) {
+  xml += "<MaxLength>" + parseInt(String(row.MaxLength), 10) + "</MaxLength>";
+ }
+ var isReq = row.IsRequired === true || String(row.IsRequired).toLowerCase() === "true";
+ var isPk = row.IsPrimaryKey === true || String(row.IsPrimaryKey).toLowerCase() === "true";
+ xml += "<IsRequired>" + (isReq || isPk ? "true" : "false") + "</IsRequired>";
+ xml += "<IsNillable>" + (isReq || isPk ? "false" : "true") + "</IsNillable>";
+ if (isPk) {
+  xml += "<IsPrimaryKey>true</IsPrimaryKey>";
+ }
+ if (row.DefaultValue !== null && row.DefaultValue !== undefined && pbTrim(row.DefaultValue)) {
+  xml += "<DefaultValue>" + pbXmlSafe(row.DefaultValue) + "</DefaultValue>";
+ }
+ xml += "</Field>";
+ return xml;
+}
+
+function pbBuildDeFieldsXmlFromUat(fields) {
+ var list = fields || [];
+ var pk = [];
+ var rest = [];
+ var i;
+ for (i = 0; i < list.length; i++) {
+  var row = list[i];
+  if (!row || !row.Name) {
+   continue;
+  }
+  if (row.IsPrimaryKey === true || String(row.IsPrimaryKey).toLowerCase() === "true") {
+   pk.push(row);
+  } else {
+   rest.push(row);
+  }
+ }
+ var ordered = pk.concat(rest);
+ var xml = "";
+ for (i = 0; i < ordered.length; i++) {
+  xml += pbFieldRowToXml(ordered[i]);
+ }
+ return xml;
+}
+
+function pbRestFieldTypeFromSoap(fieldType) {
+ var ft = pbTrim(fieldType).toLowerCase();
+ if (ft === "emailaddress") {
+  return "EmailAddress";
+ }
+ if (ft === "number" || ft === "decimal") {
+  return "Number";
+ }
+ if (ft === "date") {
+  return "Date";
+ }
+ if (ft === "boolean") {
+  return "Boolean";
+ }
+ return "Text";
+}
+
+function pbProdRestCreateEntryDe(sub, token, customerKey, deName, uatSpec) {
+ var ck = pbTrim(customerKey);
+ var spec = uatSpec || pbUatLoadDeSpec(ck);
+ if (!spec || !spec.fields || !spec.fields.length) {
+  return { ok: false, objectId: "", msg: "UAT DE schema not found for REST create." };
+ }
+ var fieldsPayload = [];
+ var fi;
+ for (fi = 0; fi < spec.fields.length; fi++) {
+  var row = spec.fields[fi];
+  if (!row || !row.Name) {
+   continue;
+  }
+  var entry = {
+   name: pbToStr(row.Name),
+   type: pbRestFieldTypeFromSoap(row.FieldType),
+   required:
+    row.IsRequired === true ||
+    String(row.IsRequired).toLowerCase() === "true" ||
+    row.IsPrimaryKey === true ||
+    String(row.IsPrimaryKey).toLowerCase() === "true",
+   primaryKey: row.IsPrimaryKey === true || String(row.IsPrimaryKey).toLowerCase() === "true"
+  };
+  if (row.MaxLength) {
+   entry.length = parseInt(String(row.MaxLength), 10);
+  }
+  if (row.DefaultValue !== null && row.DefaultValue !== undefined && pbTrim(row.DefaultValue)) {
+   entry.defaultValue = pbToStr(row.DefaultValue);
+  }
+  fieldsPayload.push(entry);
+ }
+ var sendField = spec.sendableField || "ContactId";
+ var subField = spec.subscriberField || "Subscriber Key";
+ var payload = {
+  name: pbTrim(deName) || spec.name || ck,
+  key: ck,
+  isSendable: true,
+  isTestable: true,
+  sendableCustomObjectField: sendField === "Subscriber Key" ? "ContactId" : sendField,
+  sendableSubscriberField: subField === "Subscriber Key" ? "_SubscriberKey" : subField,
+  fields: fieldsPayload
+ };
+ var postUrl = "https://" + sub + ".rest.marketingcloudapis.com/data/v1/dataextensions";
+ var posted = pbHttpJson(token, sub, "POST", postUrl, payload);
+ if (!pbHttpOk(posted.status)) {
+  return {
+   ok: false,
+   objectId: "",
+   msg: "REST DE POST HTTP " + posted.status + " — " + pbTrim(posted.body).substring(0, 160)
+  };
+ }
+ var objectId = pbProdRestDeObjectId(sub, token, ck);
+ if (objectId) {
+  return { ok: true, objectId: objectId, msg: "Entry DE created in Production via REST." };
+ }
+ return { ok: false, objectId: "", msg: "REST DE POST accepted but id not returned." };
 }
 
 function pbProdRestDeObjectId(sub, token, customerKey) {
@@ -937,6 +1164,14 @@ function pbProdEnsureEntryDe(sub, token, customerKey, deName) {
    msg: "Entry DE already exists in Production (ObjectID " + existing.objectId + ")."
   };
  }
+ var uatSpec = pbUatLoadDeSpec(ck);
+ var fieldsXml =
+  uatSpec && uatSpec.fields && uatSpec.fields.length
+   ? pbBuildDeFieldsXmlFromUat(uatSpec.fields)
+   : pbStackEntryDeFieldsXml();
+ var sendableName = uatSpec ? uatSpec.sendableField : "ContactId";
+ var subscriberName = uatSpec ? uatSpec.subscriberField : "Subscriber Key";
+ var deDisplayName = uatSpec && uatSpec.name ? uatSpec.name : name;
  var categoryId = pbProdResolveDeCategoryId(sub, token);
  var categoryXml = categoryId > 0 ? "<CategoryID>" + categoryId + "</CategoryID>" : "";
  var createBody =
@@ -944,19 +1179,23 @@ function pbProdEnsureEntryDe(sub, token, customerKey, deName) {
   "<CustomerKey>" +
   pbXmlSafe(ck) +
   "</CustomerKey><Name>" +
-  pbXmlSafe(name) +
+  pbXmlSafe(deDisplayName) +
   "</Name>" +
   categoryXml +
   "<Description>Pushed from SST</Description><IsSendable>true</IsSendable><IsTestable>true</IsTestable>" +
-  "<SendableDataExtensionField><Name>ContactId</Name><FieldType>Text</FieldType></SendableDataExtensionField>" +
-  '<SendableSubscriberField><Name>Subscriber Key</Name></SendableSubscriberField><Fields>' +
-  pbStackEntryDeFieldsXml() +
+  "<SendableDataExtensionField><Name>" +
+  pbXmlSafe(sendableName) +
+  "</Name><FieldType>Text</FieldType></SendableDataExtensionField>" +
+  "<SendableSubscriberField><Name>" +
+  pbXmlSafe(subscriberName) +
+  "</Name></SendableSubscriberField><Fields>" +
+  fieldsXml +
   "</Fields></Objects></CreateRequestMsg>";
  var created = pbSoapCall(sub, token, "Create", createBody);
  var objectId = pbParseSoapObjectId(created.body);
- if (pbSoapPartnerOk(created.body)) {
+ if (pbSoapMutationSucceeded(created.body)) {
   if (!objectId) {
-   var afterCreate = pbProdRetrieveDeObjectId(sub, token, ck, name);
+   var afterCreate = pbProdRetrieveDeObjectId(sub, token, ck, deDisplayName);
    objectId = afterCreate.objectId || "";
   }
   if (objectId) {
@@ -966,6 +1205,10 @@ function pbProdEnsureEntryDe(sub, token, customerKey, deName) {
   if (restAfter) {
    return { ok: true, objectId: restAfter, msg: "Entry DE created in Production (REST id " + restAfter + ")." };
   }
+  var restCreate = pbProdRestCreateEntryDe(sub, token, ck, deDisplayName, uatSpec);
+  if (restCreate.ok && restCreate.objectId) {
+   return restCreate;
+  }
   return {
    ok: false,
    objectId: "",
@@ -973,14 +1216,19 @@ function pbProdEnsureEntryDe(sub, token, customerKey, deName) {
     "Entry DE SOAP OK but ObjectID not found for key " +
     ck +
     ". " +
-    pbSoapFirstStatusMessage(created.body)
+    pbSoapFirstStatusMessage(created.body) +
+    (restCreate.msg ? " REST: " + restCreate.msg : "")
   };
  }
  if (created.body.indexOf("already exists") >= 0 || created.body.indexOf("AlreadyExist") >= 0) {
-  var again = pbProdRetrieveDeObjectId(sub, token, ck, name);
+  var again = pbProdRetrieveDeObjectId(sub, token, ck, deDisplayName);
   if (again.ok && again.objectId) {
    return { ok: true, objectId: again.objectId, msg: "Entry DE resolved in Production after duplicate." };
   }
+ }
+ var restOnly = pbProdRestCreateEntryDe(sub, token, ck, deDisplayName, uatSpec);
+ if (restOnly.ok && restOnly.objectId) {
+  return restOnly;
  }
  return {
   ok: false,
@@ -988,7 +1236,10 @@ function pbProdEnsureEntryDe(sub, token, customerKey, deName) {
    "Entry DE create failed (" +
    pbParseSoapStatus(created.body) +
    "). " +
-   pbTrim(created.body).substring(0, 180)
+   pbSoapFirstStatusMessage(created.body) +
+   " " +
+   pbTrim(created.body).substring(0, 120) +
+   (restOnly.msg ? " REST: " + restOnly.msg : "")
  };
 }
 
@@ -1030,7 +1281,7 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
   ">";
  var resp = pbSoapCall(sub, token, action, body);
  var objectId = pbParseSoapObjectId(resp.body) || existingId;
- if (pbSoapPartnerOk(resp.body)) {
+ if (pbSoapMutationSucceeded(resp.body)) {
   if (!objectId) {
    objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
   }
@@ -1060,7 +1311,9 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
    " failed (" +
    pbParseSoapStatus(resp.body) +
    "). " +
-   pbTrim(resp.body).substring(0, 180)
+   pbSoapFirstStatusMessage(resp.body) +
+   " " +
+   pbTrim(resp.body).substring(0, 120)
  };
 }
 
