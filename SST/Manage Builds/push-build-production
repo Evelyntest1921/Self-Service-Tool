@@ -878,13 +878,41 @@ function pbSoapErrorSummary(body) {
  }
  var msg = pbSoapFirstStatusMessage(text);
  var status = pbParseSoapStatus(text);
- if (msg) {
-  return (status ? status + " — " : "") + msg;
+ if (text.match(/<(?:[\w]+:)?StatusCode[^>]*>\s*Error\s*</i)) {
+  var errCode = text.match(/<(?:[\w]+:)?ErrorCode[^>]*>([^<]+)</i);
+  var codePart = errCode && pbTrim(errCode[1]) ? " ErrorCode=" + pbTrim(errCode[1]) : "";
+  if (msg) {
+   return "StatusCode Error" + codePart + " — " + msg;
+  }
+  var snippet = pbTrim(pbSoapResultsSnippet(text)).substring(0, 280);
+  return "StatusCode Error" + codePart + (snippet ? " — " + snippet : "");
  }
- if (status) {
+ if (msg) {
+  return (status && status.toUpperCase() !== "OK" ? status + " — " : "") + msg;
+ }
+ if (status && status.toUpperCase() !== "OK") {
   return status;
  }
- return "SOAP request failed.";
+ return "SOAP mutation did not succeed (no fault detail returned).";
+}
+
+function pbResolvePushQueryKey(live, fb, deKey) {
+ var candidates = [
+  live && live.queryKey,
+  fb && fb.queryKey,
+  fb && fb.automationKey,
+  live && live.automationKey,
+  deKey,
+  fb && fb.buildName
+ ];
+ var i;
+ for (i = 0; i < candidates.length; i++) {
+  var k = pbTrim(candidates[i]);
+  if (k && k.toUpperCase() !== "N/A") {
+   return k;
+  }
+ }
+ return "";
 }
 
 function pbAdaptQuerySqlForProduction(sql) {
@@ -2033,54 +2061,81 @@ function pbProdEnsureEntryDe(sub, token, customerKey, deName, uatOpts) {
 function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustomerKey, deName, deObjectId, automationKeyHint) {
  var key = pbTrim(queryKey);
  if (!key || !pbTrim(queryText)) {
-  return { ok: false, objectId: "", msg: "Query key or SQL missing." };
- }
- var qName = pbTrim(queryName) || key;
- var prodSql = pbToStr(queryText);
- var existingId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
- var body = pbBuildQueryMutationBody({
-  existingId: existingId,
-  key: key,
-  qName: qName,
-  categoryId: 0,
-  useCategory: false,
-  sql: prodSql,
-  useDeOid: false,
-  deOid: "",
-  deCustomerKey: deCustomerKey,
-  deName: deName
- });
- var action = existingId ? "Update" : "Create";
- var lastResp = pbSoapCall(sub, token, action, body);
- var objectId = pbParseSoapObjectId(lastResp.body) || existingId;
- if (!objectId) {
-  objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
- }
- if (pbSoapMutationSucceeded(lastResp.body) && objectId) {
   return {
-   ok: true,
-   objectId: objectId,
-   msg: "Query " + (existingId ? "updated" : "created") + " in Production (stack-style QueryDefinition)."
+   ok: false,
+   objectId: "",
+   msg:
+    "Query key or SQL missing (key=" +
+    (key || "empty") +
+    ", sqlChars=" +
+    pbToStr(queryText).length +
+    ")."
   };
  }
- if (pbSoapMutationSucceeded(lastResp.body) && !objectId) {
-  objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
-  if (objectId) {
+ var qName = pbTrim(queryName) || key;
+ if (qName !== key) {
+  qName = key;
+ }
+ var prodSql = pbToStr(queryText);
+ var existingId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+ var attemptPlans = [
+  { useCategory: false },
+  { useCategory: true, categoryId: pbProdResolveQueryCategoryId(sub, token) }
+ ];
+ var lastResp = { body: "" };
+ var ai;
+ for (ai = 0; ai < attemptPlans.length; ai++) {
+  var plan = attemptPlans[ai];
+  if (plan.useCategory && !(plan.categoryId > 0)) {
+   continue;
+  }
+  var body = pbBuildQueryMutationBody({
+   existingId: existingId,
+   key: key,
+   qName: qName,
+   categoryId: plan.categoryId || 0,
+   useCategory: plan.useCategory,
+   sql: prodSql,
+   useDeOid: false,
+   deOid: "",
+   deCustomerKey: deCustomerKey,
+   deName: deName
+  });
+  var action = existingId ? "Update" : "Create";
+  lastResp = pbSoapCall(sub, token, action, body);
+  var objectId = pbParseSoapObjectId(lastResp.body) || existingId;
+  if (!objectId) {
+   objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+  }
+  if (pbSoapMutationSucceeded(lastResp.body) && objectId) {
    return {
     ok: true,
     objectId: objectId,
-    msg: "Query " + (existingId ? "updated" : "created") + " in Production; ObjectID resolved by retrieve."
+    msg:
+     "Query " +
+     (existingId ? "updated" : "created") +
+     " in Production (CustomerKey=" +
+     key +
+     ")."
    };
   }
- }
- if (!existingId) {
-  var createdId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
-  if (createdId) {
-   return {
-    ok: true,
-    objectId: createdId,
-    msg: "Query exists in Production for key " + key + " (resolved after create attempt)."
-   };
+  if (pbSoapMutationSucceeded(lastResp.body) && !objectId) {
+   objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+   if (objectId) {
+    return {
+     ok: true,
+     objectId: objectId,
+     msg: "Query " + (existingId ? "updated" : "created") + " in Production; ObjectID resolved by retrieve."
+    };
+   }
+  }
+  if (!existingId) {
+   var createdId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+   if (createdId) {
+    existingId = createdId;
+    ai--;
+    continue;
+   }
   }
  }
  var objectIdFinal = pbProdRetrieveQueryObjectId(sub, token, key, qName);
@@ -2100,7 +2155,7 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
   msg:
    "Query " +
    (existingId ? "Update" : "Create") +
-   " failed for key " +
+   " failed for CustomerKey " +
    key +
    ". " +
    pbSoapErrorSummary(lastResp.body)
@@ -2714,6 +2769,28 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
   if (!deKey) {
    return { ok: false, logs: logs, msg: "Entry DE key missing." };
   }
+  if (resolved.usesLiveStack) {
+   var liveQuery = pbResolveLiveStackContext(
+    devAuth.token,
+    devAuth.subdomain,
+    journeyId,
+    fb
+   );
+   if (liveQuery.ok) {
+    live = liveQuery;
+    log(live.msg);
+   }
+  }
+  var queryKey = pbResolvePushQueryKey(live, fb, deKey);
+  if (!queryKey) {
+   return {
+    ok: false,
+    logs: logs,
+    msg:
+     "Query customer key is empty. Fix UAT automation query step or set queryKey on bd_journey_analytics (stack builds usually use the same key as the entry DE, e.g. ASC_TEST_04)."
+   };
+  }
+  log("Query CustomerKey " + queryKey + " (target DE " + deKey + ").");
   var deProd = pbProdRetrieveDeObjectId(prodAuth.subdomain, prodAuth.token, deKey, deName);
   if (!deProd.ok || !deProd.objectId) {
    return { ok: false, logs: logs, msg: "Push entry DE first — not found in Production." };
@@ -2726,13 +2803,13 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
   var queryResult = pbProdUpsertQuery(
    prodAuth.subdomain,
    prodAuth.token,
-   live.queryKey,
-   buildName,
+   queryKey,
+   queryKey,
    queryBuild.sql,
    deKey,
    deName,
    deProd.objectId,
-   live.automationKey
+   live.automationKey || fb.automationKey
   );
   if (queryResult.ok) {
    log(queryResult.msg);
@@ -2757,8 +2834,8 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
   return { ok: false, logs: logs, msg: "Email FAILED: " + emailCopy.msg };
  }
  if (sid === "automation") {
-  var qk = pbTrim(live.queryKey);
-  var qOid = pbProdRetrieveQueryObjectId(prodAuth.subdomain, prodAuth.token, qk, buildName);
+  var qk = pbResolvePushQueryKey(live, fb, deKey);
+  var qOid = pbProdRetrieveQueryObjectId(prodAuth.subdomain, prodAuth.token, qk, qk || buildName);
   if (!qOid) {
    return { ok: false, logs: logs, msg: "Push query step first — query ObjectID not found in Production." };
   }
