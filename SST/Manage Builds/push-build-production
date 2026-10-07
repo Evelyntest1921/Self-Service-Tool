@@ -568,25 +568,6 @@ function pbResolveLiveStackContext(token, sub, journeyId, fallback) {
   result.emailName = emailLive.name;
  }
  result.emailLegacyId = emailLive.legacyEmailId || "";
- var emailResolved = pbResolveSourceEmailAsset(
-  token,
-  sub,
-  emailLive.contentAssetId || emailLive.legacyEmailId,
-  emailLive.name,
-  emailLive.legacyEmailId
- );
- if (emailResolved.ok && emailResolved.asset) {
-  result.emailAssetId = pbToStr(emailResolved.asset.id || emailLive.contentAssetId || "");
-  if (emailResolved.asset.name) {
-   result.emailName = pbTrim(emailResolved.asset.name);
-  }
- } else if (emailLive.contentAssetId || emailLive.legacyEmailId || emailLive.name) {
-  result.msg =
-   "Live email could not be loaded from Content Builder (" +
-   (emailResolved.msg || "not found") +
-   ").";
-  return result;
- }
  var entryRef = pbFindEntryEventRef(jObj);
  if (!entryRef || !entryRef.eventDefId) {
   result.msg = "Live journey has no entry event definition on triggers.";
@@ -648,16 +629,37 @@ function pbResolveLiveStackContext(token, sub, journeyId, fallback) {
   result.msg = "Live query not resolved from automation query step (WSProxy).";
   return result;
  }
- if (!result.emailAssetId) {
-  result.msg = "Live email asset id not found on journey email activity.";
-  return result;
- }
  if (!result.automationKey) {
   result.msg = "Live automation customer key not resolved.";
   return result;
  }
+ if (!emailLive.contentAssetId && !emailLive.legacyEmailId && !emailLive.name) {
+  result.msg = "Live email activity not found on journey canvas.";
+  return result;
+ }
+ result.emailAssetId = emailLive.contentAssetId || emailLive.legacyEmailId || "";
+ var emailResolved = pbResolveSourceEmailAsset(
+  token,
+  sub,
+  emailLive.contentAssetId,
+  emailLive.name,
+  emailLive.legacyEmailId,
+  false
+ );
+ if (emailResolved.ok && emailResolved.asset) {
+  result.emailAssetId = pbToStr(emailResolved.asset.id || result.emailAssetId);
+  if (emailResolved.asset.name) {
+   result.emailName = pbTrim(emailResolved.asset.name);
+  }
+ }
  result.ok = true;
  result.msg = "Live artifacts resolved from journey " + journeyId + ".";
+ if (!emailResolved.ok && emailLive.legacyEmailId) {
+  result.msg +=
+   " Email uses legacy id " +
+   emailLive.legacyEmailId +
+   "; Content Builder lookup runs on push.";
+ }
  return result;
 }
 
@@ -1410,30 +1412,45 @@ function pbIsEmailAsset(assetObj) {
  return typeId === 207 || typeId === 208 || typeId === 4;
 }
 
-function pbFetchEmailAssetByLegacyId(sourceToken, sourceSub, legacyId) {
+function pbFetchEmailAssetByLegacyId(sourceToken, sourceSub, legacyId, allowScan) {
  var leg = pbTrim(legacyId);
  if (!leg) {
   return { ok: false, asset: null, msg: "" };
  }
- var filterLegacy =
-  "assetType.id eq 207 and legacyData.legacyId eq " + encodeURIComponent(String(parseInt(leg, 10) || leg));
- var legacyUrl =
-  "https://" +
-  sourceSub +
-  ".rest.marketingcloudapis.com/asset/v1/content/assets?$page=1&$pagesize=10&$filter=" +
-  encodeURIComponent(filterLegacy);
- var legacyGot = pbHttpJson(sourceToken, sourceSub, "GET", legacyUrl, null);
- if (pbHttpOk(legacyGot.status) && legacyGot.body) {
-  try {
-   var legacyData = Platform.Function.ParseJSON(legacyGot.body);
-   var legacyItems = legacyData && legacyData.items ? legacyData.items : [];
-   if (legacyItems.length === 1 && pbIsEmailAsset(legacyItems[0])) {
-    return { ok: true, asset: legacyItems[0], msg: "" };
-   }
-  } catch (legacyParseEx) {}
+ var legNum = String(parseInt(leg, 10) || leg);
+ var filterAttempts = [
+  "assetType.id eq 207 and legacyData.legacyId eq " + legNum,
+  "assetType.id eq 207 and legacyData.legacyId eq '" + leg.replace(/'/g, "''") + "'"
+ ];
+ var ai;
+ for (ai = 0; ai < filterAttempts.length; ai++) {
+  var legacyUrl =
+   "https://" +
+   sourceSub +
+   ".rest.marketingcloudapis.com/asset/v1/content/assets?$page=1&$pagesize=10&$filter=" +
+   encodeURIComponent(filterAttempts[ai]);
+  var legacyGot = pbHttpJson(sourceToken, sourceSub, "GET", legacyUrl, null);
+  if (pbHttpOk(legacyGot.status) && legacyGot.body) {
+   try {
+    var legacyData = Platform.Function.ParseJSON(legacyGot.body);
+    var legacyItems = legacyData && legacyData.items ? legacyData.items : [];
+    var li;
+    for (li = 0; li < legacyItems.length; li++) {
+     if (pbIsEmailAsset(legacyItems[li]) && pbExtractLegacyEmailId(legacyItems[li]) === leg) {
+      return { ok: true, asset: legacyItems[li], msg: "" };
+     }
+    }
+    if (legacyItems.length === 1 && pbIsEmailAsset(legacyItems[0])) {
+     return { ok: true, asset: legacyItems[0], msg: "" };
+    }
+   } catch (legacyParseEx) {}
+  }
+ }
+ if (allowScan !== true) {
+  return { ok: false, asset: null, msg: "No Content Builder asset for legacy email id " + leg + "." };
  }
  var page = 1;
- while (page <= 6) {
+ while (page <= 3) {
   var listUrl =
    "https://" +
    sourceSub +
@@ -1526,12 +1543,28 @@ function pbFetchEmailAssetByName(sourceToken, sourceSub, emailName) {
  }
 }
 
-function pbResolveSourceEmailAsset(sourceToken, sourceSub, assetId, emailName, legacyEmailId) {
+function pbResolveSourceEmailAsset(sourceToken, sourceSub, assetId, emailName, legacyEmailId, allowLegacyScan) {
  var id = pbTrim(assetId);
  var legacy = pbTrim(legacyEmailId || "");
  var byLegacy = { ok: false, msg: "" };
  if (legacy && id === legacy) {
   id = "";
+ }
+ if (id && id.indexOf("-") >= 0) {
+  var byGuid = pbFetchEmailAssetById(sourceToken, sourceSub, id);
+  if (byGuid.ok) {
+   return byGuid;
+  }
+ }
+ if (id && /^\d+$/.test(id)) {
+  var byNumeric = pbFetchEmailAssetById(sourceToken, sourceSub, id);
+  if (byNumeric.ok) {
+   return byNumeric;
+  }
+  if (!legacy) {
+   legacy = id;
+   id = "";
+  }
  }
  if (id) {
   var byId = pbFetchEmailAssetById(sourceToken, sourceSub, id);
@@ -1540,7 +1573,7 @@ function pbResolveSourceEmailAsset(sourceToken, sourceSub, assetId, emailName, l
   }
  }
  if (legacy) {
-  byLegacy = pbFetchEmailAssetByLegacyId(sourceToken, sourceSub, legacy);
+  byLegacy = pbFetchEmailAssetByLegacyId(sourceToken, sourceSub, legacy, allowLegacyScan === true);
   if (byLegacy.ok) {
    return byLegacy;
   }
@@ -1564,7 +1597,7 @@ function pbResolveSourceEmailAsset(sourceToken, sourceSub, assetId, emailName, l
   return pbFetchEmailAssetById(sourceToken, sourceSub, id);
  }
  if (legacy) {
-  return pbFetchEmailAssetByLegacyId(sourceToken, sourceSub, legacy);
+  return pbFetchEmailAssetByLegacyId(sourceToken, sourceSub, legacy, allowLegacyScan === true);
  }
  return { ok: false, asset: null, msg: "Email asset id or name missing." };
 }
@@ -1575,7 +1608,8 @@ function pbCopyEmailAsset(sourceToken, sourceSub, targetToken, targetSub, assetI
   sourceSub,
   assetId,
   targetName,
-  legacyEmailId || ""
+  legacyEmailId || "",
+  true
  );
  if (!resolved.ok || !resolved.asset) {
   return { ok: false, msg: resolved.msg || "Could not resolve source email." };
