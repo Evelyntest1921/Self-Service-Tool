@@ -223,37 +223,58 @@ function pbCoerceLookupRows(raw) {
  if (raw == null) {
   return [];
  }
+ var source = raw;
  try {
-  var count = Platform.Function.RowCount(raw);
-  if (!count || count < 1) {
-   return [];
+  if (source.Results && typeof source.Results.length === "number") {
+   source = source.Results;
   }
-  var out = [];
-  var i;
-  for (i = 1; i <= count; i++) {
-   out.push(Platform.Function.Row(raw, i));
+  if (typeof source.length === "number" && source.length > 0) {
+   var fromArray = [];
+   var j;
+   for (j = 0; j < source.length; j++) {
+    if (source[j]) {
+     fromArray.push(source[j]);
+    }
+   }
+   if (fromArray.length > 0) {
+    return fromArray;
+   }
   }
-  return out;
- } catch (rowEx) {
-  return [];
- }
+  var count = Platform.Function.RowCount(source);
+  if (count && count > 0) {
+   var fromRowset = [];
+   var i;
+   for (i = 1; i <= count; i++) {
+    fromRowset.push(Platform.Function.Row(source, i));
+   }
+   if (fromRowset.length > 0) {
+    return fromRowset;
+   }
+  }
+ } catch (rowEx) {}
+ return [];
 }
 
 function pbAuthField(row, names) {
  var i;
  for (i = 0; i < names.length; i++) {
-  try {
-   var v = Platform.Function.Field(row, names[i]);
-   if (v !== null && v !== undefined && pbTrim(v)) {
-    return pbTrim(v);
-   }
-  } catch (fieldEx) {}
+  var v = null;
   try {
    v = row[names[i]];
-   if (v !== null && v !== undefined && pbTrim(v)) {
-    return pbTrim(v);
-   }
-  } catch (fieldEx2) {}
+  } catch (fieldEx) {}
+  if ((v === null || v === undefined || !pbTrim(v)) && row) {
+   try {
+    v = row[String(names[i])];
+   } catch (fieldEx2) {}
+  }
+  if ((v === null || v === undefined || !pbTrim(v)) && row) {
+   try {
+    v = Platform.Function.Field(row, names[i]);
+   } catch (fieldEx3) {}
+  }
+  if (v !== null && v !== undefined && pbTrim(v)) {
+   return pbTrim(v);
+  }
  }
  return "";
 }
