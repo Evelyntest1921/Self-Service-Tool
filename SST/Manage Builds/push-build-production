@@ -2896,10 +2896,23 @@ function pbProdCreateQueryDefinitionStackParity(sub, token, queryKey, queryName,
     ")."
   };
  }
+ if (!objectId) {
+  objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName) || "";
+ }
+ if (objectId) {
+  return {
+   ok: true,
+   objectId: objectId,
+   msg:
+    "QueryDefinition already in Production (key=" +
+    key +
+    "). SOAP response was unclear; using existing query."
+  };
+ }
  var statusMsg = pbSoapFirstStatusMessage(resp.body) || pbSoapFailureDetail(resp);
  return {
   ok: false,
-  objectId: objectId,
+  objectId: "",
   msg:
    "QueryDefinition " +
    (existingId ? "update" : "create") +
@@ -3924,16 +3937,28 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
    targetDeKeyCombo,
    targetDeNameCombo
   );
+  var qOidCombo = queryResultCombo.objectId || "";
   if (!queryResultCombo.ok) {
-   return { ok: false, logs: logs, msg: "Query FAILED: " + queryResultCombo.msg };
+   qOidCombo =
+    qOidCombo ||
+    pbProdRetrieveQueryObjectId(prodAuth.subdomain, prodAuth.token, queryKeyCombo, queryKeyCombo) ||
+    "";
+   if (qOidCombo) {
+    log("Query already in Production; continuing to automation.");
+   } else {
+    return { ok: false, logs: logs, msg: "Query FAILED: " + queryResultCombo.msg };
+   }
+  } else {
+   log(queryResultCombo.msg);
   }
-  log(queryResultCombo.msg);
-  var qOidCombo = pbProdRetrieveQueryObjectId(
-   prodAuth.subdomain,
-   prodAuth.token,
-   queryKeyCombo,
-   queryKeyCombo
-  );
+  if (!qOidCombo) {
+   qOidCombo = pbProdRetrieveQueryObjectId(
+    prodAuth.subdomain,
+    prodAuth.token,
+    queryKeyCombo,
+    queryKeyCombo
+   );
+  }
   if (!qOidCombo) {
    qOidCombo = pbProdQueryObjectIdFromAutomation(prodAuth.token, prodAuth.subdomain, live.automationKey || buildName);
   }
