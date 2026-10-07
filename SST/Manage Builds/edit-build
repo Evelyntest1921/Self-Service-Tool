@@ -10,6 +10,7 @@ IF RowCount(@navRows) > 0 THEN
  SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit")
  SET @PERFORMANCE_URL = Field(@navRow,"ss_performance")
  SET @JOURNEY_VIEW_URL = Field(@navRow,"ss_build_journey")
+ SET @EDIT_DE_OPEN_URL = Trim(Field(@navRow,"ss_edit_de_open"))
 ENDIF
 SET @MC_CLOUD = "https://mc.s13.exacttarget.com/cloud/"
 SET @DETAIL_EXTERNAL_KEY_DE = "Bd_journey_analytics"
@@ -37,7 +38,7 @@ VAR @chkQueryStatus, @chkQueryMsg, @chkQueryText, @chkQueryIcon
 VAR @chkAutoStatusStatus, @chkAutoStatusMsg, @chkAutoStatusIcon
 VAR @deleteRequested, @removeLogOnly, @deleteEmailFromPost, @purgeRequested
 VAR @executeRemoveLogDelete, @redirectLogRemoved, @redirectBuildPurged, @redirectEmailDeleted
-VAR @editBuildDeOpenJson, @editBuildDeOpenJsonMode
+VAR @EDIT_DE_OPEN_URL
 VAR @authOk, @accessToken, @subdomain
 VAR @resultText, @pageStatus, @detailRowsAfter
 VAR @attemptPurgeBuild, @purgeBuildLog, @purgeEmailOk
@@ -49,11 +50,7 @@ VAR @automationActionRequested, @attemptAutomationAction, @automationActionOk, @
 VAR @automationAction, @automationFrequency, @automationMinuteInterval, @automationStartDate, @automationStartOffset, @automationTimezoneId, @dispAutomationActive, @showAutomationActivate, @showAutomationPause
 
 
-SET @editBuildDeOpenJson = ""
-SET @editBuildDeOpenJsonMode = IIF(RequestParameter("editBuildDeOpenData") == "1", "1", "0")
-IF @editBuildDeOpenJsonMode != "1" AND QueryParameter("editBuildDeOpenData") == "1" THEN
- SET @editBuildDeOpenJsonMode = "1"
-ENDIF
+SET @EDIT_DE_OPEN_URL = ""
 SET @executeRemoveLogDelete = "false"
 SET @redirectLogRemoved = "false"
 SET @redirectBuildPurged = "false"
@@ -419,116 +416,6 @@ IF (@pageStatus != "tamper") AND ((@attemptPurgeBuild == "true") OR (@attemptDel
 ENDIF
 ENDIF
 ]%%
-<script runat="server">
-Platform.Load("core", "1");
-function deTrim(v) {
- if (v === null || typeof v === "undefined") {
-  return "";
- }
- try {
-  return (v + "").replace(/^\s+|\s+$/g, "");
- } catch (deTrimEx) {
-  return "";
- }
-}
-function deGuidLike(id) {
- var v = deTrim(id);
- if (!v) {
-  return false;
- }
- return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(v);
-}
-function deEscJson(s) {
- return String(s || "")
-  .replace(/\\/g, "\\\\")
-  .replace(/"/g, '\\"')
-  .replace(/\r/g, "\\r")
-  .replace(/\n/g, "\\n");
-}
-function deMcHost() {
- var cloud = Platform.Variable.GetValue("@MC_CLOUD") || "https://mc.s13.exacttarget.com/cloud/";
- var m = String(cloud).match(/^(https:\/\/[^/]+)/i);
- return m ? m[1] : "https://mc.s13.exacttarget.com";
-}
-function deObjectIdFromRow(row) {
- if (!row) {
-  return "";
- }
- try {
-  var id = deTrim(row.ObjectID + "");
-  return deGuidLike(id) ? id : "";
- } catch (deRowEx) {
-  return "";
- }
-}
-function deResolveObjectId(key, name) {
- var k = deTrim(key);
- if (k && k.toUpperCase() !== "N/A" && deGuidLike(k)) {
-  return k;
- }
- if (k && k.toUpperCase() !== "N/A") {
-  try {
-   var prox = new Script.Util.WSProxy();
-   var r = prox.retrieve("DataExtension", ["ObjectID"], {
-    Property: "CustomerKey",
-    SimpleOperator: "equals",
-    Value: k
-   });
-   if (r && r.Results && r.Results.length > 0) {
-    var byKey = deObjectIdFromRow(r.Results[0]);
-    if (byKey) {
-     return byKey;
-    }
-   }
-  } catch (deKeyEx) {}
- }
- var n = deTrim(name);
- if (!n || n.toUpperCase() === "N/A") {
-  return "";
- }
- try {
-  var proxName = new Script.Util.WSProxy();
-  var rName = proxName.retrieve("DataExtension", ["ObjectID"], {
-   Property: "Name",
-   SimpleOperator: "equals",
-   Value: n
-  });
-  if (rName && rName.Results && rName.Results.length > 0) {
-   return deObjectIdFromRow(rName.Results[0]);
-  }
- } catch (deNameEx) {}
- return "";
-}
-function deBuildOpenUrl(key, name) {
- var oid = deResolveObjectId(key, name);
- if (!oid) {
-  return "";
- }
- return (
-  deMcHost() +
-  "/contactsmeta/admin.html#admin/data-extension/" +
-  encodeURIComponent(oid) +
-  "/properties"
- );
-}
-try {
- if (Platform.Variable.GetValue("@editBuildDeOpenJsonMode") === "1") {
-  var deOpenUrl = deBuildOpenUrl(
-   Platform.Variable.GetValue("@dispDeId") || "",
-   Platform.Variable.GetValue("@dispDeName") || ""
-  );
-  var deOpenJson = deOpenUrl
-   ? '{"ok":true,"url":"' + deEscJson(deOpenUrl) + '"}'
-   : '{"ok":false,"error":"Data extension not found for this build."}';
-  Platform.Variable.SetValue("@editBuildDeOpenJson", deOpenJson);
- }
-} catch (deOpenTopEx) {
- Platform.Variable.SetValue(
-  "@editBuildDeOpenJson",
-  '{"ok":false,"error":"' + deEscJson(deOpenTopEx.message || String(deOpenTopEx)) + '"}'
- );
-}
-</script>
 <script runat="server" language="javascript">
 Platform.Load("core", "1");
 
@@ -1867,10 +1754,6 @@ function deleteStackAutomation(sub, token, autoId, customerKey) {
 }
 
 
-var skipMainSsjsForDeOpenJson =
- Platform.Variable.GetValue("@editBuildDeOpenJsonMode") === "1";
-if (!skipMainSsjsForDeOpenJson) {
-
 var authOk = Platform.Variable.GetValue("@authOk") || "";
 var accessToken = Platform.Variable.GetValue("@accessToken") || "";
 var subdomain = Platform.Variable.GetValue("@subdomain") || "";
@@ -2972,7 +2855,6 @@ try {
   }
 }
 
-}
 </script>
 %%[
 VAR @combinedLog, @trailBody
@@ -3168,9 +3050,6 @@ IF @isSurveyBuild == "true" THEN
 ENDIF
 SET @editSidebarHtml = ContentBlockByName("sst_shell_edit_sidebar")
 ]%%
-%%[ IF @editBuildDeOpenJsonMode == "1" THEN ]%%
-%%=v(@editBuildDeOpenJson)=%%
-%%[ ELSE ]%%
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4052,7 +3931,7 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
    <a class="btn btn-neutral js-automation-home-link" href="%%=Concat(@MC_CLOUD,"#app/Automation%20Studio/")=%%" target="_blank" rel="noopener noreferrer" data-automation-name="%%=Replace(Replace(v(@dispAutomationName),'"','&quot;'),'&','&amp;')=%%" title="%%[ IF NOT Empty(@dispAutomationName) THEN ]%%Copies automation name to clipboard%%[ ELSE ]%%Opens Automation Studio%%[ ENDIF ]%%">Open automation</a>
 %%[ ENDIF ]%%
 %%[ IF (NOT Empty(@dispDeId) AND @dispDeId != "N/A") OR (NOT Empty(@dispDeName) AND @dispDeName != "N/A") THEN ]%%
-   <button type="button" class="btn btn-neutral" id="openEntryDeBtn" title="%%=Replace(Replace(IIF(NOT Empty(@dispDeName) AND @dispDeName != "N/A", @dispDeName, @dispDeId),'"','&quot;'),'&','&amp;')=%%">Open data extension</button>
+   <button type="button" class="btn btn-neutral" id="openEntryDeBtn" data-de-open-url="%%=Replace(Replace(v(@EDIT_DE_OPEN_URL),'"','&quot;'),'&','&amp;')=%%" data-journey-id="%%=Replace(Replace(v(@jid),'"','&quot;'),'&','&amp;')=%%" title="%%=Replace(Replace(IIF(NOT Empty(@dispDeName) AND @dispDeName != "N/A", @dispDeName, @dispDeId),'"','&quot;'),'&','&amp;')=%%">Open data extension</button>
 %%[ ENDIF ]%%
  </div>
 </div>
@@ -4222,8 +4101,20 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
   return;
  }
  openDeBtn.addEventListener("click", function () {
-  var url = new URL(window.location.href);
-  url.searchParams.set("editBuildDeOpenData", "1");
+  var deOpenBase = openDeBtn.getAttribute("data-de-open-url") || "";
+  var journeyId = openDeBtn.getAttribute("data-journey-id") || "";
+  if (!deOpenBase) {
+   alert(
+    "Entry DE link is not configured. Add text field ss_edit_de_open on bd_sst_page_navigation with the published edit-build-de-open Cloud Page URL."
+   );
+   return;
+  }
+  if (!journeyId) {
+   alert("Missing journeyId for this build.");
+   return;
+  }
+  var url = new URL(deOpenBase, window.location.href);
+  url.searchParams.set("journeyId", journeyId);
   openDeBtn.disabled = true;
   var prevLabel = openDeBtn.textContent;
   openDeBtn.textContent = "Opening…";
@@ -4264,4 +4155,3 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
 </script>
 </body>
 </html>
-%%[ ENDIF ]%%

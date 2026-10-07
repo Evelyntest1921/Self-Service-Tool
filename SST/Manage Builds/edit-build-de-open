@@ -1,0 +1,215 @@
+%%[
+VAR @jid, @detailRows, @detailRow, @dispDeId, @dispDeName, @deOpenJson, @MC_CLOUD
+SET @jid = Trim(RequestParameter("journeyId"))
+IF Empty(@jid) THEN
+ SET @jid = Trim(QueryParameter("journeyId"))
+ENDIF
+SET @dispDeId = ""
+SET @dispDeName = ""
+SET @deOpenJson = ""
+SET @MC_CLOUD = "https://mc.s13.exacttarget.com/cloud/"
+IF NOT Empty(@jid) THEN
+ SET @detailRows = LookupRows("Bd_journey_analytics","journeyId",@jid)
+ IF RowCount(@detailRows) == 0 THEN
+  SET @detailRows = LookupRows("Bd_journey_analytics","JourneyID",@jid)
+ ENDIF
+ IF RowCount(@detailRows) > 0 THEN
+  SET @detailRow = Row(@detailRows,1)
+  SET @dispDeName = Trim(Field(@detailRow,"deName"))
+  SET @dispDeId = Trim(Field(@detailRow,"deId"))
+ ENDIF
+ENDIF
+]%%
+<script runat="server">
+Platform.Load("core", "1");
+
+function deToStr(v) {
+ if (v === null || typeof v === "undefined") {
+  return "";
+ }
+ if (typeof v === "string") {
+  return v;
+ }
+ try {
+  return v + "";
+ } catch (deCoerceEx) {
+  return "";
+ }
+}
+
+function deIsWs(c) {
+ return c === " " || c === "\t" || c === "\n" || c === "\r";
+}
+
+function deTrim(v) {
+ var s = deToStr(v);
+ if (!s) {
+  return "";
+ }
+ var len = s.length;
+ if (typeof len !== "number" || isNaN(len) || len < 0) {
+  return "";
+ }
+ var start = 0;
+ var end = len;
+ while (start < end && deIsWs(s.charAt(start))) {
+  start += 1;
+ }
+ while (end > start && deIsWs(s.charAt(end - 1))) {
+  end -= 1;
+ }
+ if (start >= end) {
+  return "";
+ }
+ var out = "";
+ var i;
+ for (i = start; i < end; i++) {
+  out += s.charAt(i);
+ }
+ return out;
+}
+
+function deGuidLike(id) {
+ var v = deTrim(id);
+ if (!v) {
+  return false;
+ }
+ if (v.length !== 36) {
+  return false;
+ }
+ var p0 = v.charAt(8);
+ var p1 = v.charAt(13);
+ var p2 = v.charAt(18);
+ var p3 = v.charAt(23);
+ if (p0 !== "-" || p1 !== "-" || p2 !== "-" || p3 !== "-") {
+  return false;
+ }
+ return true;
+}
+
+function deEscJson(s) {
+ var text = deToStr(s);
+ var out = "";
+ var i;
+ for (i = 0; i < text.length; i++) {
+  var ch = text.charAt(i);
+  if (ch === "\\") {
+   out += "\\\\";
+  } else if (ch === '"') {
+   out += '\\"';
+  } else if (ch === "\r") {
+   out += "\\r";
+  } else if (ch === "\n") {
+   out += "\\n";
+  } else {
+   out += ch;
+  }
+ }
+ return out;
+}
+
+function deMcHost() {
+ var cloud = Platform.Variable.GetValue("@MC_CLOUD") || "https://mc.s13.exacttarget.com/cloud/";
+ var cloudStr = deToStr(cloud);
+ var host = "https://mc.s13.exacttarget.com";
+ var slashPos = cloudStr.indexOf("//");
+ if (slashPos >= 0) {
+  var afterProto = slashPos + 2;
+  var pathSlash = cloudStr.indexOf("/", afterProto);
+  if (pathSlash > afterProto) {
+   host = cloudStr.substring(0, pathSlash);
+  } else if (cloudStr.length > afterProto) {
+   host = cloudStr;
+  }
+ }
+ return host;
+}
+
+function deObjectIdFromRow(row) {
+ if (!row) {
+  return "";
+ }
+ try {
+  var id = deTrim(row.ObjectID);
+  return deGuidLike(id) ? id : "";
+ } catch (deRowEx) {
+  return "";
+ }
+}
+
+function deResolveObjectId(key, name) {
+ var k = deTrim(key);
+ if (k && k.toUpperCase() !== "N/A" && deGuidLike(k)) {
+  return k;
+ }
+ if (k && k.toUpperCase() !== "N/A") {
+  try {
+   var prox = new Script.Util.WSProxy();
+   var r = prox.retrieve("DataExtension", ["ObjectID"], {
+    Property: "CustomerKey",
+    SimpleOperator: "equals",
+    Value: k
+   });
+   if (r && r.Results && r.Results.length > 0) {
+    var byKey = deObjectIdFromRow(r.Results[0]);
+    if (byKey) {
+     return byKey;
+    }
+   }
+  } catch (deKeyEx) {}
+ }
+ var n = deTrim(name);
+ if (!n || n.toUpperCase() === "N/A") {
+  return "";
+ }
+ try {
+  var proxName = new Script.Util.WSProxy();
+  var rName = proxName.retrieve("DataExtension", ["ObjectID"], {
+   Property: "Name",
+   SimpleOperator: "equals",
+   Value: n
+  });
+  if (rName && rName.Results && rName.Results.length > 0) {
+   return deObjectIdFromRow(rName.Results[0]);
+  }
+ } catch (deNameEx) {}
+ return "";
+}
+
+function deBuildOpenUrl(key, name) {
+ var oid = deResolveObjectId(key, name);
+ if (!oid) {
+  return "";
+ }
+ return (
+  deMcHost() +
+  "/contactsmeta/admin.html#admin/data-extension/" +
+  encodeURIComponent(oid) +
+  "/properties"
+ );
+}
+
+var deOpenJson = '{"ok":false,"error":"Missing journeyId."}';
+try {
+ var jid = deTrim(Platform.Variable.GetValue("@jid") || "");
+ if (!jid) {
+  deOpenJson = '{"ok":false,"error":"Missing journeyId."}';
+ } else {
+  var deKey = Platform.Variable.GetValue("@dispDeId") || "";
+  var deName = Platform.Variable.GetValue("@dispDeName") || "";
+  if (!deTrim(deKey) && !deTrim(deName)) {
+   deOpenJson = '{"ok":false,"error":"No data extension on file for this build."}';
+  } else {
+   var deOpenUrl = deBuildOpenUrl(deKey, deName);
+   deOpenJson = deOpenUrl
+    ? '{"ok":true,"url":"' + deEscJson(deOpenUrl) + '"}'
+    : '{"ok":false,"error":"Data extension not found for this build."}';
+  }
+ }
+} catch (deOpenTopEx) {
+ deOpenJson =
+  '{"ok":false,"error":"' + deEscJson(deOpenTopEx.message || String(deOpenTopEx)) + '"}';
+}
+Platform.Variable.SetValue("@deOpenJson", deOpenJson);
+</script>
+%%=v(@deOpenJson)=%%
