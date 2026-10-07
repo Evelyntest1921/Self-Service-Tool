@@ -158,6 +158,11 @@ function pbHttpOk(statusCode) {
  return code === 200 || code === 201;
 }
 
+function pbHttpAccepted(statusCode) {
+ var code = parseInt(String(statusCode), 10);
+ return code === 200 || code === 201 || code === 202;
+}
+
 function pbExtractAccessToken(body) {
  var text = pbToStr(body);
  if (!text) {
@@ -1036,7 +1041,7 @@ function pbCreateProdAutomation(token, sub, opts) {
   }
  };
  var posted = pbHttpJson(token, sub, "POST", endpoint, payload);
- if (posted.status !== 200 && posted.status !== 201 && posted.status !== 202) {
+ if (!pbHttpAccepted(posted.status)) {
   return {
    ok: false,
    automationId: "",
@@ -1081,7 +1086,7 @@ function pbCreateProdDeAudienceEvent(token, sub, opts) {
   metaData: { criteriaDescription: "", scheduleState: "No Schedule" }
  };
  var resp = pbHttpJson(token, sub, "POST", url, payload);
- if (resp.status !== 200 && resp.status !== 201) {
+ if (!pbHttpOk(resp.status)) {
   return {
    ok: false,
    eventDefId: "",
@@ -1136,8 +1141,11 @@ function pbGetJourney(token, sub, journeyId) {
   encodeURIComponent(journeyId) +
   "?extras=all";
  var got = pbHttpJson(token, sub, "GET", url, null);
- if (got.status !== 200 || !got.body) {
+ if (!pbHttpOk(got.status)) {
   return { ok: false, msg: "Journey GET HTTP " + got.status + ".", obj: null };
+ }
+ if (!pbTrim(got.body)) {
+  return { ok: false, msg: "Journey GET HTTP " + got.status + " but response body was empty.", obj: null };
  }
  try {
   return { ok: true, msg: "", obj: Platform.Function.ParseJSON(got.body) };
@@ -1206,7 +1214,7 @@ function pbCloneJourneyToProd(devToken, devSub, prodToken, prodSub, sourceJourne
  }
  var postUrl = "https://" + prodSub + ".rest.marketingcloudapis.com/interaction/v1/interactions";
  var posted = pbHttpJson(prodToken, prodSub, "POST", postUrl, j);
- if (posted.status !== 200 && posted.status !== 201) {
+ if (!pbHttpOk(posted.status)) {
   return {
    ok: false,
    journeyId: "",
@@ -1406,7 +1414,7 @@ function pbCopyEmailAsset(sourceToken, sourceSub, targetToken, targetSub, assetI
    "https://" + targetSub + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + encodeURIComponent(newId),
    null
   );
-  if (gotAsset.status === 200 && gotAsset.body) {
+  if (pbHttpOk(gotAsset.status) && gotAsset.body) {
    legacyId = pbExtractLegacyEmailId(Platform.Function.ParseJSON(gotAsset.body));
   }
  } catch (legacyEx) {}
