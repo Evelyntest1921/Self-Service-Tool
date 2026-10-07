@@ -806,6 +806,27 @@ function pbSoapQueryTextXml(sql) {
  return "<QueryText>" + pbXmlSafe(s) + "</QueryText>";
 }
 
+function pbSoapFindObjectIdForCustomerKey(body, customerKey) {
+ var ck = pbTrim(customerKey);
+ if (!ck) {
+  return "";
+ }
+ var text = pbToStr(body);
+ var parts = text.split(/<(?:[\w]+:)?Results\b/i);
+ var pi;
+ for (pi = 1; pi < parts.length; pi++) {
+  var chunk = parts[pi];
+  if (chunk.indexOf(ck) < 0) {
+   continue;
+  }
+  var m = chunk.match(/<(?:[\w]+:)?ObjectID[^>]*>([^<]+)</i);
+  if (m && pbTrim(m[1])) {
+   return pbTrim(m[1]);
+  }
+ }
+ return "";
+}
+
 function pbProdRetrieveQueryObjectId(sub, token, queryKey, queryName) {
  var key = pbTrim(queryKey);
  if (!key) {
@@ -813,24 +834,44 @@ function pbProdRetrieveQueryObjectId(sub, token, queryKey, queryName) {
  }
  var retrieveQ =
   '<RetrieveRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI"><RetrieveRequest>' +
-  "<ObjectType>QueryDefinition</ObjectType><Properties>ObjectID</Properties>" +
+  "<ObjectType>QueryDefinition</ObjectType><Properties>ObjectID</Properties><Properties>CustomerKey</Properties><Properties>Name</Properties>" +
   '<Filter xsi:type="SimpleFilterPart"><Property>CustomerKey</Property><SimpleOperator>equals</SimpleOperator><Value>' +
   pbXmlSafe(key) +
   "</Value></Filter></RetrieveRequest></RetrieveRequestMsg>";
  var found = pbSoapCall(sub, token, "Retrieve", retrieveQ);
- var oid = pbParseSoapObjectId(found.body);
+ var oid = pbSoapFindObjectIdForCustomerKey(found.body, key) || pbParseSoapObjectId(found.body);
  if (oid) {
   return oid;
  }
  var name = pbTrim(queryName) || key;
  var retrieveName =
   '<RetrieveRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI"><RetrieveRequest>' +
-  "<ObjectType>QueryDefinition</ObjectType><Properties>ObjectID</Properties>" +
+  "<ObjectType>QueryDefinition</ObjectType><Properties>ObjectID</Properties><Properties>CustomerKey</Properties><Properties>Name</Properties>" +
   '<Filter xsi:type="SimpleFilterPart"><Property>Name</Property><SimpleOperator>equals</SimpleOperator><Value>' +
   pbXmlSafe(name) +
   "</Value></Filter></RetrieveRequest></RetrieveRequestMsg>";
  var byName = pbSoapCall(sub, token, "Retrieve", retrieveName);
- return pbParseSoapObjectId(byName.body);
+ return pbSoapFindObjectIdForCustomerKey(byName.body, key) || pbParseSoapObjectId(byName.body);
+}
+
+function pbProdQueryObjectIdFromAutomation(token, sub, automationKey) {
+ var auto = pbFindAutomationByKey(token, sub, automationKey);
+ if (!auto || !auto.steps) {
+  return "";
+ }
+ var steps = auto.steps;
+ var si;
+ for (si = 0; si < steps.length; si++) {
+  var activities = steps[si] && steps[si].activities ? steps[si].activities : [];
+  var ai;
+  for (ai = 0; ai < activities.length; ai++) {
+   var act = activities[ai] || {};
+   if (parseInt(String(act.objectTypeId), 10) === 300 && act.activityObjectId) {
+    return pbToStr(act.activityObjectId);
+   }
+  }
+ }
+ return "";
 }
 
 function pbProdResolveDeCategoryId(sub, token) {
@@ -1486,12 +1527,13 @@ function pbProdEnsureEntryDe(sub, token, customerKey, deName, uatOpts) {
  };
 }
 
-function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustomerKey, deName) {
+function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustomerKey, deName, deObjectId, automationKeyHint) {
  var key = pbTrim(queryKey);
  if (!key || !pbTrim(queryText)) {
   return { ok: false, objectId: "", msg: "Query key or SQL missing." };
  }
  var qName = pbTrim(queryName) || key;
+ var deOid = pbTrim(deObjectId || "");
  var retrieveQ =
   '<RetrieveRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI"><RetrieveRequest>' +
   "<ObjectType>QueryDefinition</ObjectType><Properties>ObjectID</Properties>" +
@@ -1515,7 +1557,9 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
   "</Name>" +
   pbSoapQueryTextXml(queryText) +
   "<TargetType>DE</TargetType><TargetUpdateType>Update</TargetUpdateType>" +
-  "<DataExtensionTarget><CustomerKey>" +
+  "<DataExtensionTarget>" +
+  (deOid ? "<ObjectID>" + pbXmlSafe(deOid) + "</ObjectID>" : "") +
+  "<CustomerKey>" +
   pbXmlSafe(deCustomerKey) +
   "</CustomerKey><Name>" +
   pbXmlSafe(deName) +
@@ -1527,6 +1571,9 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
  if (pbSoapMutationSucceeded(resp.body)) {
   if (!objectId) {
    objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+  }
+  if (!objectId && pbTrim(automationKeyHint)) {
+   objectId = pbProdQueryObjectIdFromAutomation(token, sub, automationKeyHint);
   }
   if (objectId) {
    return {
@@ -1544,6 +1591,19 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
     ". " +
     pbSoapFirstStatusMessage(resp.body)
   };
+ }
+ if (!objectId) {
+  objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+  if (!objectId && pbTrim(automationKeyHint)) {
+   objectId = pbProdQueryObjectIdFromAutomation(token, sub, automationKeyHint);
+  }
+  if (objectId) {
+   return {
+    ok: true,
+    objectId: objectId,
+    msg: "Query resolved in Production (existing query " + key + ")."
+   };
+  }
  }
  return {
   ok: false,
@@ -1591,7 +1651,7 @@ function pbFindAutomationByKey(token, sub, automationKey) {
  var endpoint = "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/automations";
  var url = endpoint + "/key:" + encodeURIComponent(String(automationKey));
  var got = pbHttpJson(token, sub, "GET", url, null);
- if (got.status === 200 && got.body) {
+ if (pbHttpOk(got.status) && got.body) {
   try {
    return Platform.Function.ParseJSON(got.body);
   } catch (parseEx) {}
@@ -2285,7 +2345,9 @@ function pbPushStackBuild(ctx) {
    buildName,
    queryText,
    deKey,
-   deName
+   deName,
+   deResult.objectId || "",
+   automationKey
   );
   if (queryResult.ok) {
    log(queryResult.msg);
