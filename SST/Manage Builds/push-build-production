@@ -251,6 +251,524 @@ function pbLookupQueryText(queryKey) {
  return "";
 }
 
+function pbXmlSafe(s) {
+ return pbToStr(s)
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/"/g, "&quot;");
+}
+
+function pbSoapCall(sub, token, action, bodyXml) {
+ var envelope =
+  '<?xml version="1.0" encoding="UTF-8"?>' +
+  '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing">' +
+  "<s:Header>" +
+  '<a:Action s:mustUnderstand="1">' +
+  action +
+  "</a:Action>" +
+  '<a:To s:mustUnderstand="1">https://' +
+  pbXmlSafe(sub) +
+  ".soap.marketingcloudapis.com/Service.asmx</a:To>" +
+  '<fueloauth xmlns="http://exacttarget.com">' +
+  pbXmlSafe(token) +
+  "</fueloauth></s:Header>" +
+  '<s:Body xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">' +
+  bodyXml +
+  "</s:Body></s:Envelope>";
+ var req = new Script.Util.HttpRequest("https://" + sub + ".soap.marketingcloudapis.com/Service.asmx");
+ req.emptyContentHandling = 0;
+ req.retries = 1;
+ req.continueOnError = true;
+ req.method = "POST";
+ req.contentType = "text/xml";
+ req.setHeader("SOAPAction", action);
+ req.postData = envelope;
+ var resp = req.send();
+ return { status: resp.statusCode, body: resp.content ? pbToStr(resp.content) : "" };
+}
+
+function pbParseSoapObjectId(body) {
+ var m = pbToStr(body).match(/<ObjectID>([^<]+)<\/ObjectID>/i);
+ return m ? pbTrim(m[1]) : "";
+}
+
+function pbParseSoapStatus(body) {
+ var m = pbToStr(body).match(/<OverallStatus>([^<]+)<\/OverallStatus>/i);
+ return m ? pbTrim(m[1]) : "";
+}
+
+function pbStackSchemaFieldXml(fieldDef) {
+ var name = fieldDef.name;
+ var fieldType = fieldDef.dataType === "EmailAddress" ? "EmailAddress" : "Text";
+ var req = fieldDef.name === "MemberId" || fieldDef.name === "ContactId";
+ var pk = fieldDef.name === "MemberId";
+ var xml =
+  '<Field xsi:type="DataExtensionField"><Name>' +
+  pbXmlSafe(name) +
+  "</Name><FieldType>" +
+  fieldType +
+  "</FieldType>";
+ if (fieldDef.maxLength) {
+  xml += "<MaxLength>" + parseInt(String(fieldDef.maxLength), 10) + "</MaxLength>";
+ }
+ xml += "<IsRequired>" + (req ? "true" : "false") + "</IsRequired>";
+ xml += "<IsNillable>" + (req ? "false" : "true") + "</IsNillable>";
+ if (pk) {
+  xml += "<IsPrimaryKey>true</IsPrimaryKey>";
+ }
+ if (fieldDef.defaultValue) {
+  xml += "<DefaultValue>" + pbXmlSafe(fieldDef.defaultValue) + "</DefaultValue>";
+ }
+ xml += "</Field>";
+ return xml;
+}
+
+function pbStackEntryDeFieldsXml() {
+ var schema = [
+  { name: "MemberId", dataType: "Text", maxLength: "50" },
+  { name: "ContactId", dataType: "Text", maxLength: "50" },
+  { name: "Email", dataType: "EmailAddress", maxLength: "254" },
+  { name: "CampaignId", dataType: "Text", maxLength: "50" },
+  { name: "AccountId", dataType: "Text", maxLength: "50" },
+  { name: "Account_Owner_Name", dataType: "Text", maxLength: "50" },
+  { name: "Account_Owner_Email", dataType: "Text", maxLength: "254" },
+  { name: "Status", dataType: "Text", maxLength: "50" },
+  { name: "State", dataType: "Text", maxLength: "50" },
+  { name: "AccountOwnerId", dataType: "Text", maxLength: "50" },
+  { name: "type", dataType: "Text", maxLength: "50", defaultValue: "SST" }
+ ];
+ var xml = "";
+ var i;
+ for (i = 0; i < schema.length; i++) {
+  xml += pbStackSchemaFieldXml(schema[i]);
+ }
+ return xml;
+}
+
+function pbProdRetrieveDeObjectId(sub, token, customerKey, deName) {
+ var ck = pbTrim(customerKey);
+ if (ck) {
+  var retrieveKey =
+   '<RetrieveRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI"><RetrieveRequest>' +
+   "<ObjectType>DataExtension</ObjectType><Properties>ObjectID</Properties><Properties>CustomerKey</Properties>" +
+   '<Filter xsi:type="SimpleFilterPart"><Property>CustomerKey</Property><SimpleOperator>equals</SimpleOperator><Value>' +
+   pbXmlSafe(ck) +
+   "</Value></Filter></RetrieveRequest></RetrieveRequestMsg>";
+  var respKey = pbSoapCall(sub, token, "Retrieve", retrieveKey);
+  var oidKey = pbParseSoapObjectId(respKey.body);
+  if (oidKey) {
+   return { ok: true, objectId: oidKey, customerKey: ck };
+  }
+ }
+ var name = pbTrim(deName);
+ if (name) {
+  var retrieveName =
+   '<RetrieveRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI"><RetrieveRequest>' +
+   "<ObjectType>DataExtension</ObjectType><Properties>ObjectID</Properties><Properties>CustomerKey</Properties>" +
+   '<Filter xsi:type="SimpleFilterPart"><Property>Name</Property><SimpleOperator>equals</SimpleOperator><Value>' +
+   pbXmlSafe(name) +
+   "</Value></Filter></RetrieveRequest></RetrieveRequestMsg>";
+  var respName = pbSoapCall(sub, token, "Retrieve", retrieveName);
+  var oidName = pbParseSoapObjectId(respName.body);
+  if (oidName) {
+   return { ok: true, objectId: oidName, customerKey: ck || name };
+  }
+ }
+ return { ok: false, objectId: "", customerKey: ck };
+}
+
+function pbProdEnsureEntryDe(sub, token, customerKey, deName) {
+ var ck = pbTrim(customerKey);
+ var name = pbTrim(deName) || ck;
+ if (!ck) {
+  return { ok: false, msg: "Entry DE customer key missing." };
+ }
+ var existing = pbProdRetrieveDeObjectId(sub, token, ck, name);
+ if (existing.ok && existing.objectId) {
+  return {
+   ok: true,
+   objectId: existing.objectId,
+   msg: "Entry DE already exists in Production (ObjectID " + existing.objectId + ")."
+  };
+ }
+ var createBody =
+  '<CreateRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI"><Objects xsi:type="DataExtension">' +
+  "<CustomerKey>" +
+  pbXmlSafe(ck) +
+  "</CustomerKey><Name>" +
+  pbXmlSafe(name) +
+  "</Name><Description>Pushed from SST</Description><IsSendable>true</IsSendable><IsTestable>true</IsTestable>" +
+  "<SendableDataExtensionField><Name>ContactId</Name><FieldType>Text</FieldType></SendableDataExtensionField>" +
+  '<SendableSubscriberField><Name>Subscriber Key</Name></SendableSubscriberField><Fields>' +
+  pbStackEntryDeFieldsXml() +
+  "</Fields></Objects></CreateRequestMsg>";
+ var created = pbSoapCall(sub, token, "Create", createBody);
+ var status = pbParseSoapStatus(created.body);
+ var objectId = pbParseSoapObjectId(created.body);
+ if (status === "OK" && objectId) {
+  return { ok: true, objectId: objectId, msg: "Entry DE created in Production." };
+ }
+ if (created.body.indexOf("already exists") >= 0 || created.body.indexOf("AlreadyExist") >= 0) {
+  var again = pbProdRetrieveDeObjectId(sub, token, ck, name);
+  if (again.ok) {
+   return { ok: true, objectId: again.objectId, msg: "Entry DE resolved in Production after duplicate." };
+  }
+ }
+ return {
+  ok: false,
+  msg: "Entry DE create failed (" + status + "). " + pbTrim(created.body).substring(0, 180)
+ };
+}
+
+function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustomerKey, deName) {
+ var key = pbTrim(queryKey);
+ if (!key || !pbTrim(queryText)) {
+  return { ok: false, objectId: "", msg: "Query key or SQL missing." };
+ }
+ var qName = pbTrim(queryName) || key;
+ var retrieveQ =
+  '<RetrieveRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI"><RetrieveRequest>' +
+  "<ObjectType>QueryDefinition</ObjectType><Properties>ObjectID</Properties>" +
+  '<Filter xsi:type="SimpleFilterPart"><Property>CustomerKey</Property><SimpleOperator>equals</SimpleOperator><Value>' +
+  pbXmlSafe(key) +
+  "</Value></Filter></RetrieveRequest></RetrieveRequestMsg>";
+ var found = pbSoapCall(sub, token, "Retrieve", retrieveQ);
+ var existingId = pbParseSoapObjectId(found.body);
+ var action = existingId ? "Update" : "Create";
+ var requestTag = existingId ? "UpdateRequestMsg" : "CreateRequestMsg";
+ var objectIdXml = existingId ? "<ObjectID>" + pbXmlSafe(existingId) + "</ObjectID>" : "";
+ var body =
+  "<" +
+  requestTag +
+  ' xmlns="http://exacttarget.com/wsdl/partnerAPI"><Objects xsi:type="QueryDefinition">' +
+  objectIdXml +
+  "<CustomerKey>" +
+  pbXmlSafe(key) +
+  "</CustomerKey><Name>" +
+  pbXmlSafe(qName) +
+  "</Name><QueryText>" +
+  pbXmlSafe(queryText) +
+  "</QueryText><TargetType>DE</TargetType><TargetUpdateType>Update</TargetUpdateType>" +
+  "<DataExtensionTarget><CustomerKey>" +
+  pbXmlSafe(deCustomerKey) +
+  "</CustomerKey><Name>" +
+  pbXmlSafe(deName) +
+  "</Name></DataExtensionTarget></Objects></" +
+  requestTag +
+  ">";
+ var resp = pbSoapCall(sub, token, action, body);
+ var status = pbParseSoapStatus(resp.body);
+ var objectId = pbParseSoapObjectId(resp.body) || existingId;
+ if (status === "OK" && objectId) {
+  return {
+   ok: true,
+   objectId: objectId,
+   msg: "Query " + (existingId ? "updated" : "created") + " in Production."
+  };
+ }
+ return {
+  ok: false,
+  objectId: objectId,
+  msg: "Query " + action + " failed (" + status + "). " + pbTrim(resp.body).substring(0, 180)
+ };
+}
+
+function pbRandomGuid() {
+ var tpl = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx";
+ return tpl.replace(/[xy]/g, function (c) {
+  var r = (Math.random() * 16) | 0;
+  var v = c === "x" ? r : (r & 0x3) | 0x8;
+  return v.toString(16);
+ });
+}
+
+function pbExtractLegacyEmailId(assetObj) {
+ if (!assetObj || typeof assetObj !== "object") {
+  return "";
+ }
+ var candidates = [
+  assetObj.data && assetObj.data.email && assetObj.data.email.legacy && assetObj.data.email.legacy.legacyId,
+  assetObj.data && assetObj.data.email && assetObj.data.email.legacyId,
+  assetObj.legacyId
+ ];
+ var i;
+ for (i = 0; i < candidates.length; i++) {
+  if (candidates[i] !== null && candidates[i] !== undefined && pbTrim(candidates[i])) {
+   return pbToStr(candidates[i]);
+  }
+ }
+ return "";
+}
+
+function pbFindAutomationByKey(token, sub, automationKey) {
+ var endpoint = "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/automations";
+ var url = endpoint + "/key:" + encodeURIComponent(String(automationKey));
+ var got = pbHttpJson(token, sub, "GET", url, null);
+ if (got.status === 200 && got.body) {
+  try {
+   return Platform.Function.ParseJSON(got.body);
+  } catch (parseEx) {}
+ }
+ return null;
+}
+
+function pbCreateProdAutomation(token, sub, opts) {
+ var automationName = pbTrim(opts.automationName);
+ var automationKey = pbTrim(opts.automationKey);
+ var queryObjectId = pbTrim(opts.queryObjectId);
+ if (!automationKey || !queryObjectId) {
+  return { ok: false, automationId: "", msg: "Automation key or query ObjectID missing." };
+ }
+ var existing = pbFindAutomationByKey(token, sub, automationKey);
+ if (existing && existing.id) {
+  return { ok: true, automationId: pbToStr(existing.id), msg: "Automation already exists in Production." };
+ }
+ var now = new Date();
+ now.setMinutes(0, 0, 0);
+ now.setHours(now.getHours() + 1);
+ function pad2(n) {
+  return (n < 10 ? "0" : "") + n;
+ }
+ var startDateLocal =
+  now.getFullYear() +
+  "-" +
+  pad2(now.getMonth() + 1) +
+  "-" +
+  pad2(now.getDate()) +
+  "T" +
+  pad2(now.getHours()) +
+  ":" +
+  pad2(now.getMinutes()) +
+  ":00";
+ var dUntil = new Date(now.getTime());
+ dUntil.setDate(dUntil.getDate() + 365);
+ var untilCompact =
+  String(dUntil.getFullYear()) + pad2(dUntil.getMonth() + 1) + pad2(dUntil.getDate());
+ var recurRule = "FREQ=HOURLY;INTERVAL=1;UNTIL=" + untilCompact;
+ var endpoint = "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/automations";
+ var payload = {
+  name: automationName || automationKey,
+  description: "Pushed from SST",
+  key: automationKey,
+  steps: [
+   {
+    annotation: "",
+    stepNumber: 0,
+    activities: [
+     {
+      name: "Query Activity",
+      description: "",
+      objectTypeId: 300,
+      displayOrder: 0,
+      activityObjectId: queryObjectId,
+      serializedObject: ""
+     }
+    ]
+   }
+  ],
+  startSource: {
+   typeId: 1,
+   schedule: {
+    icalRecur: recurRule,
+    startDateTime: startDateLocal,
+    endDateTime: startDateLocal,
+    timezoneId: 1
+   }
+  }
+ };
+ var posted = pbHttpJson(token, sub, "POST", endpoint, payload);
+ if (posted.status !== 200 && posted.status !== 201 && posted.status !== 202) {
+  return {
+   ok: false,
+   automationId: "",
+   msg: "Automation POST HTTP " + posted.status + " — " + pbTrim(posted.body).substring(0, 200)
+  };
+ }
+ var automationId = "";
+ try {
+  var parsed = Platform.Function.ParseJSON(posted.body);
+  automationId = parsed && parsed.id ? pbToStr(parsed.id) : "";
+ } catch (postEx) {}
+ if (!automationId) {
+  var recovered = pbFindAutomationByKey(token, sub, automationKey);
+  automationId = recovered && recovered.id ? pbToStr(recovered.id) : "";
+ }
+ if (!automationId) {
+  return { ok: false, automationId: "", msg: "Automation created but id not returned." };
+ }
+ return { ok: true, automationId: automationId, msg: "Automation created in Production." };
+}
+
+function pbCreateProdDeAudienceEvent(token, sub, opts) {
+ var url = "https://" + sub + ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions";
+ var eventKey = pbTrim(opts.eventKey) || "DEAudience-" + pbRandomGuid();
+ var payload = {
+  name: pbTrim(opts.name),
+  description: "",
+  type: "AutomationAudience",
+  mode: "Production",
+  eventDefinitionKey: eventKey,
+  dataExtensionId: pbTrim(opts.dataExtensionId),
+  dataExtensionName: pbTrim(opts.dataExtensionName),
+  AutomationId: pbTrim(opts.automationId),
+  isVisibleInPicker: false,
+  arguments: {
+   AutomationId: pbTrim(opts.automationId),
+   DataExtensionId: pbTrim(opts.dataExtensionId),
+   EventDefinitionKey: eventKey,
+   useHighWatermark: true
+  },
+  configurationArguments: {},
+  metaData: { criteriaDescription: "", scheduleState: "No Schedule" }
+ };
+ var resp = pbHttpJson(token, sub, "POST", url, payload);
+ if (resp.status !== 200 && resp.status !== 201) {
+  return {
+   ok: false,
+   eventDefId: "",
+   eventKey: eventKey,
+   msg: "Event definition POST HTTP " + resp.status + " — " + pbTrim(resp.body).substring(0, 200)
+  };
+ }
+ var eventDefId = "";
+ try {
+  var parsed = Platform.Function.ParseJSON(resp.body);
+  eventDefId = parsed && parsed.id ? pbToStr(parsed.id) : "";
+ } catch (parseEx) {}
+ if (!eventDefId) {
+  var m = resp.body.match(/"id"\s*:\s*"([^"]+)"/);
+  eventDefId = m ? m[1] : "";
+ }
+ if (!eventDefId) {
+  return { ok: false, eventDefId: "", eventKey: eventKey, msg: "Event created but id missing." };
+ }
+ var trigger = {
+  key: "TRIGGER",
+  name: "TRIGGER",
+  description: "",
+  type: "AutomationAudience",
+  outcomes: [],
+  arguments: {},
+  configurationArguments: {},
+  metaData: {
+   sourceInteractionId: "00000000-0000-0000-0000-000000000000",
+   eventDefinitionId: eventDefId,
+   eventDefinitionKey: eventKey,
+   chainType: "None",
+   configurationRequired: false,
+   iconUrl: "/images/icon-data-extension.svg",
+   title: "Data Extension"
+  }
+ };
+ return {
+  ok: true,
+  eventDefId: eventDefId,
+  eventKey: eventKey,
+  trigger: trigger,
+  msg: "Entry event definition created in Production."
+ };
+}
+
+function pbGetJourney(token, sub, journeyId) {
+ var url =
+  "https://" +
+  sub +
+  ".rest.marketingcloudapis.com/interaction/v1/interactions/" +
+  encodeURIComponent(journeyId) +
+  "?extras=all";
+ var got = pbHttpJson(token, sub, "GET", url, null);
+ if (got.status !== 200 || !got.body) {
+  return { ok: false, msg: "Journey GET HTTP " + got.status + ".", obj: null };
+ }
+ try {
+  return { ok: true, msg: "", obj: Platform.Function.ParseJSON(got.body) };
+ } catch (parseEx) {
+  return { ok: false, msg: "Journey JSON parse failed.", obj: null };
+ }
+}
+
+function pbPatchEmailActivities(activities, legacyEmailId, assetId) {
+ if (!activities || !activities.length) {
+  return;
+ }
+ var i;
+ for (i = 0; i < activities.length; i++) {
+  var act = activities[i];
+  if (!act) {
+   continue;
+  }
+  var type = pbTrim(act.type).toUpperCase();
+  if (type.indexOf("EMAIL") < 0 && String(act.objectTypeId) !== "524") {
+   continue;
+  }
+  if (!act.configurationArguments) {
+   act.configurationArguments = {};
+  }
+  if (!act.configurationArguments.triggeredSend) {
+   act.configurationArguments.triggeredSend = {};
+  }
+  if (legacyEmailId) {
+   act.configurationArguments.triggeredSend.emailId = legacyEmailId;
+  }
+  if (assetId) {
+   act.configurationArguments.triggeredSend.contentId = assetId;
+  }
+  if (act.metaData && act.metaData.data && act.metaData.data.email) {
+   if (legacyEmailId) {
+    act.metaData.data.email.legacyId = legacyEmailId;
+   }
+   if (assetId) {
+    act.metaData.data.email.id = assetId;
+   }
+  }
+ }
+}
+
+function pbCloneJourneyToProd(devToken, devSub, prodToken, prodSub, sourceJourneyId, opts) {
+ var got = pbGetJourney(devToken, devSub, sourceJourneyId);
+ if (!got.ok || !got.obj) {
+  return { ok: false, journeyId: "", msg: got.msg || "Could not load source journey." };
+ }
+ var j = got.obj;
+ var newKey = pbRandomGuid();
+ j.key = newKey;
+ j.name = pbTrim(opts.buildName) || pbTrim(j.name) || "Pushed journey";
+ j.version = 1;
+ j.status = "Draft";
+ delete j.id;
+ delete j.definitionId;
+ delete j.createdDate;
+ delete j.modifiedDate;
+ delete j.lastPublishedDate;
+ delete j.scheduledStatus;
+ pbPatchEmailActivities(j.activities, opts.legacyEmailId, opts.prodEmailAssetId);
+ if (opts.trigger) {
+  j.triggers = [opts.trigger];
+ }
+ var postUrl = "https://" + prodSub + ".rest.marketingcloudapis.com/interaction/v1/interactions";
+ var posted = pbHttpJson(prodToken, prodSub, "POST", postUrl, j);
+ if (posted.status !== 200 && posted.status !== 201) {
+  return {
+   ok: false,
+   journeyId: "",
+   msg: "Journey POST HTTP " + posted.status + " — " + pbTrim(posted.body).substring(0, 220)
+  };
+ }
+ var newJid = "";
+ try {
+  var parsed = Platform.Function.ParseJSON(posted.body);
+  newJid = parsed && parsed.id ? pbToStr(parsed.id) : "";
+ } catch (parseEx) {}
+ if (!newJid) {
+  var m = posted.body.match(/"id"\s*:\s*"([^"]+)"/);
+  newJid = m ? m[1] : "";
+ }
+ if (!newJid) {
+  return { ok: false, journeyId: "", msg: "Journey created in Production but id missing." };
+ }
+ return { ok: true, journeyId: newJid, msg: "Journey created in Production (draft) id " + newJid + "." };
+}
+
 function pbManifestRows(opts) {
  var o = opts || {};
  var rows = [];
@@ -338,13 +856,36 @@ function pbCopyEmailAsset(sourceToken, sourceSub, targetToken, targetSub, assetI
  if (!newId) {
   return { ok: false, msg: "Production email created but id not returned." };
  }
- return { ok: true, msg: "Email copied to Production (asset id " + newId + ").", prodEmailId: newId };
+ var legacyId = "";
+ try {
+  var gotAsset = pbHttpJson(
+   targetToken,
+   targetSub,
+   "GET",
+   "https://" + targetSub + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + encodeURIComponent(newId),
+   null
+  );
+  if (gotAsset.status === 200 && gotAsset.body) {
+   legacyId = pbExtractLegacyEmailId(Platform.Function.ParseJSON(gotAsset.body));
+  }
+ } catch (legacyEx) {}
+ return {
+  ok: true,
+  msg: "Email copied to Production (asset id " + newId + ").",
+  prodEmailId: newId,
+  legacyEmailId: legacyId
+ };
 }
 
 function pbPushStackBuild(ctx) {
  var logs = [];
+ var failed = false;
  function log(line) {
   logs.push(pbToStr(line));
+ }
+ function fail(line) {
+  failed = true;
+  log(line);
  }
  var devAuth = pbAuthForUser("Admin");
  if (!devAuth.ok) {
@@ -356,11 +897,43 @@ function pbPushStackBuild(ctx) {
   return { ok: false, logs: logs, msg: "Production auth failed: " + prodAuth.msg };
  }
  log("Production (Production_Admin) authentication OK.");
- var queryText = pbLookupQueryText(ctx.queryKey);
+ var deKey = pbTrim(ctx.deId);
+ var deName = pbTrim(ctx.deName) || deKey;
+ if (!deKey || deKey.toUpperCase() === "N/A") {
+  deKey = pbTrim(ctx.buildName);
+  deName = pbTrim(ctx.deName) || deKey;
+ }
+ var queryKey = pbTrim(ctx.queryKey);
+ var automationKey = pbTrim(ctx.automationKey) || pbTrim(ctx.automationGuid);
+ var automationName = pbTrim(ctx.automationName) || pbTrim(ctx.buildName);
+ var queryText = pbLookupQueryText(queryKey);
  if (queryText) {
   log("Loaded query SQL from source (" + queryText.length + " chars).");
  } else {
-  log("WARNING: Query SQL not found in source BU for key " + ctx.queryKey + ".");
+  fail("Query SQL not found in source BU for key " + queryKey + ".");
+ }
+ var deResult = pbProdEnsureEntryDe(prodAuth.subdomain, prodAuth.token, deKey, deName);
+ if (deResult.ok) {
+  log(deResult.msg);
+ } else {
+  fail("Entry DE FAILED: " + deResult.msg);
+ }
+ var queryResult = { ok: false, objectId: "" };
+ if (queryText && deKey) {
+  queryResult = pbProdUpsertQuery(
+   prodAuth.subdomain,
+   prodAuth.token,
+   queryKey,
+   pbTrim(ctx.buildName),
+   queryText,
+   deKey,
+   deName
+  );
+  if (queryResult.ok) {
+   log(queryResult.msg);
+  } else {
+   fail("Query FAILED: " + queryResult.msg);
+  }
  }
  var emailCopy = pbCopyEmailAsset(
   devAuth.token,
@@ -372,15 +945,70 @@ function pbPushStackBuild(ctx) {
  );
  if (emailCopy.ok) {
   log(emailCopy.msg);
+  if (!emailCopy.legacyEmailId) {
+   log("WARNING: Production email legacy id not resolved; journey email step may need manual fix.");
+  }
  } else {
-  log("Email copy FAILED: " + emailCopy.msg);
+  fail("Email copy FAILED: " + emailCopy.msg);
  }
- log("Entry DE, query create/update, automation, event, and journey push use Production REST/SOAP and are queued as the next implementation step.");
- log("After this push, verify Production for the email asset; complete stack parity before activating schedules.");
+ var automationResult = { ok: false, automationId: "" };
+ if (queryResult.objectId && automationKey) {
+  automationResult = pbCreateProdAutomation(prodAuth.token, prodAuth.subdomain, {
+   automationName: automationName,
+   automationKey: automationKey,
+   queryObjectId: queryResult.objectId
+  });
+  if (automationResult.ok) {
+   log(automationResult.msg);
+  } else {
+   fail("Automation FAILED: " + automationResult.msg);
+  }
+ }
+ var eventResult = { ok: false, trigger: null };
+ if (automationResult.automationId && deResult.objectId) {
+  eventResult = pbCreateProdDeAudienceEvent(prodAuth.token, prodAuth.subdomain, {
+   name: pbTrim(ctx.buildName),
+   eventKey: "DEAudience-" + pbRandomGuid(),
+   dataExtensionId: deResult.objectId,
+   dataExtensionName: deName,
+   automationId: automationResult.automationId
+  });
+  if (eventResult.ok) {
+   log(eventResult.msg);
+  } else {
+   fail("Entry event FAILED: " + eventResult.msg);
+  }
+ }
+ if (ctx.journeyId && eventResult.ok && emailCopy.ok) {
+  var journeyClone = pbCloneJourneyToProd(
+   devAuth.token,
+   devAuth.subdomain,
+   prodAuth.token,
+   prodAuth.subdomain,
+   ctx.journeyId,
+   {
+    buildName: pbTrim(ctx.buildName),
+    legacyEmailId: emailCopy.legacyEmailId,
+    prodEmailAssetId: emailCopy.prodEmailId,
+    trigger: eventResult.trigger
+   }
+  );
+  if (journeyClone.ok) {
+   log(journeyClone.msg);
+  } else {
+   fail("Journey FAILED: " + journeyClone.msg);
+  }
+ } else if (ctx.journeyId && !eventResult.ok) {
+  fail("Journey skipped because entry event was not created.");
+ }
+ if (!failed) {
+  log("Review Production Journey Builder and Automation Studio before activating schedules.");
+  return { ok: true, logs: logs, msg: "Push to Production completed." };
+ }
  return {
-  ok: emailCopy.ok,
+  ok: false,
   logs: logs,
-  msg: emailCopy.ok ? "Partial push completed." : "Push did not complete successfully."
+  msg: "Push finished with errors. Review the log and fix Production artifacts before go-live."
  };
 }
 
