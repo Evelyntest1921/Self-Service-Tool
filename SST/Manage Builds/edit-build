@@ -36,7 +36,8 @@ VAR @chkAutoNameStatus, @chkAutoNameMsg, @chkAutoNameIcon
 VAR @chkQueryStatus, @chkQueryMsg, @chkQueryText, @chkQueryIcon
 VAR @chkAutoStatusStatus, @chkAutoStatusMsg, @chkAutoStatusIcon
 VAR @deleteRequested, @removeLogOnly, @deleteEmailFromPost, @purgeRequested
-VAR @executeRemoveLogDelete, @redirectLogRemoved, @redirectBuildPurged, @redirectEmailDeleted, @deOpenUrl
+VAR @executeRemoveLogDelete, @redirectLogRemoved, @redirectBuildPurged, @redirectEmailDeleted
+VAR @editBuildDeOpenJson, @editBuildDeOpenJsonMode
 VAR @authOk, @accessToken, @subdomain
 VAR @resultText, @pageStatus, @detailRowsAfter
 VAR @attemptPurgeBuild, @purgeBuildLog, @purgeEmailOk
@@ -48,7 +49,11 @@ VAR @automationActionRequested, @attemptAutomationAction, @automationActionOk, @
 VAR @automationAction, @automationFrequency, @automationMinuteInterval, @automationStartDate, @automationStartOffset, @automationTimezoneId, @dispAutomationActive, @showAutomationActivate, @showAutomationPause
 
 
-SET @deOpenUrl = ""
+SET @editBuildDeOpenJson = ""
+SET @editBuildDeOpenJsonMode = IIF(RequestParameter("editBuildDeOpenData") == "1", "1", "0")
+IF @editBuildDeOpenJsonMode != "1" AND QueryParameter("editBuildDeOpenData") == "1" THEN
+ SET @editBuildDeOpenJsonMode = "1"
+ENDIF
 SET @executeRemoveLogDelete = "false"
 SET @redirectLogRemoved = "false"
 SET @redirectBuildPurged = "false"
@@ -418,11 +423,57 @@ ENDIF
 Platform.Load("core", "1");
 
 
-function strTrim(s) {
- if (s == null || s === undefined) {
-   return "";
+function isWsChar(c) {
+ return c === " " || c === "\t" || c === "\n" || c === "\r";
+}
+
+
+function toJsString(v) {
+ if (v === null || typeof v === "undefined") {
+  return "";
  }
- return String(s).replace(/^\s+|\s+$/g, "");
+ if (typeof v === "string") {
+  return v;
+ }
+ if (typeof v === "number" || typeof v === "boolean") {
+  return v + "";
+ }
+ try {
+  var s = v + "";
+  if (s && s.indexOf("[object") !== 0) {
+   return s;
+  }
+ } catch (coerceEx) {}
+ return "";
+}
+
+
+function strTrim(v) {
+ var s = toJsString(v);
+ if (!s) {
+  return "";
+ }
+ var len = s.length;
+ if (typeof len !== "number" || isNaN(len) || len < 0) {
+  return "";
+ }
+ var start = 0;
+ var end = len;
+ while (start < end && isWsChar(s.charAt(start))) {
+  start += 1;
+ }
+ while (end > start && isWsChar(s.charAt(end - 1))) {
+  end -= 1;
+ }
+ if (start >= end) {
+  return "";
+ }
+ var out = "";
+ var i;
+ for (i = start; i < end; i++) {
+  out += s.charAt(i);
+ }
+ return out;
 }
 
 
@@ -550,7 +601,7 @@ function logDeField(jid, colName) {
    if (val === undefined || val === null) {
      return "";
    }
-   return strTrim(String(val));
+   return strTrim(soapValueToString(val));
  } catch (logDeEx) {
    return "";
  }
@@ -661,12 +712,18 @@ function deObjectIdFromRetrieveRow(row) {
 }
 
 
-function wsProxyUsableForDeOpen() {
+function canRunWsProxyOnPage() {
  try {
   var pageStatus = Platform.Variable.GetValue("@pageStatus") || "";
   if (pageStatus !== "view") {
    return false;
   }
+  try {
+   var reqUri = Platform.Request.GetRequestURI();
+   if (reqUri && String(reqUri).toLowerCase().indexOf("preview") >= 0) {
+    return false;
+   }
+  } catch (uriEx) {}
   var mid = Platform.Function.AuthenticatedMemberID();
   if (mid === null || typeof mid === "undefined") {
    return false;
@@ -682,6 +739,16 @@ function wsProxyUsableForDeOpen() {
 }
 
 
+function escJsonStr(s) {
+ return String(s || "")
+  .replace(/\\/g, "\\\\")
+  .replace(/"/g, '\\"')
+  .replace(/\r/g, "\\r")
+  .replace(/\n/g, "\\n")
+  .replace(/\t/g, "\\t");
+}
+
+
 function resolveDeObjectIdByCustomerKey(customerKey) {
  var key = strTrim(customerKey);
  if (!key || key.toUpperCase() === "N/A") {
@@ -689,9 +756,6 @@ function resolveDeObjectIdByCustomerKey(customerKey) {
  }
  if (isGuidLike(key)) {
   return key;
- }
- if (!wsProxyUsableForDeOpen()) {
-  return "";
  }
  try {
    var prox = new Script.Util.WSProxy();
@@ -722,9 +786,6 @@ function resolveDeObjectIdForOpen(deCustomerKey, deName) {
  }
  var name = strTrim(deName);
  if (!name || name.toUpperCase() === "N/A") {
-  return "";
- }
- if (!wsProxyUsableForDeOpen()) {
   return "";
  }
  try {
@@ -2333,7 +2394,7 @@ try {
 var stackBuildPage = Platform.Variable.GetValue("@isStackBuild") || "";
 var queryKeyPage = strTrim(Platform.Variable.GetValue("@dispQueryKey") || "");
 var dispQueryTextVal = "";
-if (stackBuildPage == "true" && queryKeyPage) {
+if (stackBuildPage == "true" && queryKeyPage && canRunWsProxyOnPage()) {
  dispQueryTextVal = truncQueryDisplay(lookupQueryText(queryKeyPage));
 }
 Platform.Variable.SetValue("@dispQueryText", dispQueryTextVal);
@@ -2966,18 +3027,21 @@ try {
   }
 }
 
-try {
- if (detailCountVal > 0) {
-  var deOpenUrlVal = "";
-  if (wsProxyUsableForDeOpen()) {
-   deOpenUrlVal = buildDataExtensionOpenUrl(dispDeIdVal, dispDeNameVal);
-  } else {
-   deOpenUrlVal = buildDataExtensionOpenUrlFromObjectId(dispDeIdVal);
+if (Platform.Variable.GetValue("@editBuildDeOpenJsonMode") === "1") {
+ var deOpenJson = '{"ok":false,"url":""}';
+ try {
+  var deOpenUrlLive = buildDataExtensionOpenUrl(
+   Platform.Variable.GetValue("@dispDeId") || "",
+   Platform.Variable.GetValue("@dispDeName") || ""
+  );
+  if (deOpenUrlLive) {
+   deOpenJson = '{"ok":true,"url":"' + escJsonStr(deOpenUrlLive) + '"}';
   }
-  Platform.Variable.SetValue("@deOpenUrl", deOpenUrlVal);
+ } catch (deOpenJsonEx) {
+  deOpenJson =
+   '{"ok":false,"error":"' + escJsonStr(deOpenJsonEx.message || String(deOpenJsonEx)) + '"}';
  }
-} catch (deOpenUrlEx) {
- Platform.Variable.SetValue("@deOpenUrl", "");
+ Platform.Variable.SetValue("@editBuildDeOpenJson", deOpenJson);
 }
 </script>
 %%[
@@ -3174,6 +3238,9 @@ IF @isSurveyBuild == "true" THEN
 ENDIF
 SET @editSidebarHtml = ContentBlockByName("sst_shell_edit_sidebar")
 ]%%
+%%[ IF @editBuildDeOpenJsonMode == "1" THEN ]%%
+%%=v(@editBuildDeOpenJson)=%%
+%%[ ELSE ]%%
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4054,8 +4121,8 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
 %%[ IF @isStackBuild == "true" THEN ]%%
    <a class="btn btn-neutral js-automation-home-link" href="%%=Concat(@MC_CLOUD,"#app/Automation%20Studio/")=%%" target="_blank" rel="noopener noreferrer" data-automation-name="%%=Replace(Replace(v(@dispAutomationName),'"','&quot;'),'&','&amp;')=%%" title="%%[ IF NOT Empty(@dispAutomationName) THEN ]%%Copies automation name to clipboard%%[ ELSE ]%%Opens Automation Studio%%[ ENDIF ]%%">Open automation</a>
 %%[ ENDIF ]%%
-%%[ IF NOT Empty(@deOpenUrl) THEN ]%%
-   <a class="btn btn-neutral" href="%%=v(@deOpenUrl)=%%" target="_blank" rel="noopener noreferrer">Open data extension</a>
+%%[ IF (NOT Empty(@dispDeId) AND @dispDeId != "N/A") OR (NOT Empty(@dispDeName) AND @dispDeName != "N/A") THEN ]%%
+   <button type="button" class="btn btn-neutral" id="openEntryDeBtn">Open data extension</button>
 %%[ ENDIF ]%%
  </div>
 </div>
@@ -4219,6 +4286,47 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
   };
  }
 })();
+(function () {
+ var openDeBtn = document.getElementById("openEntryDeBtn");
+ if (!openDeBtn) {
+  return;
+ }
+ openDeBtn.addEventListener("click", function () {
+  var url = new URL(window.location.href);
+  url.searchParams.set("editBuildDeOpenData", "1");
+  openDeBtn.disabled = true;
+  var prevLabel = openDeBtn.textContent;
+  openDeBtn.textContent = "Opening…";
+  fetch(url.toString(), { credentials: "same-origin" })
+   .then(function (resp) {
+    return resp.text();
+   })
+   .then(function (text) {
+    var payload = null;
+    try {
+     payload = JSON.parse(text);
+    } catch (parseEx) {
+     payload = { ok: false, error: "Invalid response." };
+    }
+    if (payload && payload.ok && payload.url) {
+     window.open(payload.url, "_blank", "noopener");
+    } else {
+     alert(
+      (payload && payload.error) ||
+       "Could not resolve the data extension link. Open Contact Builder and search by DE name or customer key."
+     );
+    }
+   })
+   .catch(function () {
+    alert("Network error loading data extension link.");
+   })
+   .finally(function () {
+    openDeBtn.disabled = false;
+    openDeBtn.textContent = prevLabel;
+   });
+ });
+})();
 </script>
 </body>
 </html>
+%%[ ENDIF ]%%
