@@ -713,33 +713,58 @@ function pbXmlSafe(s) {
   .replace(/"/g, "&quot;");
 }
 
-function pbSoapCall(sub, token, action, bodyXml) {
- var envelope =
-  '<?xml version="1.0" encoding="UTF-8"?>' +
-  '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing">' +
-  "<s:Header>" +
-  '<a:Action s:mustUnderstand="1">' +
-  action +
-  "</a:Action>" +
-  '<a:To s:mustUnderstand="1">https://' +
-  pbXmlSafe(sub) +
-  ".soap.marketingcloudapis.com/Service.asmx</a:To>" +
-  '<fueloauth xmlns="http://exacttarget.com">' +
-  pbXmlSafe(token) +
-  "</fueloauth></s:Header>" +
-  '<s:Body xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">' +
-  bodyXml +
-  "</s:Body></s:Envelope>";
+function pbSoapCallEx(sub, token, action, bodyXml, style) {
+ var envelope = "";
+ var soapAction = action;
+ if (style === "11") {
+  envelope =
+   '<?xml version="1.0" encoding="UTF-8"?>' +
+   '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">' +
+   "<soap:Header>" +
+   '<fueloauth xmlns="http://exacttarget.com">' +
+   pbXmlSafe(token) +
+   "</fueloauth></soap:Header>" +
+   '<soap:Body xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">' +
+   bodyXml +
+   "</soap:Body></soap:Envelope>";
+  soapAction = '"' + action + '"';
+ } else {
+  envelope =
+   '<?xml version="1.0" encoding="UTF-8"?>' +
+   '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing">' +
+   "<s:Header>" +
+   '<a:Action s:mustUnderstand="1">' +
+   action +
+   "</a:Action>" +
+   '<a:To s:mustUnderstand="1">https://' +
+   pbXmlSafe(sub) +
+   ".soap.marketingcloudapis.com/Service.asmx</a:To>" +
+   '<fueloauth xmlns="http://exacttarget.com">' +
+   pbXmlSafe(token) +
+   "</fueloauth></s:Header>" +
+   '<s:Body xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">' +
+   bodyXml +
+   "</s:Body></s:Envelope>";
+ }
  var req = new Script.Util.HttpRequest("https://" + sub + ".soap.marketingcloudapis.com/Service.asmx");
  req.emptyContentHandling = 0;
  req.retries = 1;
  req.continueOnError = true;
  req.method = "POST";
- req.contentType = "text/xml";
- req.setHeader("SOAPAction", action);
+ req.contentType = "text/xml; charset=UTF-8";
+ req.setHeader("SOAPAction", soapAction);
  req.postData = envelope;
  var resp = req.send();
- return { status: resp.statusCode, body: resp.content ? pbToStr(resp.content) : "" };
+ return {
+  status: resp.statusCode,
+  body: resp.content ? pbToStr(resp.content) : "",
+  style: style || "12"
+ };
+}
+
+function pbSoapCall(sub, token, action, bodyXml) {
+ var got = pbSoapCallEx(sub, token, action, bodyXml, "12");
+ return { status: got.status, body: got.body };
 }
 
 function pbSoapResultsSnippet(body) {
@@ -815,8 +840,11 @@ function pbSoapPartnerOk(body) {
 
 function pbSoapStatusCodes(body) {
  var text = pbToStr(body);
- var codeTags = text.match(/<(?:[\w]+:)?StatusCode[^>]*>([^<]*)</gi);
+ var codeTags = text.match(/<(?:[\w]+:)?StatusCode\b[^>]*>([^<]*)</gi);
  var codes = [];
+ if (!codeTags || !codeTags.length) {
+  codeTags = text.match(/\bStatusCode\b[^>]*>([^<]*)</gi);
+ }
  if (!codeTags || !codeTags.length) {
   return codes;
  }
@@ -828,6 +856,26 @@ function pbSoapStatusCodes(body) {
   }
  }
  return codes;
+}
+
+function pbSoapQuerySaveSucceeded(body) {
+ if (pbParseSoapObjectId(body)) {
+  return true;
+ }
+ if (!pbSoapPartnerOk(body)) {
+  return false;
+ }
+ var codes = pbSoapStatusCodes(body);
+ if (!codes.length) {
+  return true;
+ }
+ var ci;
+ for (ci = 0; ci < codes.length; ci++) {
+  if (codes[ci].toUpperCase() !== "OK") {
+   return false;
+  }
+ }
+ return true;
 }
 
 function pbSoapMutationSucceeded(body) {
@@ -1507,12 +1555,17 @@ function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQu
 
 function pbBuildQueryMutationBody(opts) {
  var o = opts || {};
- var requestTag = o.existingId ? "UpdateRequestMsg" : "CreateRequestMsg";
+ var createRoot = pbTrim(o.createRoot || "");
+ var requestTag = o.existingId
+  ? "UpdateRequestMsg"
+  : createRoot === "CreateRequest"
+  ? "CreateRequest"
+  : "CreateRequestMsg";
  var objectIdXml = o.existingId ? "<ObjectID>" + pbXmlSafe(o.existingId) + "</ObjectID>" : "";
  var categoryXml = o.useCategory && o.categoryId > 0 ? "<CategoryID>" + o.categoryId + "</CategoryID>" : "";
  var deTargetOid = o.useDeOid && o.deOid ? "<ObjectID>" + pbXmlSafe(o.deOid) + "</ObjectID>" : "";
  var targetUpdate = pbTrim(o.targetUpdateType || "Update") || "Update";
- var optionsXml = o.existingId ? "" : "<Options></Options>";
+ var optionsXml = o.existingId || requestTag === "CreateRequest" ? "" : "<Options></Options>";
  return (
   "<" +
   requestTag +
@@ -2442,19 +2495,20 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
  var queryCategoryId = pbProdResolveQueryCategoryId(sub, token);
  var attemptPlans = existingId
   ? [
-     { targetUpdateType: "Update", useCategory: false, useDeOid: true },
-     { targetUpdateType: "Update", useCategory: false, useDeOid: false },
-     { targetUpdateType: "Overwrite", useCategory: false, useDeOid: true },
-     { targetUpdateType: "Overwrite", useCategory: true, useDeOid: true }
+     { targetUpdateType: "Update", useCategory: false, useDeOid: true, createRoot: "", soapStyle: "11" },
+     { targetUpdateType: "Update", useCategory: false, useDeOid: false, createRoot: "", soapStyle: "12" },
+     { targetUpdateType: "Overwrite", useCategory: false, useDeOid: true, createRoot: "", soapStyle: "11" },
+     { targetUpdateType: "Overwrite", useCategory: true, useDeOid: true, createRoot: "", soapStyle: "12" }
     ]
   : [
-     { targetUpdateType: "Overwrite", useCategory: false, useDeOid: true },
-     { targetUpdateType: "Update", useCategory: false, useDeOid: true },
-     { targetUpdateType: "Overwrite", useCategory: false, useDeOid: false },
-     { targetUpdateType: "Update", useCategory: false, useDeOid: false },
-     { targetUpdateType: "Overwrite", useCategory: true, useDeOid: true }
+     { targetUpdateType: "Overwrite", useCategory: false, useDeOid: true, createRoot: "CreateRequest", soapStyle: "11" },
+     { targetUpdateType: "Overwrite", useCategory: false, useDeOid: true, createRoot: "CreateRequestMsg", soapStyle: "11" },
+     { targetUpdateType: "Update", useCategory: false, useDeOid: true, createRoot: "CreateRequest", soapStyle: "12" },
+     { targetUpdateType: "Update", useCategory: false, useDeOid: true, createRoot: "CreateRequestMsg", soapStyle: "12" },
+     { targetUpdateType: "Overwrite", useCategory: false, useDeOid: false, createRoot: "CreateRequestMsg", soapStyle: "11" },
+     { targetUpdateType: "Overwrite", useCategory: true, useDeOid: true, createRoot: "CreateRequestMsg", soapStyle: "12" }
     ];
- var lastResp = { body: "", status: 0 };
+ var lastResp = { body: "", status: 0, style: "" };
  var lastSqlLabel = "";
  var vi;
  for (vi = 0; vi < sqlVariants.length; vi++) {
@@ -2477,15 +2531,16 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
     useDeOid: plan.useDeOid,
     deOid: targetDeOid,
     deCustomerKey: targetDeKey,
-    deName: targetDeName
+    deName: targetDeName,
+    createRoot: plan.createRoot || ""
    });
    var action = existingId ? "Update" : "Create";
-   lastResp = pbSoapCall(sub, token, action, body);
+   lastResp = pbSoapCallEx(sub, token, action, body, plan.soapStyle || "11");
    var objectId = pbParseSoapObjectId(lastResp.body) || existingId;
    if (!objectId) {
     objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
    }
-   if (pbSoapMutationSucceeded(lastResp.body) && objectId) {
+   if (pbSoapQuerySaveSucceeded(lastResp.body) && objectId) {
     return {
      ok: true,
      objectId: objectId,
@@ -2499,7 +2554,7 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
       ")."
     };
    }
-   if (pbSoapMutationSucceeded(lastResp.body) && !objectId) {
+   if (pbSoapQuerySaveSucceeded(lastResp.body) && !objectId) {
     objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
     if (objectId) {
      return {
@@ -2510,6 +2565,8 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
        (existingId ? "updated" : "created") +
        " in Production; ObjectID resolved by retrieve (SQL variant=" +
        lastSqlLabel +
+       ", SOAP " +
+       (lastResp.style || "") +
        ")."
      };
     }
@@ -2519,8 +2576,10 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
      msg:
       "Query " +
       (existingId ? "updated" : "created") +
-      " in Production (SOAP StatusCode OK, CustomerKey=" +
+      " in Production (OverallStatus OK, CustomerKey=" +
       key +
+      ", SOAP " +
+      (lastResp.style || "") +
       "). ObjectID not returned; automation step will resolve query by key."
     };
    }
@@ -2545,12 +2604,12 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
    msg: "Query resolved in Production for key " + key + "."
   };
  }
- if (pbSoapMutationSucceeded(lastResp.body)) {
+ if (pbSoapQuerySaveSucceeded(lastResp.body)) {
   return {
    ok: true,
    objectId: "",
    msg:
-    "Query saved in Production (last SOAP call StatusCode OK) for CustomerKey " +
+    "Query saved in Production (last SOAP OverallStatus OK) for CustomerKey " +
     key +
     ". ObjectID could not be retrieved; automation step will resolve by key."
   };
@@ -2568,8 +2627,12 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
    "] key " +
    targetDeKey +
    (lastSqlLabel ? " (last SQL variant=" + lastSqlLabel + ")" : "") +
+   (lastResp.style ? ", SOAP " + lastResp.style : "") +
    ". " +
    pbSoapFailureDetail(lastResp) +
+   (lastResp.body
+    ? " Response excerpt: " + pbTrim(lastResp.body).substring(0, 320)
+    : "") +
    " If the message mentions unknown data extensions, confirm Salesforce sync objects exist in the Production BU (ENT.* vs non-ENT)."
  };
 }
