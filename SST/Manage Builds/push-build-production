@@ -1117,6 +1117,36 @@ function pbStackBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, enviro
  return sql;
 }
 
+function pbProductionCampaignMemberQueryText(campaignId) {
+ var camp = pbStackEscapeSql(campaignId);
+ var emailExpr =
+  "COALESCE(NULLIF(RTRIM(ISNULL(cm.email, '')), ''), NULLIF(RTRIM(ISNULL(con.Email, '')), ''))";
+ return (
+  "SELECT\n" +
+  "  cm.id AS MemberId,\n" +
+  "  cm.ContactId AS ContactId,\n" +
+  "  " +
+  emailExpr +
+  " AS Email,\n" +
+  "  cm.CampaignId AS CampaignId,\n" +
+  "  con.AccountId AS AccountId,\n" +
+  "  u.Name AS Account_Owner_Name,\n" +
+  "  u.Email AS Account_Owner_Email,\n" +
+  "  cm.Status AS Status,\n" +
+  "  con.MailingState AS State,\n" +
+  "  a.OwnerId AS AccountOwnerId,\n" +
+  "  'SST' AS type\n" +
+  "FROM CampaignMember_Salesforce_1 cm\n" +
+  "LEFT JOIN Contact_Salesforce con ON cm.ContactId = con.id\n" +
+  "LEFT JOIN Account_Salesforce a ON con.AccountId = a.id\n" +
+  "LEFT JOIN User_Salesforce u ON u.id = a.OwnerId\n" +
+  "WHERE cm.CampaignId = '" +
+  camp +
+  "'\n" +
+  "  AND cm.ContactId IS NOT NULL"
+ );
+}
+
 function pbStackSanitizeDeName(deName) {
  var name = pbToStr(deName).replace(/^\s+|\s+$/g, "");
  if (!name || !/^[A-Za-z0-9_ \-]+$/.test(name)) {
@@ -1393,8 +1423,9 @@ function pbProdFindEmailAssetByName(token, sub, emailName) {
  return found;
 }
 
-function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQueryText, navEnvironment) {
+function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQueryText, sqlEnvironment) {
  var opts = fb || {};
+ var prodEnv = pbTrim(sqlEnvironment || "").toLowerCase() || "production";
  var audienceSource = pbTrim(opts.audienceSource || "").toLowerCase();
  if (!audienceSource || audienceSource === "campaign") {
   var inferredSource = pbInferAudienceSourceFromQuerySql(liveQueryText);
@@ -1405,7 +1436,6 @@ function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQu
   }
  }
  var prox = new Script.Util.WSProxy();
- var prodEnv = pbStackSqlEnvironmentForPush(navEnvironment);
  if (audienceSource === "dataextension") {
   var sourceDe = pbTrim(opts.sourceDataExtension);
   if (!sourceDe) {
@@ -1448,23 +1478,30 @@ function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQu
     "Salesforce Campaign ID required: enter it above (701…) or store it on bd_journey_analytics."
   };
  }
- var campSql = pbStackBuildCampaignMemberQuery(
-  campaignId,
-  opts.sfUserId,
-  journeyId,
-  prodEnv,
-  senderProfileId
- );
+ var campSql =
+  prodEnv === "production"
+   ? pbProductionCampaignMemberQueryText(campaignId)
+   : pbStackBuildCampaignMemberQuery(
+      campaignId,
+      opts.sfUserId,
+      journeyId,
+      prodEnv,
+      senderProfileId
+     );
  var campNote = "";
  if (campResolve.source === "live_query") {
   campNote = " Campaign ID taken from live UAT query SQL.";
  } else if (campResolve.source === "page_input") {
   campNote = " Campaign ID from push page input.";
  }
+ var templateNote =
+  prodEnv === "production"
+   ? " Production campaign-member SQL (CampaignMember_Salesforce_1 / OwnerId join)."
+   : " sync env=" + prodEnv;
  return {
   ok: true,
   sql: campSql,
-  msg: "Query SQL rebuilt for push (sync env=" + prodEnv + ", campaign audience)." + campNote
+  msg: "Query SQL rebuilt for push (" + templateNote + ", campaign " + campaignId + ")." + campNote
  };
 }
 
@@ -2352,11 +2389,14 @@ function pbProdEnsureEntryDe(sub, token, customerKey, deName, uatOpts) {
 }
 
 function pbQuerySqlVariantsForProdPush(primarySql) {
- var variants = [];
  var base = pbToStr(primarySql);
- if (base) {
-  variants.push({ sql: base, label: "production sync (no ENT)" });
+ if (!base) {
+  return [];
  }
+ if (!/\bENT\./i.test(base)) {
+  return [{ sql: base, label: "production campaign-member template" }];
+ }
+ var variants = [{ sql: base, label: "ENT SQL" }];
  var adapted = pbAdaptQuerySqlForProduction(base);
  if (adapted.adapted && adapted.sql && adapted.sql !== base) {
   variants.push({ sql: adapted.sql, label: "non-ENT from ENT SQL" });
