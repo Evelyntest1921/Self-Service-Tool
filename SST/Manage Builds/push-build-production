@@ -338,6 +338,302 @@ function pbLookupQueryText(queryKey) {
  return "";
 }
 
+function pbWsLookupQueryByObjectId(queryObjectId) {
+ var oid = pbTrim(queryObjectId);
+ if (!oid) {
+  return { customerKey: "", name: "", queryText: "" };
+ }
+ try {
+  var prox = new Script.Util.WSProxy();
+  var r = prox.retrieve(
+   "QueryDefinition",
+   ["CustomerKey", "Name", "QueryText"],
+   { Property: "ObjectID", SimpleOperator: "equals", Value: oid }
+  );
+  if (r && r.Results && r.Results.length > 0) {
+   return {
+    customerKey: pbToStr(r.Results[0].CustomerKey || ""),
+    name: pbToStr(r.Results[0].Name || ""),
+    queryText: pbToStr(r.Results[0].QueryText || "")
+   };
+  }
+ } catch (wsQEx) {}
+ return { customerKey: "", name: "", queryText: "" };
+}
+
+function pbWsLookupDeByObjectId(objectId) {
+ var oid = pbTrim(objectId);
+ if (!oid) {
+  return { customerKey: "", name: "" };
+ }
+ try {
+  var prox = new Script.Util.WSProxy();
+  var r = prox.retrieve("DataExtension", ["CustomerKey", "Name"], {
+   Property: "ObjectID",
+   SimpleOperator: "equals",
+   Value: oid
+  });
+  if (r && r.Results && r.Results.length > 0) {
+   return {
+    customerKey: pbToStr(r.Results[0].CustomerKey || ""),
+    name: pbToStr(r.Results[0].Name || "")
+   };
+  }
+ } catch (wsDeEx) {}
+ return { customerKey: "", name: "" };
+}
+
+function pbFindEntryEventRef(jObj) {
+ var triggers = jObj && jObj.triggers ? jObj.triggers : [];
+ var i;
+ for (i = 0; i < triggers.length; i++) {
+  var tr = triggers[i] || {};
+  if (pbTrim(tr.type).toUpperCase() === "EMAILAUDIENCE") {
+   var meta = tr.metaData || {};
+   var eventDefId = pbTrim(meta.eventDefinitionId);
+   if (!eventDefId && tr.arguments) {
+    eventDefId = pbTrim(tr.arguments.eventDefinitionId);
+   }
+   if (eventDefId) {
+    return { eventDefId: eventDefId };
+   }
+  }
+ }
+ for (i = 0; i < triggers.length; i++) {
+  var tr2 = triggers[i] || {};
+  var meta2 = tr2.metaData || {};
+  var evId = pbTrim(meta2.eventDefinitionId);
+  if (!evId && tr2.arguments) {
+   evId = pbTrim(tr2.arguments.eventDefinitionId);
+  }
+  if (evId) {
+   return { eventDefId: evId };
+  }
+ }
+ return null;
+}
+
+function pbGetEventDefinition(token, sub, eventDefId) {
+ var url =
+  "https://" +
+  sub +
+  ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
+  encodeURIComponent(eventDefId);
+ var got = pbHttpJson(token, sub, "GET", url, null);
+ if (!pbHttpOk(got.status) || !got.body) {
+  return { ok: false, msg: "Event GET HTTP " + got.status + ".", obj: null };
+ }
+ try {
+  return { ok: true, msg: "", obj: Platform.Function.ParseJSON(got.body) };
+ } catch (parseEx) {
+  return { ok: false, msg: "Event JSON parse failed.", obj: null };
+ }
+}
+
+function pbGetAutomationRest(token, sub, restId, customerKey) {
+ var base = "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/automations/";
+ var rid = pbTrim(restId);
+ var key = pbTrim(customerKey);
+ if (rid) {
+  var byId = pbHttpJson(token, sub, "GET", base + encodeURIComponent(rid), null);
+  if (pbHttpOk(byId.status) && byId.body) {
+   try {
+    return { ok: true, obj: Platform.Function.ParseJSON(byId.body) };
+   } catch (byIdEx) {}
+  }
+ }
+ if (key) {
+  var byKey = pbHttpJson(token, sub, "GET", base + "key:" + encodeURIComponent(key), null);
+  if (pbHttpOk(byKey.status) && byKey.body) {
+   try {
+    return { ok: true, obj: Platform.Function.ParseJSON(byKey.body) };
+   } catch (byKeyEx) {}
+  }
+ }
+ return { ok: false, obj: null };
+}
+
+function pbExtractQueryFromAutomation(autoObj) {
+ var steps = autoObj && autoObj.steps ? autoObj.steps : [];
+ var si;
+ for (si = 0; si < steps.length; si++) {
+  var activities = steps[si] && steps[si].activities ? steps[si].activities : [];
+  var ai;
+  for (ai = 0; ai < activities.length; ai++) {
+   var act = activities[ai] || {};
+   if (parseInt(String(act.objectTypeId), 10) === 300 && act.activityObjectId) {
+    return { queryObjectId: pbToStr(act.activityObjectId) };
+   }
+  }
+ }
+ return { queryObjectId: "" };
+}
+
+function pbExtractEmailFromJourney(jObj) {
+ var acts = jObj && jObj.activities ? jObj.activities : [];
+ var i;
+ for (i = 0; i < acts.length; i++) {
+  var act = acts[i] || {};
+  var type = pbTrim(act.type).toUpperCase();
+  if (type.indexOf("EMAIL") < 0 && String(act.objectTypeId) !== "524") {
+   continue;
+  }
+  var ts =
+   act.configurationArguments && act.configurationArguments.triggeredSend
+    ? act.configurationArguments.triggeredSend
+    : {};
+  var assetId = pbTrim(ts.contentId || ts.emailId || "");
+  if (!assetId && act.metaData && act.metaData.data && act.metaData.data.email) {
+   assetId = pbTrim(act.metaData.data.email.id || act.metaData.data.email.legacyId || "");
+  }
+  var emailName = pbTrim(act.name || "");
+  if (assetId || emailName) {
+   return { assetId: assetId, name: emailName };
+  }
+ }
+ return { assetId: "", name: "" };
+}
+
+function pbResolveLiveEntryDeFromEvent(evObj) {
+ if (!evObj) {
+  return { customerKey: "", name: "", objectId: "" };
+ }
+ var objectId = pbTrim(evObj.dataExtensionId || evObj.dataExtensionID || "");
+ var name = pbTrim(evObj.dataExtensionName || "");
+ var customerKey = pbTrim(evObj.dataExtensionKey || evObj.dataExtensionCustomerKey || "");
+ if (objectId && (!name || !customerKey)) {
+  var meta = pbWsLookupDeByObjectId(objectId);
+  if (!name) {
+   name = meta.name;
+  }
+  if (!customerKey) {
+   customerKey = meta.customerKey;
+  }
+ }
+ return { customerKey: customerKey, name: name, objectId: objectId };
+}
+
+function pbResolveLiveStackContext(token, sub, journeyId, fallback) {
+ var fb = fallback || {};
+ var result = {
+  ok: false,
+  msg: "",
+  buildName: pbTrim(fb.buildName),
+  deCustomerKey: "",
+  deName: "",
+  queryKey: "",
+  queryText: "",
+  emailAssetId: "",
+  emailName: "",
+  automationKey: "",
+  automationName: "",
+  automationRestId: ""
+ };
+ var jGot = pbGetJourney(token, sub, journeyId);
+ if (!jGot.ok || !jGot.obj) {
+  result.msg = jGot.msg || "Could not load live journey.";
+  return result;
+ }
+ var jObj = jGot.obj;
+ if (pbTrim(jObj.name)) {
+  result.buildName = pbTrim(jObj.name);
+ }
+ var emailLive = pbExtractEmailFromJourney(jObj);
+ if (emailLive.assetId) {
+  result.emailAssetId = emailLive.assetId;
+ }
+ if (emailLive.name) {
+  result.emailName = emailLive.name;
+ }
+ var entryRef = pbFindEntryEventRef(jObj);
+ if (!entryRef || !entryRef.eventDefId) {
+  result.msg = "Live journey has no entry event definition on triggers.";
+  return result;
+ }
+ var evGot = pbGetEventDefinition(token, sub, entryRef.eventDefId);
+ if (!evGot.ok || !evGot.obj) {
+  result.msg = evGot.msg || "Could not load live entry event.";
+  return result;
+ }
+ var entryDe = pbResolveLiveEntryDeFromEvent(evGot.obj);
+ if (entryDe.customerKey) {
+  result.deCustomerKey = entryDe.customerKey;
+ }
+ if (entryDe.name) {
+  result.deName = entryDe.name;
+ }
+ var evArgs = evGot.obj.arguments || {};
+ var autoRestId = pbTrim(
+  evGot.obj.AutomationId || evArgs.AutomationId || fb.automationGuid || ""
+ );
+ var autoKeyHint = pbTrim(fb.automationKey || fb.automationGuid || "");
+ var autoGot = pbGetAutomationRest(token, sub, autoRestId, autoKeyHint);
+ if (autoGot.ok && autoGot.obj) {
+  if (autoGot.obj.key) {
+   result.automationKey = pbToStr(autoGot.obj.key);
+  }
+  if (autoGot.obj.name) {
+   result.automationName = pbToStr(autoGot.obj.name);
+  }
+  if (autoGot.obj.id) {
+   result.automationRestId = pbToStr(autoGot.obj.id);
+  }
+  var qRef = pbExtractQueryFromAutomation(autoGot.obj);
+  if (qRef.queryObjectId) {
+   var qLive = pbWsLookupQueryByObjectId(qRef.queryObjectId);
+   if (qLive.customerKey) {
+    result.queryKey = qLive.customerKey;
+   }
+   if (qLive.queryText) {
+    result.queryText = qLive.queryText;
+   }
+   if (!result.queryKey && qLive.name) {
+    result.queryKey = qLive.name;
+   }
+  }
+ }
+ if (!result.automationKey && autoKeyHint) {
+  result.automationKey = autoKeyHint;
+ }
+ if (!result.automationName && pbTrim(fb.automationName)) {
+  result.automationName = pbTrim(fb.automationName);
+ }
+ if (!result.deCustomerKey) {
+  result.msg = "Live entry DE customer key not found on entry event.";
+  return result;
+ }
+ if (!result.queryKey || !result.queryText) {
+  result.msg = "Live query not resolved from automation query step (WSProxy).";
+  return result;
+ }
+ if (!result.emailAssetId) {
+  result.msg = "Live email asset id not found on journey email activity.";
+  return result;
+ }
+ if (!result.automationKey) {
+  result.msg = "Live automation customer key not resolved.";
+  return result;
+ }
+ result.ok = true;
+ result.msg = "Live artifacts resolved from journey " + journeyId + ".";
+ return result;
+}
+
+function pbStackAnalyticsFallback(ctx) {
+ var c = ctx || {};
+ return {
+  buildName: pbTrim(c.buildName),
+  deId: pbTrim(c.deId),
+  deName: pbTrim(c.deName),
+  queryKey: pbTrim(c.queryKey),
+  emailId: pbTrim(c.emailId),
+  emailName: pbTrim(c.emailName),
+  automationGuid: pbTrim(c.automationGuid),
+  automationKey: pbTrim(c.automationKey),
+  automationName: pbTrim(c.automationName)
+ };
+}
+
 function pbXmlSafe(s) {
  return pbToStr(s)
   .replace(/&/g, "&amp;")
@@ -936,7 +1232,16 @@ function pbManifestRows(opts) {
  var o = opts || {};
  var rows = [];
  rows.push({ kind: "Entry data extension", name: o.deName, key: o.deId, note: "Schema + sendable config" });
- rows.push({ kind: "Query activity", name: o.buildName, key: o.queryKey, note: o.queryFound ? "SQL loaded from source BU" : "Query not found in source BU" });
+ rows.push({
+  kind: "Query activity",
+  name: o.buildName,
+  key: o.queryKey,
+  note: o.queryFound
+   ? o.liveResolved
+     ? "Keys + SQL from live journey/automation"
+     : "SQL loaded from source BU"
+   : "Query not found in source BU"
+ });
  rows.push({ kind: "Content Builder email", name: o.emailName, key: o.emailId, note: "Email asset copy" });
  rows.push({ kind: "Automation", name: o.automationName, key: o.automationKey || o.automationGuid, note: "Schedule + query step" });
  rows.push({ kind: "Entry event definition", name: o.buildName, key: "", note: "DE-audience trigger wired to automation" });
@@ -1142,21 +1447,34 @@ function pbPushStackBuild(ctx) {
   return { ok: false, logs: logs, msg: "Production auth failed: " + prodAuth.msg };
  }
  log("Production (" + (prodAuth.userKey || prodUser) + ") authentication OK.");
- var deKey = pbTrim(ctx.deId);
- var deName = pbTrim(ctx.deName) || deKey;
- if (!deKey || deKey.toUpperCase() === "N/A") {
-  deKey = pbTrim(ctx.buildName);
-  deName = pbTrim(ctx.deName) || deKey;
+ var journeyId = pbTrim(ctx.journeyId);
+ if (!journeyId) {
+  return { ok: false, logs: logs, msg: "Journey id missing." };
  }
- var queryKey = pbTrim(ctx.queryKey);
- var automationKey = pbTrim(ctx.automationKey) || pbTrim(ctx.automationGuid);
- var automationName = pbTrim(ctx.automationName) || pbTrim(ctx.buildName);
- var queryText = pbLookupQueryText(queryKey);
- if (queryText) {
-  log("Loaded query SQL from source (" + queryText.length + " chars).");
- } else {
-  fail("Query SQL not found in source BU for key " + queryKey + ".");
+ var live = pbResolveLiveStackContext(
+  devAuth.token,
+  devAuth.subdomain,
+  journeyId,
+  pbStackAnalyticsFallback(ctx)
+ );
+ if (!live.ok) {
+  fail(live.msg || "Live artifact resolution failed.");
+  return {
+   ok: false,
+   logs: logs,
+   msg: "Push stopped: resolve live UAT journey artifacts before using Production."
+  };
  }
+ log(live.msg);
+ var deKey = live.deCustomerKey;
+ var deName = live.deName || deKey;
+ var queryKey = live.queryKey;
+ var queryText = live.queryText;
+ var automationKey = live.automationKey;
+ var automationName = live.automationName || live.buildName || pbTrim(ctx.buildName);
+ var buildName = live.buildName || pbTrim(ctx.buildName);
+ log("Entry DE key " + deKey + ", query key " + queryKey + " (" + queryText.length + " chars SQL).");
+ log("Email asset id " + live.emailAssetId + ", automation key " + automationKey + ".");
  var deResult = pbProdEnsureEntryDe(prodAuth.subdomain, prodAuth.token, deKey, deName);
  if (deResult.ok) {
   log(deResult.msg);
@@ -1172,7 +1490,7 @@ function pbPushStackBuild(ctx) {
    prodAuth.subdomain,
    prodAuth.token,
    queryKey,
-   pbTrim(ctx.buildName),
+   buildName,
    queryText,
    deKey,
    deName
@@ -1188,8 +1506,8 @@ function pbPushStackBuild(ctx) {
   devAuth.subdomain,
   prodAuth.token,
   prodAuth.subdomain,
-  ctx.emailId,
-  ctx.emailName || ctx.buildName
+  live.emailAssetId,
+  live.emailName || buildName
  );
  if (emailCopy.ok) {
   log(emailCopy.msg);
@@ -1215,7 +1533,7 @@ function pbPushStackBuild(ctx) {
  var eventResult = { ok: false, trigger: null };
  if (automationResult.automationId && deResult.objectId) {
   eventResult = pbCreateProdDeAudienceEvent(prodAuth.token, prodAuth.subdomain, {
-   name: pbTrim(ctx.buildName),
+   name: buildName,
    eventKey: "DEAudience-" + pbRandomGuid(),
    dataExtensionId: deResult.objectId,
    dataExtensionName: deName,
@@ -1227,15 +1545,15 @@ function pbPushStackBuild(ctx) {
    fail("Entry event FAILED: " + eventResult.msg);
   }
  }
- if (ctx.journeyId && eventResult.ok && emailCopy.ok) {
+ if (journeyId && eventResult.ok && emailCopy.ok) {
   var journeyClone = pbCloneJourneyToProd(
    devAuth.token,
    devAuth.subdomain,
    prodAuth.token,
    prodAuth.subdomain,
-   ctx.journeyId,
+   journeyId,
    {
-    buildName: pbTrim(ctx.buildName),
+    buildName: buildName,
     legacyEmailId: emailCopy.legacyEmailId,
     prodEmailAssetId: emailCopy.prodEmailId,
     trigger: eventResult.trigger
@@ -1246,7 +1564,7 @@ function pbPushStackBuild(ctx) {
   } else {
    fail("Journey FAILED: " + journeyClone.msg);
   }
- } else if (ctx.journeyId && !eventResult.ok) {
+ } else if (journeyId && !eventResult.ok) {
   fail("Journey skipped because entry event was not created.");
  }
  if (!failed) {
@@ -1270,37 +1588,70 @@ var pushResultBanner = "";
 var pushBlockedMsg = pbTrim(Platform.Variable.GetValue("@pushBlockedMsg") || "");
 
 if (pageStatus === "review" && isStack && jid) {
- var buildName = pbTrim(Platform.Variable.GetValue("@dispName") || "");
- var queryKey = pbTrim(Platform.Variable.GetValue("@dispQueryKey") || "");
- var queryText = pbLookupQueryText(queryKey);
- var manifest = pbManifestRows({
-  buildName: buildName,
-  journeyId: jid,
-  deName: pbTrim(Platform.Variable.GetValue("@dispDeName") || ""),
+ var reviewFb = pbStackAnalyticsFallback({
+  buildName: pbTrim(Platform.Variable.GetValue("@dispName") || ""),
   deId: pbTrim(Platform.Variable.GetValue("@dispDeId") || ""),
-  queryKey: queryKey,
-  queryFound: !!queryText,
-  emailName: pbTrim(Platform.Variable.GetValue("@dispEmailName") || ""),
+  deName: pbTrim(Platform.Variable.GetValue("@dispDeName") || ""),
+  queryKey: pbTrim(Platform.Variable.GetValue("@dispQueryKey") || ""),
   emailId: pbTrim(Platform.Variable.GetValue("@dispEmailId") || ""),
-  automationName: pbTrim(Platform.Variable.GetValue("@dispAutomationName") || ""),
+  emailName: pbTrim(Platform.Variable.GetValue("@dispEmailName") || ""),
   automationGuid: pbTrim(Platform.Variable.GetValue("@dispAutomationGuid") || ""),
-  automationKey: pbTrim(Platform.Variable.GetValue("@dispAutomationCustomerKey") || "")
+  automationKey: pbTrim(Platform.Variable.GetValue("@dispAutomationCustomerKey") || ""),
+  automationName: pbTrim(Platform.Variable.GetValue("@dispAutomationName") || "")
+ });
+ var reviewLive = { ok: false, msg: "" };
+ var reviewAuth = pbAuthForUser(
+  pbTrim(Platform.Variable.GetValue("@AUTH_SOURCE_USER") || "Admin") || "Admin",
+  []
+ );
+ if (reviewAuth.ok) {
+  reviewLive = pbResolveLiveStackContext(reviewAuth.token, reviewAuth.subdomain, jid, reviewFb);
+  if (reviewLive.ok) {
+   pushBlockedMsg = "";
+  } else {
+   pushBlockedMsg =
+    "Live artifact resolution failed: " + (reviewLive.msg || "Could not read journey, entry event, automation, or email from UAT.");
+  }
+ } else {
+  pushBlockedMsg = "Source (Admin) auth failed for live manifest: " + reviewAuth.msg;
+ }
+ var manifest = pbManifestRows({
+  buildName: reviewLive.ok ? reviewLive.buildName : reviewFb.buildName,
+  journeyId: jid,
+  deName: reviewLive.ok ? reviewLive.deName : reviewFb.deName,
+  deId: reviewLive.ok ? reviewLive.deCustomerKey : reviewFb.deId,
+  queryKey: reviewLive.ok ? reviewLive.queryKey : reviewFb.queryKey,
+  queryFound: reviewLive.ok ? !!reviewLive.queryText : !!pbLookupQueryText(reviewFb.queryKey),
+  liveResolved: reviewLive.ok,
+  emailName: reviewLive.ok ? reviewLive.emailName : reviewFb.emailName,
+  emailId: reviewLive.ok ? reviewLive.emailAssetId : reviewFb.emailId,
+  automationName: reviewLive.ok ? reviewLive.automationName : reviewFb.automationName,
+  automationGuid: reviewLive.ok ? reviewLive.automationRestId : reviewFb.automationGuid,
+  automationKey: reviewLive.ok ? reviewLive.automationKey : reviewFb.automationKey
  });
  manifestHtml = pbBuildManifestHtml(manifest);
+ if (reviewLive.ok) {
+  manifestHtml =
+   '<div class="banner good" style="margin-bottom:14px">' +
+   pbHtmlSafe(reviewLive.msg) +
+   "</div>" +
+   manifestHtml;
+ }
 }
 
 if (confirmPush && pageStatus === "review" && isStack && jid) {
  pageStatus = "pushing";
  var pushResult = pbPushStackBuild({
-  buildName: pbTrim(Platform.Variable.GetValue("@dispName") || ""),
   journeyId: jid,
+  buildName: pbTrim(Platform.Variable.GetValue("@dispName") || ""),
   queryKey: pbTrim(Platform.Variable.GetValue("@dispQueryKey") || ""),
   emailId: pbTrim(Platform.Variable.GetValue("@dispEmailId") || ""),
   emailName: pbTrim(Platform.Variable.GetValue("@dispEmailName") || ""),
   deId: pbTrim(Platform.Variable.GetValue("@dispDeId") || ""),
   deName: pbTrim(Platform.Variable.GetValue("@dispDeName") || ""),
   automationGuid: pbTrim(Platform.Variable.GetValue("@dispAutomationGuid") || ""),
-  automationKey: pbTrim(Platform.Variable.GetValue("@dispAutomationCustomerKey") || "")
+  automationKey: pbTrim(Platform.Variable.GetValue("@dispAutomationCustomerKey") || ""),
+  automationName: pbTrim(Platform.Variable.GetValue("@dispAutomationName") || "")
  });
  var li;
  pushLogHtml = '<ol class="push-log">';
@@ -1384,7 +1735,11 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
  <p class="sub" style="margin-bottom:12px">Journey ID: <code>%%=v(@jid)=%%</code></p>
  %%=TreatAsContent(@manifestHtml)=%%
 </div>
-%%[ IF @pageStatus == "review" THEN ]%%
+%%[ IF NOT Empty(@pushBlockedMsg) AND @pageStatus == "review" THEN ]%%
+<div class="banner bad">%%=v(@pushBlockedMsg)=%%</div>
+<p class="sub">Fix the UAT journey (entry DE, automation query step, email activity) or refresh analytics from Manage Build, then reload this page.</p>
+<a class="btn btn-neutral" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Back to Manage Build</a>
+%%[ ELSEIF @pageStatus == "review" THEN ]%%
 <form method="post" action="" class="push-actions">
  <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
  <input type="hidden" name="confirmPush" value="1">
