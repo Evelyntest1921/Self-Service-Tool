@@ -794,6 +794,69 @@ function pbSoapMutationSucceeded(body) {
  return true;
 }
 
+function pbSoapMutationSucceededStrict(body) {
+ if (!pbSoapPartnerOk(body)) {
+  return false;
+ }
+ var text = pbToStr(body);
+ var codeTags = text.match(/<(?:[\w]+:)?StatusCode[^>]*>([^<]*)</gi);
+ if (!codeTags || !codeTags.length) {
+  return false;
+ }
+ var ci;
+ for (ci = 0; ci < codeTags.length; ci++) {
+  var codeVal = pbTrim(codeTags[ci].replace(/<\/?[^>]+>/g, ""));
+  if (!codeVal || codeVal.toUpperCase() !== "OK") {
+   return false;
+  }
+ }
+ return true;
+}
+
+function pbIsGuidLike(value) {
+ return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(pbTrim(value));
+}
+
+function pbProdSoapDeObjectId(sub, token, customerKey, deName) {
+ var got = pbProdRetrieveDeObjectId(sub, token, customerKey, deName);
+ if (got.ok && got.objectId && pbIsGuidLike(got.objectId)) {
+  return got.objectId;
+ }
+ return "";
+}
+
+function pbProdResolveQueryCategoryId(sub, token) {
+ var names = ["Query Activities", "Queries", "My Queries", "Automation Studio"];
+ var ni;
+ for (ni = 0; ni < names.length; ni++) {
+  var retrieveFolder =
+   '<RetrieveRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI"><RetrieveRequest>' +
+   "<ObjectType>DataFolder</ObjectType><Properties>ID</Properties><Properties>Name</Properties>" +
+   '<Filter xsi:type="SimpleFilterPart"><Property>Name</Property><SimpleOperator>equals</SimpleOperator><Value>' +
+   pbXmlSafe(names[ni]) +
+   "</Value></Filter></RetrieveRequest></RetrieveRequestMsg>";
+  var resp = pbSoapCall(sub, token, "Retrieve", retrieveFolder);
+  var text = pbSoapResultsSnippet(resp.body);
+  var idMatch = text.match(/<(?:[\w]+:)?ID[^>]*>([^<]+)</i);
+  if (idMatch && pbTrim(idMatch[1])) {
+   var cid = parseInt(String(idMatch[1]), 10);
+   if (!isNaN(cid) && cid > 0) {
+    return cid;
+   }
+  }
+ }
+ return 0;
+}
+
+function pbSoapCallPartnerAction(sub, token, action, bodyXml) {
+ var resp = pbSoapCall(sub, token, action, bodyXml);
+ if (pbParseSoapObjectId(resp.body) || !pbSoapPartnerOk(resp.body)) {
+  return resp;
+ }
+ var fullAction = "http://exacttarget.com/wsdl/partnerAPI/" + action;
+ return pbSoapCall(sub, token, fullAction, bodyXml);
+}
+
 function pbSoapQueryTextXml(sql) {
  var s = pbToStr(sql);
  if (!s) {
@@ -1533,18 +1596,16 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
   return { ok: false, objectId: "", msg: "Query key or SQL missing." };
  }
  var qName = pbTrim(queryName) || key;
- var deOid = pbTrim(deObjectId || "");
- var retrieveQ =
-  '<RetrieveRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI"><RetrieveRequest>' +
-  "<ObjectType>QueryDefinition</ObjectType><Properties>ObjectID</Properties>" +
-  '<Filter xsi:type="SimpleFilterPart"><Property>CustomerKey</Property><SimpleOperator>equals</SimpleOperator><Value>' +
-  pbXmlSafe(key) +
-  "</Value></Filter></RetrieveRequest></RetrieveRequestMsg>";
- var found = pbSoapCall(sub, token, "Retrieve", retrieveQ);
- var existingId = pbParseSoapObjectId(found.body);
+ var deOid = pbProdSoapDeObjectId(sub, token, deCustomerKey, deName);
+ if (!deOid && pbIsGuidLike(deObjectId)) {
+  deOid = pbTrim(deObjectId);
+ }
+ var existingId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
  var action = existingId ? "Update" : "Create";
  var requestTag = existingId ? "UpdateRequestMsg" : "CreateRequestMsg";
  var objectIdXml = existingId ? "<ObjectID>" + pbXmlSafe(existingId) + "</ObjectID>" : "";
+ var queryCategoryId = pbProdResolveQueryCategoryId(sub, token);
+ var categoryXml = queryCategoryId > 0 ? "<CategoryID>" + queryCategoryId + "</CategoryID>" : "";
  var body =
   "<" +
   requestTag +
@@ -1555,6 +1616,7 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
   "</CustomerKey><Name>" +
   pbXmlSafe(qName) +
   "</Name>" +
+  categoryXml +
   pbSoapQueryTextXml(queryText) +
   "<TargetType>DE</TargetType><TargetUpdateType>Update</TargetUpdateType>" +
   "<DataExtensionTarget>" +
@@ -1566,9 +1628,9 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
   "</Name></DataExtensionTarget></Objects></" +
   requestTag +
   ">";
- var resp = pbSoapCall(sub, token, action, body);
+ var resp = pbSoapCallPartnerAction(sub, token, action, body);
  var objectId = pbParseSoapObjectId(resp.body) || existingId;
- if (pbSoapMutationSucceeded(resp.body)) {
+ if (pbSoapMutationSucceededStrict(resp.body)) {
   if (!objectId) {
    objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
   }
@@ -1582,41 +1644,36 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
     msg: "Query " + (existingId ? "updated" : "created") + " in Production."
    };
   }
-  return {
-   ok: false,
-   objectId: "",
-   msg:
-    "Query SOAP OK but ObjectID not found for key " +
-    key +
-    ". " +
-    pbSoapFirstStatusMessage(resp.body)
-  };
  }
  if (!objectId) {
   objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
-  if (!objectId && pbTrim(automationKeyHint)) {
-   objectId = pbProdQueryObjectIdFromAutomation(token, sub, automationKeyHint);
-  }
-  if (objectId) {
-   return {
-    ok: true,
-    objectId: objectId,
-    msg: "Query resolved in Production (existing query " + key + ")."
-   };
-  }
+ }
+ if (!objectId && pbTrim(automationKeyHint)) {
+  objectId = pbProdQueryObjectIdFromAutomation(token, sub, automationKeyHint);
+ }
+ if (objectId) {
+  return {
+   ok: true,
+   objectId: objectId,
+   msg: "Query resolved in Production for key " + key + "."
+  };
+ }
+ var errDetail = pbSoapFirstStatusMessage(resp.body);
+ if (!errDetail) {
+  errDetail = pbTrim(resp.body).substring(0, 200);
  }
  return {
   ok: false,
-  objectId: objectId,
+  objectId: "",
   msg:
    "Query " +
    action +
-   " failed (" +
+   " failed for key " +
+   key +
+   " (" +
    pbParseSoapStatus(resp.body) +
    "). " +
-   pbSoapFirstStatusMessage(resp.body) +
-   " " +
-   pbTrim(resp.body).substring(0, 120)
+   errDetail
  };
 }
 
