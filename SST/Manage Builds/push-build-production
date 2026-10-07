@@ -5,9 +5,11 @@ VAR @dispName, @dispType, @dispEmailName, @dispEmailId, @dispDeName, @dispDeId
 VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationCustomerKey, @dispAutomationName
 VAR @isStackBuild, @pageStatus, @pushBlockedMsg, @pushLogHtml, @pushResultBanner
 VAR @manifestHtml, @editSidebarHtml, @buildNavContext, @buildNavActive
-VAR @STACK_JOURNEY_TYPE
+VAR @STACK_JOURNEY_TYPE, @AUTH_SOURCE_USER, @AUTH_PROD_USER
 
 SET @STACK_JOURNEY_TYPE = "Journey + Automation"
+SET @AUTH_SOURCE_USER = "Admin"
+SET @AUTH_PROD_USER = "Production_Admin"
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
 SET @PUSH_PAGE_SELF = ""
@@ -42,6 +44,12 @@ IF RowCount(@navRows) > 0 THEN
  SET @HOME_URL = Field(@navRow,"ss_home")
  SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit")
  SET @PUSH_PAGE_SELF = Trim(Field(@navRow,"ss_push_production"))
+ IF NOT Empty(Trim(Field(@navRow,"ss_auth_source_user"))) THEN
+  SET @AUTH_SOURCE_USER = Trim(Field(@navRow,"ss_auth_source_user"))
+ ENDIF
+ IF NOT Empty(Trim(Field(@navRow,"ss_auth_prod_user"))) THEN
+  SET @AUTH_PROD_USER = Trim(Field(@navRow,"ss_auth_prod_user"))
+ ENDIF
 ENDIF
 
 IF Empty(@jid) THEN
@@ -151,6 +159,19 @@ function pbEscJson(s) {
  return out;
 }
 
+function pbAuthField(row, names) {
+ var i;
+ for (i = 0; i < names.length; i++) {
+  try {
+   var v = row[names[i]];
+   if (v !== null && v !== undefined && pbTrim(v)) {
+    return pbTrim(v);
+   }
+  } catch (fieldEx) {}
+ }
+ return "";
+}
+
 function pbAuthForUser(userKey) {
  var out = {
   ok: false,
@@ -159,18 +180,23 @@ function pbAuthForUser(userKey) {
   msg: ""
  };
  try {
-  var rows = Platform.Function.LookupRows("SFMC_AUTH", "User", userKey);
+  var lookupUser = pbTrim(userKey);
+  if (!lookupUser) {
+   out.msg = "SFMC_AUTH User key is empty.";
+   return out;
+  }
+  var rows = Platform.Function.LookupRows("SFMC_AUTH", "User", lookupUser);
   if (!rows || rows.length === 0) {
-   out.msg = "No SFMC_AUTH row for User=" + userKey + ".";
+   out.msg = "No SFMC_AUTH row for User=" + lookupUser + ".";
    return out;
   }
   var row = rows[0];
-  var clientId = pbTrim(row.clientId);
-  var clientSecret = pbTrim(row.clientSecret);
-  var subdomain = pbTrim(row.subdomain);
-  var accountId = pbTrim(row.accountId);
+  var clientId = pbAuthField(row, ["clientId", "ClientId"]);
+  var clientSecret = pbAuthField(row, ["clientSecret", "ClientSecret"]);
+  var subdomain = pbAuthField(row, ["subdomain", "Subdomain"]);
+  var accountId = pbAuthField(row, ["accountId", "AccountId"]);
   if (!clientId || !clientSecret || !subdomain) {
-   out.msg = "SFMC_AUTH incomplete for User=" + userKey + ".";
+   out.msg = "SFMC_AUTH incomplete for User=" + lookupUser + ".";
    return out;
   }
   var authUrl = "https://" + subdomain + ".auth.marketingcloudapis.com/v2/token";
@@ -189,7 +215,12 @@ function pbAuthForUser(userKey) {
   var resp = req.send();
   var body = resp.content ? pbToStr(resp.content) : "";
   if (resp.statusCode !== 200) {
-   out.msg = "Auth HTTP " + resp.statusCode + " for User=" + userKey + ".";
+   out.msg =
+    "Auth HTTP " +
+    resp.statusCode +
+    " for User=" +
+    lookupUser +
+    " (check subdomain and account_id on that row).";
    return out;
   }
   var parsed = null;
@@ -200,7 +231,7 @@ function pbAuthForUser(userKey) {
   }
   var token = parsed && parsed.access_token ? pbToStr(parsed.access_token) : "";
   if (!token) {
-   out.msg = "Auth response missing access_token for User=" + userKey + ".";
+   out.msg = "Auth response missing access_token for User=" + lookupUser + ".";
    return out;
   }
   out.ok = true;
@@ -887,16 +918,19 @@ function pbPushStackBuild(ctx) {
   failed = true;
   log(line);
  }
- var devAuth = pbAuthForUser("Admin");
+ var sourceUser = pbTrim(Platform.Variable.GetValue("@AUTH_SOURCE_USER") || "Admin") || "Admin";
+ var prodUser =
+  pbTrim(Platform.Variable.GetValue("@AUTH_PROD_USER") || "Production_Admin") || "Production_Admin";
+ var devAuth = pbAuthForUser(sourceUser);
  if (!devAuth.ok) {
   return { ok: false, logs: logs, msg: "Source auth failed: " + devAuth.msg };
  }
- log("Source (Admin) authentication OK.");
- var prodAuth = pbAuthForUser("Production_Admin");
+ log("Source (" + sourceUser + ") authentication OK.");
+ var prodAuth = pbAuthForUser(prodUser);
  if (!prodAuth.ok) {
   return { ok: false, logs: logs, msg: "Production auth failed: " + prodAuth.msg };
  }
- log("Production (Production_Admin) authentication OK.");
+ log("Production (" + prodUser + ") authentication OK.");
  var deKey = pbTrim(ctx.deId);
  var deName = pbTrim(ctx.deName) || deKey;
  if (!deKey || deKey.toUpperCase() === "N/A") {
@@ -1129,7 +1163,7 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 <p class="sub">%%=v(@pushBlockedMsg)=%%</p>
 <p class="sub"><a href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Back to Manage Build</a></p>
 %%[ ELSE ]%%
-<p class="sub">Review artifacts that will be created or updated in the <strong>Production</strong> business unit using <code>SFMC_AUTH</code> user <strong>Production_Admin</strong>. Source definitions are read with <strong>Admin</strong>.</p>
+<p class="sub">Production writes use <code>SFMC_AUTH</code> <strong>User=%%=v(@AUTH_PROD_USER)=%%</strong> (your prod row is usually <strong>Production_Admin</strong> with prod <code>account_id</code>). Source reads use <strong>User=%%=v(@AUTH_SOURCE_USER)=%%</strong> (usually <strong>Admin</strong> for the BU where builds live).</p>
 %%=TreatAsContent(@pushResultBanner)=%%
 <div class="panel">
  <p class="panel-title">Build: %%=v(@dispName)=%%</p>
