@@ -622,10 +622,76 @@ function resolveJourneyEntryEventId(sub, token, jid) {
 }
 
 
+function soapValueToString(val) {
+ if (val === null || typeof val === "undefined") {
+  return "";
+ }
+ if (typeof val === "string") {
+  return val;
+ }
+ try {
+  return val + "";
+ } catch (coerceSoapEx) {
+  return "";
+ }
+}
+
+
+function isGuidLike(id) {
+ var value = strTrim(id);
+ if (!value) {
+  return false;
+ }
+ return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
+  value
+ );
+}
+
+
+function deObjectIdFromRetrieveRow(row) {
+ if (!row) {
+  return "";
+ }
+ try {
+  var id = strTrim(soapValueToString(row.ObjectID));
+  return isGuidLike(id) ? id : "";
+ } catch (rowIdEx) {
+  return "";
+ }
+}
+
+
+function wsProxyUsableForDeOpen() {
+ try {
+  var pageStatus = Platform.Variable.GetValue("@pageStatus") || "";
+  if (pageStatus !== "view") {
+   return false;
+  }
+  var mid = Platform.Function.AuthenticatedMemberID();
+  if (mid === null || typeof mid === "undefined") {
+   return false;
+  }
+  var midStr = strTrim(soapValueToString(mid));
+  if (!midStr || midStr === "0") {
+   return false;
+  }
+ } catch (wsCheckEx) {
+  return false;
+ }
+ return true;
+}
+
+
 function resolveDeObjectIdByCustomerKey(customerKey) {
  var key = strTrim(customerKey);
  if (!key || key.toUpperCase() === "N/A") {
    return "";
+ }
+ if (isGuidLike(key)) {
+  return key;
+ }
+ if (!wsProxyUsableForDeOpen()) {
+  return "";
  }
  try {
    var prox = new Script.Util.WSProxy();
@@ -634,8 +700,8 @@ function resolveDeObjectIdByCustomerKey(customerKey) {
      SimpleOperator: "equals",
      Value: key
    });
-   if (rde && rde.Results && rde.Results.length > 0 && rde.Results[0].ObjectID) {
-     return String(rde.Results[0].ObjectID);
+   if (rde && rde.Results && rde.Results.length > 0) {
+     return deObjectIdFromRetrieveRow(rde.Results[0]);
    }
  } catch (deKeyEx) {}
  return "";
@@ -658,6 +724,9 @@ function resolveDeObjectIdForOpen(deCustomerKey, deName) {
  if (!name || name.toUpperCase() === "N/A") {
   return "";
  }
+ if (!wsProxyUsableForDeOpen()) {
+  return "";
+ }
  try {
   var prox = new Script.Util.WSProxy();
   var rde = prox.retrieve("DataExtension", ["ObjectID"], {
@@ -665,41 +734,35 @@ function resolveDeObjectIdForOpen(deCustomerKey, deName) {
    SimpleOperator: "equals",
    Value: name
   });
-  if (rde && rde.Results && rde.Results.length > 0 && rde.Results[0].ObjectID) {
-   return String(rde.Results[0].ObjectID);
+  if (rde && rde.Results && rde.Results.length > 0) {
+   return deObjectIdFromRetrieveRow(rde.Results[0]);
   }
  } catch (deNameOpenEx) {}
  return "";
 }
 
 
-function buildDataExtensionOpenUrl(deCustomerKey, deName) {
- try {
-  var objId = resolveDeObjectIdForOpen(deCustomerKey, deName);
-  objId = strTrim(objId);
-  if (!objId) {
-   return "";
-  }
-  return (
-   mcHostFromCloudUrl() +
-   "/contactsmeta/admin.html#admin/data-extension/" +
-   encodeURIComponent(String(objId)) +
-   "/properties"
-  );
- } catch (deOpenBuildEx) {
+function buildDataExtensionOpenUrlFromObjectId(objectId) {
+ var objId = strTrim(objectId);
+ if (!objId || !isGuidLike(objId)) {
   return "";
  }
+ return (
+  mcHostFromCloudUrl() +
+  "/contactsmeta/admin.html#admin/data-extension/" +
+  encodeURIComponent(objId) +
+  "/properties"
+ );
 }
 
 
-function isGuidLike(id) {
- var value = strTrim(id);
- if (!value) {
-   return false;
+function buildDataExtensionOpenUrl(deCustomerKey, deName) {
+ try {
+  var objId = resolveDeObjectIdForOpen(deCustomerKey, deName);
+  return buildDataExtensionOpenUrlFromObjectId(objId);
+ } catch (deOpenBuildEx) {
+  return "";
  }
- return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
-   value
- );
 }
 
 
@@ -2905,10 +2968,13 @@ try {
 
 try {
  if (detailCountVal > 0) {
-  Platform.Variable.SetValue(
-   "@deOpenUrl",
-   buildDataExtensionOpenUrl(dispDeIdVal, dispDeNameVal)
-  );
+  var deOpenUrlVal = "";
+  if (wsProxyUsableForDeOpen()) {
+   deOpenUrlVal = buildDataExtensionOpenUrl(dispDeIdVal, dispDeNameVal);
+  } else {
+   deOpenUrlVal = buildDataExtensionOpenUrlFromObjectId(dispDeIdVal);
+  }
+  Platform.Variable.SetValue("@deOpenUrl", deOpenUrlVal);
  }
 } catch (deOpenUrlEx) {
  Platform.Variable.SetValue("@deOpenUrl", "");
