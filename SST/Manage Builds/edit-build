@@ -36,7 +36,7 @@ VAR @chkAutoNameStatus, @chkAutoNameMsg, @chkAutoNameIcon
 VAR @chkQueryStatus, @chkQueryMsg, @chkQueryText, @chkQueryIcon
 VAR @chkAutoStatusStatus, @chkAutoStatusMsg, @chkAutoStatusIcon
 VAR @deleteRequested, @removeLogOnly, @deleteEmailFromPost, @purgeRequested
-VAR @executeRemoveLogDelete, @redirectLogRemoved, @redirectBuildPurged, @redirectEmailDeleted
+VAR @executeRemoveLogDelete, @redirectLogRemoved, @redirectBuildPurged, @redirectEmailDeleted, @deOpenUrl
 VAR @authOk, @accessToken, @subdomain
 VAR @resultText, @pageStatus, @detailRowsAfter
 VAR @attemptPurgeBuild, @purgeBuildLog, @purgeEmailOk
@@ -48,6 +48,7 @@ VAR @automationActionRequested, @attemptAutomationAction, @automationActionOk, @
 VAR @automationAction, @automationFrequency, @automationMinuteInterval, @automationStartDate, @automationStartOffset, @automationTimezoneId, @dispAutomationActive, @showAutomationActivate, @showAutomationPause
 
 
+SET @deOpenUrl = ""
 SET @executeRemoveLogDelete = "false"
 SET @redirectLogRemoved = "false"
 SET @redirectBuildPurged = "false"
@@ -638,6 +639,51 @@ function resolveDeObjectIdByCustomerKey(customerKey) {
    }
  } catch (deKeyEx) {}
  return "";
+}
+
+
+function mcHostFromCloudUrl() {
+ var cloud = Platform.Variable.GetValue("@MC_CLOUD") || "https://mc.s13.exacttarget.com/cloud/";
+ var m = String(cloud).match(/^(https:\/\/[^/]+)/i);
+ return m ? m[1] : "https://mc.s13.exacttarget.com";
+}
+
+
+function resolveDeObjectIdForOpen(deCustomerKey, deName) {
+ var byKey = resolveDeObjectIdByCustomerKey(deCustomerKey);
+ if (byKey) {
+  return byKey;
+ }
+ var name = strTrim(deName);
+ if (!name || name.toUpperCase() === "N/A") {
+  return "";
+ }
+ try {
+  var prox = new Script.Util.WSProxy();
+  var rde = prox.retrieve("DataExtension", ["ObjectID"], {
+   Property: "Name",
+   SimpleOperator: "equals",
+   Value: name
+  });
+  if (rde && rde.Results && rde.Results.length > 0 && rde.Results[0].ObjectID) {
+   return String(rde.Results[0].ObjectID);
+  }
+ } catch (deNameOpenEx) {}
+ return "";
+}
+
+
+function buildDataExtensionOpenUrl(deCustomerKey, deName) {
+ var objId = resolveDeObjectIdForOpen(deCustomerKey, deName);
+ if (!objId) {
+  return "";
+ }
+ return (
+  mcHostFromCloudUrl() +
+  "/contactsmeta/admin.html#admin/data-extension/" +
+  encodeURIComponent(objId) +
+  "/properties"
+ );
 }
 
 
@@ -2851,6 +2897,17 @@ try {
     Platform.Variable.SetValue("@journeyHeroAnimate", "true");
   }
 }
+
+try {
+ if (detailCountVal > 0) {
+  Platform.Variable.SetValue(
+   "@deOpenUrl",
+   buildDataExtensionOpenUrl(dispDeIdVal, dispDeNameVal)
+  );
+ }
+} catch (deOpenUrlEx) {
+ Platform.Variable.SetValue("@deOpenUrl", "");
+}
 </script>
 %%[
 VAR @combinedLog, @trailBody
@@ -3925,6 +3982,9 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
    <a class="btn btn-neutral" href="%%=Concat(@MC_CLOUD,"#app/Content%20Builder/")=%%" target="_blank" rel="noopener noreferrer">Open Content Builder</a>
 %%[ IF @isStackBuild == "true" THEN ]%%
    <a class="btn btn-neutral js-automation-home-link" href="%%=Concat(@MC_CLOUD,"#app/Automation%20Studio/")=%%" target="_blank" rel="noopener noreferrer" data-automation-name="%%=Replace(Replace(v(@dispAutomationName),'"','&quot;'),'&','&amp;')=%%" title="%%[ IF NOT Empty(@dispAutomationName) THEN ]%%Copies automation name to clipboard%%[ ELSE ]%%Opens Automation Studio%%[ ENDIF ]%%">Open automation</a>
+%%[ ENDIF ]%%
+%%[ IF NOT Empty(@deOpenUrl) THEN ]%%
+   <a class="btn btn-neutral" href="%%=v(@deOpenUrl)=%%" target="_blank" rel="noopener noreferrer">Open data extension</a>
 %%[ ENDIF ]%%
  </div>
 </div>
