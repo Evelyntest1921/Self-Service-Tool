@@ -72,6 +72,9 @@ ELSE
    SET @dispAutomationCustomerKey = Trim(Field(@detailRow,"automationCustomerKey"))
    SET @dispAutomationName = Trim(Field(@detailRow,"automationName"))
    SET @dispCampaignId = Trim(Field(@detailRow,"campaignId"))
+   IF Empty(@dispCampaignId) THEN
+    SET @dispCampaignId = Trim(Field(@detailRow,"CampaignId"))
+   ENDIF
   ENDIF
  ENDIF
 ENDIF
@@ -1163,9 +1166,62 @@ function pbInferBracketDeFromQuerySql(sql) {
  return m ? pbTrim(m[1]) : "";
 }
 
+function pbInferCampaignIdFromQuerySql(sql) {
+ var s = pbToStr(sql);
+ if (!s) {
+  return "";
+ }
+ var patterns = [
+  /cm\.CampaignId\s*=\s*'([0-9a-zA-Z]{15,18})'/i,
+  /CampaignId\s*=\s*'([0-9a-zA-Z]{15,18})'/i
+ ];
+ var pi;
+ for (pi = 0; pi < patterns.length; pi++) {
+  var m = s.match(patterns[pi]);
+  if (m && m[1]) {
+   return pbTrim(m[1]).substring(0, 18);
+  }
+ }
+ return "";
+}
+
+function pbInferAudienceSourceFromQuerySql(sql) {
+ var s = pbToStr(sql);
+ if (!s) {
+  return "";
+ }
+ if (/CampaignMember_Salesforce/i.test(s)) {
+  return "campaign";
+ }
+ if (/FROM\s+\[/i.test(s)) {
+  return "dataextension";
+ }
+ return "";
+}
+
+function pbResolveStackCampaignId(fb, liveQueryText) {
+ var fromAnalytics = pbTrim(fb && fb.campaignId);
+ if (fromAnalytics && fromAnalytics.length >= 15) {
+  return { campaignId: fromAnalytics.substring(0, 18), source: "analytics" };
+ }
+ var inferred = pbInferCampaignIdFromQuerySql(liveQueryText);
+ if (inferred && inferred.length >= 15) {
+  return { campaignId: inferred, source: "live_query" };
+ }
+ return { campaignId: "", source: "" };
+}
+
 function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQueryText) {
  var opts = fb || {};
- var audienceSource = pbTrim(opts.audienceSource || "campaign").toLowerCase();
+ var audienceSource = pbTrim(opts.audienceSource || "").toLowerCase();
+ if (!audienceSource || audienceSource === "campaign") {
+  var inferredSource = pbInferAudienceSourceFromQuerySql(liveQueryText);
+  if (inferredSource) {
+   audienceSource = inferredSource;
+  } else if (!audienceSource) {
+   audienceSource = "campaign";
+  }
+ }
  var prox = new Script.Util.WSProxy();
  var prodEnv = "production";
  if (audienceSource === "dataextension") {
@@ -1196,12 +1252,14 @@ function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQu
   }
   return { ok: true, sql: deSql, msg: "Query SQL built for Production (stack DE audience rules)." };
  }
- var campaignId = pbTrim(opts.campaignId);
+ var campResolve = pbResolveStackCampaignId(opts, liveQueryText);
+ var campaignId = campResolve.campaignId;
  if (!campaignId || campaignId.length < 15) {
   return {
    ok: false,
    sql: "",
-   msg: "campaignId missing or too short in bd_journey_analytics; stack builds require a Salesforce Campaign ID."
+   msg:
+    "Salesforce Campaign ID not found on bd_journey_analytics and not found in live UAT query SQL (expected WHERE cm.CampaignId = '701…')."
   };
  }
  var campSql = pbStackBuildCampaignMemberQuery(
@@ -1211,7 +1269,15 @@ function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQu
   prodEnv,
   senderProfileId
  );
- return { ok: true, sql: campSql, msg: "Query SQL built for Production (stack campaign audience rules)." };
+ var campNote =
+  campResolve.source === "live_query"
+   ? " Campaign ID taken from live UAT query SQL (analytics campaignId was empty)."
+   : "";
+ return {
+  ok: true,
+  sql: campSql,
+  msg: "Query SQL built for Production (stack campaign audience rules)." + campNote
+ };
 }
 
 function pbBuildQueryMutationBody(opts) {
@@ -2917,7 +2983,9 @@ if (pageStatus === "review" && isStack && jid) {
        reviewLive.queryText
       ).ok
      )
-   : !!pbTrim(reviewFb.campaignId),
+   : !!(
+      pbResolveStackCampaignId(reviewFb, reviewLive.ok ? reviewLive.queryText : "").campaignId
+     ),
   liveResolved: reviewLive.ok,
   emailName: reviewLive.ok ? reviewLive.emailName : reviewFb.emailName,
   emailId: reviewLive.ok ? reviewLive.emailAssetId : reviewFb.emailId,
