@@ -6,6 +6,9 @@ VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationCustomerKey, @dispAutomat
 VAR @isStackBuild, @pageStatus, @pushBlockedMsg, @pushLogHtml, @pushResultBanner
 VAR @manifestHtml, @editSidebarHtml, @buildNavContext, @buildNavActive
 VAR @STACK_JOURNEY_TYPE, @AUTH_SOURCE_USER, @AUTH_PROD_USER
+VAR @srcClientId, @srcClientSecret, @srcSubdomain, @srcAccountId, @srcAuthUser
+VAR @prodClientId, @prodClientSecret, @prodSubdomain, @prodAccountId, @prodAuthUser
+VAR @authRows, @authRow, @authRowCount
 
 SET @STACK_JOURNEY_TYPE = "Journey + Automation"
 SET @AUTH_SOURCE_USER = "Admin"
@@ -92,6 +95,53 @@ IF Empty(@pushCampaignId) THEN
  SET @pushCampaignId = @dispCampaignId
 ENDIF
 
+SET @srcClientId = ""
+SET @srcClientSecret = ""
+SET @srcSubdomain = ""
+SET @srcAccountId = ""
+SET @srcAuthUser = ""
+SET @prodClientId = ""
+SET @prodClientSecret = ""
+SET @prodSubdomain = ""
+SET @prodAccountId = ""
+SET @prodAuthUser = ""
+SET @authRows = LookupRows("SFMC_AUTH","User",@AUTH_SOURCE_USER)
+SET @authRowCount = RowCount(@authRows)
+IF @authRowCount > 0 THEN
+ SET @authRow = Row(@authRows,1)
+ SET @srcAuthUser = @AUTH_SOURCE_USER
+ SET @srcClientId = Trim(Field(@authRow,"clientId"))
+ SET @srcClientSecret = Trim(Field(@authRow,"clientSecret"))
+ SET @srcSubdomain = Trim(Field(@authRow,"subdomain"))
+ SET @srcAccountId = Trim(Field(@authRow,"accountId"))
+ENDIF
+SET @authRows = LookupRows("SFMC_AUTH","User",@AUTH_PROD_USER)
+SET @authRowCount = RowCount(@authRows)
+IF @authRowCount == 0 THEN
+ SET @authRows = LookupRows("SFMC_AUTH","User","Admin_production")
+ SET @authRowCount = RowCount(@authRows)
+ IF @authRowCount > 0 THEN
+  SET @prodAuthUser = "Admin_production"
+ ENDIF
+ENDIF
+IF @authRowCount == 0 THEN
+ SET @authRows = LookupRows("SFMC_AUTH","User","Production_Admin")
+ SET @authRowCount = RowCount(@authRows)
+ IF @authRowCount > 0 THEN
+  SET @prodAuthUser = "Production_Admin"
+ ENDIF
+ENDIF
+IF @authRowCount > 0 THEN
+ SET @authRow = Row(@authRows,1)
+ IF Empty(@prodAuthUser) THEN
+  SET @prodAuthUser = @AUTH_PROD_USER
+ ENDIF
+ SET @prodClientId = Trim(Field(@authRow,"clientId"))
+ SET @prodClientSecret = Trim(Field(@authRow,"clientSecret"))
+ SET @prodSubdomain = Trim(Field(@authRow,"subdomain"))
+ SET @prodAccountId = Trim(Field(@authRow,"accountId"))
+ENDIF
+
 ]%%
 <script runat="server">
 Platform.Load("core", "1");
@@ -100,11 +150,8 @@ function pbToStr(v) {
  if (v === null || typeof v === "undefined") {
   return "";
  }
- if (typeof v === "string") {
-  return v;
- }
  try {
-  return v + "";
+  return String(v);
  } catch (pbEx) {
   return "";
  }
@@ -202,10 +249,11 @@ function pbAmpVarLimit() {
 function pbTruncateAmpVar(val) {
  var s = pbToStr(val);
  var max = pbAmpVarLimit();
- if (s.length <= max) {
+ var len = s.length;
+ if (typeof len !== "number" || len <= max) {
   return s;
  }
- return s.substring(0, max) + "…";
+ return pbSafeSubstring(s, 0, max) + "...";
 }
 
 function pbSetAmpVar(name, val) {
@@ -219,86 +267,19 @@ function pbSetAmpVar(name, val) {
  } catch (setEx) {}
 }
 
-function pbLookupRowsFirstRow(deName, filterField, filterValue) {
- var rows = null;
- try {
-  rows = Platform.Function.LookupRows(deName, filterField, filterValue);
- } catch (lookupEx) {
-  return null;
- }
- if (!rows) {
-  return null;
- }
- try {
-  if (typeof rows.length === "number" && rows.length > 0 && rows[0]) {
-   return rows[0];
-  }
- } catch (lenEx) {}
- try {
-  if (rows.Results && rows.Results.length > 0 && rows.Results[0]) {
-   return rows.Results[0];
-  }
- } catch (resEx) {}
- return null;
+function pbAuthAmpPrefix(which) {
+ return which === "prod" ? "prod" : "src";
 }
 
-function pbAuthField(row, names) {
- var i;
- for (i = 0; i < names.length; i++) {
-  var v = null;
-  try {
-   v = row[names[i]];
-  } catch (fieldEx) {}
-  if ((v === null || v === undefined || !pbTrim(v)) && row) {
-   try {
-    v = row[String(names[i])];
-   } catch (fieldEx2) {}
-  }
-  if ((v === null || v === undefined || !pbTrim(v)) && row) {
-   try {
-    v = Platform.Function.Field(row, names[i]);
-   } catch (fieldEx3) {}
-  }
-  if (v !== null && v !== undefined && pbTrim(v)) {
-   return pbTrim(v);
-  }
- }
- return "";
-}
-
-function pbAuthResolveRow(userKey, fallbackKeys) {
- var tried = [];
- var keys = [pbTrim(userKey)];
- var fi;
- if (fallbackKeys && fallbackKeys.length) {
-  for (fi = 0; fi < fallbackKeys.length; fi++) {
-   keys.push(pbTrim(fallbackKeys[fi]));
-  }
- }
- var ki;
- for (ki = 0; ki < keys.length; ki++) {
-  var candidate = keys[ki];
-  if (!candidate) {
-   continue;
-  }
-  var dup = false;
-  var ti;
-  for (ti = 0; ti < tried.length; ti++) {
-   if (tried[ti] === candidate) {
-    dup = true;
-    break;
-   }
-  }
-  if (dup) {
-   continue;
-  }
-  tried.push(candidate);
-  var authRow = pbLookupRowsFirstRow("SFMC_AUTH", "User", candidate);
-  if (authRow) {
-   return { row: authRow, userKey: candidate, tried: tried };
-  }
- }
- return { row: null, userKey: pbTrim(userKey), tried: tried };
+function pbAuthFromAmp(which) {
+ var prefix = pbAuthAmpPrefix(which);
+ return {
+  userKey: pbTrim(Platform.Variable.GetValue("@" + prefix + "AuthUser") || ""),
+  clientId: pbTrim(Platform.Variable.GetValue("@" + prefix + "ClientId") || ""),
+  clientSecret: pbTrim(Platform.Variable.GetValue("@" + prefix + "ClientSecret") || ""),
+  subdomain: pbTrim(Platform.Variable.GetValue("@" + prefix + "Subdomain") || ""),
+  accountId: pbTrim(Platform.Variable.GetValue("@" + prefix + "AccountId") || "")
+ };
 }
 
 function pbAuthForUser(userKey, fallbackKeys) {
@@ -310,25 +291,17 @@ function pbAuthForUser(userKey, fallbackKeys) {
   userKey: ""
  };
  try {
-  var resolved = pbAuthResolveRow(userKey, fallbackKeys);
-  if (!resolved.row) {
-   out.msg =
-    "No SFMC_AUTH row for User=" +
-    resolved.userKey +
-    " (also tried: " +
-    (resolved.tried.length ? resolved.tried.join(", ") : "none") +
-    ").";
-   return out;
-  }
-  var lookupUser = resolved.userKey;
+  var want = pbTrim(userKey);
+  var which = fallbackKeys && fallbackKeys.length ? "prod" : "src";
+  var packed = pbAuthFromAmp(which);
+  var lookupUser = packed.userKey || want;
   out.userKey = lookupUser;
-  var row = resolved.row;
-  var clientId = pbAuthField(row, ["clientId", "ClientId"]);
-  var clientSecret = pbAuthField(row, ["clientSecret", "ClientSecret"]);
-  var subdomain = pbAuthField(row, ["subdomain", "Subdomain"]);
-  var accountId = pbAuthField(row, ["accountId", "AccountId"]);
+  var clientId = packed.clientId;
+  var clientSecret = packed.clientSecret;
+  var subdomain = packed.subdomain;
+  var accountId = packed.accountId;
   if (!clientId || !clientSecret || !subdomain) {
-   out.msg = "SFMC_AUTH incomplete for User=" + lookupUser + ".";
+   out.msg = "No SFMC_AUTH row loaded in AMPscript for User=" + (lookupUser || want) + ".";
    return out;
   }
   var authUrl = "https://" + subdomain + ".auth.marketingcloudapis.com/v2/token";
@@ -353,7 +326,7 @@ function pbAuthForUser(userKey, fallbackKeys) {
     " for User=" +
     lookupUser +
     " — " +
-    pbTrim(body).substring(0, 160);
+    pbSafeSubstring(pbTrim(body), 0, 160);
    return out;
   }
   var token = pbExtractAccessToken(body);
@@ -364,7 +337,7 @@ function pbAuthForUser(userKey, fallbackKeys) {
     " for User=" +
     lookupUser +
     " but no access_token — " +
-    pbTrim(body).substring(0, 160);
+    pbSafeSubstring(pbTrim(body), 0, 160);
    return out;
   }
   out.ok = true;
@@ -2927,17 +2900,27 @@ function pbSafeSubstring(text, start, maxLen) {
   return "";
  }
  var st = start || 0;
+ var take = maxLen || 280;
+ var len = s.length;
+ if (typeof len !== "number" || len < 1) {
+  return "";
+ }
  if (st < 0) {
   st = 0;
  }
- if (st >= s.length) {
+ if (st >= len) {
   return "";
  }
- var end = st + (maxLen || 280);
- if (end > s.length) {
-  end = s.length;
+ var end = st + take;
+ if (end > len) {
+  end = len;
  }
- return s.substring(st, end);
+ var out = "";
+ var i;
+ for (i = st; i < end; i++) {
+  out += s.charAt(i);
+ }
+ return out;
 }
 
 function pbStackCreateQueryDefinitionProd(sub, token, queryKey, queryName, queryText, deCustomerKey, deName, automationKeyHint) {
