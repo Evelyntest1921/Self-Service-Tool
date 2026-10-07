@@ -950,9 +950,16 @@ function pbUatRestLoadDeSpec(token, sub, customerKey) {
  if (!token || !sub || !ck) {
   return null;
  }
- var base =
+ var baseCustom =
+  "https://" + sub + ".rest.marketingcloudapis.com/data/v1/customobjects/key:" + encodeURIComponent(ck);
+ var baseLegacy =
   "https://" + sub + ".rest.marketingcloudapis.com/data/v1/dataextensions/key:" + encodeURIComponent(ck);
- var metaGot = pbHttpJson(token, sub, "GET", base, null);
+ var metaGot = pbHttpJson(token, sub, "GET", baseCustom, null);
+ var base = baseCustom;
+ if (!pbHttpOk(metaGot.status) || !metaGot.body) {
+  metaGot = pbHttpJson(token, sub, "GET", baseLegacy, null);
+  base = baseLegacy;
+ }
  if (!pbHttpOk(metaGot.status) || !metaGot.body) {
   return null;
  }
@@ -964,6 +971,15 @@ function pbUatRestLoadDeSpec(token, sub, customerKey) {
  }
  var fields = [];
  var colsGot = pbHttpJson(token, sub, "GET", base + "/columns", null);
+ if (!pbHttpOk(colsGot.status) && meta && meta.id) {
+  colsGot = pbHttpJson(
+   token,
+   sub,
+   "GET",
+   "https://" + sub + ".rest.marketingcloudapis.com/data/v1/customobjects/" + encodeURIComponent(pbToStr(meta.id)) + "/fields",
+   null
+  );
+ }
  if (pbHttpOk(colsGot.status) && colsGot.body) {
   try {
    var colsData = Platform.Function.ParseJSON(colsGot.body);
@@ -1152,6 +1168,80 @@ function pbRestFieldTypeFromSoap(fieldType) {
  return "Text";
 }
 
+function pbParseRestDeObjectId(row) {
+ if (!row) {
+  return "";
+ }
+ if (row.customObjectId) {
+  return pbToStr(row.customObjectId);
+ }
+ if (row.id) {
+  return pbToStr(row.id);
+ }
+ if (row.objectId) {
+  return pbToStr(row.objectId);
+ }
+ return "";
+}
+
+function pbProdRestDeObjectId(sub, token, customerKey) {
+ var ck = pbTrim(customerKey);
+ if (!ck) {
+  return "";
+ }
+ var urls = [
+  "https://" + sub + ".rest.marketingcloudapis.com/data/v1/customobjects/key:" + encodeURIComponent(ck),
+  "https://" + sub + ".rest.marketingcloudapis.com/data/v1/dataextensions/key:" + encodeURIComponent(ck)
+ ];
+ var ui;
+ for (ui = 0; ui < urls.length; ui++) {
+  var got = pbHttpJson(token, sub, "GET", urls[ui], null);
+  if (!pbHttpOk(got.status) || !got.body) {
+   continue;
+  }
+  try {
+   var oid = pbParseRestDeObjectId(Platform.Function.ParseJSON(got.body));
+   if (oid) {
+    return oid;
+  }
+  } catch (restDeEx) {}
+ }
+ return "";
+}
+
+function pbRestCustomObjectFieldRow(row, ordinal) {
+ var name = pbToStr(row.Name || "");
+ if (!name) {
+  return null;
+ }
+ var type = pbRestFieldTypeFromSoap(row.FieldType);
+ var isPk = row.IsPrimaryKey === true || String(row.IsPrimaryKey).toLowerCase() === "true";
+ var isReq =
+  isPk ||
+  row.IsRequired === true ||
+  String(row.IsRequired).toLowerCase() === "true";
+ var len = row.MaxLength ? parseInt(String(row.MaxLength), 10) : type === "EmailAddress" ? 254 : 50;
+ if (isNaN(len) || len <= 0) {
+  len = 50;
+ }
+ return {
+  name: name,
+  type: type,
+  maskType: "None",
+  storageType: "Plain",
+  length: len,
+  ordinal: ordinal,
+  isNullable: !isReq,
+  isPrimaryKey: isPk,
+  isTemplateField: false,
+  isInheritable: true,
+  isOverridable: true,
+  isHidden: false,
+  isReadOnly: false,
+  mustOverride: false
+ };
+}
+
 function pbProdRestCreateEntryDe(sub, token, customerKey, deName, uatSpec) {
  var ck = pbTrim(customerKey);
  var spec = uatSpec && uatSpec.fields && uatSpec.fields.length ? uatSpec : pbDefaultStackDeSpec(deName || ck);
@@ -1160,80 +1250,65 @@ function pbProdRestCreateEntryDe(sub, token, customerKey, deName, uatSpec) {
  }
  var fieldsPayload = [];
  var fi;
+ var ord = 0;
  for (fi = 0; fi < spec.fields.length; fi++) {
-  var row = spec.fields[fi];
-  if (!row || !row.Name) {
-   continue;
+  var mapped = pbRestCustomObjectFieldRow(spec.fields[fi], ord);
+  if (mapped) {
+   fieldsPayload.push(mapped);
+   ord++;
   }
-  var entry = {
-   name: pbToStr(row.Name),
-   type: pbRestFieldTypeFromSoap(row.FieldType),
-   required:
-    row.IsRequired === true ||
-    String(row.IsRequired).toLowerCase() === "true" ||
-    row.IsPrimaryKey === true ||
-    String(row.IsPrimaryKey).toLowerCase() === "true",
-   primaryKey: row.IsPrimaryKey === true || String(row.IsPrimaryKey).toLowerCase() === "true"
-  };
-  if (row.MaxLength) {
-   entry.length = parseInt(String(row.MaxLength), 10);
-  }
-  if (row.DefaultValue !== null && row.DefaultValue !== undefined && pbTrim(row.DefaultValue)) {
-   entry.defaultValue = pbToStr(row.DefaultValue);
-  }
-  fieldsPayload.push(entry);
+ }
+ if (!fieldsPayload.length) {
+  return { ok: false, objectId: "", msg: "DE schema has no fields for REST create." };
  }
  var sendField = spec.sendableField || "ContactId";
- var subField = spec.subscriberField || "Subscriber Key";
+ if (sendField === "Subscriber Key") {
+  sendField = "ContactId";
+ }
+ var categoryId = pbProdResolveDeCategoryId(sub, token);
  var payload = {
   name: pbTrim(deName) || spec.name || ck,
   key: ck,
+  description: "Pushed from SST",
+  isActive: true,
   isSendable: true,
   isTestable: true,
-  sendableCustomObjectField: sendField === "Subscriber Key" ? "ContactId" : sendField,
-  sendableSubscriberField: subField === "Subscriber Key" ? "_SubscriberKey" : subField,
+  sendableCustomObjectField: sendField,
+  sendableSubscriberField: "_SubscriberKey",
+  isObjectDeletable: true,
+  isFieldAdditionAllowed: true,
+  isFieldModificationAllowed: true,
   fields: fieldsPayload
  };
- var postUrl = "https://" + sub + ".rest.marketingcloudapis.com/data/v1/dataextensions";
+ if (categoryId > 0) {
+  payload.categoryId = categoryId;
+ }
+ var postUrl = "https://" + sub + ".rest.marketingcloudapis.com/data/v1/customobjects";
  var posted = pbHttpJson(token, sub, "POST", postUrl, payload);
  if (!pbHttpOk(posted.status)) {
+  if (parseInt(String(posted.status), 10) === 409 || pbTrim(posted.body).toLowerCase().indexOf("exist") >= 0) {
+   var existingId = pbProdRestDeObjectId(sub, token, ck);
+   if (existingId) {
+    return { ok: true, objectId: existingId, msg: "Entry DE already exists in Production (REST id " + existingId + ")." };
+   }
+  }
   return {
    ok: false,
    objectId: "",
    msg: "REST DE POST HTTP " + posted.status + " — " + pbTrim(posted.body).substring(0, 160)
   };
  }
- var objectId = pbProdRestDeObjectId(sub, token, ck);
+ var objectId = "";
+ try {
+  objectId = pbParseRestDeObjectId(Platform.Function.ParseJSON(posted.body));
+ } catch (postDeEx) {}
+ if (!objectId) {
+  objectId = pbProdRestDeObjectId(sub, token, ck);
+ }
  if (objectId) {
-  return { ok: true, objectId: objectId, msg: "Entry DE created in Production via REST." };
+  return { ok: true, objectId: objectId, msg: "Entry DE created in Production via REST customobjects." };
  }
  return { ok: false, objectId: "", msg: "REST DE POST accepted but id not returned." };
-}
-
-function pbProdRestDeObjectId(sub, token, customerKey) {
- var ck = pbTrim(customerKey);
- if (!ck) {
-  return "";
- }
- var url =
-  "https://" +
-  sub +
-  ".rest.marketingcloudapis.com/data/v1/dataextensions/key:" +
-  encodeURIComponent(ck);
- var got = pbHttpJson(token, sub, "GET", url, null);
- if (!pbHttpOk(got.status) || !got.body) {
-  return "";
- }
- try {
-  var row = Platform.Function.ParseJSON(got.body);
-  if (row && row.customObjectId) {
-   return pbToStr(row.customObjectId);
-  }
-  if (row && row.id) {
-   return pbToStr(row.id);
-  }
- } catch (restDeEx) {}
- return "";
 }
 
 function pbStackSchemaFieldXml(fieldDef) {
@@ -2023,6 +2098,20 @@ function pbResolveSourceEmailAsset(sourceToken, sourceSub, assetId, emailName, l
  return { ok: false, asset: null, msg: "Email asset id or name missing." };
 }
 
+function pbReuseProdEmailByName(targetToken, targetSub, emailName) {
+ var byName = pbFetchEmailAssetByName(targetToken, targetSub, emailName);
+ if (!byName.ok || !byName.asset) {
+  return { ok: false, prodEmailId: "", legacyEmailId: "", msg: byName.msg || "" };
+ }
+ var asset = byName.asset;
+ return {
+  ok: true,
+  prodEmailId: pbToStr(asset.id || ""),
+  legacyEmailId: pbExtractLegacyEmailId(asset),
+  msg: "Production email reused (asset id " + pbToStr(asset.id || "") + ")."
+ };
+}
+
 function pbCopyEmailAsset(sourceToken, sourceSub, targetToken, targetSub, assetId, targetName, legacyEmailId) {
  var resolved = pbResolveSourceEmailAsset(
   sourceToken,
@@ -2036,12 +2125,22 @@ function pbCopyEmailAsset(sourceToken, sourceSub, targetToken, targetSub, assetI
   return { ok: false, msg: resolved.msg || "Could not resolve source email." };
  }
  var template = resolved.asset;
+ var prodEmailName = pbTrim(targetName || template.name || "Pushed email");
+ var existingProd = pbReuseProdEmailByName(targetToken, targetSub, prodEmailName);
+ if (existingProd.ok && existingProd.prodEmailId) {
+  return {
+   ok: true,
+   msg: existingProd.msg,
+   prodEmailId: existingProd.prodEmailId,
+   legacyEmailId: existingProd.legacyEmailId
+  };
+ }
  var views = template.views || {};
  var htmlView = views.html || {};
  var subject =
   (views.subjectline && views.subjectline.content) || template.name || targetName || "Email";
  var payload = {
-  name: targetName || template.name || "Pushed email",
+  name: prodEmailName,
   assetType: { id: 207, name: "htmlemail" },
   channels: { email: true, web: false },
   views: {
@@ -2057,9 +2156,21 @@ function pbCopyEmailAsset(sourceToken, sourceSub, targetToken, targetSub, assetI
  var postUrl = "https://" + targetSub + ".rest.marketingcloudapis.com/asset/v1/content/assets";
  var posted = pbHttpJson(targetToken, targetSub, "POST", postUrl, payload);
  if (!pbHttpOk(posted.status)) {
+  var postBody = pbTrim(posted.body);
+  if (postBody.indexOf("already taken") >= 0 || postBody.indexOf("must be unique") >= 0) {
+   var dupReuse = pbReuseProdEmailByName(targetToken, targetSub, prodEmailName);
+   if (dupReuse.ok && dupReuse.prodEmailId) {
+    return {
+     ok: true,
+     msg: dupReuse.msg,
+     prodEmailId: dupReuse.prodEmailId,
+     legacyEmailId: dupReuse.legacyEmailId
+    };
+   }
+  }
   return {
    ok: false,
-   msg: "Production email POST HTTP " + posted.status + " — " + pbTrim(posted.body).substring(0, 220)
+   msg: "Production email POST HTTP " + posted.status + " — " + postBody.substring(0, 220)
   };
  }
  var newId = "";
