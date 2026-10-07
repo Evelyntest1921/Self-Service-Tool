@@ -1312,10 +1312,14 @@ function pbBuildQueryMutationBody(opts) {
  var objectIdXml = o.existingId ? "<ObjectID>" + pbXmlSafe(o.existingId) + "</ObjectID>" : "";
  var categoryXml = o.useCategory && o.categoryId > 0 ? "<CategoryID>" + o.categoryId + "</CategoryID>" : "";
  var deTargetOid = o.useDeOid && o.deOid ? "<ObjectID>" + pbXmlSafe(o.deOid) + "</ObjectID>" : "";
+ var targetUpdate = pbTrim(o.targetUpdateType || "Update") || "Update";
+ var optionsXml = o.existingId ? "" : "<Options></Options>";
  return (
   "<" +
   requestTag +
-  ' xmlns="http://exacttarget.com/wsdl/partnerAPI"><Objects xsi:type="QueryDefinition">' +
+  ' xmlns="http://exacttarget.com/wsdl/partnerAPI">' +
+  optionsXml +
+  '<Objects xsi:type="QueryDefinition">' +
   objectIdXml +
   "<CustomerKey>" +
   pbXmlSafe(o.key) +
@@ -1324,7 +1328,9 @@ function pbBuildQueryMutationBody(opts) {
   "</Name>" +
   categoryXml +
   pbSoapQueryTextXml(o.sql) +
-  "<TargetType>DE</TargetType><TargetUpdateType>Update</TargetUpdateType>" +
+  "<TargetType>DE</TargetType><TargetUpdateType>" +
+  pbXmlSafe(targetUpdate) +
+  "</TargetUpdateType>" +
   "<DataExtensionTarget>" +
   deTargetOid +
   "<CustomerKey>" +
@@ -1335,6 +1341,126 @@ function pbBuildQueryMutationBody(opts) {
   requestTag +
   ">"
  );
+}
+
+function pbProdRetrieveDeTargetMeta(sub, token, customerKey, deNameHint) {
+ var ck = pbTrim(customerKey);
+ if (!ck) {
+  return { ok: false, objectId: "", customerKey: "", name: "" };
+ }
+ var retrieve =
+  '<RetrieveRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI"><RetrieveRequest>' +
+  "<ObjectType>DataExtension</ObjectType><Properties>ObjectID</Properties><Properties>CustomerKey</Properties><Properties>Name</Properties>" +
+  '<Filter xsi:type="SimpleFilterPart"><Property>CustomerKey</Property><SimpleOperator>equals</SimpleOperator><Value>' +
+  pbXmlSafe(ck) +
+  "</Value></Filter></RetrieveRequest></RetrieveRequestMsg>";
+ var resp = pbSoapCall(sub, token, "Retrieve", retrieve);
+ var text = pbSoapResultsSnippet(resp.body);
+ var oid = pbParseSoapObjectId(resp.body);
+ var nameMatch = text.match(/<(?:[\w]+:)?Name[^>]*>([^<]*)</i);
+ var ckMatch = text.match(/<(?:[\w]+:)?CustomerKey[^>]*>([^<]*)</i);
+ var prodName = nameMatch && pbTrim(nameMatch[1]) ? pbTrim(nameMatch[1]) : pbTrim(deNameHint) || ck;
+ var prodKey = ckMatch && pbTrim(ckMatch[1]) ? pbTrim(ckMatch[1]) : ck;
+ if (oid) {
+  return { ok: true, objectId: oid, customerKey: prodKey, name: prodName };
+ }
+ var fallback = pbProdRetrieveDeObjectId(sub, token, ck, deNameHint);
+ if (fallback.ok && fallback.objectId) {
+  return {
+   ok: true,
+   objectId: fallback.objectId,
+   customerKey: fallback.customerKey || ck,
+   name: pbTrim(deNameHint) || ck
+  };
+ }
+ return { ok: false, objectId: "", customerKey: ck, name: pbTrim(deNameHint) || ck };
+}
+
+function pbCreateQueryDefinitionWsProxy(queryKey, queryName, queryText, deCustomerKey, deName) {
+ try {
+  var prox = new Script.Util.WSProxy();
+  var existing = prox.retrieve("QueryDefinition", ["ObjectID", "CustomerKey"], {
+   Property: "CustomerKey",
+   SimpleOperator: "equals",
+   Value: String(queryKey)
+  });
+  var existingObjectId = "";
+  if (existing && existing.Results && existing.Results.length > 0 && existing.Results[0].ObjectID) {
+   existingObjectId = String(existing.Results[0].ObjectID);
+  }
+  var queryPayload = {
+   Name: String(queryName),
+   CustomerKey: String(queryKey),
+   QueryText: queryText,
+   TargetType: "DE",
+   TargetUpdateType: "Update",
+   DataExtensionTarget: {
+    CustomerKey: String(deCustomerKey),
+    Name: String(deName)
+   }
+  };
+  var createResponse = null;
+  if (existingObjectId) {
+   queryPayload.ObjectID = existingObjectId;
+   createResponse = prox.updateItem("QueryDefinition", queryPayload);
+  } else {
+   createResponse = prox.createItem("QueryDefinition", queryPayload);
+  }
+  var status =
+   createResponse && createResponse.Status ? String(createResponse.Status) : "UNKNOWN";
+  var objectId = "";
+  if (createResponse && createResponse.Results && createResponse.Results.length > 0) {
+   var qr = createResponse.Results[0];
+   objectId = qr.ObjectID
+    ? String(qr.ObjectID)
+    : qr.NewObjectID
+    ? String(qr.NewObjectID)
+    : qr.NewID
+    ? String(qr.NewID)
+    : "";
+  }
+  if (status === "OK" && !objectId) {
+   var lookup = prox.retrieve("QueryDefinition", ["ObjectID"], {
+    Property: "CustomerKey",
+    SimpleOperator: "equals",
+    Value: String(queryKey)
+   });
+   if (lookup && lookup.Results && lookup.Results.length > 0 && lookup.Results[0].ObjectID) {
+    objectId = String(lookup.Results[0].ObjectID);
+   }
+  }
+  if (status === "OK") {
+   return {
+    ok: true,
+    objectId: objectId,
+    msg: "QueryDefinition " + (existingObjectId ? "updated" : "created") + " via WSProxy (same BU as cloud page)."
+   };
+  }
+  var errMsg =
+   createResponse &&
+   createResponse.Results &&
+   createResponse.Results.length > 0 &&
+   createResponse.Results[0].StatusMessage
+    ? String(createResponse.Results[0].StatusMessage)
+    : "WSProxy Status=" + status;
+  return { ok: false, objectId: "", msg: errMsg };
+ } catch (wsEx) {
+  return { ok: false, objectId: "", msg: wsEx.message || String(wsEx) };
+ }
+}
+
+function pbSoapFailureDetail(lastResp) {
+ var resp = lastResp || {};
+ var body = pbToStr(resp.body);
+ var http = resp.status !== undefined && resp.status !== null ? String(resp.status) : "";
+ if (!pbTrim(body)) {
+  return (
+   "Empty SOAP response" +
+   (http ? " (HTTP " + http + ")" : "") +
+   ". Production token/subdomain may not allow QueryDefinition Create, or the request was blocked."
+  );
+ }
+ return pbSoapErrorSummary(body);
 }
 
 function pbSoapFindObjectIdForCustomerKey(body, customerKey) {
@@ -2058,7 +2184,8 @@ function pbProdEnsureEntryDe(sub, token, customerKey, deName, uatOpts) {
  };
 }
 
-function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustomerKey, deName, deObjectId, automationKeyHint) {
+function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustomerKey, deName, deObjectId, automationKeyHint, extraOpts) {
+ var xo = extraOpts || {};
  var key = pbTrim(queryKey);
  if (!key || !pbTrim(queryText)) {
   return {
@@ -2077,29 +2204,47 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
   qName = key;
  }
  var prodSql = pbToStr(queryText);
+ var deTarget = pbProdRetrieveDeTargetMeta(sub, token, deCustomerKey, deName);
+ if (!deTarget.ok || !deTarget.objectId) {
+  return {
+   ok: false,
+   objectId: "",
+   msg:
+    "Production entry DE not found for query target (key " +
+    pbTrim(deCustomerKey) +
+    "). Push entry DE step first."
+  };
+ }
+ var targetDeKey = deTarget.customerKey || deCustomerKey;
+ var targetDeName = deTarget.name || deName;
+ var targetDeOid = deTarget.objectId;
  var existingId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+ var queryCategoryId = pbProdResolveQueryCategoryId(sub, token);
  var attemptPlans = [
-  { useCategory: false },
-  { useCategory: true, categoryId: pbProdResolveQueryCategoryId(sub, token) }
+  { targetUpdateType: "Update", useCategory: false, useDeOid: false },
+  { targetUpdateType: "Overwrite", useCategory: false, useDeOid: false },
+  { targetUpdateType: "Overwrite", useCategory: false, useDeOid: true },
+  { targetUpdateType: "Overwrite", useCategory: true, useDeOid: true }
  ];
- var lastResp = { body: "" };
+ var lastResp = { body: "", status: 0 };
  var ai;
  for (ai = 0; ai < attemptPlans.length; ai++) {
   var plan = attemptPlans[ai];
-  if (plan.useCategory && !(plan.categoryId > 0)) {
+  if (plan.useCategory && !(queryCategoryId > 0)) {
    continue;
   }
   var body = pbBuildQueryMutationBody({
    existingId: existingId,
    key: key,
    qName: qName,
-   categoryId: plan.categoryId || 0,
+   categoryId: queryCategoryId,
    useCategory: plan.useCategory,
+   targetUpdateType: plan.targetUpdateType,
    sql: prodSql,
-   useDeOid: false,
-   deOid: "",
-   deCustomerKey: deCustomerKey,
-   deName: deName
+   useDeOid: plan.useDeOid,
+   deOid: targetDeOid,
+   deCustomerKey: targetDeKey,
+   deName: targetDeName
   });
   var action = existingId ? "Update" : "Create";
   lastResp = pbSoapCall(sub, token, action, body);
@@ -2149,6 +2294,17 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
    msg: "Query resolved in Production for key " + key + "."
   };
  }
+ var wsFallback = null;
+ if (xo.uatSub && xo.uatSub === sub) {
+  wsFallback = pbCreateQueryDefinitionWsProxy(key, qName, prodSql, targetDeKey, targetDeName);
+  if (wsFallback.ok && wsFallback.objectId) {
+   return {
+    ok: true,
+    objectId: wsFallback.objectId,
+    msg: wsFallback.msg
+   };
+  }
+ }
  return {
   ok: false,
   objectId: "",
@@ -2157,8 +2313,13 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
    (existingId ? "Update" : "Create") +
    " failed for CustomerKey " +
    key +
-   ". " +
-   pbSoapErrorSummary(lastResp.body)
+   " targeting DE [" +
+   targetDeName +
+   "] key " +
+   targetDeKey +
+   ". Stack build uses WSProxy in the UAT business unit; Production push uses SOAP to the prod subdomain. " +
+   pbSoapFailureDetail(lastResp) +
+   (wsFallback && wsFallback.msg ? " WSProxy fallback: " + wsFallback.msg : "")
  };
 }
 
@@ -2800,6 +2961,23 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
    return { ok: false, logs: logs, msg: "Query SQL FAILED: " + (queryBuild.msg || "Could not build Production SQL.") };
   }
   log(queryBuild.msg);
+  var deTargetMeta = pbProdRetrieveDeTargetMeta(
+   prodAuth.subdomain,
+   prodAuth.token,
+   deKey,
+   deName
+  );
+  if (deTargetMeta.ok) {
+   log(
+    "Query target DE meta — CustomerKey " +
+     deTargetMeta.customerKey +
+     ", Name " +
+     deTargetMeta.name +
+     ", ObjectID " +
+     deTargetMeta.objectId +
+     "."
+   );
+  }
   var queryResult = pbProdUpsertQuery(
    prodAuth.subdomain,
    prodAuth.token,
@@ -2809,7 +2987,8 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
    deKey,
    deName,
    deProd.objectId,
-   live.automationKey || fb.automationKey
+   live.automationKey || fb.automationKey,
+   { uatSub: devAuth.subdomain }
   );
   if (queryResult.ok) {
    log(queryResult.msg);
