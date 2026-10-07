@@ -219,40 +219,27 @@ function pbSetAmpVar(name, val) {
  } catch (setEx) {}
 }
 
-function pbCoerceLookupRows(raw) {
- if (raw == null) {
-  return [];
- }
- var source = raw;
+function pbLookupRowsFirstRow(deName, filterField, filterValue) {
+ var rows = null;
  try {
-  if (source.Results && typeof source.Results.length === "number") {
-   source = source.Results;
+  rows = Platform.Function.LookupRows(deName, filterField, filterValue);
+ } catch (lookupEx) {
+  return null;
+ }
+ if (!rows) {
+  return null;
+ }
+ try {
+  if (typeof rows.length === "number" && rows.length > 0 && rows[0]) {
+   return rows[0];
   }
-  if (typeof source.length === "number" && source.length > 0) {
-   var fromArray = [];
-   var j;
-   for (j = 0; j < source.length; j++) {
-    if (source[j]) {
-     fromArray.push(source[j]);
-    }
-   }
-   if (fromArray.length > 0) {
-    return fromArray;
-   }
+ } catch (lenEx) {}
+ try {
+  if (rows.Results && rows.Results.length > 0 && rows.Results[0]) {
+   return rows.Results[0];
   }
-  var count = Platform.Function.RowCount(source);
-  if (count && count > 0) {
-   var fromRowset = [];
-   var i;
-   for (i = 1; i <= count; i++) {
-    fromRowset.push(Platform.Function.Row(source, i));
-   }
-   if (fromRowset.length > 0) {
-    return fromRowset;
-   }
-  }
- } catch (rowEx) {}
- return [];
+ } catch (resEx) {}
+ return null;
 }
 
 function pbAuthField(row, names) {
@@ -306,9 +293,9 @@ function pbAuthResolveRow(userKey, fallbackKeys) {
    continue;
   }
   tried.push(candidate);
-  var rows = pbCoerceLookupRows(Platform.Function.LookupRows("SFMC_AUTH", "User", candidate));
-  if (rows.length > 0) {
-   return { row: rows[0], userKey: candidate, tried: tried };
+  var authRow = pbLookupRowsFirstRow("SFMC_AUTH", "User", candidate);
+  if (authRow) {
+   return { row: authRow, userKey: candidate, tried: tried };
   }
  }
  return { row: null, userKey: pbTrim(userKey), tried: tried };
@@ -2867,18 +2854,88 @@ function pbStackBuildQueryActivitySteps(queryObjectId) {
  ];
 }
 
+function pbProdCreateQueryDefinitionStackParity(sub, token, queryKey, queryName, queryText, deCustomerKey, deName) {
+ var key = pbTrim(queryKey);
+ var qName = pbTrim(queryName) || key;
+ var sql = pbToStr(queryText);
+ if (!key || !sql) {
+  return { ok: false, objectId: "", msg: "Query key or SQL missing." };
+ }
+ var deKey = pbTrim(deCustomerKey);
+ var deDisplay = pbTrim(deName) || deKey;
+ var existingId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+ var body = pbBuildQueryMutationBody({
+  existingId: existingId,
+  key: key,
+  qName: qName,
+  categoryId: 0,
+  useCategory: false,
+  targetUpdateType: "Update",
+  sql: sql,
+  useDeOid: false,
+  deOid: "",
+  deCustomerKey: deKey,
+  deName: deDisplay,
+  createRoot: ""
+ });
+ var action = existingId ? "Update" : "Create";
+ var resp = pbSoapCall(sub, token, action, body);
+ var objectId = pbParseSoapObjectId(resp.body) || existingId || "";
+ if (!objectId) {
+  objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName) || "";
+ }
+ if (pbSoapQuerySaveSucceeded(resp.body)) {
+  return {
+   ok: true,
+   objectId: objectId,
+   msg:
+    "QueryDefinition " +
+    (existingId ? "updated" : "created") +
+    " in Production (same payload as stack build, key=" +
+    key +
+    ")."
+  };
+ }
+ var statusMsg = pbSoapFirstStatusMessage(resp.body) || pbSoapFailureDetail(resp);
+ return {
+  ok: false,
+  objectId: objectId,
+  msg:
+   "QueryDefinition " +
+   (existingId ? "update" : "create") +
+   " failed: " +
+   pbSafeSubstring(statusMsg, 0, 280)
+ };
+}
+
+function pbSafeSubstring(text, start, maxLen) {
+ var s = pbToStr(text);
+ if (!s) {
+  return "";
+ }
+ var st = start || 0;
+ if (st < 0) {
+  st = 0;
+ }
+ if (st >= s.length) {
+  return "";
+ }
+ var end = st + (maxLen || 280);
+ if (end > s.length) {
+  end = s.length;
+ }
+ return s.substring(st, end);
+}
+
 function pbStackCreateQueryDefinitionProd(sub, token, queryKey, queryName, queryText, deCustomerKey, deName, automationKeyHint) {
- return pbProdUpsertQuery(
+ return pbProdCreateQueryDefinitionStackParity(
   sub,
   token,
   queryKey,
   queryName,
   queryText,
   deCustomerKey,
-  deName,
-  "",
-  automationKeyHint || queryKey,
-  { sqlVariants: true }
+  deName
  );
 }
 
@@ -3515,12 +3572,22 @@ function pbResolvePushContext(journeyType, devToken, devSub, journeyId, fb) {
  return { journeyType: jt, live: liveLite, fb: fb, usesLiveStack: false };
 }
 
-function pbProdStepStatus(stepId, prodAuth, live) {
+function pbProdStepStatus(stepId, prodAuth, live, uiOpts) {
  var sid = pbTrim(stepId).toLowerCase();
+ var uo = uiOpts || {};
+ var lv = live || {};
+ if (uo.skipLiveChecks === true) {
+  if (sid === "de" && !pbTrim(lv.deCustomerKey)) {
+   return { state: "blocked", note: "No entry DE customer key from analytics." };
+  }
+  if (sid === "query_automation" && (!pbTrim(lv.queryKey) || !pbTrim(lv.automationKey))) {
+   return { state: "blocked", note: "No query or automation customer key." };
+  }
+  return { state: "pending", note: "Push this step to create or update in Production." };
+ }
  if (!prodAuth || !prodAuth.ok) {
   return { state: "unknown", note: "Production auth not available for status check." };
  }
- var lv = live || {};
  if (sid === "de") {
   var deKey = pbTrim(lv.deCustomerKey);
   if (!deKey) {
@@ -3584,6 +3651,9 @@ function pbProdStepStatus(stepId, prodAuth, live) {
 
 function pbBuildStepsHtml(journeyType, plan, live, prodAuth, jid, uiOpts) {
  var uo = uiOpts || {};
+ if (uo.skipLiveChecks !== true && uo.skipLiveChecks !== false) {
+  uo.skipLiveChecks = true;
+ }
  var html = '<p class="push-plan-intro">Plan from <strong>journeyType</strong>: <code>' + pbHtmlSafe(journeyType) + "</code></p>";
  if (uo.showCampaignInput) {
   var campVal = pbHtmlSafe(uo.campaignId || "");
@@ -3600,7 +3670,7 @@ function pbBuildStepsHtml(journeyType, plan, live, prodAuth, jid, uiOpts) {
  var i;
  for (i = 0; i < plan.length; i++) {
   var step = plan[i];
-  var st = pbProdStepStatus(step.id, prodAuth, live);
+  var st = pbProdStepStatus(step.id, prodAuth, live, uo);
   var stateClass = "state-" + pbHtmlSafe(st.state);
   html += '<li class="push-step ' + stateClass + '">';
   html += '<div class="push-step-head"><span class="push-step-num">' + (i + 1) + "</span>";
@@ -3664,7 +3734,7 @@ function pbPushAuthPair() {
 function pbExecutePushStep(stepId, journeyType, ctx) {
  var logs = [];
  function log(line) {
-  logs.push(pbToStr(line));
+  logs.push(pbSafeSubstring(line, 0, 420));
  }
  var sid = pbTrim(stepId).toLowerCase();
  if (!pbPlanIncludesStep(journeyType, sid)) {
@@ -3865,7 +3935,17 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
    queryKeyCombo
   );
   if (!qOidCombo) {
-   return { ok: false, logs: logs, msg: "Query created but ObjectID not found in Production." };
+   qOidCombo = pbProdQueryObjectIdFromAutomation(prodAuth.token, prodAuth.subdomain, live.automationKey || buildName);
+  }
+  if (!qOidCombo) {
+   return {
+    ok: false,
+    logs: logs,
+    msg:
+     "Query step reported success but Query ObjectID not found in Production. Open Automation Studio in Production and confirm query \"" +
+     queryKeyCombo +
+     "\" exists, then push this step again."
+   };
   }
   var automationResultCombo = pbStackCreateAutomationProd(prodAuth.token, prodAuth.subdomain, {
    automationName: live.automationName || buildName,
@@ -4311,10 +4391,6 @@ try {
   } else {
    pushBlockedMsg = "";
   }
-  var prodAuthPreview = pbAuthForUser(
-   pbTrim(Platform.Variable.GetValue("@AUTH_PROD_USER") || "Admin_Production") || "Admin_Production",
-   ["Admin_production", "Admin_Production", "Production_Admin", "Admin Production"]
-  );
   var plan = pbGetPushPlan(journeyType);
   var liveForUi = resolved.live;
   if (resolved.usesLiveStack && resolved.live.ok) {
@@ -4324,9 +4400,10 @@ try {
   }
   var isStackForUi = Platform.Variable.GetValue("@isStackBuild") === "true";
   stepsHtml = pbTruncateAmpVar(
-   pbBuildStepsHtml(journeyType, plan, liveForUi, prodAuthPreview, jid, {
+   pbBuildStepsHtml(journeyType, plan, liveForUi, null, jid, {
     showCampaignInput: isStackForUi,
-    campaignId: pbTrim(Platform.Variable.GetValue("@pushCampaignId") || "")
+    campaignId: pbTrim(Platform.Variable.GetValue("@pushCampaignId") || ""),
+    skipLiveChecks: true
    })
   );
   if (resolved.usesLiveStack && resolved.live.ok) {
