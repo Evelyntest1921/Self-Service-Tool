@@ -189,25 +189,63 @@ function pbAuthField(row, names) {
  return "";
 }
 
-function pbAuthForUser(userKey) {
+function pbAuthResolveRow(userKey, fallbackKeys) {
+ var tried = [];
+ var keys = [pbTrim(userKey)];
+ var fi;
+ if (fallbackKeys && fallbackKeys.length) {
+  for (fi = 0; fi < fallbackKeys.length; fi++) {
+   keys.push(pbTrim(fallbackKeys[fi]));
+  }
+ }
+ var ki;
+ for (ki = 0; ki < keys.length; ki++) {
+  var candidate = keys[ki];
+  if (!candidate) {
+   continue;
+  }
+  var dup = false;
+  var ti;
+  for (ti = 0; ti < tried.length; ti++) {
+   if (tried[ti] === candidate) {
+    dup = true;
+    break;
+   }
+  }
+  if (dup) {
+   continue;
+  }
+  tried.push(candidate);
+  var rows = Platform.Function.LookupRows("SFMC_AUTH", "User", candidate);
+  if (rows && rows.length > 0) {
+   return { row: rows[0], userKey: candidate, tried: tried };
+  }
+ }
+ return { row: null, userKey: pbTrim(userKey), tried: tried };
+}
+
+function pbAuthForUser(userKey, fallbackKeys) {
  var out = {
   ok: false,
   token: "",
   subdomain: "",
-  msg: ""
+  msg: "",
+  userKey: ""
  };
  try {
-  var lookupUser = pbTrim(userKey);
-  if (!lookupUser) {
-   out.msg = "SFMC_AUTH User key is empty.";
+  var resolved = pbAuthResolveRow(userKey, fallbackKeys);
+  if (!resolved.row) {
+   out.msg =
+    "No SFMC_AUTH row for User=" +
+    resolved.userKey +
+    " (also tried: " +
+    (resolved.tried.length ? resolved.tried.join(", ") : "none") +
+    ").";
    return out;
   }
-  var rows = Platform.Function.LookupRows("SFMC_AUTH", "User", lookupUser);
-  if (!rows || rows.length === 0) {
-   out.msg = "No SFMC_AUTH row for User=" + lookupUser + ".";
-   return out;
-  }
-  var row = rows[0];
+  var lookupUser = resolved.userKey;
+  out.userKey = lookupUser;
+  var row = resolved.row;
   var clientId = pbAuthField(row, ["clientId", "ClientId"]);
   var clientSecret = pbAuthField(row, ["clientSecret", "ClientSecret"]);
   var subdomain = pbAuthField(row, ["subdomain", "Subdomain"]);
@@ -939,16 +977,22 @@ function pbPushStackBuild(ctx) {
  var sourceUser = pbTrim(Platform.Variable.GetValue("@AUTH_SOURCE_USER") || "Admin") || "Admin";
  var prodUser =
   pbTrim(Platform.Variable.GetValue("@AUTH_PROD_USER") || "Admin_Production") || "Admin_Production";
- var devAuth = pbAuthForUser(sourceUser);
+ var prodUserFallbacks = [
+  "Admin_production",
+  "Admin_Production",
+  "Production_Admin",
+  "Admin Production"
+ ];
+ var devAuth = pbAuthForUser(sourceUser, []);
  if (!devAuth.ok) {
   return { ok: false, logs: logs, msg: "Source auth failed: " + devAuth.msg };
  }
- log("Source (" + sourceUser + ") authentication OK.");
- var prodAuth = pbAuthForUser(prodUser);
+ log("Source (" + (devAuth.userKey || sourceUser) + ") authentication OK.");
+ var prodAuth = pbAuthForUser(prodUser, prodUserFallbacks);
  if (!prodAuth.ok) {
   return { ok: false, logs: logs, msg: "Production auth failed: " + prodAuth.msg };
  }
- log("Production (" + prodUser + ") authentication OK.");
+ log("Production (" + (prodAuth.userKey || prodUser) + ") authentication OK.");
  var deKey = pbTrim(ctx.deId);
  var deName = pbTrim(ctx.deName) || deKey;
  if (!deKey || deKey.toUpperCase() === "N/A") {
@@ -1181,7 +1225,7 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 <p class="sub">%%=v(@pushBlockedMsg)=%%</p>
 <p class="sub"><a href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Back to Manage Build</a></p>
 %%[ ELSE ]%%
-<p class="sub">Source reads use <code>SFMC_AUTH</code> <strong>User=Admin</strong> (UAT). Production writes use <strong>User=Admin_Production</strong> (prod <code>account_id</code> and subdomain on that row).</p>
+<p class="sub">Source reads use <code>SFMC_AUTH</code> <strong>User=Admin</strong> (UAT). Production writes use the prod row (e.g. <strong>Admin_Production</strong> / <strong>Admin_production</strong>) with prod <code>account_id</code> and subdomain.</p>
 %%=TreatAsContent(@pushResultBanner)=%%
 <div class="panel">
  <p class="panel-title">Build: %%=v(@dispName)=%%</p>
