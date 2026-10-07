@@ -545,6 +545,7 @@ function pbResolveLiveStackContext(token, sub, journeyId, fallback) {
   buildName: pbTrim(fb.buildName),
   deCustomerKey: "",
   deName: "",
+  deObjectId: "",
   queryKey: "",
   queryText: "",
   emailAssetId: "",
@@ -584,6 +585,9 @@ function pbResolveLiveStackContext(token, sub, journeyId, fallback) {
  }
  if (entryDe.name) {
   result.deName = entryDe.name;
+ }
+ if (entryDe.objectId) {
+  result.deObjectId = entryDe.objectId;
  }
  var evArgs = evGot.obj.arguments || {};
  var autoRestId = pbTrim(
@@ -845,43 +849,209 @@ function pbProdResolveDeCategoryId(sub, token) {
  return 0;
 }
 
-function pbUatLoadDeSpec(customerKey) {
+function pbDefaultStackDeFieldRows() {
+ return [
+  { Name: "MemberId", FieldType: "Text", MaxLength: 50, IsPrimaryKey: true, IsRequired: true },
+  { Name: "ContactId", FieldType: "Text", MaxLength: 50, IsRequired: true },
+  { Name: "Email", FieldType: "EmailAddress", MaxLength: 254 },
+  { Name: "CampaignId", FieldType: "Text", MaxLength: 50 },
+  { Name: "AccountId", FieldType: "Text", MaxLength: 50 },
+  { Name: "Account_Owner_Name", FieldType: "Text", MaxLength: 50 },
+  { Name: "Account_Owner_Email", FieldType: "Text", MaxLength: 254 },
+  { Name: "Status", FieldType: "Text", MaxLength: 50 },
+  { Name: "State", FieldType: "Text", MaxLength: 50 },
+  { Name: "AccountOwnerId", FieldType: "Text", MaxLength: 50 },
+  { Name: "type", FieldType: "Text", MaxLength: 50, DefaultValue: "SST" }
+ ];
+}
+
+function pbDefaultStackDeSpec(deName) {
+ return {
+  name: pbTrim(deName) || "Entry DE",
+  fields: pbDefaultStackDeFieldRows(),
+  sendableField: "ContactId",
+  subscriberField: "Subscriber Key",
+  source: "defaultStack"
+ };
+}
+
+function pbUatWsRetrieveDeRow(prox, customerKey, deName, objectId) {
+ var attempts = [];
  var ck = pbTrim(customerKey);
- if (!ck) {
+ var name = pbTrim(deName);
+ var oid = pbTrim(objectId);
+ if (ck) {
+  attempts.push({ Property: "CustomerKey", SimpleOperator: "equals", Value: ck });
+ }
+ if (oid) {
+  attempts.push({ Property: "ObjectID", SimpleOperator: "equals", Value: oid });
+ }
+ if (name) {
+  attempts.push({ Property: "Name", SimpleOperator: "equals", Value: name });
+ }
+ var ai;
+ for (ai = 0; ai < attempts.length; ai++) {
+  try {
+   var deR = prox.retrieve(
+    "DataExtension",
+    ["Name", "CustomerKey", "ObjectID"],
+    attempts[ai]
+   );
+   if (deR && deR.Results && deR.Results.length > 0) {
+    return deR.Results[0];
+   }
+  } catch (wsDeEx) {}
+ }
+ return null;
+}
+
+function pbUatWsLoadFields(prox, deRow, customerKey) {
+ var ck = pbTrim((deRow && deRow.CustomerKey) || customerKey);
+ var oid = deRow && deRow.ObjectID ? pbToStr(deRow.ObjectID) : "";
+ var filters = [];
+ if (ck) {
+  filters.push({ Property: "DataExtension.CustomerKey", SimpleOperator: "equals", Value: ck });
+ }
+ if (oid) {
+  filters.push({ Property: "DataExtension.ObjectID", SimpleOperator: "equals", Value: oid });
+ }
+ var fi;
+ for (fi = 0; fi < filters.length; fi++) {
+  try {
+   var fieldsR = prox.retrieve(
+    "DataExtensionField",
+    ["Name", "FieldType", "MaxLength", "IsPrimaryKey", "IsRequired", "DefaultValue"],
+    filters[fi]
+   );
+   if (fieldsR && fieldsR.Results && fieldsR.Results.length > 0) {
+    return fieldsR.Results;
+   }
+  } catch (wsFldEx) {}
+ }
+ return [];
+}
+
+function pbRestRowToFieldSpec(item) {
+ if (!item || !item.name) {
   return null;
+ }
+ return {
+  Name: pbToStr(item.name),
+  FieldType: pbToStr(item.type || item.fieldType || "Text"),
+  MaxLength: item.length || item.maxLength || "",
+  IsPrimaryKey: item.isPrimaryKey === true || item.primaryKey === true,
+  IsRequired: item.isRequired === true || item.required === true,
+  DefaultValue: item.defaultValue
+ };
+}
+
+function pbUatRestLoadDeSpec(token, sub, customerKey) {
+ var ck = pbTrim(customerKey);
+ if (!token || !sub || !ck) {
+  return null;
+ }
+ var base =
+  "https://" + sub + ".rest.marketingcloudapis.com/data/v1/dataextensions/key:" + encodeURIComponent(ck);
+ var metaGot = pbHttpJson(token, sub, "GET", base, null);
+ if (!pbHttpOk(metaGot.status) || !metaGot.body) {
+  return null;
+ }
+ var meta = null;
+ try {
+  meta = Platform.Function.ParseJSON(metaGot.body);
+ } catch (metaEx) {
+  return null;
+ }
+ var fields = [];
+ var colsGot = pbHttpJson(token, sub, "GET", base + "/columns", null);
+ if (pbHttpOk(colsGot.status) && colsGot.body) {
+  try {
+   var colsData = Platform.Function.ParseJSON(colsGot.body);
+   var items = colsData && colsData.items ? colsData.items : colsData && colsData.columns ? colsData.columns : [];
+   if (!items.length && colsData && colsData.fields) {
+    items = colsData.fields;
+   }
+   var ci;
+   for (ci = 0; ci < items.length; ci++) {
+    var mapped = pbRestRowToFieldSpec(items[ci]);
+    if (mapped) {
+     fields.push(mapped);
+    }
+   }
+  } catch (colsEx) {}
+ }
+ if (!fields.length && meta && meta.fields && meta.fields.length) {
+  var mi;
+  for (mi = 0; mi < meta.fields.length; mi++) {
+   var mappedMeta = pbRestRowToFieldSpec(meta.fields[mi]);
+   if (mappedMeta) {
+    fields.push(mappedMeta);
+   }
+  }
+ }
+ if (!fields.length) {
+  return null;
+ }
+ var sendField = "ContactId";
+ var fi2;
+ for (fi2 = 0; fi2 < fields.length; fi2++) {
+  if (pbTrim(fields[fi2].Name).toLowerCase() === "contactid") {
+   sendField = "ContactId";
+   break;
+  }
+  if (pbTrim(fields[fi2].FieldType).toLowerCase() === "emailaddress") {
+   sendField = pbTrim(fields[fi2].Name);
+  }
+ }
+ return {
+  name: pbToStr((meta && meta.name) || ck),
+  fields: fields,
+  sendableField: (meta && meta.sendableCustomObjectField) || sendField,
+  subscriberField: "Subscriber Key",
+  source: "uatRest"
+ };
+}
+
+function pbUatLoadDeSpec(customerKey, deName, objectId, uatToken, uatSub) {
+ var ck = pbTrim(customerKey);
+ if (!ck && !pbTrim(deName) && !pbTrim(objectId)) {
+  return null;
+ }
+ if (uatToken && uatSub) {
+  var fromRest = pbUatRestLoadDeSpec(uatToken, uatSub, ck);
+  if (fromRest && fromRest.fields && fromRest.fields.length) {
+   return fromRest;
+  }
  }
  try {
   var prox = new Script.Util.WSProxy();
-  var deR = prox.retrieve(
-   "DataExtension",
-   [
-    "Name",
-    "CustomerKey",
-    "IsSendable",
-    "IsTestable",
-    "SendableDataExtensionField",
-    "SendableSubscriberField"
-   ],
-   { Property: "CustomerKey", SimpleOperator: "equals", Value: ck }
-  );
-  if (!deR || !deR.Results || !deR.Results.length) {
+  var deRow = pbUatWsRetrieveDeRow(prox, ck, deName, objectId);
+  if (!deRow) {
    return null;
   }
-  var deRow = deR.Results[0];
-  var fieldsR = prox.retrieve(
-   "DataExtensionField",
-   ["Name", "FieldType", "MaxLength", "IsPrimaryKey", "IsRequired", "DefaultValue"],
-   { Property: "DataExtension.CustomerKey", SimpleOperator: "equals", Value: ck }
-  );
+  var resolvedKey = pbToStr(deRow.CustomerKey || ck);
+  var fields = pbUatWsLoadFields(prox, deRow, resolvedKey);
+  if (!fields.length) {
+   return null;
+  }
   return {
-   name: pbToStr(deRow.Name || ck),
-   fields: fieldsR && fieldsR.Results ? fieldsR.Results : [],
-   sendableField: pbUatSendableDeFieldName(deRow),
-   subscriberField: pbUatSendableSubscriberFieldName(deRow)
+   name: pbToStr(deRow.Name || deName || ck),
+   fields: fields,
+   sendableField: "ContactId",
+   subscriberField: "Subscriber Key",
+   source: "uatWsProxy"
   };
  } catch (uatDeEx) {
   return null;
  }
+}
+
+function pbUatLoadDeSpecOrDefault(customerKey, deName, objectId, uatToken, uatSub) {
+ var spec = pbUatLoadDeSpec(customerKey, deName, objectId, uatToken, uatSub);
+ if (spec && spec.fields && spec.fields.length) {
+  return spec;
+ }
+ return pbDefaultStackDeSpec(deName || customerKey);
 }
 
 function pbUatSendableDeFieldName(deRow) {
@@ -984,9 +1154,9 @@ function pbRestFieldTypeFromSoap(fieldType) {
 
 function pbProdRestCreateEntryDe(sub, token, customerKey, deName, uatSpec) {
  var ck = pbTrim(customerKey);
- var spec = uatSpec || pbUatLoadDeSpec(ck);
+ var spec = uatSpec && uatSpec.fields && uatSpec.fields.length ? uatSpec : pbDefaultStackDeSpec(deName || ck);
  if (!spec || !spec.fields || !spec.fields.length) {
-  return { ok: false, objectId: "", msg: "UAT DE schema not found for REST create." };
+  return { ok: false, objectId: "", msg: "DE schema missing for REST create." };
  }
  var fieldsPayload = [];
  var fi;
@@ -1093,23 +1263,12 @@ function pbStackSchemaFieldXml(fieldDef) {
 }
 
 function pbStackEntryDeFieldsXml() {
- var schema = [
-  { name: "MemberId", dataType: "Text", maxLength: "50" },
-  { name: "ContactId", dataType: "Text", maxLength: "50" },
-  { name: "Email", dataType: "EmailAddress", maxLength: "254" },
-  { name: "CampaignId", dataType: "Text", maxLength: "50" },
-  { name: "AccountId", dataType: "Text", maxLength: "50" },
-  { name: "Account_Owner_Name", dataType: "Text", maxLength: "50" },
-  { name: "Account_Owner_Email", dataType: "Text", maxLength: "254" },
-  { name: "Status", dataType: "Text", maxLength: "50" },
-  { name: "State", dataType: "Text", maxLength: "50" },
-  { name: "AccountOwnerId", dataType: "Text", maxLength: "50" },
-  { name: "type", dataType: "Text", maxLength: "50", defaultValue: "SST" }
- ];
+ var rows = pbDefaultStackDeFieldRows();
  var xml = "";
  var i;
- for (i = 0; i < schema.length; i++) {
-  xml += pbStackSchemaFieldXml(schema[i]);
+ for (i = 0; i < rows.length; i++) {
+  var row = rows[i];
+  xml += pbFieldRowToXml(row);
  }
  return xml;
 }
@@ -1150,9 +1309,10 @@ function pbProdRetrieveDeObjectId(sub, token, customerKey, deName) {
  return { ok: false, objectId: "", customerKey: ck };
 }
 
-function pbProdEnsureEntryDe(sub, token, customerKey, deName) {
+function pbProdEnsureEntryDe(sub, token, customerKey, deName, uatOpts) {
  var ck = pbTrim(customerKey);
  var name = pbTrim(deName) || ck;
+ var uo = uatOpts || {};
  if (!ck) {
   return { ok: false, msg: "Entry DE customer key missing." };
  }
@@ -1164,11 +1324,14 @@ function pbProdEnsureEntryDe(sub, token, customerKey, deName) {
    msg: "Entry DE already exists in Production (ObjectID " + existing.objectId + ")."
   };
  }
- var uatSpec = pbUatLoadDeSpec(ck);
- var fieldsXml =
-  uatSpec && uatSpec.fields && uatSpec.fields.length
-   ? pbBuildDeFieldsXmlFromUat(uatSpec.fields)
-   : pbStackEntryDeFieldsXml();
+ var uatSpec = pbUatLoadDeSpecOrDefault(
+  ck,
+  name,
+  uo.deObjectId,
+  uo.uatToken,
+  uo.uatSub
+ );
+ var fieldsXml = pbBuildDeFieldsXmlFromUat(uatSpec.fields);
  var sendableName = uatSpec ? uatSpec.sendableField : "ContactId";
  var subscriberName = uatSpec ? uatSpec.subscriberField : "Subscriber Key";
  var deDisplayName = uatSpec && uatSpec.name ? uatSpec.name : name;
@@ -1199,7 +1362,12 @@ function pbProdEnsureEntryDe(sub, token, customerKey, deName) {
    objectId = afterCreate.objectId || "";
   }
   if (objectId) {
-   return { ok: true, objectId: objectId, msg: "Entry DE created in Production." };
+   return {
+    ok: true,
+    objectId: objectId,
+    msg:
+     "Entry DE created in Production (schema source: " + pbToStr(uatSpec.source || "unknown") + ")."
+   };
   }
   var restAfter = pbProdRestDeObjectId(sub, token, ck);
   if (restAfter) {
@@ -1984,7 +2152,11 @@ function pbPushStackBuild(ctx) {
  var buildName = live.buildName || pbTrim(ctx.buildName);
  log("Entry DE key " + deKey + ", query key " + queryKey + " (" + queryText.length + " chars SQL).");
  log("Email asset id " + live.emailAssetId + ", automation key " + automationKey + ".");
- var deResult = pbProdEnsureEntryDe(prodAuth.subdomain, prodAuth.token, deKey, deName);
+ var deResult = pbProdEnsureEntryDe(prodAuth.subdomain, prodAuth.token, deKey, deName, {
+  uatToken: devAuth.token,
+  uatSub: devAuth.subdomain,
+  deObjectId: live.deObjectId || ""
+ });
  if (deResult.ok) {
   log(deResult.msg);
   if (!deResult.objectId) {
