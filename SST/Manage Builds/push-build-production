@@ -375,13 +375,60 @@ function pbSoapCall(sub, token, action, bodyXml) {
 }
 
 function pbParseSoapObjectId(body) {
- var m = pbToStr(body).match(/<ObjectID>([^<]+)<\/ObjectID>/i);
- return m ? pbTrim(m[1]) : "";
+ var text = pbToStr(body);
+ var mNew = text.match(/<(?:[\w]+:)?NewObjectID[^>]*>([^<]+)</i);
+ if (mNew && pbTrim(mNew[1])) {
+  return pbTrim(mNew[1]);
+ }
+ var mNewId = text.match(/<(?:[\w]+:)?NewID[^>]*>([^<]+)</i);
+ if (mNewId && pbTrim(mNewId[1])) {
+  return pbTrim(mNewId[1]);
+ }
+ var mObj = text.match(/<(?:[\w]+:)?ObjectID[^>]*>([^<]+)</i);
+ return mObj ? pbTrim(mObj[1]) : "";
 }
 
 function pbParseSoapStatus(body) {
- var m = pbToStr(body).match(/<OverallStatus>([^<]+)<\/OverallStatus>/i);
+ var m = pbToStr(body).match(/<(?:[\w]+:)?OverallStatus[^>]*>([^<]+)</i);
  return m ? pbTrim(m[1]) : "";
+}
+
+function pbSoapPartnerOk(body) {
+ var status = pbParseSoapStatus(body);
+ if (status !== "OK") {
+  return false;
+ }
+ if (pbToStr(body).match(/<(?:[\w]+:)?StatusCode[^>]*>\s*Error\s*</i)) {
+  return false;
+ }
+ return true;
+}
+
+function pbSoapQueryTextXml(sql) {
+ var s = pbToStr(sql);
+ if (!s) {
+  return "<QueryText></QueryText>";
+ }
+ if (s.indexOf("<") >= 0 || s.indexOf("&") >= 0) {
+  var safe = s.split("]]>").join("]]]]><![CDATA[>");
+  return "<QueryText><![CDATA[" + safe + "]]></QueryText>";
+ }
+ return "<QueryText>" + pbXmlSafe(s) + "</QueryText>";
+}
+
+function pbProdRetrieveQueryObjectId(sub, token, queryKey) {
+ var key = pbTrim(queryKey);
+ if (!key) {
+  return "";
+ }
+ var retrieveQ =
+  '<RetrieveRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI"><RetrieveRequest>' +
+  "<ObjectType>QueryDefinition</ObjectType><Properties>ObjectID</Properties>" +
+  '<Filter xsi:type="SimpleFilterPart"><Property>CustomerKey</Property><SimpleOperator>equals</SimpleOperator><Value>' +
+  pbXmlSafe(key) +
+  "</Value></Filter></RetrieveRequest></RetrieveRequestMsg>";
+ var found = pbSoapCall(sub, token, "Retrieve", retrieveQ);
+ return pbParseSoapObjectId(found.body);
 }
 
 function pbStackSchemaFieldXml(fieldDef) {
@@ -490,20 +537,34 @@ function pbProdEnsureEntryDe(sub, token, customerKey, deName) {
   pbStackEntryDeFieldsXml() +
   "</Fields></Objects></CreateRequestMsg>";
  var created = pbSoapCall(sub, token, "Create", createBody);
- var status = pbParseSoapStatus(created.body);
  var objectId = pbParseSoapObjectId(created.body);
- if (status === "OK" && objectId) {
-  return { ok: true, objectId: objectId, msg: "Entry DE created in Production." };
+ if (pbSoapPartnerOk(created.body)) {
+  if (!objectId) {
+   var afterCreate = pbProdRetrieveDeObjectId(sub, token, ck, name);
+   objectId = afterCreate.objectId || "";
+  }
+  if (objectId) {
+   return { ok: true, objectId: objectId, msg: "Entry DE created in Production." };
+  }
+  return {
+   ok: true,
+   objectId: "",
+   msg: "Entry DE create returned OK; ObjectID not returned — verify DE in Production by key " + ck + "."
+  };
  }
  if (created.body.indexOf("already exists") >= 0 || created.body.indexOf("AlreadyExist") >= 0) {
   var again = pbProdRetrieveDeObjectId(sub, token, ck, name);
-  if (again.ok) {
+  if (again.ok && again.objectId) {
    return { ok: true, objectId: again.objectId, msg: "Entry DE resolved in Production after duplicate." };
   }
  }
  return {
   ok: false,
-  msg: "Entry DE create failed (" + status + "). " + pbTrim(created.body).substring(0, 180)
+  msg:
+   "Entry DE create failed (" +
+   pbParseSoapStatus(created.body) +
+   "). " +
+   pbTrim(created.body).substring(0, 180)
  };
 }
 
@@ -533,9 +594,9 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
   pbXmlSafe(key) +
   "</CustomerKey><Name>" +
   pbXmlSafe(qName) +
-  "</Name><QueryText>" +
-  pbXmlSafe(queryText) +
-  "</QueryText><TargetType>DE</TargetType><TargetUpdateType>Update</TargetUpdateType>" +
+  "</Name>" +
+  pbSoapQueryTextXml(queryText) +
+  "<TargetType>DE</TargetType><TargetUpdateType>Update</TargetUpdateType>" +
   "<DataExtensionTarget><CustomerKey>" +
   pbXmlSafe(deCustomerKey) +
   "</CustomerKey><Name>" +
@@ -544,19 +605,34 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
   requestTag +
   ">";
  var resp = pbSoapCall(sub, token, action, body);
- var status = pbParseSoapStatus(resp.body);
  var objectId = pbParseSoapObjectId(resp.body) || existingId;
- if (status === "OK" && objectId) {
+ if (pbSoapPartnerOk(resp.body)) {
+  if (!objectId) {
+   objectId = pbProdRetrieveQueryObjectId(sub, token, key);
+  }
+  if (objectId) {
+   return {
+    ok: true,
+    objectId: objectId,
+    msg: "Query " + (existingId ? "updated" : "created") + " in Production."
+   };
+  }
   return {
-   ok: true,
-   objectId: objectId,
-   msg: "Query " + (existingId ? "updated" : "created") + " in Production."
+   ok: false,
+   objectId: "",
+   msg: "Query SOAP OK but ObjectID not found for key " + key + "."
   };
  }
  return {
   ok: false,
   objectId: objectId,
-  msg: "Query " + action + " failed (" + status + "). " + pbTrim(resp.body).substring(0, 180)
+  msg:
+   "Query " +
+   action +
+   " failed (" +
+   pbParseSoapStatus(resp.body) +
+   "). " +
+   pbTrim(resp.body).substring(0, 180)
  };
 }
 
@@ -888,23 +964,96 @@ function pbBuildManifestHtml(rows) {
  return html;
 }
 
-function pbCopyEmailAsset(sourceToken, sourceSub, targetToken, targetSub, assetId, targetName) {
+function pbIsEmailAsset(assetObj) {
+ if (!assetObj || !assetObj.assetType || assetObj.assetType.id === undefined) {
+  return false;
+ }
+ var typeId = parseInt(String(assetObj.assetType.id), 10);
+ return typeId === 207 || typeId === 208 || typeId === 4;
+}
+
+function pbFetchEmailAssetById(sourceToken, sourceSub, assetId) {
  var id = pbTrim(assetId);
  if (!id) {
-  return { ok: false, msg: "Email asset id missing." };
+  return { ok: false, asset: null, msg: "Email asset id missing." };
  }
  var getUrl =
   "https://" + sourceSub + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + encodeURIComponent(id);
  var got = pbHttpJson(sourceToken, sourceSub, "GET", getUrl, null);
- if (got.status !== 200 || !got.body) {
-  return { ok: false, msg: "Source email GET HTTP " + got.status + "." };
+ if (!pbHttpOk(got.status) || !got.body) {
+  return { ok: false, asset: null, msg: "Source email GET HTTP " + got.status + "." };
  }
- var template = null;
  try {
-  template = Platform.Function.ParseJSON(got.body);
+  var asset = Platform.Function.ParseJSON(got.body);
+  if (!pbIsEmailAsset(asset)) {
+   return { ok: false, asset: null, msg: "Asset " + id + " is not an email content asset." };
+  }
+  return { ok: true, asset: asset, msg: "" };
  } catch (parseEx) {
-  return { ok: false, msg: "Source email JSON parse failed." };
+  return { ok: false, asset: null, msg: "Source email JSON parse failed." };
  }
+}
+
+function pbFetchEmailAssetByName(sourceToken, sourceSub, emailName) {
+ var name = pbTrim(emailName);
+ if (!name) {
+  return { ok: false, asset: null, msg: "Email name missing." };
+ }
+ var odataName = name.replace(/'/g, "''");
+ var filterExpr = "name eq '" + odataName + "'";
+ var listUrl =
+  "https://" +
+  sourceSub +
+  ".rest.marketingcloudapis.com/asset/v1/content/assets?$page=1&$pagesize=50&$filter=" +
+  encodeURIComponent(filterExpr);
+ var got = pbHttpJson(sourceToken, sourceSub, "GET", listUrl, null);
+ if (!pbHttpOk(got.status) || !got.body) {
+  return { ok: false, asset: null, msg: "Email search HTTP " + got.status + "." };
+ }
+ try {
+  var data = Platform.Function.ParseJSON(got.body);
+  var items = data && data.items ? data.items : [];
+  var nameLower = name.toLowerCase();
+  var matches = [];
+  var i;
+  for (i = 0; i < items.length; i++) {
+   if (pbIsEmailAsset(items[i]) && pbTrim(items[i].name).toLowerCase() === nameLower) {
+    matches.push(items[i]);
+   }
+  }
+  if (matches.length === 1) {
+   return { ok: true, asset: matches[0], msg: "" };
+  }
+  if (matches.length > 1) {
+   return { ok: false, asset: null, msg: "Multiple emails named \"" + name + "\"; fix emailId in analytics." };
+  }
+  return { ok: false, asset: null, msg: "No email named \"" + name + "\" in source BU." };
+ } catch (listEx) {
+  return { ok: false, asset: null, msg: "Email search parse failed." };
+ }
+}
+
+function pbResolveSourceEmailAsset(sourceToken, sourceSub, assetId, emailName) {
+ var byId = pbFetchEmailAssetById(sourceToken, sourceSub, assetId);
+ if (byId.ok) {
+  return byId;
+ }
+ if (emailName) {
+  var byName = pbFetchEmailAssetByName(sourceToken, sourceSub, emailName);
+  if (byName.ok) {
+   return byName;
+  }
+  return { ok: false, asset: null, msg: byId.msg + " " + byName.msg };
+ }
+ return byId;
+}
+
+function pbCopyEmailAsset(sourceToken, sourceSub, targetToken, targetSub, assetId, targetName) {
+ var resolved = pbResolveSourceEmailAsset(sourceToken, sourceSub, assetId, targetName);
+ if (!resolved.ok || !resolved.asset) {
+  return { ok: false, msg: resolved.msg || "Could not resolve source email." };
+ }
+ var template = resolved.asset;
  var views = template.views || {};
  var htmlView = views.html || {};
  var subject =
@@ -925,7 +1074,7 @@ function pbCopyEmailAsset(sourceToken, sourceSub, targetToken, targetSub, assetI
  };
  var postUrl = "https://" + targetSub + ".rest.marketingcloudapis.com/asset/v1/content/assets";
  var posted = pbHttpJson(targetToken, targetSub, "POST", postUrl, payload);
- if (posted.status !== 200 && posted.status !== 201) {
+ if (!pbHttpOk(posted.status)) {
   return {
    ok: false,
    msg: "Production email POST HTTP " + posted.status + " — " + pbTrim(posted.body).substring(0, 220)
@@ -1011,6 +1160,9 @@ function pbPushStackBuild(ctx) {
  var deResult = pbProdEnsureEntryDe(prodAuth.subdomain, prodAuth.token, deKey, deName);
  if (deResult.ok) {
   log(deResult.msg);
+  if (!deResult.objectId) {
+   fail("Entry DE FAILED: create OK but no ObjectID — cannot wire entry event.");
+  }
  } else {
   fail("Entry DE FAILED: " + deResult.msg);
  }
