@@ -780,6 +780,20 @@ function pbSoapFirstStatusMessage(body) {
  return m ? pbTrim(m[1]) : "";
 }
 
+function pbSoapAllStatusMessages(body) {
+ var text = pbToStr(body);
+ var re = /<(?:[\w]+:)?StatusMessage[^>]*>([\s\S]*?)<\/(?:[\w]+:)?StatusMessage>/gi;
+ var parts = [];
+ var m;
+ while ((m = re.exec(text)) !== null) {
+  var piece = pbTrim(m[1].replace(/<[^>]+>/g, " "));
+  if (piece) {
+   parts.push(piece);
+  }
+ }
+ return parts;
+}
+
 function pbParseSoapStatus(body) {
  var m = pbToStr(body).match(/<(?:[\w]+:)?OverallStatus[^>]*>([^<]+)</i);
  return m ? pbTrim(m[1]) : "";
@@ -887,11 +901,25 @@ function pbSoapErrorSummary(body) {
  if (fault && pbTrim(fault[1])) {
   return pbTrim(fault[1]);
  }
- var msg = pbSoapFirstStatusMessage(text);
+ var allMsgs = pbSoapAllStatusMessages(text);
+ var msg = allMsgs.length ? allMsgs.join(" | ") : pbSoapFirstStatusMessage(text);
  var status = pbParseSoapStatus(text);
  if (text.match(/<(?:[\w]+:)?StatusCode[^>]*>\s*Error\s*</i)) {
-  var errCode = text.match(/<(?:[\w]+:)?ErrorCode[^>]*>([^<]+)</i);
-  var codePart = errCode && pbTrim(errCode[1]) ? " ErrorCode=" + pbTrim(errCode[1]) : "";
+  var errCodes = text.match(/<(?:[\w]+:)?ErrorCode[^>]*>([^<]+)</gi);
+  var codePart = "";
+  if (errCodes && errCodes.length) {
+   var codes = [];
+   var ci;
+   for (ci = 0; ci < errCodes.length; ci++) {
+    var c = pbTrim(errCodes[ci].replace(/<\/?[^>]+>/g, ""));
+    if (c) {
+     codes.push(c);
+    }
+   }
+   if (codes.length) {
+    codePart = " ErrorCode=" + codes.join(",");
+   }
+  }
   if (msg) {
    return "StatusCode Error" + codePart + " — " + msg;
   }
@@ -904,7 +932,19 @@ function pbSoapErrorSummary(body) {
  if (status && status.toUpperCase() !== "OK") {
   return status;
  }
- return "SOAP mutation did not succeed (no fault detail returned).";
+ var trimmed = pbTrim(text);
+ if (!trimmed) {
+  return "Empty SOAP body (check Production token and subdomain).";
+ }
+ if (trimmed.indexOf("<html") >= 0 || trimmed.indexOf("<!DOCTYPE") >= 0) {
+  return "Non-SOAP HTTP response (auth or endpoint issue).";
+ }
+ return (
+  "SOAP mutation did not succeed — OverallStatus=" +
+  (status || "missing") +
+  ", snippet: " +
+  trimmed.substring(0, 220)
+ );
 }
 
 function pbResolvePushQueryKey(live, fb, deKey) {
@@ -1259,13 +1299,18 @@ function pbStackSqlEnvironmentForPush(navEnvironment) {
  return "uat";
 }
 
+function pbStackSqlEnvironmentForProductionPush(navEnvironment) {
+ return "uat";
+}
+
 function pbBuildQuerySqlForProdPush(fb, journeyId, senderProfileId, liveQueryText, navEnvironment) {
+ var sqlEnv = pbStackSqlEnvironmentForProductionPush(navEnvironment);
  return pbBuildStackAudienceQueryForProd(
   fb,
   journeyId,
   senderProfileId,
   liveQueryText,
-  navEnvironment
+  sqlEnv
  );
 }
 
@@ -1540,11 +1585,12 @@ function pbSoapFailureDetail(lastResp) {
  var resp = lastResp || {};
  var body = pbToStr(resp.body);
  var http = resp.status !== undefined && resp.status !== null ? String(resp.status) : "";
+ if (http && http !== "200") {
+  return "HTTP " + http + " — " + (pbTrim(body) ? pbSoapErrorSummary(body) : "no response body");
+ }
  if (!pbTrim(body)) {
   return (
-   "Empty SOAP response" +
-   (http ? " (HTTP " + http + ")" : "") +
-   ". Production token/subdomain may not allow QueryDefinition Create, or the request was blocked."
+   "Empty SOAP response. Production token/subdomain may not allow QueryDefinition Create, or the request was blocked."
   );
  }
  return pbSoapErrorSummary(body);
@@ -2275,6 +2321,19 @@ function pbProdEnsureEntryDe(sub, token, customerKey, deName, uatOpts) {
  };
 }
 
+function pbQuerySqlVariantsForProdPush(primarySql) {
+ var variants = [];
+ var base = pbToStr(primarySql);
+ if (base) {
+  variants.push({ sql: base, label: "stack ENT sync" });
+ }
+ var adapted = pbAdaptQuerySqlForProduction(base);
+ if (adapted.adapted && adapted.sql && adapted.sql !== base) {
+  variants.push({ sql: adapted.sql, label: "non-ENT sync" });
+ }
+ return variants;
+}
+
 function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustomerKey, deName, deObjectId, automationKeyHint, extraOpts) {
  var xo = extraOpts || {};
  var key = pbTrim(queryKey);
@@ -2294,7 +2353,7 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
  if (qName !== key) {
   qName = key;
  }
- var prodSql = pbToStr(queryText);
+ var sqlVariants = xo.sqlVariants === false ? [{ sql: pbToStr(queryText), label: "provided" }] : pbQuerySqlVariantsForProdPush(queryText);
  var deTarget = pbProdRetrieveDeTargetMeta(sub, token, deCustomerKey, deName);
  if (!deTarget.ok || !deTarget.objectId) {
   return {
@@ -2318,59 +2377,72 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
   { targetUpdateType: "Overwrite", useCategory: true, useDeOid: true }
  ];
  var lastResp = { body: "", status: 0 };
- var ai;
- for (ai = 0; ai < attemptPlans.length; ai++) {
-  var plan = attemptPlans[ai];
-  if (plan.useCategory && !(queryCategoryId > 0)) {
-   continue;
-  }
-  var body = pbBuildQueryMutationBody({
-   existingId: existingId,
-   key: key,
-   qName: qName,
-   categoryId: queryCategoryId,
-   useCategory: plan.useCategory,
-   targetUpdateType: plan.targetUpdateType,
-   sql: prodSql,
-   useDeOid: plan.useDeOid,
-   deOid: targetDeOid,
-   deCustomerKey: targetDeKey,
-   deName: targetDeName
-  });
-  var action = existingId ? "Update" : "Create";
-  lastResp = pbSoapCall(sub, token, action, body);
-  var objectId = pbParseSoapObjectId(lastResp.body) || existingId;
-  if (!objectId) {
-   objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
-  }
-  if (pbSoapMutationSucceeded(lastResp.body) && objectId) {
-   return {
-    ok: true,
-    objectId: objectId,
-    msg:
-     "Query " +
-     (existingId ? "updated" : "created") +
-     " in Production (CustomerKey=" +
-     key +
-     ")."
-   };
-  }
-  if (pbSoapMutationSucceeded(lastResp.body) && !objectId) {
-   objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
-   if (objectId) {
+ var lastSqlLabel = "";
+ var vi;
+ for (vi = 0; vi < sqlVariants.length; vi++) {
+  var prodSql = sqlVariants[vi].sql;
+  lastSqlLabel = sqlVariants[vi].label || "";
+  var ai;
+  for (ai = 0; ai < attemptPlans.length; ai++) {
+   var plan = attemptPlans[ai];
+   if (plan.useCategory && !(queryCategoryId > 0)) {
+    continue;
+   }
+   var body = pbBuildQueryMutationBody({
+    existingId: existingId,
+    key: key,
+    qName: qName,
+    categoryId: queryCategoryId,
+    useCategory: plan.useCategory,
+    targetUpdateType: plan.targetUpdateType,
+    sql: prodSql,
+    useDeOid: plan.useDeOid,
+    deOid: targetDeOid,
+    deCustomerKey: targetDeKey,
+    deName: targetDeName
+   });
+   var action = existingId ? "Update" : "Create";
+   lastResp = pbSoapCall(sub, token, action, body);
+   var objectId = pbParseSoapObjectId(lastResp.body) || existingId;
+   if (!objectId) {
+    objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+   }
+   if (pbSoapMutationSucceeded(lastResp.body) && objectId) {
     return {
      ok: true,
      objectId: objectId,
-     msg: "Query " + (existingId ? "updated" : "created") + " in Production; ObjectID resolved by retrieve."
+     msg:
+      "Query " +
+      (existingId ? "updated" : "created") +
+      " in Production (CustomerKey=" +
+      key +
+      ", SQL variant=" +
+      lastSqlLabel +
+      ")."
     };
    }
-  }
-  if (!existingId) {
-   var createdId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
-   if (createdId) {
-    existingId = createdId;
-    ai--;
-    continue;
+   if (pbSoapMutationSucceeded(lastResp.body) && !objectId) {
+    objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+    if (objectId) {
+     return {
+      ok: true,
+      objectId: objectId,
+      msg:
+       "Query " +
+       (existingId ? "updated" : "created") +
+       " in Production; ObjectID resolved by retrieve (SQL variant=" +
+       lastSqlLabel +
+       ")."
+     };
+    }
+   }
+   if (!existingId) {
+    var createdId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+    if (createdId) {
+     existingId = createdId;
+     ai--;
+     continue;
+    }
    }
   }
  }
@@ -2397,8 +2469,10 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
    targetDeName +
    "] key " +
    targetDeKey +
-   ". Production uses SOAP (stack build uses WSProxy in the UAT BU). " +
-   pbSoapFailureDetail(lastResp)
+   (lastSqlLabel ? " (last SQL variant=" + lastSqlLabel + ")" : "") +
+   ". " +
+   pbSoapFailureDetail(lastResp) +
+   " If the message mentions unknown data extensions, confirm Salesforce sync objects exist in the Production BU (ENT.* vs non-ENT)."
  };
 }
 
@@ -2564,66 +2638,19 @@ function pbStackBuildQueryActivitySteps(queryObjectId) {
  ];
 }
 
-function pbStackCreateQueryDefinitionProd(sub, token, queryKey, queryName, queryText, deCustomerKey, deName) {
- var key = pbTrim(queryKey);
- var qName = pbTrim(queryName) || key;
- var sql = pbToStr(queryText);
- if (!key || !sql) {
-  return { ok: false, objectId: "", msg: "Query key or SQL missing." };
- }
- var deKey = pbTrim(deCustomerKey);
- var deDisplay = pbTrim(deName) || deKey;
- var existingId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
- var body = pbBuildQueryMutationBody({
-  existingId: existingId,
-  key: key,
-  qName: qName,
-  categoryId: 0,
-  useCategory: false,
-  targetUpdateType: "Update",
-  sql: sql,
-  useDeOid: false,
-  deOid: "",
-  deCustomerKey: deKey,
-  deName: deDisplay
- });
- var action = existingId ? "Update" : "Create";
- var resp = pbSoapCall(sub, token, action, body);
- var objectId = pbParseSoapObjectId(resp.body) || existingId;
- if (!objectId) {
-  objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
- }
- if (pbSoapMutationSucceeded(resp.body) && objectId) {
-  return {
-   ok: true,
-   objectId: objectId,
-   msg:
-    "QueryDefinition " +
-    (existingId ? "updated" : "created") +
-    " in Production (stack-style, CustomerKey=" +
-    key +
-    ")."
-  };
- }
- if (!objectId) {
-  objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
-  if (objectId) {
-   return {
-    ok: true,
-    objectId: objectId,
-    msg: "QueryDefinition resolved in Production for CustomerKey " + key + "."
-   };
-  }
- }
- return {
-  ok: false,
-  objectId: "",
-  msg:
-   "QueryDefinition " +
-   (existingId ? "update" : "create") +
-   " failed (stack-style). " +
-   pbSoapFailureDetail(resp)
- };
+function pbStackCreateQueryDefinitionProd(sub, token, queryKey, queryName, queryText, deCustomerKey, deName, automationKeyHint) {
+ return pbProdUpsertQuery(
+  sub,
+  token,
+  queryKey,
+  queryName,
+  queryText,
+  deCustomerKey,
+  deName,
+  "",
+  automationKeyHint || queryKey,
+  { sqlVariants: true }
+ );
 }
 
 function pbStackCreateAutomationProd(token, sub, opts) {
