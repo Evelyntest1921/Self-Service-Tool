@@ -195,15 +195,65 @@ function pbExtractAccessToken(body) {
  return m ? m[1] : "";
 }
 
+function pbAmpVarLimit() {
+ return 3900;
+}
+
+function pbTruncateAmpVar(val) {
+ var s = pbToStr(val);
+ var max = pbAmpVarLimit();
+ if (s.length <= max) {
+  return s;
+ }
+ return s.substring(0, max) + "…";
+}
+
+function pbSetAmpVar(name, val) {
+ var key = pbTrim(name);
+ if (!key) {
+  return;
+ }
+ var s = pbTruncateAmpVar(val);
+ try {
+  Platform.Variable.SetValue(key.indexOf("@") === 0 ? key : "@" + key, s);
+ } catch (setEx) {}
+}
+
+function pbCoerceLookupRows(raw) {
+ if (raw == null) {
+  return [];
+ }
+ try {
+  var count = Platform.Function.RowCount(raw);
+  if (!count || count < 1) {
+   return [];
+  }
+  var out = [];
+  var i;
+  for (i = 1; i <= count; i++) {
+   out.push(Platform.Function.Row(raw, i));
+  }
+  return out;
+ } catch (rowEx) {
+  return [];
+ }
+}
+
 function pbAuthField(row, names) {
  var i;
  for (i = 0; i < names.length; i++) {
   try {
-   var v = row[names[i]];
+   var v = Platform.Function.Field(row, names[i]);
    if (v !== null && v !== undefined && pbTrim(v)) {
     return pbTrim(v);
    }
   } catch (fieldEx) {}
+  try {
+   v = row[names[i]];
+   if (v !== null && v !== undefined && pbTrim(v)) {
+    return pbTrim(v);
+   }
+  } catch (fieldEx2) {}
  }
  return "";
 }
@@ -235,8 +285,8 @@ function pbAuthResolveRow(userKey, fallbackKeys) {
    continue;
   }
   tried.push(candidate);
-  var rows = Platform.Function.LookupRows("SFMC_AUTH", "User", candidate);
-  if (rows && rows.length > 0) {
+  var rows = pbCoerceLookupRows(Platform.Function.LookupRows("SFMC_AUTH", "User", candidate));
+  if (rows.length > 0) {
    return { row: rows[0], userKey: candidate, tried: tried };
   }
  }
@@ -2630,9 +2680,6 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
    (lastResp.style ? ", SOAP " + lastResp.style : "") +
    ". " +
    pbSoapFailureDetail(lastResp) +
-   (lastResp.body
-    ? " Response excerpt: " + pbTrim(lastResp.body).substring(0, 320)
-    : "") +
    " If the message mentions unknown data extensions, confirm Salesforce sync objects exist in the Production BU (ENT.* vs non-ENT)."
  };
 }
@@ -4255,10 +4302,12 @@ try {
    liveForUi = resolved.live;
   }
   var isStackForUi = Platform.Variable.GetValue("@isStackBuild") === "true";
-  stepsHtml = pbBuildStepsHtml(journeyType, plan, liveForUi, prodAuthPreview, jid, {
-   showCampaignInput: isStackForUi,
-   campaignId: pbTrim(Platform.Variable.GetValue("@pushCampaignId") || "")
-  });
+  stepsHtml = pbTruncateAmpVar(
+   pbBuildStepsHtml(journeyType, plan, liveForUi, prodAuthPreview, jid, {
+    showCampaignInput: isStackForUi,
+    campaignId: pbTrim(Platform.Variable.GetValue("@pushCampaignId") || "")
+   })
+  );
   if (resolved.usesLiveStack && resolved.live.ok) {
    stepsHtml =
     '<div class="banner good" style="margin-bottom:14px">' +
@@ -4273,14 +4322,20 @@ try {
   var li;
   pushLogHtml = '<ol class="push-log">';
   for (li = 0; li < stepResult.logs.length; li++) {
-   pushLogHtml += "<li>" + pbHtmlSafe(stepResult.logs[li]) + "</li>";
+   pushLogHtml +=
+    "<li>" + pbHtmlSafe(pbTruncateAmpVar(stepResult.logs[li]).substring(0, 500)) + "</li>";
   }
   pushLogHtml += "</ol>";
+  pushLogHtml = pbTruncateAmpVar(pushLogHtml);
   if (stepResult.ok) {
-   pushResultBanner = '<div class="banner good">' + pbHtmlSafe(stepResult.msg) + "</div>";
+   pushResultBanner =
+    '<div class="banner good">' + pbHtmlSafe(pbTruncateAmpVar(stepResult.msg)) + "</div>";
    pageStatus = "step_done";
   } else {
-   pushResultBanner = '<div class="banner bad">' + pbHtmlSafe(stepResult.msg || "Step failed.") + "</div>";
+   pushResultBanner =
+    '<div class="banner bad">' +
+    pbHtmlSafe(pbTruncateAmpVar(stepResult.msg || "Step failed.")) +
+    "</div>";
    pageStatus = "step_failed";
   }
  }
@@ -4291,11 +4346,11 @@ try {
  pushBlockedMsg = pbToStr(pageEx.message || pageEx);
 }
 
-Platform.Variable.SetValue("@pageStatus", pageStatus);
-Platform.Variable.SetValue("@manifestHtml", stepsHtml);
-Platform.Variable.SetValue("@pushLogHtml", pushLogHtml);
-Platform.Variable.SetValue("@pushResultBanner", pushResultBanner);
-Platform.Variable.SetValue("@pushBlockedMsg", pushBlockedMsg);
+pbSetAmpVar("pageStatus", pageStatus);
+pbSetAmpVar("manifestHtml", stepsHtml);
+pbSetAmpVar("pushLogHtml", pushLogHtml);
+pbSetAmpVar("pushResultBanner", pushResultBanner);
+pbSetAmpVar("pushBlockedMsg", pushBlockedMsg);
 </script>
 %%[
 SET @editSidebarHtml = ContentBlockByName("sst_shell_edit_sidebar")
