@@ -2,7 +2,7 @@
 VAR @HOME_URL, @BUILD_PAGE_SELF, @PUSH_PAGE_SELF, @jid, @confirmPush
 VAR @navRows, @navRow, @detailRows, @detailRow, @detailCount
 VAR @dispName, @dispType, @dispEmailName, @dispEmailId, @dispDeName, @dispDeId
-VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationCustomerKey, @dispAutomationName
+VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationCustomerKey, @dispAutomationName, @dispCampaignId
 VAR @isStackBuild, @pageStatus, @pushBlockedMsg, @pushLogHtml, @pushResultBanner
 VAR @manifestHtml, @editSidebarHtml, @buildNavContext, @buildNavActive
 VAR @STACK_JOURNEY_TYPE, @AUTH_SOURCE_USER, @AUTH_PROD_USER
@@ -36,6 +36,7 @@ SET @dispQueryKey = ""
 SET @dispAutomationGuid = ""
 SET @dispAutomationCustomerKey = ""
 SET @dispAutomationName = ""
+SET @dispCampaignId = ""
 SET @detailCount = 0
 
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
@@ -70,6 +71,7 @@ ELSE
    SET @dispAutomationGuid = Trim(Field(@detailRow,"automationGuid"))
    SET @dispAutomationCustomerKey = Trim(Field(@detailRow,"automationCustomerKey"))
    SET @dispAutomationName = Trim(Field(@detailRow,"automationName"))
+   SET @dispCampaignId = Trim(Field(@detailRow,"campaignId"))
   ENDIF
  ENDIF
 ENDIF
@@ -507,15 +509,17 @@ function pbExtractEmailFromJourney(jObj) {
    contentAssetId = "";
   }
   var emailName = pbTrim(ts.emailName || act.name || "");
-  if (contentAssetId || legacyEmailId || emailName) {
+  var senderProfileId = pbTrim(ts.senderProfileId || "");
+  if (contentAssetId || legacyEmailId || emailName || senderProfileId) {
    return {
     contentAssetId: contentAssetId,
     legacyEmailId: legacyEmailId,
-    name: emailName
+    name: emailName,
+    senderProfileId: senderProfileId
    };
   }
  }
- return { contentAssetId: "", legacyEmailId: "", name: "" };
+ return { contentAssetId: "", legacyEmailId: "", name: "", senderProfileId: "" };
 }
 
 function pbResolveLiveEntryDeFromEvent(evObj) {
@@ -548,6 +552,7 @@ function pbResolveLiveStackContext(token, sub, journeyId, fallback) {
   deObjectId: "",
   queryKey: "",
   queryText: "",
+  senderProfileId: "",
   emailAssetId: "",
   emailLegacyId: "",
   emailName: "",
@@ -625,12 +630,15 @@ function pbResolveLiveStackContext(token, sub, journeyId, fallback) {
  if (!result.automationName && pbTrim(fb.automationName)) {
   result.automationName = pbTrim(fb.automationName);
  }
+ if (emailLive.senderProfileId) {
+  result.senderProfileId = emailLive.senderProfileId;
+ }
  if (!result.deCustomerKey) {
   result.msg = "Live entry DE customer key not found on entry event.";
   return result;
  }
- if (!result.queryKey || !result.queryText) {
-  result.msg = "Live query not resolved from automation query step (WSProxy).";
+ if (!result.queryKey) {
+  result.msg = "Live query key not resolved from automation query step.";
   return result;
  }
  if (!result.automationKey) {
@@ -678,7 +686,11 @@ function pbStackAnalyticsFallback(ctx) {
   emailName: pbTrim(c.emailName),
   automationGuid: pbTrim(c.automationGuid),
   automationKey: pbTrim(c.automationKey),
-  automationName: pbTrim(c.automationName)
+  automationName: pbTrim(c.automationName),
+  campaignId: pbTrim(c.campaignId),
+  audienceSource: pbTrim(c.audienceSource || "campaign"),
+  sourceDataExtension: pbTrim(c.sourceDataExtension),
+  sfUserId: pbTrim(c.sfUserId)
  };
 }
 
@@ -886,6 +898,320 @@ function pbAdaptQuerySqlForProduction(sql) {
  out = out.replace(/ENT\.User_Salesforce_1/gi, "User_Salesforce_1");
  out = out.replace(/\bENT\./gi, "");
  return { sql: out, adapted: true };
+}
+
+function pbStackEscapeSql(value) {
+ return pbToStr(value).replace(/'/g, "''");
+}
+
+function pbStackNormalizeSenderProfileToken(value) {
+ return pbToStr(value).replace(/^\s+|\s+$/g, "").toUpperCase();
+}
+
+function pbStackIsAscSenderProfile(profileId) {
+ if (!profileId) {
+  return false;
+ }
+ try {
+  var prox = new Script.Util.WSProxy();
+  var props = ["Name", "CustomerKey", "ObjectID"];
+  var pid = pbToStr(profileId);
+  var resp = prox.retrieve("SenderProfile", props, {
+   Property: "CustomerKey",
+   SimpleOperator: "equals",
+   Value: pid
+  });
+  var row = resp && resp.Results && resp.Results.length > 0 ? resp.Results[0] : null;
+  if (!row) {
+   resp = prox.retrieve("SenderProfile", props, {
+    Property: "ObjectID",
+    SimpleOperator: "equals",
+    Value: pid
+   });
+   row = resp && resp.Results && resp.Results.length > 0 ? resp.Results[0] : null;
+  }
+  if (!row) {
+   return false;
+  }
+  return (
+   pbStackNormalizeSenderProfileToken(row.Name) === "ASC" ||
+   pbStackNormalizeSenderProfileToken(row.CustomerKey) === "ASC"
+  );
+ } catch (ascErr) {
+  return false;
+ }
+}
+
+function pbStackBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environment, senderProfileId) {
+ var camp = pbStackEscapeSql(campaignId);
+ var userFilter = pbStackEscapeSql(sfUserId);
+ var env = pbToStr(environment || "").toLowerCase();
+ var useAscJoin = pbStackIsAscSenderProfile(senderProfileId);
+ var cmTable = "CampaignMember_Salesforce_1";
+ var contactTable = "Contact_Salesforce";
+ var accountTable = "Account_Salesforce";
+ var userTable = "User_Salesforce";
+ var accountOwnerExpr = "a.OwnerId";
+ var userJoinExpr = "a.OwnerId";
+ if (env === "uat") {
+  cmTable = "ENT.CampaignMember_Salesforce_2";
+  contactTable = "ENT.Contact_Salesforce_1";
+  accountTable = "ENT.Account_Salesforce_1";
+  userTable = "ENT.User_Salesforce_1";
+ }
+ if (useAscJoin) {
+  userTable = env === "uat" ? "ENT.User_Salesforce_1" : "User_Salesforce_1";
+  accountOwnerExpr = "a.ASC__c";
+  userJoinExpr = "a.ASC__c";
+ }
+ var emailExpr =
+  "COALESCE(NULLIF(RTRIM(ISNULL(cm.email, '')), ''), NULLIF(RTRIM(ISNULL(con.Email, '')), ''))";
+ var sql =
+  "SELECT\n" +
+  "  cm.id AS MemberId,\n" +
+  "  cm.ContactId AS ContactId,\n" +
+  "  " +
+  emailExpr +
+  " AS Email,\n" +
+  "  cm.CampaignId AS CampaignId,\n" +
+  "  con.AccountId AS AccountId,\n" +
+  "  u.Name AS Account_Owner_Name,\n" +
+  "  u.Email AS Account_Owner_Email,\n" +
+  "  cm.Status AS Status,\n" +
+  "  con.MailingState AS State,\n" +
+  "  " +
+  accountOwnerExpr +
+  " AS AccountOwnerId,\n" +
+  "  'SST' AS type\n" +
+  "FROM " +
+  cmTable +
+  " cm\n" +
+  "LEFT JOIN " +
+  contactTable +
+  " con ON cm.ContactId = con.id\n" +
+  "LEFT JOIN " +
+  accountTable +
+  " a ON con.AccountId = a.id\n" +
+  "LEFT JOIN " +
+  userTable +
+  " u ON u.id = " +
+  userJoinExpr +
+  "\n" +
+  "WHERE cm.CampaignId = '" +
+  camp +
+  "'\n" +
+  "  AND cm.ContactId IS NOT NULL";
+ if (userFilter) {
+  sql += "\n  AND u.id = '" + userFilter + "'";
+ }
+ return sql;
+}
+
+function pbStackSanitizeDeName(deName) {
+ var name = pbToStr(deName).replace(/^\s+|\s+$/g, "");
+ if (!name || !/^[A-Za-z0-9_ \-]+$/.test(name)) {
+  return "";
+ }
+ return name.replace(/\]/g, "]]");
+}
+
+function pbStackCollectWsResults(results) {
+ var rows = [];
+ if (!results) {
+  return rows;
+ }
+ if (typeof results.length === "number") {
+  var i;
+  for (i = 0; i < results.length; i++) {
+   rows.push(results[i]);
+  }
+  return rows;
+ }
+ if (results.Name || results.CustomerKey || results.ObjectID) {
+  rows.push(results);
+ }
+ return rows;
+}
+
+function pbStackRetrieveSourceDeFields(prox, deName) {
+ var safeName = pbStackSanitizeDeName(deName);
+ if (!safeName || !prox) {
+  return { ok: false, fields: {} };
+ }
+ var deFilters = [
+  { Property: "Name", SimpleOperator: "equals", Value: safeName },
+  { Property: "CustomerKey", SimpleOperator: "equals", Value: safeName }
+ ];
+ var deRow = null;
+ var fi;
+ for (fi = 0; fi < deFilters.length; fi++) {
+  var deResp = prox.retrieve("DataExtension", ["CustomerKey", "ObjectID", "Name"], deFilters[fi]);
+  var deRows = pbStackCollectWsResults(deResp ? deResp.Results : null);
+  if (deRows.length > 0) {
+   deRow = deRows[0];
+   break;
+  }
+ }
+ if (!deRow || !deRow.CustomerKey) {
+  return { ok: false, fields: {} };
+ }
+ var deKey = pbToStr(deRow.CustomerKey);
+ var fieldResp = prox.retrieve("DataExtensionField", ["Name", "FieldType"], {
+  Property: "DataExtension.CustomerKey",
+  SimpleOperator: "equals",
+  Value: deKey
+ });
+ var fields = {};
+ var fieldRows = pbStackCollectWsResults(fieldResp ? fieldResp.Results : null);
+ var ri;
+ for (ri = 0; ri < fieldRows.length; ri++) {
+  var fieldName = fieldRows[ri].Name ? pbToStr(fieldRows[ri].Name) : "";
+  if (fieldName) {
+   fields[fieldName.toLowerCase()] = fieldName;
+  }
+ }
+ return { ok: true, fields: fields, customerKey: deKey, name: pbToStr(deRow.Name || safeName) };
+}
+
+function pbStackBuildDataExtensionQuery(prox, sourceDeName, sfUserId, environment, senderProfileId) {
+ var deName = pbStackSanitizeDeName(sourceDeName);
+ if (!deName) {
+  return "";
+ }
+ var schema = pbStackRetrieveSourceDeFields(prox, deName);
+ if (!schema.ok) {
+  return "";
+ }
+ var fields = schema.fields || {};
+ if (!fields.subscriberkey) {
+  return "";
+ }
+ var userFilter = pbStackEscapeSql(sfUserId);
+ var env = pbToStr(environment || "").toLowerCase();
+ var useAscJoin = pbStackIsAscSenderProfile(senderProfileId);
+ var contactTable = "Contact_Salesforce";
+ var accountTable = "Account_Salesforce";
+ var userTable = "User_Salesforce";
+ var accountOwnerExpr = "a.OwnerId";
+ var userJoinExpr = "a.OwnerId";
+ if (env === "uat") {
+  contactTable = "ENT.Contact_Salesforce_1";
+  accountTable = "ENT.Account_Salesforce_1";
+  userTable = "ENT.User_Salesforce_1";
+ }
+ if (useAscJoin) {
+  userTable = env === "uat" ? "ENT.User_Salesforce_1" : "User_Salesforce_1";
+  accountOwnerExpr = "a.ASC__c";
+  userJoinExpr = "a.ASC__c";
+ }
+ var contactKeyExpr = fields.contactid ? "cm." + fields.contactid : "cm." + fields.subscriberkey;
+ var emailExpr = "NULLIF(RTRIM(ISNULL(con.Email, '')), '')";
+ if (fields.email) {
+  emailExpr =
+   "COALESCE(NULLIF(RTRIM(ISNULL(cm." +
+   fields.email +
+   ", '')), ''), NULLIF(RTRIM(ISNULL(con.Email, '')), ''))";
+ }
+ var sql =
+  "SELECT\n" +
+  "  cm." +
+  fields.subscriberkey +
+  " AS MemberId,\n" +
+  "  " +
+  contactKeyExpr +
+  " AS ContactId,\n" +
+  "  " +
+  emailExpr +
+  " AS Email,\n" +
+  "  '' AS CampaignId,\n" +
+  "  con.AccountId AS AccountId,\n" +
+  "  u.Name AS Account_Owner_Name,\n" +
+  "  u.Email AS Account_Owner_Email,\n" +
+  "  '' AS Status,\n" +
+  "  con.MailingState AS State,\n" +
+  "  " +
+  accountOwnerExpr +
+  " AS AccountOwnerId,\n" +
+  "  'SST' AS type\n" +
+  "FROM [" +
+  deName +
+  "] cm\n" +
+  "LEFT JOIN " +
+  contactTable +
+  " con ON " +
+  contactKeyExpr +
+  " = con.id\n" +
+  "LEFT JOIN " +
+  accountTable +
+  " a ON con.AccountId = a.id\n" +
+  "LEFT JOIN " +
+  userTable +
+  " u ON u.id = " +
+  userJoinExpr +
+  "\n" +
+  "WHERE cm." +
+  fields.subscriberkey +
+  " IS NOT NULL";
+ if (userFilter) {
+  sql += "\n  AND u.id = '" + userFilter + "'";
+ }
+ return sql;
+}
+
+function pbInferBracketDeFromQuerySql(sql) {
+ var m = pbToStr(sql).match(/FROM\s+\[([^\]]+)\]/i);
+ return m ? pbTrim(m[1]) : "";
+}
+
+function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQueryText) {
+ var opts = fb || {};
+ var audienceSource = pbTrim(opts.audienceSource || "campaign").toLowerCase();
+ var prox = new Script.Util.WSProxy();
+ var prodEnv = "production";
+ if (audienceSource === "dataextension") {
+  var sourceDe = pbTrim(opts.sourceDataExtension);
+  if (!sourceDe) {
+   sourceDe = pbInferBracketDeFromQuerySql(liveQueryText);
+  }
+  if (!sourceDe) {
+   return {
+    ok: false,
+    sql: "",
+    msg: "Data Extension audience: source DE name not in analytics and could not be inferred from UAT query SQL."
+   };
+  }
+  var deSql = pbStackBuildDataExtensionQuery(
+   prox,
+   sourceDe,
+   opts.sfUserId,
+   prodEnv,
+   senderProfileId
+  );
+  if (!deSql) {
+   return {
+    ok: false,
+    sql: "",
+    msg: "Source Data Extension not found in UAT or missing SubscriberKey field."
+   };
+  }
+  return { ok: true, sql: deSql, msg: "Query SQL built for Production (stack DE audience rules)." };
+ }
+ var campaignId = pbTrim(opts.campaignId);
+ if (!campaignId || campaignId.length < 15) {
+  return {
+   ok: false,
+   sql: "",
+   msg: "campaignId missing or too short in bd_journey_analytics; stack builds require a Salesforce Campaign ID."
+  };
+ }
+ var campSql = pbStackBuildCampaignMemberQuery(
+  campaignId,
+  opts.sfUserId,
+  journeyId,
+  prodEnv,
+  senderProfileId
+ );
+ return { ok: true, sql: campSql, msg: "Query SQL built for Production (stack campaign audience rules)." };
 }
 
 function pbBuildQueryMutationBody(opts) {
@@ -1646,58 +1972,51 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
   return { ok: false, objectId: "", msg: "Query key or SQL missing." };
  }
  var qName = pbTrim(queryName) || key;
- var deOid = pbProdSoapDeObjectId(sub, token, deCustomerKey, deName);
- if (!deOid && pbIsGuidLike(deObjectId)) {
-  deOid = pbTrim(deObjectId);
- }
- var sqlPack = pbAdaptQuerySqlForProduction(queryText);
- var prodSql = sqlPack.sql;
+ var prodSql = pbToStr(queryText);
  var existingId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
- var queryCategoryId = pbProdResolveQueryCategoryId(sub, token);
- var attemptPlans = [
-  { useCategory: true, useDeOid: true },
-  { useCategory: false, useDeOid: true },
-  { useCategory: false, useDeOid: false }
- ];
- var lastResp = { body: "" };
- var ai;
- for (ai = 0; ai < attemptPlans.length; ai++) {
-  var plan = attemptPlans[ai];
-  var body = pbBuildQueryMutationBody({
-   existingId: existingId,
-   key: key,
-   qName: qName,
-   categoryId: queryCategoryId,
-   useCategory: plan.useCategory,
-   sql: prodSql,
-   useDeOid: plan.useDeOid,
-   deOid: deOid,
-   deCustomerKey: deCustomerKey,
-   deName: deName
-  });
-  var action = existingId ? "Update" : "Create";
-  lastResp = pbSoapCall(sub, token, action, body);
-  var objectId = pbParseSoapObjectId(lastResp.body) || existingId;
-  if (pbSoapMutationSucceededStrict(lastResp.body)) {
-   if (!objectId) {
-    objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
-   }
-   if (objectId) {
-    var adaptNote = sqlPack.adapted ? " SQL adapted for Production (ENT tables)." : "";
-    return {
-     ok: true,
-     objectId: objectId,
-     msg: "Query " + (existingId ? "updated" : "created") + " in Production." + adaptNote
-    };
-   }
+ var body = pbBuildQueryMutationBody({
+  existingId: existingId,
+  key: key,
+  qName: qName,
+  categoryId: 0,
+  useCategory: false,
+  sql: prodSql,
+  useDeOid: false,
+  deOid: "",
+  deCustomerKey: deCustomerKey,
+  deName: deName
+ });
+ var action = existingId ? "Update" : "Create";
+ var lastResp = pbSoapCall(sub, token, action, body);
+ var objectId = pbParseSoapObjectId(lastResp.body) || existingId;
+ if (!objectId) {
+  objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+ }
+ if (pbSoapMutationSucceeded(lastResp.body) && objectId) {
+  return {
+   ok: true,
+   objectId: objectId,
+   msg: "Query " + (existingId ? "updated" : "created") + " in Production (stack-style QueryDefinition)."
+  };
+ }
+ if (pbSoapMutationSucceeded(lastResp.body) && !objectId) {
+  objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+  if (objectId) {
+   return {
+    ok: true,
+    objectId: objectId,
+    msg: "Query " + (existingId ? "updated" : "created") + " in Production; ObjectID resolved by retrieve."
+   };
   }
-  if (!existingId) {
-   var maybeCreated = pbProdRetrieveQueryObjectId(sub, token, key, qName);
-   if (maybeCreated) {
-    existingId = maybeCreated;
-    ai--;
-    continue;
-   }
+ }
+ if (!existingId) {
+  var createdId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+  if (createdId) {
+   return {
+    ok: true,
+    objectId: createdId,
+    msg: "Query exists in Production for key " + key + " (resolved after create attempt)."
+   };
   }
  }
  var objectIdFinal = pbProdRetrieveQueryObjectId(sub, token, key, qName);
@@ -1711,7 +2030,6 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
    msg: "Query resolved in Production for key " + key + "."
   };
  }
- var adaptHint = sqlPack.adapted ? " Production SQL mapping applied from UAT ENT tables." : "";
  return {
   ok: false,
   objectId: "",
@@ -1721,8 +2039,7 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
    " failed for key " +
    key +
    ". " +
-   pbSoapErrorSummary(lastResp.body) +
-   adaptHint
+   pbSoapErrorSummary(lastResp.body)
  };
 }
 
@@ -2405,12 +2722,8 @@ function pbPushStackBuild(ctx) {
  if (!journeyId) {
   return { ok: false, logs: logs, msg: "Journey id missing." };
  }
- var live = pbResolveLiveStackContext(
-  devAuth.token,
-  devAuth.subdomain,
-  journeyId,
-  pbStackAnalyticsFallback(ctx)
- );
+ var stackFb = pbStackAnalyticsFallback(ctx);
+ var live = pbResolveLiveStackContext(devAuth.token, devAuth.subdomain, journeyId, stackFb);
  if (!live.ok) {
   fail(live.msg || "Live artifact resolution failed.");
   return {
@@ -2423,10 +2736,22 @@ function pbPushStackBuild(ctx) {
  var deKey = live.deCustomerKey;
  var deName = live.deName || deKey;
  var queryKey = live.queryKey;
- var queryText = live.queryText;
  var automationKey = live.automationKey;
  var automationName = live.automationName || live.buildName || pbTrim(ctx.buildName);
  var buildName = live.buildName || pbTrim(ctx.buildName);
+ var queryBuild = pbBuildStackAudienceQueryForProd(
+  stackFb,
+  journeyId,
+  live.senderProfileId,
+  live.queryText
+ );
+ var queryText = "";
+ if (queryBuild.ok && queryBuild.sql) {
+  queryText = queryBuild.sql;
+  log(queryBuild.msg);
+ } else {
+  fail("Query SQL FAILED: " + (queryBuild.msg || "Could not build Production query like stack build."));
+ }
  log("Entry DE key " + deKey + ", query key " + queryKey + " (" + queryText.length + " chars SQL).");
  log("Email asset id " + live.emailAssetId + ", automation key " + automationKey + ".");
  var deResult = pbProdEnsureEntryDe(prodAuth.subdomain, prodAuth.token, deKey, deName, {
@@ -2558,7 +2883,8 @@ if (pageStatus === "review" && isStack && jid) {
   emailName: pbTrim(Platform.Variable.GetValue("@dispEmailName") || ""),
   automationGuid: pbTrim(Platform.Variable.GetValue("@dispAutomationGuid") || ""),
   automationKey: pbTrim(Platform.Variable.GetValue("@dispAutomationCustomerKey") || ""),
-  automationName: pbTrim(Platform.Variable.GetValue("@dispAutomationName") || "")
+  automationName: pbTrim(Platform.Variable.GetValue("@dispAutomationName") || ""),
+  campaignId: pbTrim(Platform.Variable.GetValue("@dispCampaignId") || "")
  });
  var reviewLive = { ok: false, msg: "" };
  var reviewAuth = pbAuthForUser(
@@ -2582,7 +2908,16 @@ if (pageStatus === "review" && isStack && jid) {
   deName: reviewLive.ok ? reviewLive.deName : reviewFb.deName,
   deId: reviewLive.ok ? reviewLive.deCustomerKey : reviewFb.deId,
   queryKey: reviewLive.ok ? reviewLive.queryKey : reviewFb.queryKey,
-  queryFound: reviewLive.ok ? !!reviewLive.queryText : !!pbLookupQueryText(reviewFb.queryKey),
+  queryFound: reviewLive.ok
+   ? !!(
+      pbBuildStackAudienceQueryForProd(
+       reviewFb,
+       jid,
+       reviewLive.senderProfileId,
+       reviewLive.queryText
+      ).ok
+     )
+   : !!pbTrim(reviewFb.campaignId),
   liveResolved: reviewLive.ok,
   emailName: reviewLive.ok ? reviewLive.emailName : reviewFb.emailName,
   emailId: reviewLive.ok ? reviewLive.emailAssetId : reviewFb.emailId,
@@ -2612,7 +2947,8 @@ if (confirmPush && pageStatus === "review" && isStack && jid) {
   deName: pbTrim(Platform.Variable.GetValue("@dispDeName") || ""),
   automationGuid: pbTrim(Platform.Variable.GetValue("@dispAutomationGuid") || ""),
   automationKey: pbTrim(Platform.Variable.GetValue("@dispAutomationCustomerKey") || ""),
-  automationName: pbTrim(Platform.Variable.GetValue("@dispAutomationName") || "")
+  automationName: pbTrim(Platform.Variable.GetValue("@dispAutomationName") || ""),
+  campaignId: pbTrim(Platform.Variable.GetValue("@dispCampaignId") || "")
  });
  var li;
  pushLogHtml = '<ol class="push-log">';
