@@ -1249,17 +1249,67 @@ function pbStackSqlEnvironmentForPush(navEnvironment) {
  return "uat";
 }
 
+function pbSqlEnvironmentForProdRecreate() {
+ return "production";
+}
+
 function pbBuildQuerySqlForProdPush(fb, journeyId, senderProfileId, liveQueryText, navEnvironment) {
- var liveSql = pbTrim(liveQueryText);
- if (liveSql.length > 30) {
+ return pbBuildStackAudienceQueryForProd(
+  fb,
+  journeyId,
+  senderProfileId,
+  liveQueryText,
+  pbSqlEnvironmentForProdRecreate()
+ );
+}
+
+function pbSanitizeBuildArtifactKey(name) {
+ var s = pbTrim(name);
+ if (!s || s.toUpperCase() === "N/A") {
+  return "";
+ }
+ return s.substring(0, 50);
+}
+
+function pbResolveBuildArtifactNames(ctx, fb) {
+ var c = ctx || {};
+ var f = fb || {};
+ var buildName =
+  pbSanitizeBuildArtifactKey(c.buildName) ||
+  pbSanitizeBuildArtifactKey(f.buildName) ||
+  pbSanitizeBuildArtifactKey(f.queryKey) ||
+  pbSanitizeBuildArtifactKey(f.deId);
+ if (!buildName) {
   return {
-   ok: true,
-   sql: liveSql,
-   msg:
-    "Production query uses live UAT QueryText from the automation (same SQL as the working stack build)."
+   ok: false,
+   buildName: "",
+   deCustomerKey: "",
+   deName: "",
+   queryKey: "",
+   automationKey: "",
+   automationName: "",
+   emailName: ""
   };
  }
- return pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQueryText, navEnvironment);
+ return {
+  ok: true,
+  buildName: buildName,
+  deCustomerKey: buildName,
+  deName: buildName,
+  queryKey: buildName,
+  automationKey: buildName,
+  automationName: buildName,
+  emailName: buildName
+ };
+}
+
+function pbProdFindEmailAssetByName(token, sub, emailName) {
+ var name = pbTrim(emailName);
+ if (!name) {
+  return { ok: false, asset: null };
+ }
+ var found = pbFetchEmailAssetByName(token, sub, name);
+ return found;
 }
 
 function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQueryText, navEnvironment) {
@@ -1789,7 +1839,10 @@ function pbUatLoadDeSpec(customerKey, deName, objectId, uatToken, uatSub) {
  }
 }
 
-function pbUatLoadDeSpecOrDefault(customerKey, deName, objectId, uatToken, uatSub) {
+function pbUatLoadDeSpecOrDefault(customerKey, deName, objectId, uatToken, uatSub, schemaOnly) {
+ if (schemaOnly === true) {
+  return pbDefaultStackDeSpec(deName || customerKey);
+ }
  var spec = pbUatLoadDeSpec(customerKey, deName, objectId, uatToken, uatSub);
  if (spec && spec.fields && spec.fields.length) {
   return spec;
@@ -2131,7 +2184,8 @@ function pbProdEnsureEntryDe(sub, token, customerKey, deName, uatOpts) {
   name,
   uo.deObjectId,
   uo.uatToken,
-  uo.uatSub
+  uo.uatSub,
+  uo.schemaOnly === true
  );
  var fieldsXml = pbBuildDeFieldsXmlFromUat(uatSpec.fields);
  var sendableName = uatSpec ? uatSpec.sendableField : "ContactId";
@@ -2685,17 +2739,17 @@ function pbGetPushPlan(journeyType) {
  var de = {
   id: "de",
   label: "Entry data extension",
-  note: "Empty sendable DE in Production (schema only, no UAT rows)."
+  note: "Empty sendable DE in Production (default stack schema, build name as key)."
  };
  var query = {
   id: "query",
   label: "Query activity",
-  note: "Production SQL into the entry DE (stack builds)."
+  note: "New query in Production (stack SQL rules, same CustomerKey as build name)."
  };
  var email = {
   id: "email",
   label: "Email",
-  note: "Content Builder email copied or reused in Production."
+  note: "Checks for an email in Production named like the build (no UAT copy)."
  };
  var automation = {
   id: "automation",
@@ -2710,7 +2764,7 @@ function pbGetPushPlan(journeyType) {
  var journey = {
   id: "journey",
   label: "Journey",
-  note: "Journey activities in Production (draft)."
+  note: "Not automated yet — create in Journey Builder using the build name after other steps."
  };
  if (t === "Journey + Automation") {
   return [de, query, email, automation, event, journey];
@@ -2739,8 +2793,44 @@ function pbPlanIncludesStep(journeyType, stepId) {
 function pbResolvePushContext(journeyType, devToken, devSub, journeyId, fb) {
  var jt = pbTrim(journeyType);
  if (jt === "Journey + Automation") {
-  var liveStack = pbResolveLiveStackContext(devToken, devSub, journeyId, fb);
-  return { journeyType: jt, live: liveStack, fb: fb, usesLiveStack: true };
+  var names = pbResolveBuildArtifactNames({ buildName: fb.buildName, journeyId: journeyId }, fb);
+  if (!names.ok) {
+   return {
+    journeyType: jt,
+    fb: fb,
+    usesLiveStack: true,
+    recreateOnly: true,
+    live: {
+     ok: false,
+     msg: "Build name missing on analytics — cannot name Production artifacts."
+    }
+   };
+  }
+  return {
+   journeyType: jt,
+   fb: fb,
+   usesLiveStack: true,
+   recreateOnly: true,
+   live: {
+    ok: true,
+    msg:
+     "Recreate in Production using build name \"" +
+     names.buildName +
+     "\" (same CustomerKey/Name as stack build; nothing copied from UAT).",
+    buildName: names.buildName,
+    deCustomerKey: names.deCustomerKey,
+    deName: names.deName,
+    queryKey: names.queryKey,
+    automationKey: names.automationKey,
+    automationName: names.automationName,
+    emailName: names.emailName,
+    queryText: "",
+    senderProfileId: "",
+    emailAssetId: "",
+    emailLegacyId: "",
+    deObjectId: ""
+   }
+  };
  }
  var deKey = pbTrim(fb.deId);
  if (deKey.toUpperCase() === "N/A") {
@@ -2906,36 +2996,19 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
  var fb = pbStackAnalyticsFallback(ctx);
  var resolved = pbResolvePushContext(journeyType, devAuth.token, devAuth.subdomain, journeyId, fb);
  var live = resolved.live;
- if (resolved.usesLiveStack && !live.ok && sid !== "de" && sid !== "email") {
-  return {
-   ok: false,
-   logs: logs,
-   msg: "Live UAT resolve failed: " + (live.msg || "Could not read journey artifacts.")
-  };
+ if (!live.ok) {
+  return { ok: false, logs: logs, msg: live.msg || "Could not resolve build naming." };
  }
- if (resolved.usesLiveStack && live.ok) {
-  log(live.msg);
- }
+ log(live.msg);
  var buildName = live.buildName || pbTrim(ctx.buildName);
  var deKey = live.deCustomerKey;
  var deName = live.deName || deKey;
- if (!deKey) {
-  deKey = pbTrim(fb.deId);
-  if (deKey.toUpperCase() === "N/A") {
-   deKey = "";
-  }
-  if (deKey && !deName) {
-   deName = pbTrim(fb.deName) || deKey;
-  }
- }
  if (sid === "de") {
   if (!deKey) {
    return { ok: false, logs: logs, msg: "Entry DE customer key missing." };
   }
   var deResult = pbProdEnsureEntryDe(prodAuth.subdomain, prodAuth.token, deKey, deName, {
-   uatToken: devAuth.token,
-   uatSub: devAuth.subdomain,
-   deObjectId: live.deObjectId || ""
+   schemaOnly: true
   });
   if (deResult.ok) {
    log(deResult.msg);
@@ -2947,39 +3020,18 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
   if (!deKey) {
    return { ok: false, logs: logs, msg: "Entry DE key missing." };
   }
-  if (resolved.usesLiveStack) {
-   var liveQuery = pbResolveLiveStackContext(
-    devAuth.token,
-    devAuth.subdomain,
-    journeyId,
-    fb
-   );
-   if (liveQuery.ok) {
-    live = liveQuery;
-    log(live.msg);
-   }
-  }
-  var queryKey = pbResolvePushQueryKey(live, fb, deKey);
-  if (!queryKey) {
-   return {
-    ok: false,
-    logs: logs,
-    msg:
-     "Query customer key is empty. Fix UAT automation query step or set queryKey on bd_journey_analytics (stack builds usually use the same key as the entry DE, e.g. ASC_TEST_04)."
-   };
-  }
-  log("Query CustomerKey " + queryKey + " (target DE " + deKey + ").");
+  var queryKey = live.queryKey || deKey;
+  log("Query CustomerKey " + queryKey + " (recreate, target DE " + deKey + ").");
   var deProd = pbProdRetrieveDeObjectId(prodAuth.subdomain, prodAuth.token, deKey, deName);
   if (!deProd.ok || !deProd.objectId) {
    return { ok: false, logs: logs, msg: "Push entry DE first — not found in Production." };
   }
-  var navEnv = pbTrim(Platform.Variable.GetValue("@navEnvironment") || "uat");
   var queryBuild = pbBuildQuerySqlForProdPush(
    fb,
    journeyId,
    live.senderProfileId,
-   live.queryText,
-   navEnv
+   "",
+   pbSqlEnvironmentForProdRecreate()
   );
   if (!queryBuild.ok || !queryBuild.sql) {
    return { ok: false, logs: logs, msg: "Query SQL FAILED: " + (queryBuild.msg || "Could not build Production SQL.") };
@@ -3021,30 +3073,34 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
   return { ok: false, logs: logs, msg: "Query FAILED: " + queryResult.msg };
  }
  if (sid === "email") {
-  var emailCopy = pbCopyEmailAsset(
-   devAuth.token,
-   devAuth.subdomain,
-   prodAuth.token,
-   prodAuth.subdomain,
-   live.emailAssetId,
-   live.emailName || buildName,
-   live.emailLegacyId || ""
-  );
-  if (emailCopy.ok) {
-   log(emailCopy.msg);
-   return { ok: true, logs: logs, msg: "Step complete: email in Production." };
+  var emailName = live.emailName || buildName;
+  var prodEmail = pbProdFindEmailAssetByName(prodAuth.token, prodAuth.subdomain, emailName);
+  if (prodEmail.ok && prodEmail.asset) {
+   log("Production email found by name \"" + emailName + "\" (id " + pbToStr(prodEmail.asset.id) + ").");
+   return {
+    ok: true,
+    logs: logs,
+    msg: "Step complete: email \"" + emailName + "\" exists in Production (not copied from UAT)."
+   };
   }
-  return { ok: false, logs: logs, msg: "Email FAILED: " + emailCopy.msg };
+  return {
+   ok: false,
+   logs: logs,
+   msg:
+    "Create email \"" +
+    emailName +
+    "\" in Production Content Builder first (recreate only — no UAT copy on this step)."
+  };
  }
  if (sid === "automation") {
-  var qk = pbResolvePushQueryKey(live, fb, deKey);
-  var qOid = pbProdRetrieveQueryObjectId(prodAuth.subdomain, prodAuth.token, qk, qk || buildName);
+  var qk = live.queryKey || deKey;
+  var qOid = pbProdRetrieveQueryObjectId(prodAuth.subdomain, prodAuth.token, qk, qk);
   if (!qOid) {
    return { ok: false, logs: logs, msg: "Push query step first — query ObjectID not found in Production." };
   }
   var automationResult = pbCreateProdAutomation(prodAuth.token, prodAuth.subdomain, {
    automationName: live.automationName || buildName,
-   automationKey: live.automationKey,
+   automationKey: live.automationKey || buildName,
    queryObjectId: qOid
   });
   if (automationResult.ok) {
@@ -3058,7 +3114,7 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
   if (!deForEvent.ok || !deForEvent.objectId) {
    return { ok: false, logs: logs, msg: "Push entry DE first." };
   }
-  var autoKey = pbTrim(live.automationKey);
+  var autoKey = pbTrim(live.automationKey || buildName);
   var autoObj = pbFindAutomationByKey(prodAuth.token, prodAuth.subdomain, autoKey);
   if (!autoObj || !autoObj.id) {
    return { ok: false, logs: logs, msg: "Push automation step first." };
@@ -3077,64 +3133,14 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
   return { ok: false, logs: logs, msg: "Entry event FAILED: " + eventResult.msg };
  }
  if (sid === "journey") {
-  if (!resolved.usesLiveStack) {
-   return {
-    ok: false,
-    logs: logs,
-    msg: "Journey push for journeyType \"" + journeyType + "\" is not wired yet. Push email and DE first; journey clone coming next."
-   };
-  }
-  var emailForJ = pbCopyEmailAsset(
-   devAuth.token,
-   devAuth.subdomain,
-   prodAuth.token,
-   prodAuth.subdomain,
-   live.emailAssetId,
-   live.emailName || buildName,
-   live.emailLegacyId || ""
-  );
-  if (!emailForJ.ok) {
-   return { ok: false, logs: logs, msg: "Push email step first or fix source email: " + emailForJ.msg };
-  }
-  log(emailForJ.msg);
-  var deJ = pbProdRetrieveDeObjectId(prodAuth.subdomain, prodAuth.token, deKey, deName);
-  var autoJ = pbFindAutomationByKey(prodAuth.token, prodAuth.subdomain, live.automationKey);
-  if (!deJ.objectId || !autoJ || !autoJ.id) {
-   return { ok: false, logs: logs, msg: "Push entry DE, query, and automation steps before journey." };
-  }
-  var eventForJ = pbCreateProdDeAudienceEvent(prodAuth.token, prodAuth.subdomain, {
-   name: buildName,
-   eventKey: "DEAudience-" + pbRandomGuid(),
-   dataExtensionId: deJ.objectId,
-   dataExtensionName: deName,
-   automationId: autoJ.id
-  });
-  if (!eventForJ.ok || !eventForJ.trigger) {
-   return {
-    ok: false,
-    logs: logs,
-    msg: "Entry event for journey failed (push Entry event step to test separately): " + (eventForJ.msg || "")
-   };
-  }
-  log(eventForJ.msg);
-  var journeyClone = pbCloneJourneyToProd(
-   devAuth.token,
-   devAuth.subdomain,
-   prodAuth.token,
-   prodAuth.subdomain,
-   journeyId,
-   {
-    buildName: buildName,
-    legacyEmailId: emailForJ.legacyEmailId,
-    prodEmailAssetId: emailForJ.prodEmailId,
-    trigger: eventForJ.trigger
-   }
-  );
-  if (journeyClone.ok) {
-   log(journeyClone.msg);
-   return { ok: true, logs: logs, msg: "Step complete: journey created in Production (draft)." };
-  }
-  return { ok: false, logs: logs, msg: "Journey FAILED: " + journeyClone.msg };
+  return {
+   ok: false,
+   logs: logs,
+   msg:
+    "Journey recreate is not automated. After DE, query, email, automation, and entry event, create journey \"" +
+    buildName +
+    "\" in Production Journey Builder (no UAT canvas copy)."
+  };
  }
  return { ok: false, logs: logs, msg: "Unknown push step." };
 }
@@ -3473,21 +3479,11 @@ function pbPushPageCtx() {
 
 if (pageStatus === "review" && jid && journeyType) {
  var reviewFb = pbStackAnalyticsFallback(pbPushPageCtx());
- var reviewAuth = pbAuthForUser(
-  pbTrim(Platform.Variable.GetValue("@AUTH_SOURCE_USER") || "Admin") || "Admin",
-  []
- );
- var resolved = { live: { ok: false, msg: "" }, usesLiveStack: false };
- if (reviewAuth.ok) {
-  resolved = pbResolvePushContext(journeyType, reviewAuth.token, reviewAuth.subdomain, jid, reviewFb);
-  if (resolved.usesLiveStack && !resolved.live.ok) {
-   pushBlockedMsg =
-    "Live UAT resolve failed: " + (resolved.live.msg || "Fix UAT journey artifacts, then reload.");
-  } else if (resolved.live.ok && resolved.live.msg) {
-   pushBlockedMsg = "";
-  }
+ var resolved = pbResolvePushContext(journeyType, "", "", jid, reviewFb);
+ if (!resolved.live.ok) {
+  pushBlockedMsg = resolved.live.msg || "Build name missing on analytics.";
  } else {
-  pushBlockedMsg = "Source (Admin) auth failed: " + reviewAuth.msg;
+  pushBlockedMsg = "";
  }
  var prodAuthPreview = pbAuthForUser(
   pbTrim(Platform.Variable.GetValue("@AUTH_PROD_USER") || "Admin_Production") || "Admin_Production",
@@ -3589,7 +3585,7 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 %%[ IF @pageStatus == "nodata" THEN ]%%
 <p class="sub">Open this page with <strong>journeyId</strong> from Manage Build.</p>
 %%[ ELSE ]%%
-<p class="sub">Push one artifact at a time. Steps depend on <strong>journeyType</strong> (unchanged). UAT reads use <strong>Admin</strong>; Production writes use your prod auth row.</p>
+<p class="sub">Recreate stack artifacts in Production using the <strong>build name</strong> as CustomerKey/Name (same as a new stack build). Nothing is copied from UAT. Steps depend on <strong>journeyType</strong>.</p>
 %%=TreatAsContent(@pushResultBanner)=%%
 <div class="panel">
  <p class="panel-title">Build: %%=v(@dispName)=%%</p>
