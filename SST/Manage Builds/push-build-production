@@ -862,11 +862,70 @@ function pbSoapQueryTextXml(sql) {
  if (!s) {
   return "<QueryText></QueryText>";
  }
- if (s.indexOf("<") >= 0 || s.indexOf("&") >= 0) {
-  var safe = s.split("]]>").join("]]]]><![CDATA[>");
-  return "<QueryText><![CDATA[" + safe + "]]></QueryText>";
+ var safe = s.split("]]>").join("]]]]><![CDATA[>");
+ return "<QueryText><![CDATA[" + safe + "]]></QueryText>";
+}
+
+function pbSoapErrorSummary(body) {
+ var text = pbToStr(body);
+ var fault = text.match(/<(?:[\w]+:)?faultstring[^>]*>([^<]+)/i);
+ if (fault && pbTrim(fault[1])) {
+  return pbTrim(fault[1]);
  }
- return "<QueryText>" + pbXmlSafe(s) + "</QueryText>";
+ var msg = pbSoapFirstStatusMessage(text);
+ var status = pbParseSoapStatus(text);
+ if (msg) {
+  return (status ? status + " — " : "") + msg;
+ }
+ if (status) {
+  return status;
+ }
+ return "SOAP request failed.";
+}
+
+function pbAdaptQuerySqlForProduction(sql) {
+ var s = pbToStr(sql);
+ if (!/\bENT\./i.test(s)) {
+  return { sql: s, adapted: false };
+ }
+ var out = s;
+ out = out.replace(/ENT\.CampaignMember_Salesforce_2/gi, "CampaignMember_Salesforce_1");
+ out = out.replace(/ENT\.Contact_Salesforce_1/gi, "Contact_Salesforce");
+ out = out.replace(/ENT\.Account_Salesforce_1/gi, "Account_Salesforce");
+ out = out.replace(/ENT\.User_Salesforce_1/gi, "User_Salesforce_1");
+ out = out.replace(/\bENT\./gi, "");
+ return { sql: out, adapted: true };
+}
+
+function pbBuildQueryMutationBody(opts) {
+ var o = opts || {};
+ var requestTag = o.existingId ? "UpdateRequestMsg" : "CreateRequestMsg";
+ var objectIdXml = o.existingId ? "<ObjectID>" + pbXmlSafe(o.existingId) + "</ObjectID>" : "";
+ var categoryXml = o.useCategory && o.categoryId > 0 ? "<CategoryID>" + o.categoryId + "</CategoryID>" : "";
+ var deTargetOid = o.useDeOid && o.deOid ? "<ObjectID>" + pbXmlSafe(o.deOid) + "</ObjectID>" : "";
+ return (
+  "<" +
+  requestTag +
+  ' xmlns="http://exacttarget.com/wsdl/partnerAPI"><Objects xsi:type="QueryDefinition">' +
+  objectIdXml +
+  "<CustomerKey>" +
+  pbXmlSafe(o.key) +
+  "</CustomerKey><Name>" +
+  pbXmlSafe(o.qName) +
+  "</Name>" +
+  categoryXml +
+  pbSoapQueryTextXml(o.sql) +
+  "<TargetType>DE</TargetType><TargetUpdateType>Update</TargetUpdateType>" +
+  "<DataExtensionTarget>" +
+  deTargetOid +
+  "<CustomerKey>" +
+  pbXmlSafe(o.deCustomerKey) +
+  "</CustomerKey><Name>" +
+  pbXmlSafe(o.deName) +
+  "</Name></DataExtensionTarget></Objects></" +
+  requestTag +
+  ">"
+ );
 }
 
 function pbSoapFindObjectIdForCustomerKey(body, customerKey) {
@@ -1600,80 +1659,79 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
  if (!deOid && pbIsGuidLike(deObjectId)) {
   deOid = pbTrim(deObjectId);
  }
+ var sqlPack = pbAdaptQuerySqlForProduction(queryText);
+ var prodSql = sqlPack.sql;
  var existingId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
- var action = existingId ? "Update" : "Create";
- var requestTag = existingId ? "UpdateRequestMsg" : "CreateRequestMsg";
- var objectIdXml = existingId ? "<ObjectID>" + pbXmlSafe(existingId) + "</ObjectID>" : "";
  var queryCategoryId = pbProdResolveQueryCategoryId(sub, token);
- var categoryXml = queryCategoryId > 0 ? "<CategoryID>" + queryCategoryId + "</CategoryID>" : "";
- var body =
-  "<" +
-  requestTag +
-  ' xmlns="http://exacttarget.com/wsdl/partnerAPI"><Objects xsi:type="QueryDefinition">' +
-  objectIdXml +
-  "<CustomerKey>" +
-  pbXmlSafe(key) +
-  "</CustomerKey><Name>" +
-  pbXmlSafe(qName) +
-  "</Name>" +
-  categoryXml +
-  pbSoapQueryTextXml(queryText) +
-  "<TargetType>DE</TargetType><TargetUpdateType>Update</TargetUpdateType>" +
-  "<DataExtensionTarget>" +
-  (deOid ? "<ObjectID>" + pbXmlSafe(deOid) + "</ObjectID>" : "") +
-  "<CustomerKey>" +
-  pbXmlSafe(deCustomerKey) +
-  "</CustomerKey><Name>" +
-  pbXmlSafe(deName) +
-  "</Name></DataExtensionTarget></Objects></" +
-  requestTag +
-  ">";
- var resp = pbSoapCallPartnerAction(sub, token, action, body);
- var objectId = pbParseSoapObjectId(resp.body) || existingId;
- if (pbSoapMutationSucceededStrict(resp.body)) {
-  if (!objectId) {
-   objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+ var attemptPlans = [
+  { useCategory: true, useDeOid: true },
+  { useCategory: false, useDeOid: true },
+  { useCategory: false, useDeOid: false }
+ ];
+ var lastResp = { body: "" };
+ var ai;
+ for (ai = 0; ai < attemptPlans.length; ai++) {
+  var plan = attemptPlans[ai];
+  var body = pbBuildQueryMutationBody({
+   existingId: existingId,
+   key: key,
+   qName: qName,
+   categoryId: queryCategoryId,
+   useCategory: plan.useCategory,
+   sql: prodSql,
+   useDeOid: plan.useDeOid,
+   deOid: deOid,
+   deCustomerKey: deCustomerKey,
+   deName: deName
+  });
+  var action = existingId ? "Update" : "Create";
+  lastResp = pbSoapCallPartnerAction(sub, token, action, body);
+  var objectId = pbParseSoapObjectId(lastResp.body) || existingId;
+  if (pbSoapMutationSucceededStrict(lastResp.body)) {
+   if (!objectId) {
+    objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+   }
+   if (objectId) {
+    var adaptNote = sqlPack.adapted ? " SQL adapted for Production (ENT tables)." : "";
+    return {
+     ok: true,
+     objectId: objectId,
+     msg: "Query " + (existingId ? "updated" : "created") + " in Production." + adaptNote
+    };
+   }
   }
-  if (!objectId && pbTrim(automationKeyHint)) {
-   objectId = pbProdQueryObjectIdFromAutomation(token, sub, automationKeyHint);
-  }
-  if (objectId) {
-   return {
-    ok: true,
-    objectId: objectId,
-    msg: "Query " + (existingId ? "updated" : "created") + " in Production."
-   };
+  if (!existingId) {
+   var maybeCreated = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+   if (maybeCreated) {
+    existingId = maybeCreated;
+    ai--;
+    continue;
+   }
   }
  }
- if (!objectId) {
-  objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+ var objectIdFinal = pbProdRetrieveQueryObjectId(sub, token, key, qName);
+ if (!objectIdFinal && pbTrim(automationKeyHint)) {
+  objectIdFinal = pbProdQueryObjectIdFromAutomation(token, sub, automationKeyHint);
  }
- if (!objectId && pbTrim(automationKeyHint)) {
-  objectId = pbProdQueryObjectIdFromAutomation(token, sub, automationKeyHint);
- }
- if (objectId) {
+ if (objectIdFinal) {
   return {
    ok: true,
-   objectId: objectId,
+   objectId: objectIdFinal,
    msg: "Query resolved in Production for key " + key + "."
   };
  }
- var errDetail = pbSoapFirstStatusMessage(resp.body);
- if (!errDetail) {
-  errDetail = pbTrim(resp.body).substring(0, 200);
- }
+ var adaptHint = sqlPack.adapted ? " Production SQL mapping applied from UAT ENT tables." : "";
  return {
   ok: false,
   objectId: "",
   msg:
    "Query " +
-   action +
+   (existingId ? "Update" : "Create") +
    " failed for key " +
    key +
-   " (" +
-   pbParseSoapStatus(resp.body) +
-   "). " +
-   errDetail
+   ". " +
+   pbSoapErrorSummary(lastResp.body) +
+   adaptHint
  };
 }
 
