@@ -751,7 +751,7 @@ function pbSoapCallEx(sub, token, action, bodyXml, style) {
  req.retries = 1;
  req.continueOnError = true;
  req.method = "POST";
- req.contentType = "text/xml; charset=UTF-8";
+ req.contentType = "text/xml";
  req.setHeader("SOAPAction", soapAction);
  req.postData = envelope;
  var resp = req.send();
@@ -1565,7 +1565,10 @@ function pbBuildQueryMutationBody(opts) {
  var categoryXml = o.useCategory && o.categoryId > 0 ? "<CategoryID>" + o.categoryId + "</CategoryID>" : "";
  var deTargetOid = o.useDeOid && o.deOid ? "<ObjectID>" + pbXmlSafe(o.deOid) + "</ObjectID>" : "";
  var targetUpdate = pbTrim(o.targetUpdateType || "Update") || "Update";
- var optionsXml = o.existingId || requestTag === "CreateRequest" ? "" : "<Options></Options>";
+ var optionsXml = "";
+ if (!o.existingId && requestTag !== "CreateRequest") {
+  optionsXml = "<Options></Options>";
+ }
  return (
   "<" +
   requestTag +
@@ -2501,12 +2504,9 @@ function pbProdUpsertQuery(sub, token, queryKey, queryName, queryText, deCustome
      { targetUpdateType: "Overwrite", useCategory: true, useDeOid: true, createRoot: "", soapStyle: "12" }
     ]
   : [
-     { targetUpdateType: "Overwrite", useCategory: false, useDeOid: true, createRoot: "CreateRequest", soapStyle: "11" },
      { targetUpdateType: "Overwrite", useCategory: false, useDeOid: true, createRoot: "CreateRequestMsg", soapStyle: "11" },
-     { targetUpdateType: "Update", useCategory: false, useDeOid: true, createRoot: "CreateRequest", soapStyle: "12" },
-     { targetUpdateType: "Update", useCategory: false, useDeOid: true, createRoot: "CreateRequestMsg", soapStyle: "12" },
-     { targetUpdateType: "Overwrite", useCategory: false, useDeOid: false, createRoot: "CreateRequestMsg", soapStyle: "11" },
-     { targetUpdateType: "Overwrite", useCategory: true, useDeOid: true, createRoot: "CreateRequestMsg", soapStyle: "12" }
+     { targetUpdateType: "Update", useCategory: false, useDeOid: true, createRoot: "CreateRequestMsg", soapStyle: "11" },
+     { targetUpdateType: "Overwrite", useCategory: false, useDeOid: true, createRoot: "CreateRequestMsg", soapStyle: "12" }
     ];
  var lastResp = { body: "", status: 0, style: "" };
  var lastSqlLabel = "";
@@ -4234,54 +4234,61 @@ function pbPushPageCtx() {
  };
 }
 
-if (pageStatus === "review" && jid && journeyType) {
- var reviewFb = pbStackAnalyticsFallback(pbPushPageCtx());
- var resolved = pbResolvePushContext(journeyType, "", "", jid, reviewFb);
- if (!resolved.live.ok) {
-  pushBlockedMsg = resolved.live.msg || "Build name missing on analytics.";
- } else {
-  pushBlockedMsg = "";
+try {
+ if (pageStatus === "review" && jid && journeyType) {
+  var reviewFb = pbStackAnalyticsFallback(pbPushPageCtx());
+  var resolved = pbResolvePushContext(journeyType, "", "", jid, reviewFb);
+  if (!resolved.live.ok) {
+   pushBlockedMsg = resolved.live.msg || "Build name missing on analytics.";
+  } else {
+   pushBlockedMsg = "";
+  }
+  var prodAuthPreview = pbAuthForUser(
+   pbTrim(Platform.Variable.GetValue("@AUTH_PROD_USER") || "Admin_Production") || "Admin_Production",
+   ["Admin_production", "Admin_Production", "Production_Admin", "Admin Production"]
+  );
+  var plan = pbGetPushPlan(journeyType);
+  var liveForUi = resolved.live;
+  if (resolved.usesLiveStack && resolved.live.ok) {
+   liveForUi = resolved.live;
+  } else if (!resolved.usesLiveStack) {
+   liveForUi = resolved.live;
+  }
+  var isStackForUi = Platform.Variable.GetValue("@isStackBuild") === "true";
+  stepsHtml = pbBuildStepsHtml(journeyType, plan, liveForUi, prodAuthPreview, jid, {
+   showCampaignInput: isStackForUi,
+   campaignId: pbTrim(Platform.Variable.GetValue("@pushCampaignId") || "")
+  });
+  if (resolved.usesLiveStack && resolved.live.ok) {
+   stepsHtml =
+    '<div class="banner good" style="margin-bottom:14px">' +
+    pbHtmlSafe(resolved.live.msg) +
+    "</div>" +
+    stepsHtml;
+  }
  }
- var prodAuthPreview = pbAuthForUser(
-  pbTrim(Platform.Variable.GetValue("@AUTH_PROD_USER") || "Admin_Production") || "Admin_Production",
-  ["Admin_production", "Admin_Production", "Production_Admin", "Admin Production"]
- );
- var plan = pbGetPushPlan(journeyType);
- var liveForUi = resolved.live;
- if (resolved.usesLiveStack && resolved.live.ok) {
-  liveForUi = resolved.live;
- } else if (!resolved.usesLiveStack) {
-  liveForUi = resolved.live;
- }
- var isStackForUi = Platform.Variable.GetValue("@isStackBuild") === "true";
- stepsHtml = pbBuildStepsHtml(journeyType, plan, liveForUi, prodAuthPreview, jid, {
-  showCampaignInput: isStackForUi,
-  campaignId: pbTrim(Platform.Variable.GetValue("@pushCampaignId") || "")
- });
- if (resolved.usesLiveStack && resolved.live.ok) {
-  stepsHtml =
-   '<div class="banner good" style="margin-bottom:14px">' +
-   pbHtmlSafe(resolved.live.msg) +
-   "</div>" +
-   stepsHtml;
- }
-}
 
-if (confirmStep && pushStep && pageStatus === "review" && jid && journeyType) {
- var stepResult = pbExecutePushStep(pushStep, journeyType, pbPushPageCtx());
- var li;
- pushLogHtml = '<ol class="push-log">';
- for (li = 0; li < stepResult.logs.length; li++) {
-  pushLogHtml += "<li>" + pbHtmlSafe(stepResult.logs[li]) + "</li>";
+ if (confirmStep && pushStep && pageStatus === "review" && jid && journeyType) {
+  var stepResult = pbExecutePushStep(pushStep, journeyType, pbPushPageCtx());
+  var li;
+  pushLogHtml = '<ol class="push-log">';
+  for (li = 0; li < stepResult.logs.length; li++) {
+   pushLogHtml += "<li>" + pbHtmlSafe(stepResult.logs[li]) + "</li>";
+  }
+  pushLogHtml += "</ol>";
+  if (stepResult.ok) {
+   pushResultBanner = '<div class="banner good">' + pbHtmlSafe(stepResult.msg) + "</div>";
+   pageStatus = "step_done";
+  } else {
+   pushResultBanner = '<div class="banner bad">' + pbHtmlSafe(stepResult.msg || "Step failed.") + "</div>";
+   pageStatus = "step_failed";
+  }
  }
- pushLogHtml += "</ol>";
- if (stepResult.ok) {
-  pushResultBanner = '<div class="banner good">' + pbHtmlSafe(stepResult.msg) + "</div>";
-  pageStatus = "step_done";
- } else {
-  pushResultBanner = '<div class="banner bad">' + pbHtmlSafe(stepResult.msg || "Step failed.") + "</div>";
-  pageStatus = "step_failed";
- }
+} catch (pageEx) {
+ pageStatus = "step_failed";
+ pushResultBanner =
+  '<div class="banner bad">Push page error: ' + pbHtmlSafe(pbToStr(pageEx.message || pageEx)) + "</div>";
+ pushBlockedMsg = pbToStr(pageEx.message || pageEx);
 }
 
 Platform.Variable.SetValue("@pageStatus", pageStatus);
