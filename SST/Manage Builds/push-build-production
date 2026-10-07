@@ -2,7 +2,7 @@
 VAR @HOME_URL, @BUILD_PAGE_SELF, @PUSH_PAGE_SELF, @jid, @confirmPush, @pushStep, @confirmStep, @navEnvironment
 VAR @navRows, @navRow, @detailRows, @detailRow, @detailCount
 VAR @dispName, @dispType, @dispEmailName, @dispEmailId, @dispDeName, @dispDeId
-VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationCustomerKey, @dispAutomationName, @dispCampaignId
+VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationCustomerKey, @dispAutomationName, @dispCampaignId, @pushCampaignId, @campaignIdFromForm
 VAR @isStackBuild, @pageStatus, @pushBlockedMsg, @pushLogHtml, @pushResultBanner
 VAR @manifestHtml, @editSidebarHtml, @buildNavContext, @buildNavActive
 VAR @STACK_JOURNEY_TYPE, @AUTH_SOURCE_USER, @AUTH_PROD_USER
@@ -39,6 +39,7 @@ SET @dispAutomationGuid = ""
 SET @dispAutomationCustomerKey = ""
 SET @dispAutomationName = ""
 SET @dispCampaignId = ""
+SET @pushCampaignId = ""
 SET @detailCount = 0
 
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
@@ -83,6 +84,12 @@ ELSE
    ENDIF
   ENDIF
  ENDIF
+ENDIF
+
+SET @pushCampaignId = Trim(RequestParameter("campaignId"))
+SET @campaignIdFromForm = IIF(Empty(@pushCampaignId),"0","1")
+IF Empty(@pushCampaignId) THEN
+ SET @pushCampaignId = @dispCampaignId
 ENDIF
 
 ]%%
@@ -1230,9 +1237,12 @@ function pbInferAudienceSourceFromQuerySql(sql) {
 }
 
 function pbResolveStackCampaignId(fb, liveQueryText) {
- var fromAnalytics = pbTrim(fb && fb.campaignId);
- if (fromAnalytics && fromAnalytics.length >= 15) {
-  return { campaignId: fromAnalytics.substring(0, 18), source: "analytics" };
+ var fromCtx = pbTrim(fb && fb.campaignId);
+ if (fromCtx && fromCtx.length >= 15) {
+  return {
+   campaignId: fromCtx.substring(0, 18),
+   source: pbTrim(fb.campaignIdSource) || "page"
+  };
  }
  var inferred = pbInferCampaignIdFromQuerySql(liveQueryText);
  if (inferred && inferred.length >= 15) {
@@ -1360,7 +1370,7 @@ function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQu
    ok: false,
    sql: "",
    msg:
-    "Salesforce Campaign ID not found on bd_journey_analytics and not found in live UAT query SQL (expected WHERE cm.CampaignId = '701…')."
+    "Salesforce Campaign ID required: enter it above (701…) or store it on bd_journey_analytics."
   };
  }
  var campSql = pbStackBuildCampaignMemberQuery(
@@ -1370,10 +1380,12 @@ function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQu
   prodEnv,
   senderProfileId
  );
- var campNote =
-  campResolve.source === "live_query"
-   ? " Campaign ID taken from live UAT query SQL (analytics campaignId was empty)."
-   : "";
+ var campNote = "";
+ if (campResolve.source === "live_query") {
+  campNote = " Campaign ID taken from live UAT query SQL.";
+ } else if (campResolve.source === "page_input") {
+  campNote = " Campaign ID from push page input.";
+ }
  return {
   ok: true,
   sql: campSql,
@@ -3119,15 +3131,25 @@ function pbGetPushPlan(journeyType) {
   label: "Entry data extension",
   note: "Empty sendable DE in Production (default stack schema, build name as key)."
  };
- var query = {
-  id: "query",
-  label: "Query activity",
-  note: "Same as stack build: SQL from nav environment + QueryDefinition (CustomerKey = build name)."
+ var queryAutomation = {
+  id: "query_automation",
+  label: "Query activity + automation",
+  note: "Stack query SQL (Campaign ID below) + QueryDefinition, then REST automation with hourly schedule."
  };
  var email = {
   id: "email",
   label: "Email",
   note: "Checks for an email in Production named like the build (no UAT copy)."
+ };
+ var eventJourney = {
+  id: "event_journey",
+  label: "Entry event + journey",
+  note: "DE-audience entry event wired to automation, then journey cloned from UAT (draft) with Production email ids."
+ };
+ var query = {
+  id: "query",
+  label: "Query activity",
+  note: "Same as stack build: SQL from nav environment + QueryDefinition (CustomerKey = build name)."
  };
  var automation = {
   id: "automation",
@@ -3142,10 +3164,10 @@ function pbGetPushPlan(journeyType) {
  var journey = {
   id: "journey",
   label: "Journey",
-  note: "Not automated yet — create in Journey Builder using the build name after other steps."
+  note: "Journey clone from UAT with Production email references."
  };
  if (t === "Journey + Automation") {
-  return [de, query, email, automation, event, journey];
+  return [de, queryAutomation, email, eventJourney];
  }
  if (t.indexOf("Survey") >= 0) {
   return [de, email, journey];
@@ -3254,6 +3276,22 @@ function pbProdStepStatus(stepId, prodAuth, live) {
   }
   return { state: "pending", note: "Not found in Production yet." };
  }
+ if (sid === "query_automation") {
+  var qkCombo = pbTrim(lv.queryKey);
+  var akCombo = pbTrim(lv.automationKey);
+  if (!qkCombo || !akCombo) {
+   return { state: "blocked", note: "No query or automation customer key." };
+  }
+  var qOidCombo = pbProdRetrieveQueryObjectId(prodAuth.subdomain, prodAuth.token, qkCombo, lv.buildName);
+  var autoCombo = pbFindAutomationByKey(prodAuth.token, prodAuth.subdomain, akCombo);
+  if (qOidCombo && autoCombo && autoCombo.id) {
+   return { state: "done", note: "Query and automation in Production." };
+  }
+  if (qOidCombo) {
+   return { state: "pending", note: "Query in Production; automation not yet." };
+  }
+  return { state: "pending", note: "Query and automation not in Production yet." };
+ }
  if (sid === "query") {
   var qk = pbTrim(lv.queryKey);
   if (!qk) {
@@ -3279,14 +3317,29 @@ function pbProdStepStatus(stepId, prodAuth, live) {
   }
   return { state: "pending", note: "Automation not in Production yet." };
  }
+ if (sid === "event_journey") {
+  return { state: "pending", note: "Push when DE, query/automation, and email are ready." };
+ }
  if (sid === "event" || sid === "journey") {
   return { state: "pending", note: "Push when prior steps succeed." };
  }
  return { state: "unknown", note: "" };
 }
 
-function pbBuildStepsHtml(journeyType, plan, live, prodAuth, jid) {
+function pbBuildStepsHtml(journeyType, plan, live, prodAuth, jid, uiOpts) {
+ var uo = uiOpts || {};
  var html = '<p class="push-plan-intro">Plan from <strong>journeyType</strong>: <code>' + pbHtmlSafe(journeyType) + "</code></p>";
+ if (uo.showCampaignInput) {
+  var campVal = pbHtmlSafe(uo.campaignId || "");
+  html +=
+   '<div class="push-campaign-row">' +
+   '<label class="push-campaign-label" for="pushCampaignIdField">Salesforce Campaign ID</label>' +
+   '<input id="pushCampaignIdField" class="push-campaign-input" type="text" name="campaignId" value="' +
+   campVal +
+   '" maxlength="18" placeholder="701XXXXXXXXXXXX" autocomplete="off">' +
+   '<p class="push-campaign-hint">Required for query SQL when audience is Campaign Member. Saved when you push the query + automation step.</p>' +
+   "</div>";
+ }
  html += '<ol class="push-steps">';
  var i;
  for (i = 0; i < plan.length; i++) {
@@ -3302,11 +3355,19 @@ function pbBuildStepsHtml(journeyType, plan, live, prodAuth, jid) {
   if (st.state === "blocked") {
    html += '<p class="push-step-warn">Resolve the blocker in UAT or analytics before pushing this step.</p>';
   } else {
+   var campHidden = "";
+   if (uo.showCampaignInput) {
+    campHidden =
+     '<input type="hidden" name="campaignId" class="push-campaign-hidden" value="' +
+     pbHtmlSafe(uo.campaignId || "") +
+     '">';
+   }
    html +=
-    '<form method="post" action="" class="push-step-form" onsubmit="return confirm(\'Push only this step to Production?\');">' +
+    '<form method="post" action="" class="push-step-form" onsubmit="return pbConfirmPushStep(this);">' +
     '<input type="hidden" name="journeyId" value="' +
     pbHtmlSafe(jid) +
     '">' +
+    campHidden +
     '<input type="hidden" name="pushStep" value="' +
     pbHtmlSafe(step.id) +
     '">' +
@@ -3491,6 +3552,78 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
   }
   return { ok: false, logs: logs, msg: "Automation FAILED: " + automationResult.msg };
  }
+ if (sid === "query_automation") {
+  if (!deKey) {
+   return { ok: false, logs: logs, msg: "Entry DE key missing." };
+  }
+  var queryKeyCombo = live.queryKey || deKey;
+  log("Query CustomerKey " + queryKeyCombo + " (recreate, target DE " + deKey + ").");
+  var deProdCombo = pbProdRetrieveDeObjectId(prodAuth.subdomain, prodAuth.token, deKey, deName);
+  if (!deProdCombo.ok || !deProdCombo.objectId) {
+   return { ok: false, logs: logs, msg: "Push entry DE first — not found in Production." };
+  }
+  var navEnvCombo = pbTrim(Platform.Variable.GetValue("@navEnvironment") || "uat");
+  var queryBuildCombo = pbBuildQuerySqlForProdPush(fb, journeyId, live.senderProfileId, "", navEnvCombo);
+  if (!queryBuildCombo.ok || !queryBuildCombo.sql) {
+   return { ok: false, logs: logs, msg: "Query SQL FAILED: " + (queryBuildCombo.msg || "Could not build stack SQL.") };
+  }
+  log(queryBuildCombo.msg);
+  var deTargetMetaCombo = pbProdRetrieveDeTargetMeta(
+   prodAuth.subdomain,
+   prodAuth.token,
+   deKey,
+   deName
+  );
+  var targetDeKeyCombo = deKey;
+  var targetDeNameCombo = deName;
+  if (deTargetMetaCombo.ok) {
+   targetDeKeyCombo = deTargetMetaCombo.customerKey || deKey;
+   targetDeNameCombo = deTargetMetaCombo.name || deName;
+   log(
+    "Query target DE — CustomerKey " +
+     targetDeKeyCombo +
+     ", Name " +
+     targetDeNameCombo +
+     ", ObjectID " +
+     deTargetMetaCombo.objectId +
+     "."
+   );
+  }
+  var queryResultCombo = pbStackCreateQueryDefinitionProd(
+   prodAuth.subdomain,
+   prodAuth.token,
+   queryKeyCombo,
+   queryKeyCombo,
+   queryBuildCombo.sql,
+   targetDeKeyCombo,
+   targetDeNameCombo
+  );
+  if (!queryResultCombo.ok) {
+   return { ok: false, logs: logs, msg: "Query FAILED: " + queryResultCombo.msg };
+  }
+  log(queryResultCombo.msg);
+  var qOidCombo = pbProdRetrieveQueryObjectId(
+   prodAuth.subdomain,
+   prodAuth.token,
+   queryKeyCombo,
+   queryKeyCombo
+  );
+  if (!qOidCombo) {
+   return { ok: false, logs: logs, msg: "Query created but ObjectID not found in Production." };
+  }
+  var automationResultCombo = pbStackCreateAutomationProd(prodAuth.token, prodAuth.subdomain, {
+   automationName: live.automationName || buildName,
+   automationKey: live.automationKey || buildName,
+   queryObjectId: qOidCombo,
+   frequency: "hourly",
+   timezoneId: 1
+  });
+  if (automationResultCombo.ok) {
+   log(automationResultCombo.msg);
+   return { ok: true, logs: logs, msg: "Step complete: query activity and automation in Production." };
+  }
+  return { ok: false, logs: logs, msg: "Automation FAILED: " + automationResultCombo.msg };
+ }
  if (sid === "event") {
   var deForEvent = pbProdRetrieveDeObjectId(prodAuth.subdomain, prodAuth.token, deKey, deName);
   if (!deForEvent.ok || !deForEvent.objectId) {
@@ -3518,11 +3651,63 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
   return {
    ok: false,
    logs: logs,
-   msg:
-    "Journey recreate is not automated. After DE, query, email, automation, and entry event, create journey \"" +
-    buildName +
-    "\" in Production Journey Builder (no UAT canvas copy)."
+   msg: "Use the combined entry event + journey step for stack builds."
   };
+ }
+ if (sid === "event_journey") {
+  var deForEventJ = pbProdRetrieveDeObjectId(prodAuth.subdomain, prodAuth.token, deKey, deName);
+  if (!deForEventJ.ok || !deForEventJ.objectId) {
+   return { ok: false, logs: logs, msg: "Push entry DE first." };
+  }
+  var autoKeyEj = pbTrim(live.automationKey || buildName);
+  var autoObjEj = pbFindAutomationByKey(prodAuth.token, prodAuth.subdomain, autoKeyEj);
+  if (!autoObjEj || !autoObjEj.id) {
+   return { ok: false, logs: logs, msg: "Push query + automation step first." };
+  }
+  var emailNameEj = live.emailName || buildName;
+  var prodEmailEj = pbProdFindEmailAssetByName(prodAuth.token, prodAuth.subdomain, emailNameEj);
+  if (!prodEmailEj.ok || !prodEmailEj.asset) {
+   return {
+    ok: false,
+    logs: logs,
+    msg: "Production email \"" + emailNameEj + "\" not found — complete the email step first."
+   };
+  }
+  var prodAssetIdEj = pbToStr(prodEmailEj.asset.id || "");
+  var prodLegacyEj = pbExtractLegacyEmailId(prodEmailEj.asset);
+  var eventResultEj = pbCreateProdDeAudienceEvent(prodAuth.token, prodAuth.subdomain, {
+   name: buildName,
+   eventKey: "DEAudience-" + pbRandomGuid(),
+   dataExtensionId: deForEventJ.objectId,
+   dataExtensionName: deName,
+   automationId: autoObjEj.id
+  });
+  if (!eventResultEj.ok) {
+   return { ok: false, logs: logs, msg: "Entry event FAILED: " + eventResultEj.msg };
+  }
+  log(eventResultEj.msg);
+  var journeyCloneEj = pbCloneJourneyToProd(
+   devAuth.token,
+   devAuth.subdomain,
+   prodAuth.token,
+   prodAuth.subdomain,
+   journeyId,
+   {
+    buildName: buildName,
+    legacyEmailId: prodLegacyEj,
+    prodEmailAssetId: prodAssetIdEj,
+    trigger: eventResultEj.trigger
+   }
+  );
+  if (journeyCloneEj.ok) {
+   log(journeyCloneEj.msg);
+   return {
+    ok: true,
+    logs: logs,
+    msg: "Step complete: entry event and journey (draft) in Production."
+   };
+  }
+  return { ok: false, logs: logs, msg: "Journey FAILED: " + journeyCloneEj.msg };
  }
  return { ok: false, logs: logs, msg: "Unknown push step." };
 }
@@ -3855,7 +4040,9 @@ function pbPushPageCtx() {
   automationGuid: pbTrim(Platform.Variable.GetValue("@dispAutomationGuid") || ""),
   automationKey: pbTrim(Platform.Variable.GetValue("@dispAutomationCustomerKey") || ""),
   automationName: pbTrim(Platform.Variable.GetValue("@dispAutomationName") || ""),
-  campaignId: pbTrim(Platform.Variable.GetValue("@dispCampaignId") || "")
+  campaignId: pbTrim(Platform.Variable.GetValue("@pushCampaignId") || Platform.Variable.GetValue("@dispCampaignId") || ""),
+  campaignIdSource:
+   Platform.Variable.GetValue("@campaignIdFromForm") === "1" ? "page_input" : "analytics"
  };
 }
 
@@ -3878,7 +4065,11 @@ if (pageStatus === "review" && jid && journeyType) {
  } else if (!resolved.usesLiveStack) {
   liveForUi = resolved.live;
  }
- stepsHtml = pbBuildStepsHtml(journeyType, plan, liveForUi, prodAuthPreview, jid);
+ var isStackForUi = Platform.Variable.GetValue("@isStackBuild") === "true";
+ stepsHtml = pbBuildStepsHtml(journeyType, plan, liveForUi, prodAuthPreview, jid, {
+  showCampaignInput: isStackForUi,
+  campaignId: pbTrim(Platform.Variable.GetValue("@pushCampaignId") || "")
+ });
  if (resolved.usesLiveStack && resolved.live.ok) {
   stepsHtml =
    '<div class="banner good" style="margin-bottom:14px">' +
@@ -3956,7 +4147,19 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 .banner.good{border-color:#a7f3d0;background:#ecfdf5;color:#065f46}
 .push-log{margin:12px 0 0 20px;font-size:14px}
 .push-log li{margin:6px 0}
+.push-campaign-row{margin:0 0 18px;padding:14px 16px;border:1px solid var(--border-color);border-radius:10px;background:#fff}
+.push-campaign-label{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
+.push-campaign-input{width:100%;max-width:320px;padding:9px 11px;border:1px solid var(--border-color);border-radius:8px;font:inherit}
+.push-campaign-hint{font-size:12px;color:var(--text-secondary);margin-top:8px}
 </style>
+<script>
+function pbConfirmPushStep(form){
+ var main=document.getElementById("pushCampaignIdField");
+ var hid=form.querySelector('input[name="campaignId"]');
+ if(main&&hid){hid.value=main.value.trim();}
+ return confirm("Push only this step to Production?");
+}
+</script>
 </head>
 <body>
 <div class="dashboard-layout">
@@ -3982,7 +4185,7 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
  <p class="panel-title">Step log</p>
  %%=TreatAsContent(@pushLogHtml)=%%
 </div>
-<a class="btn btn-neutral" href="%%=Concat(@PUSH_PAGE_SELF,"?journeyId=",@jid)=%%">Back to push steps</a>
+<a class="btn btn-neutral" href="%%=Concat(@PUSH_PAGE_SELF,"?journeyId=",@jid,IIF(Empty(@pushCampaignId),"",Concat("&campaignId=",@pushCampaignId)))=%%">Back to push steps</a>
 <a class="btn btn-neutral" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Manage Build</a>
 %%[ ELSEIF @pageStatus == "review" THEN ]%%
 <a class="btn btn-neutral" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Back to Manage Build</a>
