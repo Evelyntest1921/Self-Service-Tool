@@ -1,0 +1,530 @@
+%%[
+VAR @HOME_URL, @BUILD_PAGE_SELF, @PUSH_PAGE_SELF, @jid, @confirmPush
+VAR @navRows, @navRow, @detailRows, @detailRow, @detailCount
+VAR @dispName, @dispType, @dispEmailName, @dispEmailId, @dispDeName, @dispDeId
+VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationCustomerKey, @dispAutomationName
+VAR @isStackBuild, @pageStatus, @pushBlockedMsg, @pushLogHtml, @pushResultBanner
+VAR @manifestHtml, @editSidebarHtml, @buildNavContext, @buildNavActive
+VAR @STACK_JOURNEY_TYPE
+
+SET @STACK_JOURNEY_TYPE = "Journey + Automation"
+SET @HOME_URL = ""
+SET @BUILD_PAGE_SELF = ""
+SET @PUSH_PAGE_SELF = ""
+SET @jid = Trim(RequestParameter("journeyId"))
+IF Empty(@jid) THEN
+ SET @jid = Trim(QueryParameter("journeyId"))
+ENDIF
+SET @confirmPush = IIF(RequestParameter("confirmPush") == "1", "1", "0")
+SET @pageStatus = "review"
+SET @pushBlockedMsg = ""
+SET @pushLogHtml = ""
+SET @pushResultBanner = ""
+SET @manifestHtml = ""
+SET @buildNavContext = "true"
+SET @buildNavActive = "manage"
+SET @isStackBuild = "false"
+SET @dispName = ""
+SET @dispType = ""
+SET @dispEmailName = ""
+SET @dispEmailId = ""
+SET @dispDeName = ""
+SET @dispDeId = ""
+SET @dispQueryKey = ""
+SET @dispAutomationGuid = ""
+SET @dispAutomationCustomerKey = ""
+SET @dispAutomationName = ""
+SET @detailCount = 0
+
+SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
+IF RowCount(@navRows) > 0 THEN
+ SET @navRow = Row(@navRows,1)
+ SET @HOME_URL = Field(@navRow,"ss_home")
+ SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit")
+ SET @PUSH_PAGE_SELF = Trim(Field(@navRow,"ss_push_production"))
+ENDIF
+
+IF Empty(@jid) THEN
+ SET @pageStatus = "nodata"
+ELSE
+ SET @detailRows = LookupRows("Bd_journey_analytics","journeyId",@jid)
+ IF RowCount(@detailRows) == 0 THEN
+  SET @detailRows = LookupRows("Bd_journey_analytics","JourneyID",@jid)
+ ENDIF
+ SET @detailCount = RowCount(@detailRows)
+ IF @detailCount == 0 THEN
+  SET @pageStatus = "nodata"
+ ELSE
+  SET @detailRow = Row(@detailRows,1)
+  SET @dispName = Field(@detailRow,"journeyName")
+  SET @dispType = Field(@detailRow,"journeyType")
+  SET @dispEmailName = Field(@detailRow,"emailName")
+  SET @dispEmailId = Trim(Field(@detailRow,"emailId"))
+  SET @dispDeName = Field(@detailRow,"deName")
+  SET @dispDeId = Field(@detailRow,"deId")
+  IF Trim(@dispType) == @STACK_JOURNEY_TYPE THEN
+   SET @isStackBuild = "true"
+   SET @dispQueryKey = Trim(Field(@detailRow,"queryKey"))
+   SET @dispAutomationGuid = Trim(Field(@detailRow,"automationGuid"))
+   SET @dispAutomationCustomerKey = Trim(Field(@detailRow,"automationCustomerKey"))
+   SET @dispAutomationName = Trim(Field(@detailRow,"automationName"))
+  ENDIF
+ ENDIF
+ENDIF
+
+IF @pageStatus != "nodata" AND @isStackBuild != "true" THEN
+ SET @pageStatus = "unsupported"
+ SET @pushBlockedMsg = "Push to Production is only available for Journey + Automation (stack) builds in this release."
+ENDIF
+]%%
+<script runat="server">
+Platform.Load("core", "1");
+
+function pbToStr(v) {
+ if (v === null || typeof v === "undefined") {
+  return "";
+ }
+ if (typeof v === "string") {
+  return v;
+ }
+ try {
+  return v + "";
+ } catch (pbEx) {
+  return "";
+ }
+}
+
+function pbTrim(v) {
+ var s = pbToStr(v);
+ if (!s) {
+  return "";
+ }
+ var len = s.length;
+ if (typeof len !== "number" || isNaN(len) || len < 0) {
+  return "";
+ }
+ var start = 0;
+ var end = len;
+ while (start < end && (s.charAt(start) === " " || s.charAt(start) === "\t" || s.charAt(start) === "\n" || s.charAt(start) === "\r")) {
+  start += 1;
+ }
+ while (end > start && (s.charAt(end - 1) === " " || s.charAt(end - 1) === "\t" || s.charAt(end - 1) === "\n" || s.charAt(end - 1) === "\r")) {
+  end -= 1;
+ }
+ if (start >= end) {
+  return "";
+ }
+ var out = "";
+ var i;
+ for (i = start; i < end; i++) {
+  out += s.charAt(i);
+ }
+ return out;
+}
+
+function pbHtmlSafe(v) {
+ return pbToStr(v)
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;");
+}
+
+function pbEscJson(s) {
+ var text = pbToStr(s);
+ var out = "";
+ var i;
+ for (i = 0; i < text.length; i++) {
+  var ch = text.charAt(i);
+  if (ch === "\\") {
+   out += "\\\\";
+  } else if (ch === '"') {
+   out += '\\"';
+  } else if (ch === "\r") {
+   out += "\\r";
+  } else if (ch === "\n") {
+   out += "\\n";
+  } else {
+   out += ch;
+  }
+ }
+ return out;
+}
+
+function pbAuthForUser(userKey) {
+ var out = {
+  ok: false,
+  token: "",
+  subdomain: "",
+  msg: ""
+ };
+ try {
+  var rows = Platform.Function.LookupRows("SFMC_AUTH", "User", userKey);
+  if (!rows || rows.length === 0) {
+   out.msg = "No SFMC_AUTH row for User=" + userKey + ".";
+   return out;
+  }
+  var row = rows[0];
+  var clientId = pbTrim(row.clientId);
+  var clientSecret = pbTrim(row.clientSecret);
+  var subdomain = pbTrim(row.subdomain);
+  var accountId = pbTrim(row.accountId);
+  if (!clientId || !clientSecret || !subdomain) {
+   out.msg = "SFMC_AUTH incomplete for User=" + userKey + ".";
+   return out;
+  }
+  var authUrl = "https://" + subdomain + ".auth.marketingcloudapis.com/v2/token";
+  var payload = '{"grant_type":"client_credentials","client_id":"' + pbEscJson(clientId) + '","client_secret":"' + pbEscJson(clientSecret) + '"';
+  if (accountId) {
+   payload += ',"account_id":"' + pbEscJson(accountId) + '"';
+  }
+  payload += "}";
+  var req = new Script.Util.HttpRequest(authUrl);
+  req.emptyContentHandling = 0;
+  req.retries = 1;
+  req.continueOnError = true;
+  req.method = "POST";
+  req.contentType = "application/json";
+  req.postData = payload;
+  var resp = req.send();
+  var body = resp.content ? pbToStr(resp.content) : "";
+  if (resp.statusCode !== 200) {
+   out.msg = "Auth HTTP " + resp.statusCode + " for User=" + userKey + ".";
+   return out;
+  }
+  var parsed = null;
+  try {
+   parsed = Platform.Function.ParseJSON(body);
+  } catch (parseEx) {
+   parsed = null;
+  }
+  var token = parsed && parsed.access_token ? pbToStr(parsed.access_token) : "";
+  if (!token) {
+   out.msg = "Auth response missing access_token for User=" + userKey + ".";
+   return out;
+  }
+  out.ok = true;
+  out.token = token;
+  out.subdomain = subdomain;
+  return out;
+ } catch (authEx) {
+  out.msg = authEx.message || pbToStr(authEx);
+  return out;
+ }
+}
+
+function pbHttpJson(token, subdomain, method, url, bodyObj) {
+ var req = new Script.Util.HttpRequest(url);
+ req.emptyContentHandling = 0;
+ req.retries = 1;
+ req.continueOnError = true;
+ req.method = method;
+ req.contentType = "application/json";
+ req.setHeader("Authorization", "Bearer " + token);
+ if (bodyObj !== null && typeof bodyObj !== "undefined") {
+  req.postData =
+   typeof bodyObj === "string" ? bodyObj : Platform.Function.Stringify(bodyObj);
+ }
+ var resp = req.send();
+ return {
+  status: resp.statusCode,
+  body: resp.content ? pbToStr(resp.content) : ""
+ };
+}
+
+function pbLookupQueryText(queryKey) {
+ var key = pbTrim(queryKey);
+ if (!key) {
+  return "";
+ }
+ try {
+  var prox = new Script.Util.WSProxy();
+  var r = prox.retrieve("QueryDefinition", ["QueryText", "Name", "CustomerKey"], {
+   Property: "CustomerKey",
+   SimpleOperator: "equals",
+   Value: key
+  });
+  if (r && r.Results && r.Results.length > 0 && r.Results[0].QueryText) {
+   return pbToStr(r.Results[0].QueryText);
+  }
+ } catch (qEx) {}
+ return "";
+}
+
+function pbManifestRows(opts) {
+ var o = opts || {};
+ var rows = [];
+ rows.push({ kind: "Entry data extension", name: o.deName, key: o.deId, note: "Schema + sendable config" });
+ rows.push({ kind: "Query activity", name: o.buildName, key: o.queryKey, note: o.queryFound ? "SQL loaded from source BU" : "Query not found in source BU" });
+ rows.push({ kind: "Content Builder email", name: o.emailName, key: o.emailId, note: "Email asset copy" });
+ rows.push({ kind: "Automation", name: o.automationName, key: o.automationKey || o.automationGuid, note: "Schedule + query step" });
+ rows.push({ kind: "Entry event definition", name: o.buildName, key: "", note: "DE-audience trigger wired to automation" });
+ rows.push({ kind: "Journey", name: o.buildName, key: o.journeyId, note: "Canvas + email activity references" });
+ return rows;
+}
+
+function pbBuildManifestHtml(rows) {
+ var html = '<ul class="push-manifest">';
+ var i;
+ for (i = 0; i < rows.length; i++) {
+  var row = rows[i];
+  html +=
+   "<li><strong>" +
+   pbHtmlSafe(row.kind) +
+   "</strong><span>" +
+   pbHtmlSafe(row.name || "—") +
+   "</span><code>" +
+   pbHtmlSafe(row.key || "—") +
+   "</code><em>" +
+   pbHtmlSafe(row.note || "") +
+   "</em></li>";
+ }
+ html += "</ul>";
+ return html;
+}
+
+function pbCopyEmailAsset(sourceToken, sourceSub, targetToken, targetSub, assetId, targetName) {
+ var id = pbTrim(assetId);
+ if (!id) {
+  return { ok: false, msg: "Email asset id missing." };
+ }
+ var getUrl =
+  "https://" + sourceSub + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + encodeURIComponent(id);
+ var got = pbHttpJson(sourceToken, sourceSub, "GET", getUrl, null);
+ if (got.status !== 200 || !got.body) {
+  return { ok: false, msg: "Source email GET HTTP " + got.status + "." };
+ }
+ var template = null;
+ try {
+  template = Platform.Function.ParseJSON(got.body);
+ } catch (parseEx) {
+  return { ok: false, msg: "Source email JSON parse failed." };
+ }
+ var views = template.views || {};
+ var htmlView = views.html || {};
+ var subject =
+  (views.subjectline && views.subjectline.content) || template.name || targetName || "Email";
+ var payload = {
+  name: targetName || template.name || "Pushed email",
+  assetType: { id: 207, name: "htmlemail" },
+  channels: { email: true, web: false },
+  views: {
+   subjectline: { content: subject },
+   preheader: { content: (views.preheader && views.preheader.content) || "" },
+   html: {
+    content: htmlView.content || template.content || "",
+    slots: htmlView.slots || template.slots || {}
+   },
+   text: { content: (views.text && views.text.content) || "" }
+  }
+ };
+ var postUrl = "https://" + targetSub + ".rest.marketingcloudapis.com/asset/v1/content/assets";
+ var posted = pbHttpJson(targetToken, targetSub, "POST", postUrl, payload);
+ if (posted.status !== 200 && posted.status !== 201) {
+  return {
+   ok: false,
+   msg: "Production email POST HTTP " + posted.status + " — " + pbTrim(posted.body).substring(0, 220)
+  };
+ }
+ var newId = "";
+ try {
+  var created = Platform.Function.ParseJSON(posted.body);
+  newId = created && created.id ? pbToStr(created.id) : "";
+ } catch (postParseEx) {}
+ if (!newId) {
+  var m = posted.body.match(/"id"\s*:\s*"?([^",}\s]+)"?/);
+  newId = m ? m[1] : "";
+ }
+ if (!newId) {
+  return { ok: false, msg: "Production email created but id not returned." };
+ }
+ return { ok: true, msg: "Email copied to Production (asset id " + newId + ").", prodEmailId: newId };
+}
+
+function pbPushStackBuild(ctx) {
+ var logs = [];
+ function log(line) {
+  logs.push(pbToStr(line));
+ }
+ var devAuth = pbAuthForUser("Admin");
+ if (!devAuth.ok) {
+  return { ok: false, logs: logs, msg: "Source auth failed: " + devAuth.msg };
+ }
+ log("Source (Admin) authentication OK.");
+ var prodAuth = pbAuthForUser("Production_Admin");
+ if (!prodAuth.ok) {
+  return { ok: false, logs: logs, msg: "Production auth failed: " + prodAuth.msg };
+ }
+ log("Production (Production_Admin) authentication OK.");
+ var queryText = pbLookupQueryText(ctx.queryKey);
+ if (queryText) {
+  log("Loaded query SQL from source (" + queryText.length + " chars).");
+ } else {
+  log("WARNING: Query SQL not found in source BU for key " + ctx.queryKey + ".");
+ }
+ var emailCopy = pbCopyEmailAsset(
+  devAuth.token,
+  devAuth.subdomain,
+  prodAuth.token,
+  prodAuth.subdomain,
+  ctx.emailId,
+  ctx.emailName || ctx.buildName
+ );
+ if (emailCopy.ok) {
+  log(emailCopy.msg);
+ } else {
+  log("Email copy FAILED: " + emailCopy.msg);
+ }
+ log("Entry DE, query create/update, automation, event, and journey push use Production REST/SOAP and are queued as the next implementation step.");
+ log("After this push, verify Production for the email asset; complete stack parity before activating schedules.");
+ return {
+  ok: emailCopy.ok,
+  logs: logs,
+  msg: emailCopy.ok ? "Partial push completed." : "Push did not complete successfully."
+ };
+}
+
+var pageStatus = pbTrim(Platform.Variable.GetValue("@pageStatus") || "review");
+var confirmPush = Platform.Variable.GetValue("@confirmPush") === "1";
+var isStack = Platform.Variable.GetValue("@isStackBuild") === "true";
+var jid = pbTrim(Platform.Variable.GetValue("@jid") || "");
+var manifestHtml = "";
+var pushLogHtml = "";
+var pushResultBanner = "";
+var pushBlockedMsg = pbTrim(Platform.Variable.GetValue("@pushBlockedMsg") || "");
+
+if (pageStatus === "review" && isStack && jid) {
+ var buildName = pbTrim(Platform.Variable.GetValue("@dispName") || "");
+ var queryKey = pbTrim(Platform.Variable.GetValue("@dispQueryKey") || "");
+ var queryText = pbLookupQueryText(queryKey);
+ var manifest = pbManifestRows({
+  buildName: buildName,
+  journeyId: jid,
+  deName: pbTrim(Platform.Variable.GetValue("@dispDeName") || ""),
+  deId: pbTrim(Platform.Variable.GetValue("@dispDeId") || ""),
+  queryKey: queryKey,
+  queryFound: !!queryText,
+  emailName: pbTrim(Platform.Variable.GetValue("@dispEmailName") || ""),
+  emailId: pbTrim(Platform.Variable.GetValue("@dispEmailId") || ""),
+  automationName: pbTrim(Platform.Variable.GetValue("@dispAutomationName") || ""),
+  automationGuid: pbTrim(Platform.Variable.GetValue("@dispAutomationGuid") || ""),
+  automationKey: pbTrim(Platform.Variable.GetValue("@dispAutomationCustomerKey") || "")
+ });
+ manifestHtml = pbBuildManifestHtml(manifest);
+}
+
+if (confirmPush && pageStatus === "review" && isStack && jid) {
+ pageStatus = "pushing";
+ var pushResult = pbPushStackBuild({
+  buildName: pbTrim(Platform.Variable.GetValue("@dispName") || ""),
+  journeyId: jid,
+  queryKey: pbTrim(Platform.Variable.GetValue("@dispQueryKey") || ""),
+  emailId: pbTrim(Platform.Variable.GetValue("@dispEmailId") || ""),
+  emailName: pbTrim(Platform.Variable.GetValue("@dispEmailName") || ""),
+  deId: pbTrim(Platform.Variable.GetValue("@dispDeId") || ""),
+  deName: pbTrim(Platform.Variable.GetValue("@dispDeName") || ""),
+  automationGuid: pbTrim(Platform.Variable.GetValue("@dispAutomationGuid") || ""),
+  automationKey: pbTrim(Platform.Variable.GetValue("@dispAutomationCustomerKey") || "")
+ });
+ var li;
+ pushLogHtml = '<ol class="push-log">';
+ for (li = 0; li < pushResult.logs.length; li++) {
+  pushLogHtml += "<li>" + pbHtmlSafe(pushResult.logs[li]) + "</li>";
+ }
+ pushLogHtml += "</ol>";
+ if (pushResult.ok) {
+  pushResultBanner =
+   '<div class="banner good">' + pbHtmlSafe(pushResult.msg) + "</div>";
+  pageStatus = "done";
+ } else {
+  pushResultBanner =
+   '<div class="banner bad">' + pbHtmlSafe(pushResult.msg || "Push failed.") + "</div>";
+  pageStatus = "failed";
+ }
+}
+
+Platform.Variable.SetValue("@pageStatus", pageStatus);
+Platform.Variable.SetValue("@manifestHtml", manifestHtml);
+Platform.Variable.SetValue("@pushLogHtml", pushLogHtml);
+Platform.Variable.SetValue("@pushResultBanner", pushResultBanner);
+Platform.Variable.SetValue("@pushBlockedMsg", pushBlockedMsg);
+</script>
+%%[
+SET @editSidebarHtml = ContentBlockByName("sst_shell_edit_sidebar")
+]%%
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Push to Production • SST</title>
+<link rel="icon" href="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&amp;w=640&amp;q=75" type="image/png">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+:root{--text-primary:#111827;--text-secondary:#6b7280;--border-color:#e5e7eb;--bg-secondary:#f9fafb;--danger:#b91c1c;--dangerbg:#fef2f2;--radius-md:0.5rem}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg-secondary);color:var(--text-primary);line-height:1.55}
+.dashboard-layout{display:flex;height:100vh;min-height:100vh;overflow:hidden}
+.maker-main{flex:1;min-width:0;height:100vh;overflow:hidden;display:flex;flex-direction:column}
+.maker-main-inner{flex:1;overflow-y:auto;padding:32px 40px 48px}
+h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
+.sub{color:var(--text-secondary);margin-bottom:22px;max-width:720px}
+.panel{background:#fff;border:1px solid var(--border-color);padding:26px 30px;margin-bottom:20px;border-radius:12px}
+.panel-title{font-size:1rem;font-weight:700;margin:0 0 16px 0}
+.push-manifest{list-style:none;padding:0;margin:0}
+.push-manifest li{display:grid;grid-template-columns:180px 1fr 160px;gap:12px;padding:12px 0;border-bottom:1px solid var(--border-color);align-items:baseline}
+.push-manifest li:last-child{border-bottom:none}
+.push-manifest code{font-size:12px;color:#4b5563;word-break:break-all}
+.push-manifest em{font-size:12px;color:var(--text-secondary);grid-column:2 / -1}
+.push-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:20px}
+.btn{padding:11px 18px;border-radius:var(--radius-md);font-weight:600;font-size:14px;cursor:pointer;border:1px solid transparent;font:inherit;text-decoration:none;display:inline-flex;align-items:center}
+.btn-neutral{color:#111827;border-color:var(--border-color);background:#fff}
+.btn-neutral:hover{background:#fafafa}
+.btn-push{background:#059669;color:#fff;border-color:#059669}
+.btn-push:hover{background:#047857}
+.banner{padding:14px 16px;border-radius:10px;margin-bottom:16px;font-size:14px;border:1px solid var(--border-color)}
+.banner.bad{border-color:#fecaca;background:var(--dangerbg);color:var(--danger)}
+.banner.good{border-color:#a7f3d0;background:#ecfdf5;color:#065f46}
+.push-log{margin:12px 0 0 20px;font-size:14px}
+.push-log li{margin:6px 0}
+</style>
+</head>
+<body>
+<div class="dashboard-layout">
+%%=TreatAsContent(@editSidebarHtml)=%%
+<main class="maker-main">
+<div class="maker-main-inner">
+<h1>Push to Production</h1>
+%%[ IF @pageStatus == "nodata" THEN ]%%
+<p class="sub">Open this page with <strong>journeyId</strong> from Manage Build.</p>
+%%[ ELSEIF @pageStatus == "unsupported" THEN ]%%
+<p class="sub">%%=v(@pushBlockedMsg)=%%</p>
+<p class="sub"><a href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Back to Manage Build</a></p>
+%%[ ELSE ]%%
+<p class="sub">Review artifacts that will be created or updated in the <strong>Production</strong> business unit using <code>SFMC_AUTH</code> user <strong>Production_Admin</strong>. Source definitions are read with <strong>Admin</strong>.</p>
+%%=TreatAsContent(@pushResultBanner)=%%
+<div class="panel">
+ <p class="panel-title">Build: %%=v(@dispName)=%%</p>
+ <p class="sub" style="margin-bottom:12px">Journey ID: <code>%%=v(@jid)=%%</code></p>
+ %%=TreatAsContent(@manifestHtml)=%%
+</div>
+%%[ IF @pageStatus == "review" THEN ]%%
+<form method="post" action="" class="push-actions">
+ <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
+ <input type="hidden" name="confirmPush" value="1">
+ <button type="submit" class="btn btn-push" onclick="return confirm('Create or update these artifacts in Production? Existing Production assets with the same keys may be overwritten.');">Confirm push</button>
+ <a class="btn btn-neutral" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Cancel</a>
+</form>
+%%[ ELSEIF @pageStatus == "done" OR @pageStatus == "failed" THEN ]%%
+<div class="panel">
+ <p class="panel-title">Push log</p>
+ %%=TreatAsContent(@pushLogHtml)=%%
+</div>
+<a class="btn btn-neutral" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Back to Manage Build</a>
+%%[ ENDIF ]%%
+%%[ ENDIF ]%%
+</div>
+</main>
+</div>
+</body>
+</html>

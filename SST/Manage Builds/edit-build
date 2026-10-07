@@ -4,6 +4,7 @@ SET @BUILD_PAGE_SELF = ""
 SET @PERFORMANCE_URL = ""
 SET @JOURNEY_VIEW_URL = ""
 SET @EDIT_DE_OPEN_URL = ""
+SET @PUSH_PRODUCTION_URL = ""
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
  SET @navRow = Row(@navRows,1)
@@ -11,7 +12,8 @@ IF RowCount(@navRows) > 0 THEN
  SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit")
  SET @PERFORMANCE_URL = Field(@navRow,"ss_performance")
  SET @JOURNEY_VIEW_URL = Field(@navRow,"ss_build_journey")
- SET @EDIT_DE_OPEN_URL = Field(@navRow,"ss_edit_de_open")
+ SET @EDIT_DE_OPEN_URL = Trim(Field(@navRow,"ss_edit_de_open"))
+ SET @PUSH_PRODUCTION_URL = Trim(Field(@navRow,"ss_push_production"))
 ENDIF
 SET @MC_CLOUD = "https://mc.s13.exacttarget.com/cloud/"
 SET @DETAIL_EXTERNAL_KEY_DE = "Bd_journey_analytics"
@@ -3278,7 +3280,9 @@ dd{font-weight:600;font-size:1rem;margin:0;padding:0;color:var(--gray-900);word-
 .schedule-note{font-size:13px;color:var(--text-secondary);margin:0}
 .schedule-field[hidden]{display:none}
 .act{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px;padding-top:22px;border-top:1px solid var(--border-color)}
-.act-open{display:flex;flex-wrap:wrap;gap:10px}
+.act-open{display:flex;flex-wrap:wrap;gap:10px;align-items:center;width:100%}
+.btn-push-prod{margin-left:auto;background:#059669;color:#fff;border-color:#059669}
+.btn-push-prod:hover{background:#047857;border-color:#047857;color:#fff}
 .btn{padding:11px 18px;border-radius:var(--radius-md);font-weight:600;font-size:14px;cursor:pointer;border:1px solid transparent;font:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:6px;background:#fff}
 .btn-no-radius{padding:11px 18px;font-weight:600;font-size:14px;cursor:pointer;border:1px solid transparent;font:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:6px;background:#fff}
 .btn-neutral{color:var(--gray-900);border-color:var(--border-color)}
@@ -3932,6 +3936,13 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
 %%[ IF (NOT Empty(@dispDeId) AND @dispDeId != "N/A") OR (NOT Empty(@dispDeName) AND @dispDeName != "N/A") THEN ]%%
    <button type="button" class="btn btn-neutral" id="openEntryDeBtn" data-de-open-url="%%=Replace(Replace(v(@EDIT_DE_OPEN_URL),'"','&quot;'),'&','&amp;')=%%" data-journey-id="%%=Replace(Replace(v(@jid),'"','&quot;'),'&','&amp;')=%%" title="%%=Replace(Replace(IIF(NOT Empty(@dispDeName) AND @dispDeName != "N/A", @dispDeName, @dispDeId),'"','&quot;'),'&','&amp;')=%%">Open data extension</button>
 %%[ ENDIF ]%%
+%%[ IF @isStackBuild == "true" THEN ]%%
+%%[ IF NOT Empty(@PUSH_PRODUCTION_URL) THEN ]%%
+   <a class="btn btn-push-prod" href="%%=Concat(@PUSH_PRODUCTION_URL,"?journeyId=",@jid)=%%">Push To Production</a>
+%%[ ELSE ]%%
+   <button type="button" class="btn btn-push-prod" id="pushProdConfigBtn">Push To Production</button>
+%%[ ENDIF ]%%
+%%[ ENDIF ]%%
  </div>
 </div>
 
@@ -4149,6 +4160,17 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
     openDeBtn.disabled = false;
     openDeBtn.textContent = prevLabel;
    });
+ });
+})();
+(function () {
+ var pushCfgBtn = document.getElementById("pushProdConfigBtn");
+ if (!pushCfgBtn) {
+  return;
+ }
+ pushCfgBtn.addEventListener("click", function () {
+  alert(
+   "Push page URL is not configured. Add text field ss_push_production on bd_sst_page_navigation with the published push-build-production Cloud Page URL."
+  );
  });
 })();
 </script>
