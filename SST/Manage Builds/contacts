@@ -310,26 +310,6 @@ function ctHttpGet(token, url) {
  };
 }
 
-function ctHttpPostEmpty(token, url) {
- var req = new Script.Util.HttpRequest(url);
- req.emptyContentHandling = 0;
- req.retries = 1;
- req.continueOnError = true;
- req.method = "POST";
- req.contentType = "application/json";
- req.setHeader("Authorization", "Bearer " + token);
- req.postData = "{}";
- var resp = req.send();
- var body = "";
- if (resp.content) {
-  body = ctStr(resp.content);
- }
- return {
-  status: resp.statusCode,
-  body: body
- };
-}
-
 function ctAuthAdmin() {
  var clientId = ctLookupAuthScalar("Admin", "clientId");
  if (!clientId) {
@@ -489,28 +469,6 @@ function ctGetAutomation(sub, token, automationGuid, automationCustomerKey, auto
  return { ok: false, obj: null };
 }
 
-function ctAutomationStatusCode(obj) {
- if (!obj) {
-  return "";
- }
- if (obj.statusId !== undefined && obj.statusId !== null && ctStr(obj.statusId) !== "") {
-  return ctStr(obj.statusId);
- }
- if (obj.status === undefined || obj.status === null) {
-  return "";
- }
- return ctTrim(obj.status);
-}
-
-function ctAutomationIsRunning(obj) {
- var code = ctAutomationStatusCode(obj);
- if (code == "3") {
-  return true;
- }
- var label = ctTrim(obj && obj.status ? obj.status : "").toLowerCase();
- return label == "running";
-}
-
 function ctFirstQueryActivityId(obj) {
  var steps = obj && obj.steps ? obj.steps : [];
  var si;
@@ -525,21 +483,6 @@ function ctFirstQueryActivityId(obj) {
   }
  }
  return "";
-}
-
-function ctAutomationHasJourneyStep(obj) {
- var steps = obj && obj.steps ? obj.steps : [];
- var si;
- for (si = 0; si < steps.length; si++) {
-  var activities = steps[si] && steps[si].activities ? steps[si].activities : [];
-  var ai;
-  for (ai = 0; ai < activities.length; ai++) {
-   if (parseInt(String(activities[ai].objectTypeId), 10) == 952) {
-    return true;
-   }
-  }
- }
- return false;
 }
 
 function ctNormalizeQueryKey(raw) {
@@ -624,28 +567,9 @@ function ctRunFirstQueryAutomation() {
  if (queryOid) {
   return ctPerformQueryDefinition("ObjectID", queryOid);
  }
- if (ctAutomationHasJourneyStep(autoObj)) {
-  return {
-   ok: false,
-   msg: "Automation includes a Journey step. Add queryKey to Bd_journey_analytics or run the query from Automation Studio."
-  };
- }
- if (ctAutomationIsRunning(autoObj)) {
-  return { ok: false, msg: "Automation is already running. Wait for it to finish or stop it in Automation view." };
- }
- var runUrl =
-  "https://" +
-  auth.subdomain +
-  ".rest.marketingcloudapis.com/automation/v1/automations/" +
-  encodeURIComponent(String(autoObj.id)) +
-  "/actions/runallonce";
- var runResp = ctHttpPostEmpty(auth.token, runUrl);
- if (runResp.status == 200 || runResp.status == 202) {
-  return { ok: true, msg: "Query run requested. Refresh this page in a minute to see updated entry DE rows." };
- }
  return {
   ok: false,
-  msg: "Run query failed HTTP " + runResp.status + " — " + ctTrim(runResp.body).substring(0, 180)
+  msg: "Could not resolve a query for this build. Add queryKey to Bd_journey_analytics."
  };
 }
 
