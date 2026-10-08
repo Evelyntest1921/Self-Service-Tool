@@ -2,11 +2,10 @@
 VAR @HOME_URL, @BUILD_PAGE_SELF, @PUSH_PAGE_SELF, @jid, @confirmStep
 VAR @navRows, @navRow, @detailRows, @detailRow, @detailCount
 VAR @dispName, @dispType, @pageStatus, @pushBlockedMsg, @pushLogHtml, @pushResultBanner
-VAR @manifestHtml, @editSidebarHtml, @buildNavContext, @buildNavActive
-VAR @STACK_JOURNEY_TYPE, @AUTH_PROD_USER, @pushBackHref, @manageHref, @isStackBuild
+VAR @editSidebarHtml, @buildNavContext, @buildNavActive
+VAR @STACK_JOURNEY_TYPE, @pushBackHref, @manageHref, @isStackBuild
 
 SET @STACK_JOURNEY_TYPE = "Journey + Automation"
-SET @AUTH_PROD_USER = "Admin_Production"
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
 SET @PUSH_PAGE_SELF = ""
@@ -22,7 +21,6 @@ SET @pageStatus = "review"
 SET @pushBlockedMsg = ""
 SET @pushLogHtml = ""
 SET @pushResultBanner = ""
-SET @manifestHtml = ""
 SET @buildNavContext = "true"
 SET @buildNavActive = "manage"
 SET @isStackBuild = "false"
@@ -33,9 +31,9 @@ SET @detailCount = 0
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
  SET @navRow = Row(@navRows,1)
- SET @HOME_URL = Field(@navRow,"ss_home",0)
- SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit",0)
- SET @PUSH_PAGE_SELF = Trim(Field(@navRow,"ss_push_production",0))
+ SET @HOME_URL = Field(@navRow,"ss_home")
+ SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit")
+ SET @PUSH_PAGE_SELF = Trim(Field(@navRow,"ss_push_production"))
 ENDIF
 
 IF Empty(@jid) THEN
@@ -50,8 +48,8 @@ ELSE
   SET @pageStatus = "nodata"
  ELSE
   SET @detailRow = Row(@detailRows,1)
-  SET @dispName = Field(@detailRow,"journeyName",0)
-  SET @dispType = Field(@detailRow,"journeyType",0)
+  SET @dispName = Field(@detailRow,"journeyName")
+  SET @dispType = Field(@detailRow,"journeyType")
   IF Trim(@dispType) == @STACK_JOURNEY_TYPE THEN
    SET @isStackBuild = "true"
   ENDIF
@@ -62,10 +60,10 @@ SET @pushBackHref = Concat(@PUSH_PAGE_SELF,"?journeyId=",@jid)
 SET @manageHref = Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)
 ]%%
 <script runat="server">
-Platform.Load("core", "1");
+Platform.Load("core","1");
 
 function pbToStr(v) {
- if (v === null || typeof v === "undefined") {
+ if (v == null || typeof v == "undefined") {
   return "";
  }
  try {
@@ -81,15 +79,16 @@ function pbTrim(v) {
   return "";
  }
  var len = s.length;
- if (typeof len !== "number" || isNaN(len) || len < 0) {
+ if (typeof len != "number" || isNaN(len) || len < 0) {
   return "";
  }
  var start = 0;
  var end = len;
- while (start < end && (s.charAt(start) === " " || s.charAt(start) === "\t" || s.charAt(start) === "\n" || s.charAt(start) === "\r")) {
+ var sp = " \t\r\n";
+ while (start < end && sp.indexOf(s.charAt(start)) >= 0) {
   start += 1;
  }
- while (end > start && (s.charAt(end - 1) === " " || s.charAt(end - 1) === "\t" || s.charAt(end - 1) === "\n" || s.charAt(end - 1) === "\r")) {
+ while (end > start && sp.indexOf(s.charAt(end - 1)) >= 0) {
   end -= 1;
  }
  if (start >= end) {
@@ -103,12 +102,33 @@ function pbTrim(v) {
  return out;
 }
 
+function pbLt() {
+ return String.fromCharCode(60);
+}
+
+function pbGt() {
+ return String.fromCharCode(62);
+}
+
 function pbHtmlSafe(v) {
- return pbToStr(v)
-  .replace(/&/g, "&amp;")
-  .replace(/</g, "&lt;")
-  .replace(/>/g, "&gt;")
-  .replace(/"/g, "&quot;");
+ var s = pbToStr(v);
+ var out = "";
+ var i;
+ for (i = 0; i < s.length; i++) {
+  var ch = s.charAt(i);
+  if (ch == "&") {
+   out += "&" + "amp;";
+  } else if (ch == pbLt()) {
+   out += "&" + "lt;";
+  } else if (ch == pbGt()) {
+   out += "&" + "gt;";
+  } else if (ch == '"') {
+   out += "&" + "quot;";
+  } else {
+   out += ch;
+  }
+ }
+ return out;
 }
 
 function pbEscJson(s) {
@@ -117,13 +137,13 @@ function pbEscJson(s) {
  var i;
  for (i = 0; i < text.length; i++) {
   var ch = text.charAt(i);
-  if (ch === "\\") {
+  if (ch == "\\") {
    out += "\\\\";
-  } else if (ch === '"') {
+  } else if (ch == '"') {
    out += '\\"';
-  } else if (ch === "\r") {
+  } else if (ch == "\r") {
    out += "\\r";
-  } else if (ch === "\n") {
+  } else if (ch == "\n") {
    out += "\\n";
   } else {
    out += ch;
@@ -134,7 +154,7 @@ function pbEscJson(s) {
 
 function pbHttpOk(statusCode) {
  var code = parseInt(String(statusCode), 10);
- return code === 200 || code === 201 || code === 202;
+ return code == 200 || code == 201 || code == 202;
 }
 
 function pbExtractAccessToken(body) {
@@ -147,12 +167,23 @@ function pbExtractAccessToken(body) {
   if (parsed && parsed.access_token) {
    return pbToStr(parsed.access_token);
   }
- } catch (parseEx) {}
- var m = text.match(/"access_token"\s*:\s*"([^"]+)"/);
- if (m && m[1]) {
-  return m[1];
+ } catch (parseEx) {
+  parsed = null;
  }
- return "";
+ var needle = '"access_token"';
+ var idx = text.indexOf(needle);
+ if (idx < 0) {
+  return "";
+ }
+ var q1 = text.indexOf('"', idx + needle.length);
+ if (q1 < 0) {
+  return "";
+ }
+ var q2 = text.indexOf('"', q1 + 1);
+ if (q2 < 0) {
+  return "";
+ }
+ return text.substring(q1 + 1, q2);
 }
 
 function pbClip(val, maxLen) {
@@ -165,7 +196,7 @@ function pbClip(val, maxLen) {
   return "";
  }
  var len = s.length;
- if (typeof len !== "number" || len < 1) {
+ if (typeof len != "number" || len < 1) {
   return "";
  }
  if (len <= take) {
@@ -184,12 +215,14 @@ function pbSetAmpVar(name, val) {
  if (!key) {
   return;
  }
- if (key.indexOf("@") !== 0) {
+ if (key.indexOf("@") != 0) {
   key = "@" + key;
  }
  try {
   Platform.Variable.SetValue(key, pbClip(val, 3900));
- } catch (setEx) {}
+ } catch (setEx) {
+  key = key;
+ }
 }
 
 function pbLookupAuthScalar(userKey, returnField) {
@@ -270,7 +303,7 @@ function pbAuthForProd() {
    body = pbToStr(resp.content);
   }
   if (!pbHttpOk(resp.statusCode)) {
-   out.msg = "Auth HTTP " + resp.statusCode + " for User=" + lookupUser + " — " + pbClip(pbTrim(body), 160);
+   out.msg = "Auth HTTP " + resp.statusCode + " for User=" + lookupUser + " - " + pbClip(pbTrim(body), 160);
    return out;
   }
   var token = pbExtractAccessToken(body);
@@ -296,8 +329,8 @@ function pbHttpJson(token, subdomain, method, url, bodyObj) {
  req.method = method;
  req.contentType = "application/json";
  req.setHeader("Authorization", "Bearer " + token);
- if (bodyObj !== null && typeof bodyObj !== "undefined") {
-  if (typeof bodyObj === "string") {
+ if (bodyObj != null && typeof bodyObj != "undefined") {
+  if (typeof bodyObj == "string") {
    req.postData = bodyObj;
   } else {
    req.postData = Platform.Function.Stringify(bodyObj);
@@ -323,33 +356,77 @@ function pbParseJson(text) {
 }
 
 function pbXmlSafe(s) {
- return pbToStr(s)
-  .replace(/&/g, "&amp;")
-  .replace(/</g, "&lt;")
-  .replace(/"/g, "&quot;");
+ var t = pbToStr(s);
+ var out = "";
+ var i;
+ for (i = 0; i < t.length; i++) {
+  var ch = t.charAt(i);
+  if (ch == "&") {
+   out += "&" + "amp;";
+  } else if (ch == pbLt()) {
+   out += "&" + "lt;";
+  } else if (ch == '"') {
+   out += "&" + "quot;";
+  } else {
+   out += ch;
+  }
+ }
+ return out;
 }
 
-function pbSoapXmlDecl() {
- return String.fromCharCode(60, 63) + 'xml version="1.0" encoding="UTF-8"' + String.fromCharCode(63, 62);
+function pbOpen(name) {
+ return pbLt() + name + pbGt();
+}
+
+function pbOpenA(name, attrs) {
+ return pbLt() + name + " " + attrs + pbGt();
+}
+
+function pbClose(name) {
+ return pbLt() + "/" + name + pbGt();
+}
+
+function pbEl(name, inner) {
+ return pbOpen(name) + pbToStr(inner) + pbClose(name);
+}
+
+function pbTaggedValue(text, tagName) {
+ var hay = pbToStr(text);
+ var token = tagName + pbGt();
+ var idx = hay.indexOf(token);
+ if (idx < 0) {
+  return "";
+ }
+ var start = idx + token.length;
+ var end = hay.indexOf(pbLt(), start);
+ if (end < 0) {
+  return "";
+ }
+ return pbTrim(hay.substring(start, end));
 }
 
 function pbSoapCall(sub, token, action, bodyXml) {
+ var decl = String.fromCharCode(60, 63) + 'xml version="1.0" encoding="UTF-8"' + String.fromCharCode(63, 62);
  var envelope =
-  pbSoapXmlDecl() +
-  '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing">' +
-  "<s:Header>" +
-  '<a:Action s:mustUnderstand="1">' +
+  decl +
+  pbOpenA("s:Envelope", 'xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing"') +
+  pbOpen("s:Header") +
+  pbOpenA("a:Action", 's:mustUnderstand="1"') +
   action +
-  "</a:Action>" +
-  '<a:To s:mustUnderstand="1">https://' +
+  pbClose("a:Action") +
+  pbOpenA("a:To", 's:mustUnderstand="1"') +
+  "https://" +
   pbXmlSafe(sub) +
-  ".soap.marketingcloudapis.com/Service.asmx</a:To>" +
-  '<fueloauth xmlns="http://exacttarget.com">' +
+  ".soap.marketingcloudapis.com/Service.asmx" +
+  pbClose("a:To") +
+  pbOpenA("fueloauth", 'xmlns="http://exacttarget.com"') +
   pbXmlSafe(token) +
-  "</fueloauth></s:Header>" +
-  '<s:Body xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">' +
+  pbClose("fueloauth") +
+  pbClose("s:Header") +
+  pbOpenA("s:Body", 'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"') +
   bodyXml +
-  "</s:Body></s:Envelope>";
+  pbClose("s:Body") +
+  pbClose("s:Envelope");
  var req = new Script.Util.HttpRequest("https://" + sub + ".soap.marketingcloudapis.com/Service.asmx");
  req.emptyContentHandling = 0;
  req.retries = 1;
@@ -369,15 +446,94 @@ function pbSoapCall(sub, token, action, bodyXml) {
  };
 }
 
-function pbParseSoapObjectId(body) {
- var text = pbToStr(body);
- var mNew = text.match(/NewObjectID[^>]*>([^<]+)/i);
- if (mNew && pbTrim(mNew[1])) {
-  return pbTrim(mNew[1]);
+function pbSoapRetrieveQuery(sub, token, propName, propValue) {
+ var filter =
+  pbOpenA("Filter", 'xsi:type="SimpleFilterPart"') +
+  pbEl("Property", propName) +
+  pbEl("SimpleOperator", "equals") +
+  pbEl("Value", pbXmlSafe(propValue)) +
+  pbClose("Filter");
+ var bodyXml =
+  pbOpenA("RetrieveRequestMsg", 'xmlns="http://exacttarget.com/wsdl/partnerAPI"') +
+  pbOpen("RetrieveRequest") +
+  pbEl("ObjectType", "QueryDefinition") +
+  pbEl("Properties", "ObjectID") +
+  pbEl("Properties", "CustomerKey") +
+  pbEl("Properties", "Name") +
+  filter +
+  pbClose("RetrieveRequest") +
+  pbClose("RetrieveRequestMsg");
+ var found = pbSoapCall(sub, token, "Retrieve", bodyXml);
+ var oid = pbTaggedValue(found.body, "NewObjectID");
+ if (!oid) {
+  oid = pbTaggedValue(found.body, "ObjectID");
  }
- var mObj = text.match(/ObjectID[^>]*>([^<]+)/i);
- if (mObj && pbTrim(mObj[1])) {
-  return pbTrim(mObj[1]);
+ return oid;
+}
+
+function pbQueryIdFromObj(obj) {
+ if (!obj) {
+  return "";
+ }
+ if (obj.id) {
+  return pbToStr(obj.id);
+ }
+ if (obj.queryDefinitionId) {
+  return pbToStr(obj.queryDefinitionId);
+ }
+ if (obj.objectId) {
+  return pbToStr(obj.objectId);
+ }
+ if (obj.queryId) {
+  return pbToStr(obj.queryId);
+ }
+ return "";
+}
+
+function pbFindQueryViaRest(token, sub, queryKey) {
+ var key = pbTrim(queryKey);
+ if (!key) {
+  return "";
+ }
+ var base = "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/queries";
+ var byKey = pbHttpJson(token, sub, "GET", base + "/key:" + encodeURIComponent(key), null);
+ if (byKey.status == 200 && byKey.body) {
+  var keyed = pbParseJson(byKey.body);
+  var keyedId = pbQueryIdFromObj(keyed);
+  if (keyedId) {
+   return keyedId;
+  }
+ }
+ var page = 1;
+ var keyLc = key.toLowerCase();
+ while (page <= 5) {
+  var url = base + "?" + "$page=" + page + "&" + "$pagesize=100";
+  var r = pbHttpJson(token, sub, "GET", url, null);
+  if (r.status != 200) {
+   return "";
+  }
+  var obj = pbParseJson(r.body);
+  var items = [];
+  if (obj && obj.items) {
+   items = obj.items;
+  }
+  var i;
+  for (i = 0; i < items.length; i++) {
+   var itemKey = pbTrim(items[i].key);
+   if (itemKey && itemKey.toLowerCase() == keyLc) {
+    return pbQueryIdFromObj(items[i]);
+   }
+  }
+  for (i = 0; i < items.length; i++) {
+   var itemName = pbTrim(items[i].name);
+   if (itemName && itemName.toLowerCase() == keyLc) {
+    return pbQueryIdFromObj(items[i]);
+   }
+  }
+  if (items.length < 100) {
+   break;
+  }
+  page += 1;
  }
  return "";
 }
@@ -387,25 +543,15 @@ function pbRetrieveQueryObjectId(sub, token, queryKey) {
  if (!key) {
   return "";
  }
- var retrieveKey =
-  '<RetrieveRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI"><RetrieveRequest>' +
-  "<ObjectType>QueryDefinition</ObjectType><Properties>ObjectID</Properties><Properties>CustomerKey</Properties><Properties>Name</Properties>" +
-  '<Filter xsi:type="SimpleFilterPart"><Property>CustomerKey</Property><SimpleOperator>equals</SimpleOperator><Value>' +
-  pbXmlSafe(key) +
-  "</Value></Filter></RetrieveRequest></RetrieveRequestMsg>";
- var found = pbSoapCall(sub, token, "Retrieve", retrieveKey);
- var oid = pbParseSoapObjectId(found.body);
- if (oid) {
-  return oid;
+ var restId = pbFindQueryViaRest(token, sub, key);
+ if (restId) {
+  return restId;
  }
- var retrieveName =
-  '<RetrieveRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI"><RetrieveRequest>' +
-  "<ObjectType>QueryDefinition</ObjectType><Properties>ObjectID</Properties><Properties>CustomerKey</Properties><Properties>Name</Properties>" +
-  '<Filter xsi:type="SimpleFilterPart"><Property>Name</Property><SimpleOperator>equals</SimpleOperator><Value>' +
-  pbXmlSafe(key) +
-  "</Value></Filter></RetrieveRequest></RetrieveRequestMsg>";
- var byName = pbSoapCall(sub, token, "Retrieve", retrieveName);
- return pbParseSoapObjectId(byName.body);
+ var byKey = pbSoapRetrieveQuery(sub, token, "CustomerKey", key);
+ if (byKey) {
+  return byKey;
+ }
+ return pbSoapRetrieveQuery(sub, token, "Name", key);
 }
 
 function pbPad2(n) {
@@ -489,7 +635,7 @@ function pbFindAutomationInList(token, sub, name, key) {
  var endpoint = "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/automations";
  var page = 1;
  while (page <= 5) {
-  var url = endpoint + "?$page=" + page + "&$pagesize=100";
+  var url = endpoint + "?" + "$page=" + page + "&" + "$pagesize=100";
   var r = pbHttpJson(token, sub, "GET", url, null);
   if (r.status != 200) {
    return null;
@@ -513,7 +659,7 @@ function pbFindAutomationInList(token, sub, name, key) {
   if (items.length < 100) {
    break;
   }
-  page++;
+  page += 1;
  }
  return null;
 }
@@ -573,7 +719,7 @@ function pbCreateOrUpdateAutomation(token, sub, automationName, automationKey, q
     return {
      ok: false,
      automationId: "",
-     msg: "Automation create HTTP " + createStatus + " — " + pbClip(pbTrim(createBody), 220)
+     msg: "Automation create HTTP " + createStatus + " - " + pbClip(pbTrim(createBody), 220)
     };
    }
    var createObj = pbParseJson(createBody);
@@ -609,25 +755,18 @@ function pbCreateOrUpdateAutomation(token, sub, automationName, automationKey, q
  };
 }
 
-function pbBuildButtonHtml(jid, buildName) {
- var html = '<p class="push-plan-intro">Plan: Production automation only. Query must already exist as <code>' + pbHtmlSafe(buildName) + "</code>.</p>";
- html += '<ol class="push-steps">';
- html += '<li class="push-step state-pending">';
- html += '<div class="push-step-head"><span class="push-step-num">1</span>';
- html += "<strong>Automation</strong>";
- html += '<span class="push-step-badge">pending</span></div>';
- html += '<p class="push-step-note">REST create or update. Attaches the existing Production query named like the build.</p>';
- html +=
-  '<form method="post" action="" class="push-step-form" onsubmit="return confirm(\'Push this automation to Production?\');">' +
-  '<input type="hidden" name="journeyId" value="' +
-  pbHtmlSafe(jid) +
-  '">' +
-  '<input type="hidden" name="pushStep" value="automation">' +
-  '<input type="hidden" name="confirmStep" value="1">' +
-  '<button type="submit" class="btn btn-push btn-step">Push automation</button>' +
-  "</form>";
- html += "</li></ol>";
+function pbLogHtml(logs) {
+ var html = pbOpenA("ol", 'class="push-log"');
+ var i;
+ for (i = 0; i < logs.length; i++) {
+  html += pbEl("li", pbHtmlSafe(pbClip(logs[i], 500)));
+ }
+ html += pbClose("ol");
  return html;
+}
+
+function pbBanner(kind, msg) {
+ return pbOpenA("div", 'class="banner ' + kind + '"') + pbHtmlSafe(pbClip(msg, 500)) + pbClose("div");
 }
 
 function pbRunAutomationPush(buildName) {
@@ -636,7 +775,7 @@ function pbRunAutomationPush(buildName) {
  if (!name) {
   return { ok: false, logs: logs, msg: "Build name missing on analytics." };
  }
- logs.push("Looking up Production query and creating automation for \"" + name + "\".");
+ logs.push('Looking up Production query and creating automation for "' + name + '".');
  var prodAuth = pbAuthForProd();
  if (!prodAuth.ok) {
   logs.push(prodAuth.msg);
@@ -646,9 +785,9 @@ function pbRunAutomationPush(buildName) {
  var queryObjectId = pbRetrieveQueryObjectId(prodAuth.subdomain, prodAuth.token, name);
  if (!queryObjectId) {
   var qMsg =
-   "Production query not found for CustomerKey/Name \"" +
+   'Production query not found for CustomerKey/Name "' +
    name +
-   "\". Create that QueryDefinition in Production first, then push automation.";
+   '". Create that QueryDefinition in Production first, then push automation.';
   logs.push(qMsg);
   return { ok: false, logs: logs, msg: qMsg };
  }
@@ -667,53 +806,42 @@ function pbRunAutomationPush(buildName) {
 var pageStatus = "review";
 var confirmStep = false;
 var jid = "";
-var journeyType = "";
 var buildName = "";
 var isStack = false;
-var stepsHtml = "";
 var pushLogHtml = "";
 var pushResultBanner = "";
 var pushBlockedMsg = "";
 try {
  pageStatus = pbTrim(Platform.Variable.GetValue("@pageStatus") || "review");
- confirmStep = Platform.Variable.GetValue("@confirmStep") === "1";
+ confirmStep = Platform.Variable.GetValue("@confirmStep") == "1";
  jid = pbTrim(Platform.Variable.GetValue("@jid") || "");
- journeyType = pbTrim(Platform.Variable.GetValue("@dispType") || "");
  buildName = pbTrim(Platform.Variable.GetValue("@dispName") || "");
- isStack = Platform.Variable.GetValue("@isStackBuild") === "true";
- if (pageStatus === "review" && jid) {
+ isStack = Platform.Variable.GetValue("@isStackBuild") == "true";
+ if (pageStatus == "review" && jid) {
   if (!isStack) {
    pushBlockedMsg = "This page only pushes Journey + Automation builds.";
   } else if (!buildName) {
    pushBlockedMsg = "Build name missing on analytics.";
-  } else {
-   stepsHtml = pbBuildButtonHtml(jid, buildName);
   }
  }
- if (confirmStep && pageStatus === "review" && jid && isStack) {
+ if (confirmStep && pageStatus == "review" && jid && isStack) {
   var stepResult = pbRunAutomationPush(buildName);
-  var li;
-  pushLogHtml = '<ol class="push-log">';
-  for (li = 0; li < stepResult.logs.length; li++) {
-   pushLogHtml += "<li>" + pbHtmlSafe(pbClip(stepResult.logs[li], 500)) + "</li>";
-  }
-  pushLogHtml += "</ol>";
+  pushLogHtml = pbLogHtml(stepResult.logs);
   if (stepResult.ok) {
-   pushResultBanner = '<div class="banner good">' + pbHtmlSafe(pbClip(stepResult.msg, 500)) + "</div>";
+   pushResultBanner = pbBanner("good", stepResult.msg);
    pageStatus = "step_done";
   } else {
-   pushResultBanner = '<div class="banner bad">' + pbHtmlSafe(pbClip(stepResult.msg, 500)) + "</div>";
+   pushResultBanner = pbBanner("bad", stepResult.msg);
    pageStatus = "step_failed";
   }
  }
 } catch (pageEx) {
  pageStatus = "step_failed";
- pushResultBanner = '<div class="banner bad">Push page error: ' + pbHtmlSafe(pbToStr(pageEx.message || pageEx)) + "</div>";
+ pushResultBanner = pbBanner("bad", "Push page error: " + pbToStr(pageEx.message || pageEx));
  pushBlockedMsg = pbToStr(pageEx.message || pageEx);
 }
 
 pbSetAmpVar("pageStatus", pageStatus);
-pbSetAmpVar("manifestHtml", stepsHtml);
 pbSetAmpVar("pushLogHtml", pushLogHtml);
 pbSetAmpVar("pushResultBanner", pushResultBanner);
 pbSetAmpVar("pushBlockedMsg", pushBlockedMsg);
@@ -741,12 +869,12 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 .panel{background:#fff;border:1px solid var(--border-color);padding:26px 30px;margin-bottom:20px;border-radius:12px}
 .panel-title{font-size:1rem;font-weight:700;margin:0 0 16px 0}
 .push-plan-intro{margin-bottom:16px;font-size:14px;color:var(--text-secondary)}
-.push-steps{list-style:none;padding:0;margin:0;counter-reset:pushstep}
+.push-steps{list-style:none;padding:0;margin:0}
 .push-step{border:1px solid var(--border-color);border-radius:10px;padding:18px 20px;margin-bottom:14px;background:#fafafa}
 .push-step-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
 .push-step-num{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:999px;background:#111827;color:#fff;font-size:13px;font-weight:600}
 .push-step-badge{font-size:11px;font-weight:600;text-transform:uppercase;padding:3px 8px;border-radius:999px;background:#e5e7eb;color:#374151}
-.push-step-note,.push-step-status{font-size:13px;color:var(--text-secondary);margin:4px 0}
+.push-step-note{font-size:13px;color:var(--text-secondary);margin:4px 0}
 .push-step-form{margin-top:12px}
 .btn-step{padding:9px 14px;font-size:13px}
 .btn{padding:11px 18px;border-radius:var(--radius-md);font-weight:600;font-size:14px;cursor:pointer;border:1px solid transparent;font:inherit;text-decoration:none;display:inline-flex;align-items:center}
@@ -775,7 +903,21 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 <div class="panel">
  <p class="panel-title">Build: %%=v(@dispName)=%%</p>
  <p class="sub" style="margin-bottom:12px">Journey ID: <code>%%=v(@jid)=%%</code></p>
- %%=TreatAsContent(@manifestHtml)=%%
+%%[ IF @pageStatus == "review" AND @isStackBuild == "true" AND NOT Empty(@dispName) THEN ]%%
+ <p class="push-plan-intro">Plan: Production automation only. Query must already exist as <code>%%=v(@dispName)=%%</code>.</p>
+ <ol class="push-steps">
+  <li class="push-step">
+   <div class="push-step-head"><span class="push-step-num">1</span><strong>Automation</strong><span class="push-step-badge">pending</span></div>
+   <p class="push-step-note">REST create or update. Attaches the existing Production query named like the build.</p>
+   <form method="post" action="" class="push-step-form" onsubmit="return confirm('Push this automation to Production?');">
+    <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
+    <input type="hidden" name="pushStep" value="automation">
+    <input type="hidden" name="confirmStep" value="1">
+    <button type="submit" class="btn btn-push btn-step">Push automation</button>
+   </form>
+  </li>
+ </ol>
+%%[ ENDIF ]%%
 </div>
 %%[ IF NOT Empty(@pushBlockedMsg) THEN ]%%
 <div class="banner bad">%%=v(@pushBlockedMsg)=%%</div>
