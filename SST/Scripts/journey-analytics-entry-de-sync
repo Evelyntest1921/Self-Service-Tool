@@ -1,0 +1,574 @@
+<script runat="server">
+Platform.Load("core", "1");
+
+var ANALYTICS_DE = "Bd_journey_analytics";
+var LOG_DE = "sst_build_entry_de_sync_log";
+var LOG_FIELD = "log";
+var LOG_MAX_LEN = 4000;
+var DEFAULT_MAX_PER_RUN = 50;
+
+var resultLines = [];
+
+function strTrim(v) {
+ if (v === null || typeof v === "undefined") {
+  return "";
+ }
+ try {
+  return (v + "").replace(/^\s+|\s+$/g, "");
+ } catch (trimEx) {
+  return "";
+ }
+}
+
+function queryParam(name) {
+ var val = "";
+ try {
+  val = Platform.Request.GetQueryStringParameter(name);
+ } catch (qpEx) {}
+ return strTrim(val);
+}
+
+function parseIntParam(raw, fallback) {
+ var n = parseInt(strTrim(raw), 10);
+ if (isNaN(n) || n < 1) {
+  return fallback;
+ }
+ if (n > 200) {
+  return 200;
+ }
+ return n;
+}
+
+function writeLog(text) {
+ var msg = text === null || typeof text === "undefined" ? "" : text + "";
+ if (msg.length > LOG_MAX_LEN) {
+  msg = msg.substring(0, LOG_MAX_LEN - 3) + "...";
+ }
+ try {
+  Platform.Function.InsertData(LOG_DE, [LOG_FIELD], [msg]);
+ } catch (logEx) {}
+}
+
+function fieldFromRow(row, names) {
+ if (!row) {
+  return "";
+ }
+ var i;
+ for (i = 0; i < names.length; i++) {
+  var key = names[i];
+  if (row[key] !== undefined && row[key] !== null && strTrim(row[key])) {
+   return strTrim(row[key]);
+  }
+ }
+ for (i = 0; i < names.length; i++) {
+  try {
+   var v = Platform.Function.Field(row, names[i]);
+   if (v !== null && typeof v !== "undefined" && strTrim(v)) {
+    return strTrim(v);
+   }
+  } catch (fieldEx) {}
+ }
+ return "";
+}
+
+function parseAnalyticsDateMs(raw) {
+ var s = strTrim(raw);
+ if (!s || s.toUpperCase() === "N/A" || s.toLowerCase() === "null") {
+  return 0;
+ }
+ if (s.indexOf("0001-01-01") >= 0) {
+  return 0;
+ }
+ var d = new Date(s);
+ var ms = d.getTime();
+ if (isNaN(ms) || ms <= 0) {
+  return 0;
+ }
+ return ms;
+}
+
+function shouldSyncEntryDeByDate(buildUpsertRaw, journeyModifiedRaw) {
+ var upsertMs = parseAnalyticsDateMs(buildUpsertRaw);
+ if (upsertMs <= 0) {
+  return true;
+ }
+ var modifiedMs = parseAnalyticsDateMs(journeyModifiedRaw);
+ if (modifiedMs <= 0) {
+  return false;
+ }
+ return modifiedMs > upsertMs;
+}
+
+function normalizeDeField(v) {
+ var s = strTrim(v);
+ if (!s || s.toUpperCase() === "N/A") {
+  return "";
+ }
+ return s;
+}
+
+function isEmailOnlyJourneyId(jid) {
+ var id = strTrim(jid).toLowerCase();
+ return id.indexOf("email:") === 0;
+}
+
+function parseJsonSafe(text) {
+ var raw = strTrim(text);
+ if (!raw) {
+  return null;
+ }
+ try {
+  return Platform.Function.ParseJSON(raw);
+ } catch (parseEx1) {}
+ try {
+  if (typeof Script.Util.JSON !== "undefined" && Script.Util.JSON.parse) {
+   return Script.Util.JSON.parse(raw);
+  }
+ } catch (parseEx2) {}
+ return null;
+}
+
+function journeyHttpJson(token, method, url, bodyStr) {
+ try {
+  var req = new Script.Util.HttpRequest(url);
+  req.emptyContentHandling = 0;
+  req.retries = 2;
+  req.continueOnError = true;
+  req.setHeader("Authorization", "Bearer " + token);
+  req.method = method;
+  if (bodyStr) {
+   req.contentType = "application/json";
+   req.postData = bodyStr;
+  }
+  var resp = req.send();
+  return {
+   status: resp.statusCode,
+   body: resp.content ? String(resp.content) : ""
+  };
+ } catch (httpEx) {
+  return { status: 0, body: httpEx.message || String(httpEx) };
+ }
+}
+
+function lookupAuthScalar(userKey, returnField) {
+ var val = "";
+ try {
+  val = Platform.Function.Lookup("SFMC_AUTH", returnField, "User", userKey);
+ } catch (lookupEx) {
+  return "";
+ }
+ return strTrim(val);
+}
+
+function authAdmin() {
+ var clientId = lookupAuthScalar("Admin", "clientId");
+ if (!clientId) {
+  clientId = lookupAuthScalar("Admin", "ClientId");
+ }
+ var clientSecret = lookupAuthScalar("Admin", "clientSecret");
+ if (!clientSecret) {
+  clientSecret = lookupAuthScalar("Admin", "ClientSecret");
+ }
+ var subdomain = lookupAuthScalar("Admin", "subdomain");
+ if (!clientId || !clientSecret || !subdomain) {
+  return { ok: false, msg: "SFMC_AUTH Admin row incomplete." };
+ }
+ var authUrl =
+  "https://" + subdomain + ".auth.marketingcloudapis.com/v2/token";
+ var accountId = lookupAuthScalar("Admin", "accountId");
+ var payload =
+  '{"grant_type":"client_credentials","client_id":"' +
+  clientId +
+  '","client_secret":"' +
+  clientSecret +
+  '"';
+ if (accountId) {
+  payload += ',"account_id":"' + accountId + '"';
+ }
+ payload += "}";
+ var authResp;
+ try {
+  var authReq = new Script.Util.HttpRequest(authUrl);
+  authReq.emptyContentHandling = 0;
+  authReq.retries = 2;
+  authReq.continueOnError = true;
+  authReq.method = "POST";
+  authReq.contentType = "application/json";
+  authReq.postData = payload;
+  var authSend = authReq.send();
+  authResp = {
+   status: authSend.statusCode,
+   body: authSend.content ? String(authSend.content) : ""
+  };
+ } catch (authHttpEx) {
+  authResp = { status: 0, body: authHttpEx.message || String(authHttpEx) };
+ }
+ if (authResp.status != 200) {
+  return {
+   ok: false,
+   msg: "Auth HTTP " + authResp.status + " — " + strTrim(authResp.body).substring(0, 120)
+  };
+ }
+ var authObj = parseJsonSafe(authResp.body);
+ if (!authObj || !authObj.access_token) {
+  return { ok: false, msg: "Auth response missing access_token." };
+ }
+ return { ok: true, token: authObj.access_token, subdomain: subdomain };
+}
+
+function getJourneyObject(sub, token, jid) {
+ var url =
+  "https://" +
+  sub +
+  ".rest.marketingcloudapis.com/interaction/v1/interactions/" +
+  encodeURIComponent(jid) +
+  "?extras=all";
+ var resp = journeyHttpJson(token, "GET", url, null);
+ if (resp.status != 200 && resp.status != 201) {
+  var detail = resp.body ? resp.body.substring(0, 180) : "";
+  return {
+   ok: false,
+   msg: "Journey GET HTTP " + resp.status + (detail ? " — " + detail : ""),
+   obj: null
+  };
+ }
+ var jObj = parseJsonSafe(resp.body);
+ if (!jObj) {
+  return { ok: false, msg: "Could not parse journey JSON.", obj: null };
+ }
+ return { ok: true, msg: "", obj: jObj };
+}
+
+function findDeAudienceEntry(jObj) {
+ var triggers = jObj.triggers;
+ if (!triggers || !triggers.length) {
+  return null;
+ }
+ var i;
+ for (i = 0; i < triggers.length; i++) {
+  if (strTrim(triggers[i].type).toUpperCase() === "EMAILAUDIENCE") {
+   var meta = triggers[i].metaData || {};
+   var eventDefId = strTrim(meta.eventDefinitionId);
+   if (eventDefId) {
+    return { eventDefId: eventDefId };
+   }
+  }
+ }
+ return null;
+}
+
+function findEntryEventRef(jObj) {
+ var fromAudience = findDeAudienceEntry(jObj);
+ if (fromAudience) {
+  return fromAudience;
+ }
+ var triggers = jObj.triggers;
+ if (!triggers || !triggers.length) {
+  return null;
+ }
+ var i;
+ for (i = 0; i < triggers.length; i++) {
+  var tr = triggers[i] || {};
+  var meta = tr.metaData || {};
+  var eventDefId = strTrim(meta.eventDefinitionId);
+  if (!eventDefId && tr.arguments) {
+   eventDefId = strTrim(tr.arguments.eventDefinitionId);
+  }
+  if (eventDefId) {
+   return { eventDefId: eventDefId };
+  }
+ }
+ return null;
+}
+
+function getEventDefinition(sub, token, eventDefId) {
+ var url =
+  "https://" +
+  sub +
+  ".rest.marketingcloudapis.com/interaction/v1/eventDefinitions/" +
+  encodeURIComponent(eventDefId);
+ var resp = journeyHttpJson(token, "GET", url, null);
+ if (resp.status != 200 && resp.status != 201) {
+  return {
+   ok: false,
+   msg: "Event GET HTTP " + resp.status,
+   obj: null
+  };
+ }
+ var evObj = parseJsonSafe(resp.body);
+ if (!evObj) {
+  return { ok: false, msg: "Could not parse event definition.", obj: null };
+ }
+ return { ok: true, msg: "", obj: evObj };
+}
+
+function resolveDeMetaByObjectId(objectId) {
+ var oid = strTrim(objectId);
+ if (!oid) {
+  return { customerKey: "", name: "" };
+ }
+ try {
+  var prox = new Script.Util.WSProxy();
+  var rde = prox.retrieve("DataExtension", ["CustomerKey", "Name"], {
+   Property: "ObjectID",
+   SimpleOperator: "equals",
+   Value: oid
+  });
+  if (rde && rde.Results && rde.Results.length > 0) {
+   return {
+    customerKey: String(rde.Results[0].CustomerKey || ""),
+    name: String(rde.Results[0].Name || "")
+   };
+  }
+ } catch (deMetaEx) {}
+ return { customerKey: "", name: "" };
+}
+
+function resolveLiveEntryDeFromEvent(evObj) {
+ if (!evObj) {
+  return { name: "", customerKey: "", objectId: "" };
+ }
+ var objectId = strTrim(evObj.dataExtensionId || evObj.dataExtensionID || "");
+ var name = strTrim(evObj.dataExtensionName || "");
+ var customerKey = strTrim(
+  evObj.dataExtensionKey || evObj.dataExtensionCustomerKey || ""
+ );
+ if (objectId && (!name || !customerKey)) {
+  var meta = resolveDeMetaByObjectId(objectId);
+  if (!name) {
+   name = meta.name;
+  }
+  if (!customerKey) {
+   customerKey = meta.customerKey;
+  }
+ }
+ return { name: name, customerKey: customerKey, objectId: objectId };
+}
+
+function pickJourneyModifiedIso(jObj) {
+ if (!jObj) {
+  return "";
+ }
+ var candidates = [
+  jObj.modifiedDate,
+  jObj.lastModifiedDate,
+  jObj.lastPublishedDate,
+  jObj.createdDate
+ ];
+ var i;
+ for (i = 0; i < candidates.length; i++) {
+  var s = strTrim(candidates[i]);
+  if (!s || s.indexOf("0001-01-01") >= 0) {
+   continue;
+  }
+  return s;
+ }
+ return "";
+}
+
+function loadAnalyticsRows() {
+ var rows = [];
+ try {
+  var de = DataExtension.Init(ANALYTICS_DE);
+  var got = de.Rows.Retrieve([
+   "journeyId",
+   "deName",
+   "deId",
+   "BuildUpsertDate",
+   "JourneyModifiedDate"
+  ]);
+  if (got && got.length) {
+   var gi;
+   for (gi = 0; gi < got.length; gi++) {
+    rows.push(got[gi]);
+   }
+  }
+ } catch (initEx) {}
+ if (rows.length) {
+  return rows;
+ }
+ try {
+  var prox = new Script.Util.WSProxy();
+  var wsGot = prox.retrieve(
+   "DataExtensionObject[" + ANALYTICS_DE + "]",
+   ["journeyId", "deName", "deId", "BuildUpsertDate", "JourneyModifiedDate"],
+   {
+    Property: "journeyId",
+    SimpleOperator: "isNotNull"
+   }
+  );
+  if (wsGot && wsGot.Results) {
+   var wi;
+   for (wi = 0; wi < wsGot.Results.length; wi++) {
+    rows.push(wsGot.Results[wi]);
+   }
+  }
+ } catch (wsEx) {}
+ return rows;
+}
+
+function upsertAnalyticsSync(jid, deName, deId, journeyModifiedIso) {
+ var key = strTrim(jid);
+ if (!key) {
+  return { ok: false, msg: "Missing journeyId." };
+ }
+ var nameVal = strTrim(deName);
+ var idVal = strTrim(deId);
+ if (!nameVal && idVal) {
+  nameVal = idVal;
+ }
+ if (!idVal && nameVal) {
+  idVal = nameVal;
+ }
+ var modVal = strTrim(journeyModifiedIso);
+ try {
+  Platform.Function.UpsertDE(
+   ANALYTICS_DE,
+   1,
+   ["journeyId", "deName", "deId", "BuildUpsertDate", "JourneyModifiedDate"],
+   [
+    key.substring(0, 250),
+    nameVal.substring(0, 200),
+    idVal.substring(0, 50),
+    Platform.Function.Now(),
+    modVal ? modVal.substring(0, 100) : modVal
+   ]
+  );
+  return { ok: true, msg: "Upserted." };
+ } catch (upsertEx) {
+  return { ok: false, msg: upsertEx.message || String(upsertEx) };
+ }
+}
+
+function resolveEntryDeForJourney(sub, token, jObj) {
+ var entryRef = findEntryEventRef(jObj);
+ if (!entryRef || !entryRef.eventDefId) {
+  return { ok: false, msg: "No entry event definition on journey.", live: null };
+ }
+ var evFetched = getEventDefinition(sub, token, entryRef.eventDefId);
+ if (!evFetched.ok || !evFetched.obj) {
+  return {
+   ok: false,
+   msg: evFetched.msg || "Could not load event definition.",
+   live: null
+  };
+ }
+ var live = resolveLiveEntryDeFromEvent(evFetched.obj);
+ if (!live.name && !live.customerKey) {
+  return { ok: false, msg: "Event definition has no entry DE.", live: null };
+ }
+ return { ok: true, msg: "", live: live };
+}
+
+function processRow(sub, token, row) {
+ var jid = fieldFromRow(row, ["journeyId", "JourneyID"]);
+ if (!jid || isEmailOnlyJourneyId(jid)) {
+  return { status: "skipped", detail: "not a Journey Builder id" };
+ }
+ var buildUpsertRaw = fieldFromRow(row, ["BuildUpsertDate"]);
+ var journeyModifiedRaw = fieldFromRow(row, ["JourneyModifiedDate"]);
+ var storedName = normalizeDeField(fieldFromRow(row, ["deName"]));
+ var storedId = normalizeDeField(fieldFromRow(row, ["deId"]));
+ var fetched = getJourneyObject(sub, token, jid);
+ if (!fetched.ok || !fetched.obj) {
+  return { status: "error", detail: fetched.msg || "Journey GET failed" };
+ }
+ var jObj = fetched.obj;
+ var modifiedIso = pickJourneyModifiedIso(jObj);
+ var entry = resolveEntryDeForJourney(sub, token, jObj);
+ if (!entry.ok || !entry.live) {
+  return {
+   status: "error",
+   detail: entry.msg || "No entry DE resolved"
+  };
+ }
+ var liveName = normalizeDeField(entry.live.name);
+ var liveKey = normalizeDeField(entry.live.customerKey);
+ if (!liveName) {
+  liveName = liveKey;
+ }
+ if (!liveKey) {
+  liveKey = liveName;
+ }
+ var deChanged = storedName !== liveName || storedId !== liveKey;
+ var upsertResult = upsertAnalyticsSync(jid, liveName, liveKey, modifiedIso);
+ if (!upsertResult.ok) {
+  return { status: "error", detail: upsertResult.msg };
+ }
+ return {
+  status: "synced",
+  detail: deChanged ? "entry DE updated" : "entry DE unchanged; dates stamped"
+ };
+}
+
+try {
+ var maxPerRun = parseIntParam(queryParam("max"), DEFAULT_MAX_PER_RUN);
+ resultLines.push(
+  "journey-analytics-entry-de-sync — max " + maxPerRun + " journeys per run."
+ );
+ var auth = authAdmin();
+ if (!auth.ok) {
+  throw new Error(auth.msg);
+ }
+ var allRows = loadAnalyticsRows();
+ resultLines.push("Analytics rows loaded: " + allRows.length);
+ var processed = 0;
+ var synced = 0;
+ var skipped = 0;
+ var errors = 0;
+ var ri;
+ for (ri = 0; ri < allRows.length; ri++) {
+  if (processed >= maxPerRun) {
+   resultLines.push("Stopped at maxPerRun=" + maxPerRun + ".");
+   break;
+  }
+  var row = allRows[ri];
+  var jidPreview = fieldFromRow(row, ["journeyId", "JourneyID"]);
+  if (!jidPreview) {
+   continue;
+  }
+  if (
+   !shouldSyncEntryDeByDate(
+    fieldFromRow(row, ["BuildUpsertDate"]),
+    fieldFromRow(row, ["JourneyModifiedDate"])
+   )
+  ) {
+   skipped += 1;
+   continue;
+  }
+  if (isEmailOnlyJourneyId(jidPreview)) {
+   skipped += 1;
+   continue;
+  }
+  processed += 1;
+  var outcome = processRow(auth.subdomain, auth.token, row);
+  resultLines.push(
+   jidPreview.substring(0, 36) + " — " + outcome.status + ": " + outcome.detail
+  );
+  if (outcome.status === "synced") {
+   synced += 1;
+  } else if (outcome.status === "skipped") {
+   skipped += 1;
+  } else {
+   errors += 1;
+  }
+ }
+ resultLines.push(
+  "Done. processed=" +
+   processed +
+   ", synced=" +
+   synced +
+   ", skipped=" +
+   skipped +
+   ", errors=" +
+   errors
+ );
+ var output = resultLines.join("\n");
+ writeLog(output);
+ Write(output);
+} catch (runEx) {
+ var errOut = "ERROR: " + (runEx.message || String(runEx));
+ writeLog(errOut);
+ Write(errOut);
+}
+</script>
