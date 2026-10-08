@@ -5,7 +5,7 @@ VAR @dispName, @dispType, @dispEmailName, @dispEmailId, @dispDeName, @dispDeId
 VAR @dispQueryKey, @dispAutomationGuid, @dispAutomationCustomerKey, @dispAutomationName, @dispCampaignId, @pushCampaignId, @campaignIdFromForm
 VAR @isStackBuild, @pageStatus, @pushBlockedMsg, @pushLogHtml, @pushResultBanner
 VAR @manifestHtml, @editSidebarHtml, @buildNavContext, @buildNavActive
-VAR @STACK_JOURNEY_TYPE, @AUTH_SOURCE_USER, @AUTH_PROD_USER
+VAR @STACK_JOURNEY_TYPE, @AUTH_SOURCE_USER, @AUTH_PROD_USER, @pushBackHref
 
 SET @STACK_JOURNEY_TYPE = "Journey + Automation"
 SET @AUTH_SOURCE_USER = "Admin"
@@ -738,13 +738,16 @@ function pbXmlSafe(s) {
   .replace(/"/g, "&quot;");
 }
 
+function pbSoapXmlDecl() {
+ return String.fromCharCode(60, 63) + 'xml version="1.0" encoding="UTF-8"' + String.fromCharCode(63, 62);
+}
+
 function pbSoapCallEx(sub, token, action, bodyXml, style) {
  var envelope = "";
  var soapAction = action;
  if (style === "11") {
   envelope =
-   "<" +
-   "?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
+   pbSoapXmlDecl() +
    '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">' +
    "<soap:Header>" +
    '<fueloauth xmlns="http://exacttarget.com">' +
@@ -756,8 +759,7 @@ function pbSoapCallEx(sub, token, action, bodyXml, style) {
   soapAction = '"' + action + '"';
  } else {
   envelope =
-   "<" +
-   "?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
+   pbSoapXmlDecl() +
    '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing">' +
    "<s:Header>" +
    '<a:Action s:mustUnderstand="1">' +
@@ -1524,7 +1526,7 @@ function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQu
    ok: false,
    sql: "",
    msg:
-    "Salesforce Campaign ID required: enter it above (701…) or store it on bd_journey_analytics."
+    "Salesforce Campaign ID required: enter it above (701...) or store it on bd_journey_analytics."
   };
  }
  var campSql =
@@ -1557,19 +1559,22 @@ function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQu
 function pbBuildQueryMutationBody(opts) {
  var o = opts || {};
  var createRoot = pbTrim(o.createRoot || "");
- var requestTag = o.existingId
-  ? "UpdateRequestMsg"
-  : createRoot === "CreateRequest"
-  ? "CreateRequest"
-  : "CreateRequestMsg";
+ var requestTag = "CreateRequestMsg";
+ if (o.partnerApi && o.existingId) {
+  requestTag = "UpdateRequest";
+ } else if (o.partnerApi) {
+  requestTag = "CreateRequest";
+ } else if (o.existingId) {
+  requestTag = "UpdateRequestMsg";
+ } else if (createRoot === "CreateRequest") {
+  requestTag = "CreateRequest";
+ }
  var objectIdXml = o.existingId ? "<ObjectID>" + pbXmlSafe(o.existingId) + "</ObjectID>" : "";
  var categoryXml = o.useCategory && o.categoryId > 0 ? "<CategoryID>" + o.categoryId + "</CategoryID>" : "";
  var deTargetOid = o.useDeOid && o.deOid ? "<ObjectID>" + pbXmlSafe(o.deOid) + "</ObjectID>" : "";
  var targetUpdate = pbTrim(o.targetUpdateType || "Update") || "Update";
  var optionsXml = "";
- if (o.partnerApi) {
-  requestTag = o.existingId ? "UpdateRequest" : "CreateRequest";
- } else if (!o.existingId && requestTag !== "CreateRequest") {
+ if (!o.existingId && requestTag !== "CreateRequest" && !o.partnerApi) {
   optionsXml = "<Options></Options>";
  }
  return (
@@ -4346,6 +4351,31 @@ function pbCopyEmailAsset(sourceToken, sourceSub, targetToken, targetSub, assetI
  };
 }
 
+function pbPushPageCtx() {
+ var camp = pbTrim(Platform.Variable.GetValue("@pushCampaignId") || "");
+ if (!camp) {
+  camp = pbTrim(Platform.Variable.GetValue("@dispCampaignId") || "");
+ }
+ var campSrc = "analytics";
+ if (Platform.Variable.GetValue("@campaignIdFromForm") === "1") {
+  campSrc = "page_input";
+ }
+ return {
+  journeyId: jid,
+  buildName: pbTrim(Platform.Variable.GetValue("@dispName") || ""),
+  queryKey: pbTrim(Platform.Variable.GetValue("@dispQueryKey") || ""),
+  emailId: pbTrim(Platform.Variable.GetValue("@dispEmailId") || ""),
+  emailName: pbTrim(Platform.Variable.GetValue("@dispEmailName") || ""),
+  deId: pbTrim(Platform.Variable.GetValue("@dispDeId") || ""),
+  deName: pbTrim(Platform.Variable.GetValue("@dispDeName") || ""),
+  automationGuid: pbTrim(Platform.Variable.GetValue("@dispAutomationGuid") || ""),
+  automationKey: pbTrim(Platform.Variable.GetValue("@dispAutomationCustomerKey") || ""),
+  automationName: pbTrim(Platform.Variable.GetValue("@dispAutomationName") || ""),
+  campaignId: camp,
+  campaignIdSource: campSrc
+ };
+}
+
 var pageStatus = "review";
 var confirmStep = false;
 var pushStep = "";
@@ -4362,31 +4392,6 @@ try {
  jid = pbTrim(Platform.Variable.GetValue("@jid") || "");
  journeyType = pbTrim(Platform.Variable.GetValue("@dispType") || "");
  pushBlockedMsg = pbTrim(Platform.Variable.GetValue("@pushBlockedMsg") || "");
-} catch (bootEx) {
- pageStatus = "step_failed";
- pushResultBanner =
-  '<div class="banner bad">Push page error: ' + pbHtmlSafe(pbToStr(bootEx.message || bootEx)) + "</div>";
-}
-
-function pbPushPageCtx() {
- return {
-  journeyId: jid,
-  buildName: pbTrim(Platform.Variable.GetValue("@dispName") || ""),
-  queryKey: pbTrim(Platform.Variable.GetValue("@dispQueryKey") || ""),
-  emailId: pbTrim(Platform.Variable.GetValue("@dispEmailId") || ""),
-  emailName: pbTrim(Platform.Variable.GetValue("@dispEmailName") || ""),
-  deId: pbTrim(Platform.Variable.GetValue("@dispDeId") || ""),
-  deName: pbTrim(Platform.Variable.GetValue("@dispDeName") || ""),
-  automationGuid: pbTrim(Platform.Variable.GetValue("@dispAutomationGuid") || ""),
-  automationKey: pbTrim(Platform.Variable.GetValue("@dispAutomationCustomerKey") || ""),
-  automationName: pbTrim(Platform.Variable.GetValue("@dispAutomationName") || ""),
-  campaignId: pbTrim(Platform.Variable.GetValue("@pushCampaignId") || Platform.Variable.GetValue("@dispCampaignId") || ""),
-  campaignIdSource:
-   Platform.Variable.GetValue("@campaignIdFromForm") === "1" ? "page_input" : "analytics"
- };
-}
-
-try {
  if (pageStatus === "review" && jid && journeyType) {
   var reviewFb = pbStackAnalyticsFallback(pbPushPageCtx());
   var resolved = pbResolvePushContext(journeyType, "", "", jid, reviewFb);
@@ -4456,6 +4461,10 @@ pbSetAmpVar("pushBlockedMsg", pushBlockedMsg);
 </script>
 %%[
 SET @editSidebarHtml = ContentBlockByName("sst_shell_edit_sidebar")
+SET @pushBackHref = Concat(@PUSH_PAGE_SELF,"?journeyId=",@jid)
+IF NOT Empty(@pushCampaignId) THEN
+ SET @pushBackHref = Concat(@pushBackHref,"&campaignId=",@pushCampaignId)
+ENDIF
 ]%%
 <!DOCTYPE html>
 <html lang="en">
@@ -4537,7 +4546,7 @@ function pbConfirmPushStep(form){
  <p class="panel-title">Step log</p>
  %%=TreatAsContent(@pushLogHtml)=%%
 </div>
-<a class="btn btn-neutral" href="%%=Concat(@PUSH_PAGE_SELF,"?journeyId=",@jid,IIF(Empty(@pushCampaignId),"",Concat("&campaignId=",@pushCampaignId)))=%%">Back to push steps</a>
+<a class="btn btn-neutral" href="%%=v(@pushBackHref)=%%">Back to push steps</a>
 <a class="btn btn-neutral" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Manage Build</a>
 %%[ ELSEIF @pageStatus == "review" THEN ]%%
 <a class="btn btn-neutral" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Back to Manage Build</a>
