@@ -49,6 +49,29 @@ function writeLog(text) {
  } catch (logEx) {}
 }
 
+function fieldFromPropertyList(props, names) {
+ if (!props || typeof props.length !== "number") {
+  return "";
+ }
+ var pi;
+ for (pi = 0; pi < props.length; pi++) {
+  var pname = props[pi].Name != null ? props[pi].Name : props[pi].name;
+  if (!pname) {
+   continue;
+  }
+  var ni;
+  for (ni = 0; ni < names.length; ni++) {
+   if (String(pname).toLowerCase() === String(names[ni]).toLowerCase()) {
+    var v = props[pi].Value != null ? props[pi].Value : props[pi].value;
+    if (v !== null && typeof v !== "undefined" && strTrim(v)) {
+     return strTrim(v);
+    }
+   }
+  }
+ }
+ return "";
+}
+
 function fieldFromRow(row, names) {
  if (!row) {
   return "";
@@ -68,7 +91,39 @@ function fieldFromRow(row, names) {
    }
   } catch (fieldEx) {}
  }
- return "";
+ var fromProps = fieldFromPropertyList(row.Properties, names);
+ if (fromProps) {
+  return fromProps;
+ }
+ return fieldFromPropertyList(row.Property, names);
+}
+
+function coerceRows(raw) {
+ if (raw === null || typeof raw === "undefined") {
+  return [];
+ }
+ var rows = raw;
+ if (rows.Results && typeof rows.Results.length === "number") {
+  rows = rows.Results;
+ }
+ if (rows.rows && typeof rows.rows.length === "number") {
+  rows = rows.rows;
+ }
+ if (rows.Rows && typeof rows.Rows.length === "number") {
+  rows = rows.Rows;
+ }
+ if (typeof rows.length === "number") {
+  var out = [];
+  var i;
+  for (i = 0; i < rows.length; i++) {
+   out.push(rows[i]);
+  }
+  return out;
+ }
+ if (typeof rows === "object") {
+  return [rows];
+ }
+ return [];
 }
 
 function parseAnalyticsDateMs(raw) {
@@ -366,45 +421,146 @@ function pickJourneyModifiedIso(jObj) {
  return "";
 }
 
-function loadAnalyticsRows() {
- var rows = [];
- try {
-  var de = DataExtension.Init(ANALYTICS_DE);
-  var got = de.Rows.Retrieve([
-   "journeyId",
-   "deName",
-   "deId",
-   "BuildUpsertDate",
-   "JourneyModifiedDate"
-  ]);
-  if (got && got.length) {
-   var gi;
-   for (gi = 0; gi < got.length; gi++) {
-    rows.push(got[gi]);
-   }
-  }
- } catch (initEx) {}
- if (rows.length) {
-  return rows;
+function journeyIdFromRow(row) {
+ return fieldFromRow(row, ["journeyId", "JourneyId", "JourneyID"]);
+}
+
+function addUniqueAnalyticsRow(target, seen, row) {
+ var jid = journeyIdFromRow(row);
+ if (!jid) {
+  return;
  }
+ var key = jid.toLowerCase();
+ if (seen[key]) {
+  return;
+ }
+ seen[key] = true;
+ target.push(row);
+}
+
+function mergeLookupRows(target, seen, deKey, col, val) {
+ var chunk = [];
  try {
-  var prox = new Script.Util.WSProxy();
-  var wsGot = prox.retrieve(
-   "DataExtensionObject[" + ANALYTICS_DE + "]",
-   ["journeyId", "deName", "deId", "BuildUpsertDate", "JourneyModifiedDate"],
-   {
-    Property: "journeyId",
-    SimpleOperator: "isNotNull"
+  chunk = coerceRows(Platform.Function.LookupRows(deKey, col, val));
+ } catch (lookupEx) {
+  return 0;
+ }
+ var i;
+ for (i = 0; i < chunk.length; i++) {
+  addUniqueAnalyticsRow(target, seen, chunk[i]);
+ }
+ return chunk.length;
+}
+
+function loadAnalyticsRows() {
+ var notes = [];
+ var rows = [];
+ var seen = {};
+ var deKeys = [ANALYTICS_DE, "bd_journey_analytics"];
+ var journeyTypes = [
+  "Quick Send",
+  "Journey + Automation",
+  "One Sender",
+  "Campaign Journey",
+  "Campaign journey",
+  "Existing Journey",
+  "Create an Email",
+  "Create empty journey",
+  "Automation",
+  "Survey",
+  "Survey | email-only",
+  "Salesforce Survey Send"
+ ];
+ var deRowCount = 0;
+ var ki;
+ for (ki = 0; ki < deKeys.length; ki++) {
+  try {
+   deRowCount = Platform.Function.DataExtensionRowCount(deKeys[ki]);
+   if (deRowCount > 0) {
+    notes.push("DataExtensionRowCount(" + deKeys[ki] + ")=" + deRowCount);
+    break;
    }
-  );
-  if (wsGot && wsGot.Results) {
-   var wi;
-   for (wi = 0; wi < wsGot.Results.length; wi++) {
-    rows.push(wsGot.Results[wi]);
+  } catch (countEx) {}
+ }
+ var ti;
+ for (ki = 0; ki < deKeys.length; ki++) {
+  for (ti = 0; ti < journeyTypes.length; ti++) {
+   var n = mergeLookupRows(rows, seen, deKeys[ki], "journeyType", journeyTypes[ti]);
+   if (n > 0) {
+    notes.push("LookupRows " + deKeys[ki] + " journeyType=" + journeyTypes[ti] + " -> " + n);
    }
   }
- } catch (wsEx) {}
- return rows;
+  mergeLookupRows(rows, seen, deKeys[ki], "emailId", "N/A");
+  mergeLookupRows(rows, seen, deKeys[ki], "deId", "N/A");
+ }
+ if (rows.length) {
+  notes.push("Loaded " + rows.length + " unique rows via LookupRows.");
+  return { rows: rows, notes: notes, deRowCount: deRowCount };
+ }
+ var retrieveCols = ["journeyId", "deName", "deId"];
+ for (ki = 0; ki < deKeys.length; ki++) {
+  try {
+   var de = DataExtension.Init(deKeys[ki]);
+   var got = de.Rows.Retrieve(retrieveCols);
+   var coerced = coerceRows(got);
+   if (coerced.length) {
+    var ri;
+    for (ri = 0; ri < coerced.length; ri++) {
+     addUniqueAnalyticsRow(rows, seen, coerced[ri]);
+    }
+    notes.push(
+     "DataExtension.Init(" + deKeys[ki] + ").Rows.Retrieve -> " + coerced.length
+    );
+    break;
+   }
+  } catch (initEx) {
+   notes.push("Init retrieve " + deKeys[ki] + " failed: " + (initEx.message || initEx));
+  }
+  try {
+   var deAll = DataExtension.Init(deKeys[ki]);
+   var gotAll = deAll.Rows.Retrieve();
+   var coercedAll = coerceRows(gotAll);
+   if (coercedAll.length) {
+    var rj;
+    for (rj = 0; rj < coercedAll.length; rj++) {
+     addUniqueAnalyticsRow(rows, seen, coercedAll[rj]);
+    }
+    notes.push(
+     "DataExtension.Init(" + deKeys[ki] + ").Rows.Retrieve() all -> " + coercedAll.length
+    );
+    break;
+   }
+  } catch (initAllEx) {
+   notes.push(
+    "Init retrieve all " + deKeys[ki] + " failed: " + (initAllEx.message || initAllEx)
+   );
+  }
+ }
+ if (!rows.length) {
+  try {
+   var prox = new Script.Util.WSProxy();
+   var wsGot = prox.retrieve(
+    "DataExtensionObject[" + ANALYTICS_DE + "]",
+    ["journeyId", "deName", "deId", "BuildUpsertDate", "JourneyModifiedDate"],
+    {
+     Property: "journeyId",
+     SimpleOperator: "greaterThan",
+     Value: " "
+    }
+   );
+   var wsRows = coerceRows(wsGot);
+   var wi;
+   for (wi = 0; wi < wsRows.length; wi++) {
+    addUniqueAnalyticsRow(rows, seen, wsRows[wi]);
+   }
+   if (wsRows.length) {
+    notes.push("WSProxy retrieve -> " + wsRows.length);
+   }
+  } catch (wsEx) {
+   notes.push("WSProxy retrieve failed: " + (wsEx.message || wsEx));
+  }
+ }
+ return { rows: rows, notes: notes, deRowCount: deRowCount };
 }
 
 function upsertAnalyticsSync(jid, deName, deId, journeyModifiedIso) {
@@ -508,7 +664,12 @@ try {
  if (!auth.ok) {
   throw new Error(auth.msg);
  }
- var allRows = loadAnalyticsRows();
+ var loaded = loadAnalyticsRows();
+ var allRows = loaded.rows || [];
+ resultLines.push("Analytics DE row count (approx): " + (loaded.deRowCount || 0));
+ if (loaded.notes && loaded.notes.length) {
+  resultLines.push("Load notes: " + loaded.notes.join(" | "));
+ }
  resultLines.push("Analytics rows loaded: " + allRows.length);
  var processed = 0;
  var synced = 0;
