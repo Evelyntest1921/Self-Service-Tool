@@ -906,7 +906,9 @@ body{font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif;background:va
 .run-query-form{margin:0}
 .download-button{padding:10px 20px;border:1px solid #000;background:#000;color:#fff;border-radius:0.375rem;font-size:0.875rem;font-weight:600;font-family:Inter,sans-serif;cursor:pointer;transition:background 0.2s ease,border-color 0.2s ease;white-space:nowrap}
 .download-button:hover{background:#353333;border-color:#353333}
-.download-button.run-query-button-running,.download-button.run-query-button-running:hover{background:#ea580c;border-color:#c2410c;cursor:default;animation:run-query-blink 1s ease-in-out infinite}
+.download-button.run-query-button-running,.download-button.run-query-button-running:hover{background:#ea580c;border-color:#c2410c;cursor:not-allowed;pointer-events:none;animation:run-query-blink 1s ease-in-out infinite}
+.download-button:disabled{pointer-events:none;cursor:not-allowed}
+.run-query-form.is-running{pointer-events:none}
 @keyframes run-query-blink{0%,100%{opacity:1}50%{opacity:0.4}}
 .de-open-button{padding:10px 20px;border:1px solid var(--border-color);background:#fff;color:var(--gray-900);border-radius:0.375rem;font-size:0.875rem;font-weight:600;font-family:Inter,sans-serif;cursor:pointer;transition:all 0.2s ease;white-space:nowrap}
 .de-open-button:hover{border-color:#d1d5db;background:#fafafa}
@@ -984,12 +986,14 @@ Manage Build
 </div>
 <div class="responses-header-actions">
 %%[ IF @isStackBuild == "true" THEN ]%%
-<form method="post" action="" class="run-query-form" id="runQueryForm" onsubmit="return confirm('Run the stack query now? This refreshes data only and does not run the Journey step.');">
+<form method="post" action="" class="run-query-form%%[ IF @runQueryOk == "true" THEN ]%% is-running%%[ ENDIF ]%%" id="runQueryForm" onsubmit="%%[ IF @runQueryOk == "true" THEN ]%%return false;%%[ ELSE ]%%return confirm('Run the stack query now? This refreshes data only and does not run the Journey step.');%%[ ENDIF ]%%">
 <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
 <input type="hidden" name="contactPage" value="%%=v(@contactUiPage)=%%">
+%%[ IF @runQueryOk != "true" THEN ]%%
 <input type="hidden" name="confirmRunQuery" value="1">
+%%[ ENDIF ]%%
 %%[ IF @runQueryOk == "true" THEN ]%%
-<button type="button" class="download-button run-query-button-running" disabled aria-live="polite">Running</button>
+<button type="button" class="download-button run-query-button-running" disabled aria-disabled="true" aria-live="polite" tabindex="-1">Running</button>
 %%[ ELSE ]%%
 <button type="submit" class="download-button" id="runQueryBtn">Run Query</button>
 %%[ ENDIF ]%%
@@ -1129,10 +1133,30 @@ Showing 0 records
  if (!runQueryForm || !runQueryBtn) {
   return;
  }
- runQueryForm.addEventListener("submit", function () {
+ function lockRunQueryUi() {
+  runQueryForm.classList.add("is-running");
   runQueryBtn.disabled = true;
+  runQueryBtn.setAttribute("aria-disabled", "true");
+  runQueryBtn.tabIndex = -1;
   runQueryBtn.classList.add("run-query-button-running");
   runQueryBtn.textContent = "Running";
+ }
+ runQueryBtn.addEventListener(
+  "click",
+  function (ev) {
+   if (runQueryForm.classList.contains("is-running") || runQueryBtn.disabled) {
+    ev.preventDefault();
+    ev.stopPropagation();
+   }
+  },
+  true
+ );
+ runQueryForm.addEventListener("submit", function (ev) {
+  if (runQueryForm.classList.contains("is-running")) {
+   ev.preventDefault();
+   return;
+  }
+  lockRunQueryUi();
  });
 })();
 </script>
