@@ -14,8 +14,24 @@ VAR @entryScheduleEnd, @entryScheduleEndDate
 VAR @entryScheduleWeekdays, @entryContactEvaluation, @entryScheduleStart
 VAR @logDeName, @logDeId
 VAR @entryDeUpsertReady, @entryDeUpsertJid, @entryDeUpsertName, @entryDeUpsertId
+VAR @journeyActionRequested, @journeyAction, @attemptJourneyAction, @journeyActionOk, @journeyActionMsg, @journeyActionNewStatus
+VAR @journeyBtnLabel, @journeyBtnClass, @journeyActionValue, @journeyActionConfirm
 
 SET @saveScheduleRequested = "0"
+SET @journeyActionRequested = "0"
+SET @journeyAction = ""
+SET @attemptJourneyAction = "false"
+SET @journeyActionOk = "false"
+SET @journeyActionMsg = ""
+SET @journeyActionNewStatus = ""
+SET @journeyBtnLabel = "Activate Journey"
+SET @journeyBtnClass = "btn-activate"
+SET @journeyActionValue = "activate"
+SET @journeyActionConfirm = "Publish and activate this journey?"
+IF RequestParameter("confirmJourneyAction") == "1" THEN
+ SET @journeyActionRequested = "1"
+ SET @journeyAction = Trim(RequestParameter("journeyAction"))
+ENDIF
 SET @schedulePanelVisible = "false"
 SET @scheduleEventDefId = ""
 SET @scheduleSaveMsg = ""
@@ -129,6 +145,18 @@ ELSE
   SET @pageStatus = "emailonly"
  ELSE
   SET @isRealJourney = "true"
+  IF @journeyActionRequested == "1" THEN
+   SET @postedJourneyActionId = Trim(RequestParameter("journeyId"))
+   IF Empty(@postedJourneyActionId) THEN
+    SET @postedJourneyActionId = @jid
+   ENDIF
+   IF @postedJourneyActionId != @jid OR Empty(@journeyAction) OR (@journeyAction != "stop" AND @journeyAction != "activate") THEN
+    SET @pageStatus = "tamper"
+    SET @loadError = "Journey action request did not match this page."
+   ELSE
+    SET @attemptJourneyAction = "true"
+   ENDIF
+  ENDIF
   SET @detailRows = LookupRows("bd_journey_analytics","journeyId",@jid)
   SET @detailCount = RowCount(@detailRows)
   IF @detailCount > 0 THEN
@@ -336,6 +364,96 @@ function getJourneyObject(sub, token, jid) {
     return { ok: false, msg: "Could not parse journey response.", obj: null };
   }
   return { ok: true, msg: "", obj: jObj };
+}
+
+function journeyStatusIsRunning(status) {
+  var u = String(status || "").toLowerCase();
+  return u === "published" || u === "running";
+}
+
+function syncJourneyActionButtonVars(status) {
+  if (journeyStatusIsRunning(status)) {
+    Platform.Variable.SetValue("@journeyBtnLabel", "Stop Journey");
+    Platform.Variable.SetValue("@journeyBtnClass", "btn-stop");
+    Platform.Variable.SetValue("@journeyActionValue", "stop");
+    Platform.Variable.SetValue(
+      "@journeyActionConfirm",
+      "Stop this journey? Contacts already in flight may still receive messages."
+    );
+  } else {
+    Platform.Variable.SetValue("@journeyBtnLabel", "Activate Journey");
+    Platform.Variable.SetValue("@journeyBtnClass", "btn-activate");
+    Platform.Variable.SetValue("@journeyActionValue", "activate");
+    Platform.Variable.SetValue(
+      "@journeyActionConfirm",
+      "Publish and activate this journey?"
+    );
+  }
+}
+
+function stopJourney(sub, token, jid) {
+  var got = getJourneyObject(sub, token, jid);
+  if (!got.ok) {
+    return { ok: false, msg: got.msg };
+  }
+  var jObj = got.obj;
+  var status = jObj.status ? String(jObj.status) : "";
+  if (!journeyStatusIsRunning(status)) {
+    return {
+      ok: false,
+      msg: "Journey is " + (status || "unknown") + " - not running."
+    };
+  }
+  var versionNum = jObj.version || 1;
+  var stopUrl =
+    "https://" +
+    sub +
+    ".rest.marketingcloudapis.com/interaction/v1/interactions/stop/" +
+    encodeURIComponent(jid) +
+    "?versionNumber=" +
+    encodeURIComponent(String(versionNum));
+  var stopResp = journeyHttpJson(token, "POST", stopUrl, "{}");
+  if (stopResp.status != 200 && stopResp.status != 201 && stopResp.status != 202) {
+    var stopErr = stopResp.body ? stopResp.body.substring(0, 200) : "";
+    return {
+      ok: false,
+      msg: "Stop HTTP " + stopResp.status + (stopErr ? " - " + stopErr : ".")
+    };
+  }
+  return { ok: true, msg: "Journey stopped.", newStatus: "Stopped" };
+}
+
+function activateJourney(sub, token, jid) {
+  var got = getJourneyObject(sub, token, jid);
+  if (!got.ok) {
+    return { ok: false, msg: got.msg };
+  }
+  var jObj = got.obj;
+  var status = jObj.status ? String(jObj.status) : "";
+  if (journeyStatusIsRunning(status)) {
+    return { ok: false, msg: "Journey is already running." };
+  }
+  var versionNum = jObj.version || 1;
+  var pubUrl =
+    "https://" +
+    sub +
+    ".rest.marketingcloudapis.com/interaction/v1/interactions/publishAsync/" +
+    encodeURIComponent(jid) +
+    "?versionNumber=" +
+    encodeURIComponent(String(versionNum));
+  var pubResp = journeyHttpJson(token, "POST", pubUrl, "{}");
+  if (pubResp.status != 200 && pubResp.status != 201 && pubResp.status != 202) {
+    var pubErr = pubResp.body ? pubResp.body.substring(0, 200) : "";
+    return {
+      ok: false,
+      msg: "Publish HTTP " + pubResp.status + (pubErr ? " - " + pubErr : ".")
+    };
+  }
+  return {
+    ok: true,
+    msg: "Journey publish started. Refresh in a moment to confirm status.",
+    newStatus: "Running"
+  };
 }
 
 function pickFlowSvgByType(typeUpper) {
@@ -2071,6 +2189,20 @@ var logName = strTrim(Platform.Variable.GetValue("@dispName") || "");
 
 try {
   if (pageStatus === "view" && authOk === "true" && accessToken && subdomain && jid) {
+    if (Platform.Variable.GetValue("@attemptJourneyAction") === "true") {
+      var journeyAction = strTrim(Platform.Variable.GetValue("@journeyAction") || "");
+      var actionResult = { ok: false, msg: "Unknown journey action." };
+      if (journeyAction === "stop") {
+        actionResult = stopJourney(subdomain, accessToken, jid);
+      } else if (journeyAction === "activate") {
+        actionResult = activateJourney(subdomain, accessToken, jid);
+      }
+      Platform.Variable.SetValue("@journeyActionOk", actionResult.ok ? "true" : "false");
+      Platform.Variable.SetValue("@journeyActionMsg", actionResult.msg || "");
+      if (actionResult.newStatus) {
+        Platform.Variable.SetValue("@journeyActionNewStatus", actionResult.newStatus);
+      }
+    }
     var fetched = getJourneyObject(subdomain, accessToken, jid);
     if (fetched.ok && fetched.obj) {
       var jObj = fetched.obj;
@@ -2080,6 +2212,7 @@ try {
         jObj.version !== undefined && jObj.version !== null
           ? String(jObj.version)
           : "";
+      syncJourneyActionButtonVars(apiJourneyStatus);
       var activities = coerceActivityList(jObj.activities);
       apiActivityCount = String(activities.length);
       var senderProfileCache = buildSenderProfileLookupCache(activities);
@@ -2278,6 +2411,16 @@ IF NOT Empty(@entryDeUpsertReady) AND @entryDeUpsertReady == "1" AND NOT Empty(@
  SET @logDeId = @entryDeUpsertId
  SET @entryDeUpsertReady = ""
 ENDIF
+IF @attemptJourneyAction == "true" AND @journeyActionOk == "true" AND NOT Empty(@journeyActionNewStatus) THEN
+ UpsertDE(
+  "Bd_journey_analytics",
+  1,
+  "journeyId",
+  Substring(@jid, 1, 250),
+  "journeyStatus",
+  Substring(@journeyActionNewStatus, 1, 50)
+ )
+ENDIF
 ]%%
 <!DOCTYPE html>
 <html lang="en">
@@ -2421,6 +2564,15 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 .schedule-panel-lead{margin-bottom:12px}
 .schedule-automation-note{margin:0 0 16px}
 .schedule-panel-summary{margin-top:4px}
+.schedule-panel-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.journey-action-form{margin:0;display:inline-block}
+.btn-sst-black.btn-activate{background:#059669;border-color:#059669}
+.btn-sst-black.btn-activate:hover{background:#047857;border-color:#047857}
+.btn-sst-black.btn-stop{background:#dc2626;border-color:#dc2626}
+.btn-sst-black.btn-stop:hover{background:#b91c1c;border-color:#b91c1c}
+.journey-action-banner{margin:0 0 16px;padding:12px 14px;border-radius:0;font-size:14px}
+.journey-action-banner.is-ok{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}
+.journey-action-banner.is-error{background:var(--dangerbg);color:var(--danger);border:1px solid #fecaca}
 .schedule-panel-editor{display:none;margin-top:16px;padding-top:16px;border-top:1px solid var(--border-color)}
 .schedule-panel.is-editing .schedule-panel-editor{display:block}
 .schedule-panel.is-editing .schedule-panel-summary{display:none}
@@ -2468,6 +2620,9 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 <h1>No Journey Builder canvas</h1>
 <p class="sub">This build is email-only. There is no journey to visualize.</p>
 <p class="sub"><a class="breadcrumb-link" href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%">Back to manage build</a></p>
+%%[ ELSEIF @pageStatus == "tamper" THEN ]%%
+<h1>Invalid request</h1>
+<div class="banner bad">%%=v(@loadError)=%%</div>
 %%[ ELSEIF @pageStatus == "authfail" THEN ]%%
 <h1>Could not authorize</h1>
 <div class="banner bad">%%=v(@loadError)=%%</div>
@@ -2487,7 +2642,21 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
         <span>%%[ IF NOT Empty(@apiJourneyName) THEN ]%%%%=v(@apiJourneyName)=%%%%[ ELSEIF NOT Empty(@dispName) THEN ]%%%%=v(@dispName)=%%%%[ ELSE ]%%Journey%%[ ENDIF ]%%</span>
       </span>
     </nav>
+%%[ IF @attemptJourneyAction == "true" AND NOT Empty(@journeyActionMsg) THEN ]%%
+<p class="journey-action-banner%%[ IF @journeyActionOk == "true" THEN ]%% is-ok%%[ ELSE ]%% is-error%%[ ENDIF ]%%">%%=v(@journeyActionMsg)=%%</p>
+%%[ ENDIF ]%%
 <div class="panel">%%[ IF NOT Empty(@journeyMetaHtml) THEN ]%%%%=TreatAsContent(@journeyMetaHtml)=%%%%[ ENDIF ]%%</div>
+%%[ IF @schedulePanelVisible != "true" AND @isRealJourney == "true" AND @authOk == "true" THEN ]%%
+<div class="panel">
+  <div class="schedule-panel-actions">
+    <form method="post" action="" class="journey-action-form" onsubmit="return confirm('%%=Replace(v(@journeyActionConfirm),'''','\\''')=%%');">
+      <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
+      <input type="hidden" name="journeyAction" value="%%=v(@journeyActionValue)=%%">
+      <button type="submit" name="confirmJourneyAction" value="1" class="btn-sst-black %%=v(@journeyBtnClass)=%%">%%=v(@journeyBtnLabel)=%%</button>
+    </form>
+  </div>
+</div>
+%%[ ENDIF ]%%
 %%[ IF @schedulePanelVisible == "true" THEN ]%%
 <div class="panel schedule-panel%%[ IF @isJourneyAutomation == "true" THEN ]%% schedule-panel-automation%%[ ENDIF ]%%%%[ IF @scheduleEditorOpen == "true" THEN ]%% is-editing%%[ ENDIF ]%%" id="schedulePanel">
   <h2 class="panel-title">%%[ IF @isJourneyAutomation == "true" THEN ]%%Entry%%[ ELSE ]%%Schedule%%[ ENDIF ]%%</h2>
@@ -2496,7 +2665,14 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
   <p class="schedule-save-msg%%[ IF IndexOf(@scheduleSaveMsg,"Could not") > 0 THEN ]%% is-error%%[ ENDIF ]%%">%%=v(@scheduleSaveMsg)=%%</p>
 %%[ ENDIF ]%%
   <div class="schedule-panel-summary" id="schedulePanelSummary">
-    <button type="button" class="btn-sst-black" id="scheduleEditOpenBtn">%%[ IF @isJourneyAutomation == "true" THEN ]%%Edit contact evaluation%%[ ELSE ]%%Edit schedule%%[ ENDIF ]%%</button>
+    <div class="schedule-panel-actions">
+      <button type="button" class="btn-sst-black" id="scheduleEditOpenBtn">%%[ IF @isJourneyAutomation == "true" THEN ]%%Edit contact evaluation%%[ ELSE ]%%Edit schedule%%[ ENDIF ]%%</button>
+      <form method="post" action="" class="journey-action-form" onsubmit="return confirm('%%=Replace(v(@journeyActionConfirm),'''','\\''')=%%');">
+        <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
+        <input type="hidden" name="journeyAction" value="%%=v(@journeyActionValue)=%%">
+        <button type="submit" name="confirmJourneyAction" value="1" class="btn-sst-black %%=v(@journeyBtnClass)=%%">%%=v(@journeyBtnLabel)=%%</button>
+      </form>
+    </div>
   </div>
   <div class="schedule-panel-editor" id="schedulePanelEditor">
   <form method="post" action="" class="schedule-form" id="scheduleEditForm">
