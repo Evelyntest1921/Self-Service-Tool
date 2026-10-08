@@ -5,7 +5,10 @@ VAR @dispName, @dispType, @dispDeName, @dispDeId, @sourceDeKey
 VAR @pageStatus, @loadError, @contactsTableHtml, @totalRecords
 VAR @contactTotalPages, @contactPageSize, @contactStartRow, @contactEndRow, @contactNavBase
 VAR @editSidebarHtml, @buildNavContext, @buildNavActive, @journeyDisplayName
+VAR @STACK_JOURNEY_TYPE, @isStackBuild, @automationGuid, @automationCustomerKey, @automationName
+VAR @confirmRunQuery, @runQueryBanner, @runQueryOk, @showRunQueryButton
 
+SET @STACK_JOURNEY_TYPE = "Journey + Automation"
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
 SET @CONTACTS_PAGE_SELF = ""
@@ -42,6 +45,17 @@ SET @dispDeId = ""
 SET @sourceDeKey = ""
 SET @journeyDisplayName = "Contacts"
 SET @detailCount = 0
+SET @isStackBuild = "false"
+SET @automationGuid = ""
+SET @automationCustomerKey = ""
+SET @automationName = ""
+SET @confirmRunQuery = "0"
+SET @runQueryBanner = ""
+SET @runQueryOk = ""
+SET @showRunQueryButton = "false"
+IF RequestParameter("confirmRunQuery") == "1" THEN
+ SET @confirmRunQuery = "1"
+ENDIF
 
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
 IF RowCount(@navRows) > 0 THEN
@@ -67,6 +81,24 @@ ELSE
   SET @dispType = Field(@detailRow,"journeyType")
   SET @dispDeName = Trim(Field(@detailRow,"deName"))
   SET @dispDeId = Trim(Field(@detailRow,"deId"))
+  SET @automationGuid = Trim(Field(@detailRow,"automationGuid"))
+  SET @automationCustomerKey = Trim(Field(@detailRow,"automationCustomerKey"))
+  SET @automationName = Trim(Field(@detailRow,"automationName"))
+  IF Lowercase(@automationGuid) == "null" OR Lowercase(@automationGuid) == "n/a" THEN
+   SET @automationGuid = ""
+  ENDIF
+  IF Lowercase(@automationCustomerKey) == "null" OR Lowercase(@automationCustomerKey) == "n/a" THEN
+   SET @automationCustomerKey = ""
+  ENDIF
+  IF @automationGuid == "00000000-0000-0000-0000-000000000000" THEN
+   SET @automationGuid = ""
+  ENDIF
+  IF Trim(@dispType) == @STACK_JOURNEY_TYPE THEN
+   SET @isStackBuild = "true"
+  ENDIF
+  IF @isStackBuild == "true" AND (NOT Empty(@automationGuid) OR NOT Empty(@automationCustomerKey)) THEN
+   SET @showRunQueryButton = "true"
+  ENDIF
   SET @journeyDisplayName = @dispName
   IF Empty(@journeyDisplayName) THEN
    SET @journeyDisplayName = "Contacts"
@@ -249,6 +281,303 @@ function ctRetrieveDeRows(deKey) {
  return [];
 }
 
+function ctParseJson(text) {
+ try {
+  return Platform.Function.ParseJSON(ctStr(text));
+ } catch (parseEx) {
+  return null;
+ }
+}
+
+function ctHttpGet(token, url) {
+ var req = new Script.Util.HttpRequest(url);
+ req.emptyContentHandling = 0;
+ req.retries = 1;
+ req.continueOnError = true;
+ req.method = "GET";
+ req.setHeader("Authorization", "Bearer " + token);
+ var resp = req.send();
+ var body = "";
+ if (resp.content) {
+  body = ctStr(resp.content);
+ }
+ return {
+  status: resp.statusCode,
+  body: body
+ };
+}
+
+function ctHttpPostEmpty(token, url) {
+ var req = new Script.Util.HttpRequest(url);
+ req.emptyContentHandling = 0;
+ req.retries = 1;
+ req.continueOnError = true;
+ req.method = "POST";
+ req.contentType = "application/json";
+ req.setHeader("Authorization", "Bearer " + token);
+ req.postData = "{}";
+ var resp = req.send();
+ var body = "";
+ if (resp.content) {
+  body = ctStr(resp.content);
+ }
+ return {
+  status: resp.statusCode,
+  body: body
+ };
+}
+
+function ctAuthAdmin() {
+ var clientId = ctLookupAuthScalar("Admin", "clientId");
+ if (!clientId) {
+  clientId = ctLookupAuthScalar("Admin", "ClientId");
+ }
+ var clientSecret = ctLookupAuthScalar("Admin", "clientSecret");
+ if (!clientSecret) {
+  clientSecret = ctLookupAuthScalar("Admin", "ClientSecret");
+ }
+ var subdomain = ctLookupAuthScalar("Admin", "subdomain");
+ if (!subdomain) {
+  subdomain = ctLookupAuthScalar("Admin", "Subdomain");
+ }
+ var accountId = ctLookupAuthScalar("Admin", "accountId");
+ if (!accountId) {
+  accountId = ctLookupAuthScalar("Admin", "AccountId");
+ }
+ if (!clientId || !clientSecret || !subdomain) {
+  return { ok: false, token: "", subdomain: "", msg: "SFMC_AUTH Admin credentials missing." };
+ }
+ try {
+  var authUrl = "https://" + subdomain + ".auth.marketingcloudapis.com/v2/token";
+  var payload =
+   '{"grant_type":"client_credentials","client_id":"' +
+   ctEscJson(clientId) +
+   '","client_secret":"' +
+   ctEscJson(clientSecret) +
+   '"';
+  if (accountId) {
+   payload += ',"account_id":"' + ctEscJson(accountId) + '"';
+  }
+  payload += "}";
+  var req = new Script.Util.HttpRequest(authUrl);
+  req.emptyContentHandling = 0;
+  req.retries = 1;
+  req.continueOnError = true;
+  req.method = "POST";
+  req.contentType = "application/json";
+  req.postData = payload;
+  var resp = req.send();
+  var body = resp.content ? ctStr(resp.content) : "";
+  if (resp.statusCode != 200 && resp.statusCode != 201) {
+   return { ok: false, token: "", subdomain: subdomain, msg: "Auth HTTP " + resp.statusCode + "." };
+  }
+  var token = "";
+  try {
+   var parsed = Platform.Function.ParseJSON(body);
+   if (parsed && parsed.access_token) {
+    token = ctStr(parsed.access_token);
+   }
+  } catch (authParseEx) {
+   token = "";
+  }
+  if (!token) {
+   return { ok: false, token: "", subdomain: subdomain, msg: "Auth response missing access_token." };
+  }
+  return { ok: true, token: token, subdomain: subdomain, msg: "" };
+ } catch (authEx) {
+  return { ok: false, token: "", subdomain: "", msg: ctStr(authEx.message || authEx) };
+ }
+}
+
+function ctEscJson(s) {
+ var text = ctStr(s);
+ var out = "";
+ var i;
+ for (i = 0; i < text.length; i++) {
+  var ch = text.charAt(i);
+  if (ch == "\\") {
+   out += "\\\\";
+  } else if (ch == '"') {
+   out += '\\"';
+  } else if (ch == "\r") {
+   out += "\\r";
+  } else if (ch == "\n") {
+   out += "\\n";
+  } else {
+   out += ch;
+  }
+ }
+ return out;
+}
+
+function ctLookupAuthScalar(userKey, returnField) {
+ var val = "";
+ try {
+  val = Platform.Function.Lookup("SFMC_AUTH", returnField, "User", userKey);
+ } catch (lookupEx) {
+  return "";
+ }
+ return ctTrim(val);
+}
+
+function ctGetAutomationByKey(base, token, keyVal) {
+ var url = base + "key:" + encodeURIComponent(String(keyVal));
+ var got = ctHttpGet(token, url);
+ if (got.status == 200 && got.body) {
+  var obj = ctParseJson(got.body);
+  if (obj && obj.id) {
+   return { ok: true, obj: obj };
+  }
+ }
+ return { ok: false, obj: null };
+}
+
+function ctGetAutomationById(base, token, restId) {
+ var url = base + encodeURIComponent(String(restId));
+ var got = ctHttpGet(token, url);
+ if (got.status == 200 && got.body) {
+  var obj = ctParseJson(got.body);
+  if (obj && obj.id) {
+   return { ok: true, obj: obj };
+  }
+ }
+ return { ok: false, obj: null };
+}
+
+function ctGetAutomation(sub, token, automationGuid, automationCustomerKey, automationName) {
+ var base = "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/automations/";
+ var guid = ctTrim(automationGuid);
+ var key = ctTrim(automationCustomerKey);
+ var name = ctTrim(automationName);
+ if (key) {
+  var byKey = ctGetAutomationByKey(base, token, key);
+  if (byKey.ok) {
+   return byKey;
+  }
+ }
+ if (guid) {
+  var byId = ctGetAutomationById(base, token, guid);
+  if (byId.ok) {
+   return byId;
+  }
+ }
+ if (name) {
+  var page = 1;
+  while (page <= 5) {
+   var listUrl = base + "?" + "$page=" + page + "&" + "$pagesize=100";
+   var listResp = ctHttpGet(token, listUrl);
+   if (listResp.status != 200) {
+    break;
+   }
+   var listObj = ctParseJson(listResp.body);
+   var items = listObj && listObj.items ? listObj.items : [];
+   var i;
+   for (i = 0; i < items.length; i++) {
+    if (items[i].name && String(items[i].name) == String(name)) {
+     return { ok: true, obj: items[i] };
+    }
+   }
+   if (items.length < 100) {
+    break;
+   }
+   page += 1;
+  }
+ }
+ return { ok: false, obj: null };
+}
+
+function ctAutomationStatusCode(obj) {
+ if (!obj) {
+  return "";
+ }
+ if (obj.statusId !== undefined && obj.statusId !== null && ctStr(obj.statusId) !== "") {
+  return ctStr(obj.statusId);
+ }
+ if (obj.status === undefined || obj.status === null) {
+  return "";
+ }
+ return ctTrim(obj.status);
+}
+
+function ctAutomationIsRunning(obj) {
+ var code = ctAutomationStatusCode(obj);
+ if (code == "3") {
+  return true;
+ }
+ var label = ctTrim(obj && obj.status ? obj.status : "").toLowerCase();
+ return label == "running";
+}
+
+function ctFirstQueryActivityId(obj) {
+ var steps = obj && obj.steps ? obj.steps : [];
+ var si;
+ for (si = 0; si < steps.length; si++) {
+  var activities = steps[si] && steps[si].activities ? steps[si].activities : [];
+  var ai;
+  for (ai = 0; ai < activities.length; ai++) {
+   var act = activities[ai] || {};
+   if (parseInt(String(act.objectTypeId), 10) == 300 && ctTrim(act.activityObjectId)) {
+    return ctTrim(act.activityObjectId);
+   }
+  }
+ }
+ return "";
+}
+
+function ctAutomationHasJourneyStep(obj) {
+ var steps = obj && obj.steps ? obj.steps : [];
+ var si;
+ for (si = 0; si < steps.length; si++) {
+  var activities = steps[si] && steps[si].activities ? steps[si].activities : [];
+  var ai;
+  for (ai = 0; ai < activities.length; ai++) {
+   if (parseInt(String(activities[ai].objectTypeId), 10) == 952) {
+    return true;
+   }
+  }
+ }
+ return false;
+}
+
+function ctRunFirstQueryAutomation() {
+ var guid = ctTrim(Platform.Variable.GetValue("@automationGuid") || "");
+ var key = ctTrim(Platform.Variable.GetValue("@automationCustomerKey") || "");
+ var name = ctTrim(Platform.Variable.GetValue("@automationName") || "");
+ var auth = ctAuthAdmin();
+ if (!auth.ok) {
+  return { ok: false, msg: auth.msg };
+ }
+ var fetched = ctGetAutomation(auth.subdomain, auth.token, guid, key, name);
+ if (!fetched.ok || !fetched.obj) {
+  return { ok: false, msg: "Could not load automation for this build." };
+ }
+ var autoObj = fetched.obj;
+ if (ctAutomationHasJourneyStep(autoObj)) {
+  return { ok: false, msg: "Automation includes a Journey step. Run Query is only allowed for query-only automations." };
+ }
+ var queryOid = ctFirstQueryActivityId(autoObj);
+ if (!queryOid) {
+  return { ok: false, msg: "No query activity found as the first step in this automation." };
+ }
+ if (ctAutomationIsRunning(autoObj)) {
+  return { ok: false, msg: "Automation is already running. Wait for it to finish or stop it in Automation view." };
+ }
+ var runUrl =
+  "https://" +
+  auth.subdomain +
+  ".rest.marketingcloudapis.com/automation/v1/automations/" +
+  encodeURIComponent(String(autoObj.id)) +
+  "/actions/runallonce";
+ var runResp = ctHttpPostEmpty(auth.token, runUrl);
+ if (runResp.status == 200 || runResp.status == 202) {
+  return { ok: true, msg: "Query run requested. Refresh this page in a minute to see updated entry DE rows." };
+ }
+ return {
+  ok: false,
+  msg: "Run query failed HTTP " + runResp.status + " — " + ctTrim(runResp.body).substring(0, 180)
+ };
+}
+
 function ctBuildTableHtml(rows, page, pageSize) {
  var total = rows.length;
  var totalPages = total > 0 ? Math.ceil(total / pageSize) : 1;
@@ -303,6 +632,18 @@ if (isNaN(pageNum) || pageNum < 1) {
 }
 if (isNaN(pageSize) || pageSize < 1) {
  pageSize = 20;
+}
+
+var confirmRunQuery = Platform.Variable.GetValue("@confirmRunQuery") == "1";
+var isStackBuild = Platform.Variable.GetValue("@isStackBuild") == "true";
+if (confirmRunQuery && isStackBuild) {
+ var runResult = ctRunFirstQueryAutomation();
+ ctSet("runQueryOk", runResult.ok ? "true" : "false");
+ if (runResult.ok) {
+  ctSet("runQueryBanner", '<div class="banner good">' + ctHtml(runResult.msg) + "</div>");
+ } else {
+  ctSet("runQueryBanner", '<div class="banner bad">' + ctHtml(runResult.msg) + "</div>");
+ }
 }
 
 if (pageStatus == "ready" && sourceDeKey) {
@@ -362,7 +703,13 @@ body{font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif;background:va
 .responses-section{background:var(--bg-primary);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:24px;margin:24px;box-shadow:var(--shadow-sm)}
 .responses-header{display:flex;align-items:center;margin-bottom:20px}
 .chart-number{background:#000;color:#fff;width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:600;margin-right:16px;flex-shrink:0}
-.chart-content{flex:1}
+.chart-content{flex:1;min-width:0}
+.responses-header-row{display:flex;align-items:center;justify-content:space-between;gap:16px;width:100%}
+.responses-header-text{flex:1;min-width:0}
+.run-query-form{margin:0;flex-shrink:0}
+.download-button{padding:10px 20px;border:1px solid #000;background:#000;color:#fff;border-radius:0.375rem;font-size:0.875rem;font-weight:600;font-family:Inter,sans-serif;cursor:pointer;transition:all 0.2s ease;white-space:nowrap}
+.download-button:hover{background:#353333;border-color:#353333}
+.banner.good{border-color:#a7f3d0;background:#ecfdf5;color:#065f46}
 .responses-title{font-size:1.125rem;font-weight:600;color:var(--text-primary);margin-bottom:8px}
 .responses-subtitle{font-size:0.875rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em}
 .table-wrapper{overflow-x:auto;margin-top:20px;-webkit-overflow-scrolling:touch}
@@ -424,11 +771,22 @@ Manage Build
 </div>
 </div>
 <div class="responses-section">
+%%=TreatAsContent(@runQueryBanner)=%%
 <div class="responses-header">
 <div class="chart-number">🖄</div>
-<div class="chart-content">
+<div class="chart-content responses-header-row">
+<div class="responses-header-text">
 <div class="responses-title">Individual Records</div>
 <div class="responses-subtitle">Contact Engagement Details</div>
+</div>
+%%[ IF @showRunQueryButton == "true" THEN ]%%
+<form method="post" action="" class="run-query-form" onsubmit="return confirm('Run the first query activity in this automation now?');">
+<input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
+<input type="hidden" name="contactPage" value="%%=v(@contactUiPage)=%%">
+<input type="hidden" name="confirmRunQuery" value="1">
+<button type="submit" class="download-button">Run Query</button>
+</form>
+%%[ ENDIF ]%%
 </div>
 </div>
 <div class="table-wrapper" id="filterscrollto">
