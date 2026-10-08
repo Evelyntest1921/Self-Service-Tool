@@ -6,6 +6,13 @@ var LOG_DE = "sst_build_entry_de_sync_log";
 var LOG_FIELD = "log";
 var LOG_MAX_LEN = 4000;
 var DEFAULT_MAX_PER_RUN = 50;
+var DEFAULT_SYNC_JOURNEY_TYPES = [
+ "Journey + Automation",
+ "Create empty journey",
+ "Campaign Journey",
+ "Campaign journey",
+ "Existing Journey"
+];
 
 var resultLines = [];
 
@@ -165,6 +172,68 @@ function normalizeDeField(v) {
 function isEmailOnlyJourneyId(jid) {
  var id = strTrim(jid).toLowerCase();
  return id.indexOf("email:") === 0;
+}
+
+function rowJourneyType(row) {
+ return fieldFromRow(row, ["journeyType", "JourneyType"]);
+}
+
+function syncAllTypesEnabled() {
+ return queryParam("allTypes") === "1";
+}
+
+function isEligibleJourneyType(row) {
+ if (syncAllTypesEnabled()) {
+  return true;
+ }
+ var jt = strTrim(rowJourneyType(row));
+ if (!jt) {
+  return false;
+ }
+ var jtLc = jt.toLowerCase();
+ var i;
+ for (i = 0; i < DEFAULT_SYNC_JOURNEY_TYPES.length; i++) {
+  if (jtLc === DEFAULT_SYNC_JOURNEY_TYPES[i].toLowerCase()) {
+   return true;
+  }
+ }
+ return false;
+}
+
+function isLikelyInteractionGuid(jid) {
+ var v = strTrim(jid);
+ if (v.length !== 36) {
+  return false;
+ }
+ return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
+  v
+ );
+}
+
+function classifySyncFailure(msg) {
+ var m = strTrim(msg).toLowerCase();
+ if (
+  m.indexOf("404") >= 0 ||
+  m.indexOf("not found") >= 0 ||
+  m.indexOf("30003") >= 0
+ ) {
+  return "skipped";
+ }
+ if (m.indexOf("security descriptor") >= 0) {
+  return "skipped";
+ }
+ if (
+  m.indexOf("no entry event") >= 0 ||
+  m.indexOf("no entry de") >= 0 ||
+  m.indexOf("event definition has no entry") >= 0
+ ) {
+  return "skipped";
+ }
+ return "error";
+}
+
+function verboseLoggingEnabled() {
+ return queryParam("verbose") === "1";
 }
 
 function parseJsonSafe(text) {
@@ -625,15 +694,17 @@ function processRow(sub, token, row) {
  var storedId = normalizeDeField(fieldFromRow(row, ["deId"]));
  var fetched = getJourneyObject(sub, token, jid);
  if (!fetched.ok || !fetched.obj) {
-  return { status: "error", detail: fetched.msg || "Journey GET failed" };
+  var failMsg = fetched.msg || "Journey GET failed";
+  return { status: classifySyncFailure(failMsg), detail: failMsg };
  }
  var jObj = fetched.obj;
  var modifiedIso = pickJourneyModifiedIso(jObj);
  var entry = resolveEntryDeForJourney(sub, token, jObj);
  if (!entry.ok || !entry.live) {
+  var entryMsg = entry.msg || "No entry DE resolved";
   return {
-   status: "error",
-   detail: entry.msg || "No entry DE resolved"
+   status: classifySyncFailure(entryMsg),
+   detail: entryMsg
   };
  }
  var liveName = normalizeDeField(entry.live.name);
@@ -658,23 +729,35 @@ function processRow(sub, token, row) {
 try {
  var maxPerRun = parseIntParam(queryParam("max"), DEFAULT_MAX_PER_RUN);
  resultLines.push(
-  "journey-analytics-entry-de-sync — max " + maxPerRun + " journeys per run."
+  "journey-analytics-entry-de-sync — max " + maxPerRun + " API attempts per run."
  );
+ if (!syncAllTypesEnabled()) {
+  resultLines.push(
+   "Journey types: " + DEFAULT_SYNC_JOURNEY_TYPES.join(", ") + " (add ?allTypes=1 for all)."
+  );
+ }
  var auth = authAdmin();
  if (!auth.ok) {
   throw new Error(auth.msg);
  }
  var loaded = loadAnalyticsRows();
  var allRows = loaded.rows || [];
- resultLines.push("Analytics DE row count (approx): " + (loaded.deRowCount || 0));
+ resultLines.push(
+  "Analytics DE row count (approx): " +
+   (loaded.deRowCount > 0 ? loaded.deRowCount : allRows.length)
+ );
  if (loaded.notes && loaded.notes.length) {
   resultLines.push("Load notes: " + loaded.notes.join(" | "));
  }
  resultLines.push("Analytics rows loaded: " + allRows.length);
  var processed = 0;
  var synced = 0;
- var skipped = 0;
+ var skippedApi = 0;
+ var skippedDates = 0;
+ var skippedIneligible = 0;
+ var skippedInvalidId = 0;
  var errors = 0;
+ var verbose = verboseLoggingEnabled();
  var ri;
  for (ri = 0; ri < allRows.length; ri++) {
   if (processed >= maxPerRun) {
@@ -688,38 +771,58 @@ try {
   }
   if (
    !shouldSyncEntryDeByDate(
-    fieldFromRow(row, ["BuildUpsertDate"]),
-    fieldFromRow(row, ["JourneyModifiedDate"])
+    fieldFromRow(row, ["BuildUpsertDate", "buildUpsertDate"]),
+    fieldFromRow(row, ["JourneyModifiedDate", "journeyModifiedDate"])
    )
   ) {
-   skipped += 1;
+   skippedDates += 1;
    continue;
   }
-  if (isEmailOnlyJourneyId(jidPreview)) {
-   skipped += 1;
+  if (!isEligibleJourneyType(row)) {
+   skippedIneligible += 1;
+   continue;
+  }
+  if (isEmailOnlyJourneyId(jidPreview) || !isLikelyInteractionGuid(jidPreview)) {
+   skippedInvalidId += 1;
    continue;
   }
   processed += 1;
   var outcome = processRow(auth.subdomain, auth.token, row);
-  resultLines.push(
-   jidPreview.substring(0, 36) + " — " + outcome.status + ": " + outcome.detail
-  );
+  var logLine =
+   jidPreview.substring(0, 36) +
+   " [" +
+   rowJourneyType(row) +
+   "] — " +
+   outcome.status +
+   ": " +
+   outcome.detail;
+  if (outcome.status === "synced" || outcome.status === "error" || verbose) {
+   resultLines.push(logLine);
+  }
   if (outcome.status === "synced") {
    synced += 1;
   } else if (outcome.status === "skipped") {
-   skipped += 1;
+   skippedApi += 1;
   } else {
    errors += 1;
   }
  }
  resultLines.push(
-  "Done. processed=" +
+  "Done. apiAttempts=" +
    processed +
    ", synced=" +
    synced +
    ", skipped=" +
-   skipped +
-   ", errors=" +
+   (skippedDates + skippedIneligible + skippedInvalidId + skippedApi) +
+   " (dates=" +
+   skippedDates +
+   ", type=" +
+   skippedIneligible +
+   ", id=" +
+   skippedInvalidId +
+   ", staleOrNoEntry=" +
+   skippedApi +
+   "), errors=" +
    errors
  );
  var output = resultLines.join("\n");
