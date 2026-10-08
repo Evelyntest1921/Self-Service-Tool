@@ -12,7 +12,7 @@ VAR @saveScheduleRequested, @schedulePanelVisible, @scheduleEventDefId, @schedul
 VAR @entryScheduleType, @entryScheduleRepeat, @entryScheduleInterval, @entryScheduleOccurrences
 VAR @entryScheduleEnd, @entryScheduleEndDate
 VAR @entryScheduleWeekdays, @entryContactEvaluation, @entryScheduleStart
-VAR @logDeName, @logDeId, @logBuildUpsertDate, @logJourneyModifiedDate
+VAR @logDeName, @logDeId
 VAR @entryDeUpsertReady, @entryDeUpsertJid, @entryDeUpsertName, @entryDeUpsertId
 
 SET @saveScheduleRequested = "0"
@@ -115,8 +115,6 @@ SET @buildAutomationCustomerKey = ""
 SET @buildAutomationName = ""
 SET @logDeName = ""
 SET @logDeId = ""
-SET @logBuildUpsertDate = ""
-SET @logJourneyModifiedDate = ""
 SET @entryDeUpsertReady = ""
 SET @entryDeUpsertJid = ""
 SET @entryDeUpsertName = ""
@@ -145,8 +143,6 @@ ELSE
    SET @buildAutomationName = Trim(Field(@detailRow,"automationName"))
    SET @logDeName = Trim(Field(@detailRow,"deName"))
    SET @logDeId = Trim(Field(@detailRow,"deId"))
-   SET @logBuildUpsertDate = Trim(Field(@detailRow,"BuildUpsertDate"))
-   SET @logJourneyModifiedDate = Trim(Field(@detailRow,"JourneyModifiedDate"))
   ENDIF
   SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
   IF RowCount(@authRow) > 0 THEN
@@ -1602,34 +1598,6 @@ function normalizeLogDeField(v) {
   return s;
 }
 
-function parseAnalyticsDateMs(raw) {
-  var s = strTrim(raw);
-  if (!s || s.toUpperCase() === "N/A" || s.toLowerCase() === "null") {
-    return 0;
-  }
-  if (s.indexOf("0001-01-01") >= 0) {
-    return 0;
-  }
-  var d = new Date(s);
-  var ms = d.getTime();
-  if (isNaN(ms) || ms <= 0) {
-    return 0;
-  }
-  return ms;
-}
-
-function shouldSyncEntryDeByDate(buildUpsertRaw, journeyModifiedRaw) {
-  var upsertMs = parseAnalyticsDateMs(buildUpsertRaw);
-  if (upsertMs <= 0) {
-    return true;
-  }
-  var modifiedMs = parseAnalyticsDateMs(journeyModifiedRaw);
-  if (modifiedMs <= 0) {
-    return false;
-  }
-  return modifiedMs > upsertMs;
-}
-
 function queueEntryDeUpsertIfChanged(jid, liveDe) {
   var journeyKey = strTrim(jid);
   if (!journeyKey) {
@@ -1650,11 +1618,6 @@ function queueEntryDeUpsertIfChanged(jid, liveDe) {
   var logName = normalizeLogDeField(Platform.Variable.GetValue("@logDeName") || "");
   var logKey = normalizeLogDeField(Platform.Variable.GetValue("@logDeId") || "");
   if (logName === liveName && logKey === liveKey) {
-    return;
-  }
-  var buildUpsertRaw = Platform.Variable.GetValue("@logBuildUpsertDate") || "";
-  var journeyModifiedRaw = Platform.Variable.GetValue("@logJourneyModifiedDate") || "";
-  if (!shouldSyncEntryDeByDate(buildUpsertRaw, journeyModifiedRaw)) {
     return;
   }
   Platform.Variable.SetValue("@entryDeUpsertJid", journeyKey);
