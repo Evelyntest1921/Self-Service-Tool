@@ -1,0 +1,458 @@
+%%[
+VAR @HOME_URL, @BUILD_PAGE_SELF, @CONTACTS_PAGE_SELF, @jid, @contactUiPage
+VAR @navRows, @navRow, @detailRows, @detailRow, @detailCount
+VAR @dispName, @dispType, @dispDeName, @dispDeId, @sourceDeKey
+VAR @pageStatus, @loadError, @contactsTableHtml, @totalRecords
+VAR @contactTotalPages, @contactPageSize, @contactStartRow, @contactEndRow, @contactNavBase
+VAR @editSidebarHtml, @buildNavContext, @buildNavActive, @journeyDisplayName
+
+SET @HOME_URL = ""
+SET @BUILD_PAGE_SELF = ""
+SET @CONTACTS_PAGE_SELF = ""
+SET @jid = Trim(RequestParameter("journeyId"))
+IF Empty(@jid) THEN
+ SET @jid = Trim(QueryParameter("journeyId"))
+ENDIF
+SET @contactUiPage = Trim(RequestParameter("contactPage"))
+IF Empty(@contactUiPage) THEN
+ SET @contactUiPage = Trim(QueryParameter("contactPage"))
+ENDIF
+IF Empty(@contactUiPage) THEN
+ SET @contactUiPage = 1
+ENDIF
+SET @contactUiPage = Add(0, @contactUiPage)
+IF @contactUiPage < 1 THEN
+ SET @contactUiPage = 1
+ENDIF
+SET @pageStatus = "ready"
+SET @loadError = ""
+SET @contactsTableHtml = ""
+SET @totalRecords = 0
+SET @contactTotalPages = 1
+SET @contactPageSize = 20
+SET @contactStartRow = 0
+SET @contactEndRow = 0
+SET @contactNavBase = ""
+SET @buildNavContext = "true"
+SET @buildNavActive = "contacts"
+SET @dispName = ""
+SET @dispType = ""
+SET @dispDeName = ""
+SET @dispDeId = ""
+SET @sourceDeKey = ""
+SET @journeyDisplayName = "Contacts"
+SET @detailCount = 0
+
+SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
+IF RowCount(@navRows) > 0 THEN
+ SET @navRow = Row(@navRows,1)
+ SET @HOME_URL = Field(@navRow,"ss_home")
+ SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit")
+ SET @CONTACTS_PAGE_SELF = Trim(Field(@navRow,"ss_contacts"))
+ENDIF
+
+IF Empty(@jid) THEN
+ SET @pageStatus = "nodata"
+ELSE
+ SET @detailRows = LookupRows("Bd_journey_analytics","journeyId",@jid)
+ IF RowCount(@detailRows) == 0 THEN
+  SET @detailRows = LookupRows("Bd_journey_analytics","JourneyID",@jid)
+ ENDIF
+ SET @detailCount = RowCount(@detailRows)
+ IF @detailCount == 0 THEN
+  SET @pageStatus = "nodata"
+ ELSE
+  SET @detailRow = Row(@detailRows,1)
+  SET @dispName = Field(@detailRow,"journeyName")
+  SET @dispType = Field(@detailRow,"journeyType")
+  SET @dispDeName = Trim(Field(@detailRow,"deName"))
+  SET @dispDeId = Trim(Field(@detailRow,"deId"))
+  SET @journeyDisplayName = @dispName
+  IF Empty(@journeyDisplayName) THEN
+   SET @journeyDisplayName = "Contacts"
+  ENDIF
+  SET @sourceDeKey = @dispDeId
+  IF Empty(@sourceDeKey) OR @sourceDeKey == "N/A" THEN
+   SET @sourceDeKey = @dispDeName
+  ENDIF
+  IF Empty(@sourceDeKey) OR @sourceDeKey == "N/A" THEN
+   SET @pageStatus = "node"
+   SET @loadError = "No entry data extension on analytics for this build."
+  ENDIF
+ ENDIF
+ENDIF
+
+IF NOT Empty(@CONTACTS_PAGE_SELF) AND NOT Empty(@jid) THEN
+ SET @contactNavBase = Concat(@CONTACTS_PAGE_SELF,"?journeyId=",@jid,"&contactPage=")
+ENDIF
+]%%
+<script runat="server">
+Platform.Load("core","1");
+
+function ctStr(v) {
+ if (v == null || typeof v == "undefined") {
+  return "";
+ }
+ try {
+  return String(v);
+ } catch (ctEx) {
+  return "";
+ }
+}
+
+function ctTrim(v) {
+ var s = ctStr(v);
+ if (!s) {
+  return "";
+ }
+ var len = s.length;
+ if (typeof len != "number" || isNaN(len) || len < 0) {
+  return "";
+ }
+ var start = 0;
+ var end = len;
+ var sp = " \t\r\n";
+ while (start < end && sp.indexOf(s.charAt(start)) >= 0) {
+  start += 1;
+ }
+ while (end > start && sp.indexOf(s.charAt(end - 1)) >= 0) {
+  end -= 1;
+ }
+ if (start >= end) {
+  return "";
+ }
+ var out = "";
+ var i;
+ for (i = start; i < end; i++) {
+  out += s.charAt(i);
+ }
+ return out;
+}
+
+function ctHtml(v) {
+ var s = ctStr(v);
+ var out = "";
+ var i;
+ var lt = String.fromCharCode(60);
+ var gt = String.fromCharCode(62);
+ for (i = 0; i < s.length; i++) {
+  var ch = s.charAt(i);
+  if (ch == "&") {
+   out += "&" + "amp;";
+  } else if (ch == lt) {
+   out += "&" + "lt;";
+  } else if (ch == gt) {
+   out += "&" + "gt;";
+  } else if (ch == '"') {
+   out += "&" + "quot;";
+  } else {
+   out += ch;
+  }
+ }
+ return out;
+}
+
+function ctSet(name, val) {
+ var key = ctTrim(name);
+ if (!key) {
+  return;
+ }
+ if (key.indexOf("@") != 0) {
+  key = "@" + key;
+ }
+ try {
+  Platform.Variable.SetValue(key, ctStr(val));
+ } catch (setEx) {
+  key = key;
+ }
+}
+
+function ctCoerceRows(r) {
+ if (!r) {
+  return [];
+ }
+ if (r.Results) {
+  return ctCoerceRows(r.Results);
+ }
+ if (typeof r.length == "number") {
+  var out = [];
+  var i;
+  for (i = 0; i < r.length; i++) {
+   out.push(r[i]);
+  }
+  return out;
+ }
+ if (typeof r == "object") {
+  return [r];
+ }
+ return [];
+}
+
+function ctField(row, names) {
+ if (!row) {
+  return "";
+ }
+ var i;
+ for (i = 0; i < names.length; i++) {
+  var n = names[i];
+  if (row[n] !== undefined && row[n] !== null && ctTrim(row[n])) {
+   return ctTrim(row[n]);
+  }
+ }
+ return "";
+}
+
+function ctRetrieveDeRows(deKey) {
+ var key = ctTrim(deKey);
+ if (!key || key.toUpperCase() == "N/A") {
+  return [];
+ }
+ var variants = [key, key.toLowerCase(), key.toUpperCase()];
+ var seen = {};
+ var keys = [];
+ var vi;
+ for (vi = 0; vi < variants.length; vi++) {
+  var v = variants[vi];
+  if (!v || seen[v]) {
+   continue;
+  }
+  seen[v] = true;
+  keys.push(v);
+ }
+ var ki;
+ for (ki = 0; ki < keys.length; ki++) {
+  try {
+   var rows = ctCoerceRows(DataExtension.Init(keys[ki]).Rows.Retrieve());
+   if (rows.length) {
+    return rows;
+   }
+  } catch (initEx) {}
+ }
+ var props = ["ContactId", "Email", "Account_Owner_Name", "Account_Owner_Email", "MemberId"];
+ for (ki = 0; ki < keys.length; ki++) {
+  try {
+   var prox = new Script.Util.WSProxy();
+   var got = prox.retrieve(
+    "DataExtensionObject[" + keys[ki] + "]",
+    props,
+    {
+     Property: "ContactId",
+     SimpleOperator: "isNotNull"
+    }
+   );
+   rows = ctCoerceRows(got);
+   if (rows.length) {
+    return rows;
+   }
+  } catch (wsEx) {}
+ }
+ return [];
+}
+
+function ctBuildTableHtml(rows, page, pageSize) {
+ var total = rows.length;
+ var totalPages = total > 0 ? Math.ceil(total / pageSize) : 1;
+ if (page > totalPages) {
+  page = totalPages;
+ }
+ if (page < 1) {
+  page = 1;
+ }
+ var start = (page - 1) * pageSize;
+ var end = start + pageSize;
+ if (end > total) {
+  end = total;
+ }
+ var html = "";
+ var i;
+ if (total == 0) {
+  html =
+   '<tr><td colspan="4" style="text-align:center;padding:24px;color:#6b7280;">No rows in the entry data extension.</td></tr>';
+ } else {
+  for (i = start; i < end; i++) {
+   var row = rows[i];
+   var contactId = ctField(row, ["ContactId", "contactId", "contactid", "SubscriberKey"]);
+   var email = ctField(row, ["Email", "email"]);
+   var ownerName = ctField(row, ["Account_Owner_Name", "Account_owner_name", "account_owner_name"]);
+   var ownerEmail = ctField(row, ["Account_Owner_Email", "Account_owner_email", "account_owner_email"]);
+   html += "<tr>";
+   html += "<td>" + ctHtml(contactId || "-") + "</td>";
+   html += "<td>" + ctHtml(email || "-") + "</td>";
+   html += "<td>" + ctHtml(ownerName || "-") + "</td>";
+   html += "<td>" + ctHtml(ownerEmail || "-") + "</td>";
+   html += "</tr>";
+  }
+ }
+ return {
+  html: html,
+  total: total,
+  totalPages: totalPages,
+  page: page,
+  startRow: total > 0 ? start + 1 : 0,
+  endRow: end > 0 ? end : 0
+ };
+}
+
+var pageStatus = ctTrim(Platform.Variable.GetValue("@pageStatus") || "ready");
+var loadError = ctTrim(Platform.Variable.GetValue("@loadError") || "");
+var sourceDeKey = ctTrim(Platform.Variable.GetValue("@sourceDeKey") || "");
+var pageNum = parseInt(String(Platform.Variable.GetValue("@contactUiPage") || "1"), 10);
+var pageSize = parseInt(String(Platform.Variable.GetValue("@contactPageSize") || "20"), 10);
+if (isNaN(pageNum) || pageNum < 1) {
+ pageNum = 1;
+}
+if (isNaN(pageSize) || pageSize < 1) {
+ pageSize = 20;
+}
+
+if (pageStatus == "ready" && sourceDeKey) {
+ try {
+  var allRows = ctRetrieveDeRows(sourceDeKey);
+  var built = ctBuildTableHtml(allRows, pageNum, pageSize);
+  ctSet("contactsTableHtml", built.html);
+  ctSet("totalRecords", String(built.total));
+  ctSet("contactTotalPages", String(built.totalPages));
+  ctSet("contactUiPage", String(built.page));
+  ctSet("contactStartRow", String(built.startRow));
+  ctSet("contactEndRow", String(built.endRow));
+ } catch (loadEx) {
+  pageStatus = "error";
+  loadError = loadEx.message || ctStr(loadEx);
+  ctSet("pageStatus", pageStatus);
+  ctSet("loadError", loadError);
+  ctSet("contactsTableHtml", '<tr><td colspan="4" style="text-align:center;padding:24px;color:#b91c1c;">Could not load entry DE rows.</td></tr>');
+ }
+}
+</script>
+%%[
+SET @editSidebarHtml = ContentBlockByName("sst_shell_edit_sidebar")
+]%%
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SST • Contacts</title>
+<link rel="icon" href="https://www.magmutual.com/_next/image?url=%2Fmagmutual-egg.svg&amp;w=640&amp;q=75" type="image/png">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+:root{--primary-color:#6366f1;--primary-dark:#4f46e5;--text-primary:#111827;--text-secondary:#6b7280;--bg-primary:#fff;--bg-secondary:#f9fafb;--border-color:#e5e7eb;--gray-400:#9ca3af;--gray-600:#4b5563;--gray-700:#374151;--gray-900:#111827;--radius-md:0.5rem;--shadow-sm:0 1px 2px 0 rgba(0,0,0,0.05)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg-secondary);color:var(--text-primary);line-height:1.55}
+.dashboard-layout{display:flex;height:100vh;min-height:100vh;overflow:hidden}
+.maker-main{flex:1;min-width:0;height:100vh;overflow:hidden;display:flex;flex-direction:column;background:var(--bg-secondary)}
+.maker-main-inner{flex:1;overflow-y:auto;padding:0}
+.performance-dashboard{padding:20px}
+.performance-records-header{margin:0 24px 12px}
+.breadcrumb-nav{display:flex;align-items:center;flex-wrap:wrap;font-size:14px;gap:4px;padding:20px 0 0 24px;margin-bottom:12px}
+.breadcrumb-link{display:inline-flex;align-items:center;color:var(--primary-color);text-decoration:none;font-weight:500;font-size:16px}
+.breadcrumb-link:hover{color:var(--primary-dark);text-decoration:underline}
+.breadcrumb-separator{margin:0 8px;color:var(--gray-400)}
+.breadcrumb-current{display:inline-flex;align-items:center;gap:8px;font-weight:600;color:var(--gray-900);font-size:16px}
+.breadcrumb-page-icon{width:20px;height:20px;flex-shrink:0}
+.responses-section{background:var(--bg-primary);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:24px;margin:24px;box-shadow:var(--shadow-sm)}
+.responses-header{display:flex;align-items:center;margin-bottom:20px;gap:12px}
+.chart-number{font-size:1.25rem;line-height:1}
+.responses-title{font-size:1.125rem;font-weight:600;color:var(--text-primary);margin-bottom:8px}
+.responses-subtitle{font-size:0.875rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em}
+.de-meta{font-size:13px;color:var(--text-secondary);margin:-8px 0 16px 0}
+.table-wrapper{overflow-x:auto;margin-top:8px;-webkit-overflow-scrolling:touch}
+.responses-table{width:100%;border-collapse:collapse;font-size:14px;min-width:720px}
+.responses-table th{padding:12px 14px;text-align:left;font-size:11px;font-weight:600;color:var(--gray-600);text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid var(--border-color);background:#fafafa}
+.responses-table td{padding:12px 14px;font-size:14px;color:var(--text-primary);border-bottom:1px solid var(--border-color);overflow-wrap:anywhere;vertical-align:top}
+.responses-table tbody tr:hover{background:var(--bg-secondary)}
+.pagination-container{display:flex;align-items:center;justify-content:space-between;padding:20px 0;margin-top:20px;border-top:1px solid var(--border-color);gap:16px;flex-wrap:wrap}
+.pagination-info{color:var(--gray-600);font-size:14px;font-weight:500;margin:0}
+.pagination-controls{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap}
+.pagination-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border:1px solid #d1d5db;background:#fff;color:var(--gray-700);border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;text-decoration:none}
+.pagination-btn:hover{background:#f9fafb;border-color:#9ca3af}
+.pagination-btn.disabled{opacity:0.5;pointer-events:none;cursor:not-allowed}
+.page-number{display:inline-flex;align-items:center;justify-content:center;min-width:36px;height:36px;padding:0 8px;border:1px solid #d1d5db;background:#fff;color:var(--gray-700);border-radius:6px;font-size:14px;font-weight:500;text-decoration:none}
+.page-number.active{background:var(--primary-color);color:#fff;border-color:var(--primary-color)}
+.banner{padding:14px 16px;border-radius:10px;margin:24px 24px 0;font-size:14px;border:1px solid var(--border-color)}
+.banner.bad{border-color:#fecaca;background:#fef2f2;color:#b91c1c}
+.empty-panel{margin:24px;padding:24px;background:#fff;border:1px solid var(--border-color);border-radius:var(--radius-md);color:var(--text-secondary)}
+</style>
+</head>
+<body>
+<div class="dashboard-layout">
+%%=TreatAsContent(@editSidebarHtml)=%%
+<main class="maker-main">
+<div class="maker-main-inner">
+<div class="performance-dashboard performance-records-only">
+%%[ IF @pageStatus == "nodata" THEN ]%%
+<div class="empty-panel">Open this page with <strong>journeyId</strong> from Manage Build.</div>
+%%[ ELSEIF @pageStatus == "node" THEN ]%%
+<div class="banner bad">%%=v(@loadError)=%%</div>
+%%[ ELSEIF NOT Empty(@loadError) THEN ]%%
+<div class="banner bad">%%=v(@loadError)=%%</div>
+%%[ ELSE ]%%
+<div class="performance-records-header">
+<nav class="breadcrumb-nav" aria-label="Breadcrumb">
+<a href="%%=Concat(@BUILD_PAGE_SELF,"?journeyId=",@jid)=%%" class="breadcrumb-link">
+<svg width="35" height="40" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+Manage Build
+</a>
+<span class="breadcrumb-separator">/</span>
+<span class="breadcrumb-current">
+<svg class="breadcrumb-page-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+<span>Contacts</span>
+</span>
+</nav>
+</div>
+<div class="responses-section">
+<div class="responses-header">
+<div class="chart-number">🖄</div>
+<div>
+<div class="responses-title">Individual Records</div>
+<div class="responses-subtitle">Entry data extension audience</div>
+</div>
+</div>
+<p class="de-meta">Source DE: <code>%%=v(@sourceDeKey)=%%</code> · Build: <strong>%%=v(@journeyDisplayName)=%%</strong></p>
+<div class="table-wrapper" id="filterscrollto">
+<table class="responses-table">
+<thead>
+<tr>
+<th>Contact Id</th>
+<th>Email</th>
+<th>Account Owner Name</th>
+<th>Account Owner Email</th>
+</tr>
+</thead>
+<tbody>
+%%=TreatAsContent(@contactsTableHtml)=%%
+</tbody>
+</table>
+</div>
+<div class="pagination-container">
+<div class="pagination-info">
+%%[ IF @totalRecords > 0 THEN ]%%
+Showing %%=v(@contactStartRow)=%%-%%=v(@contactEndRow)=%% of %%=v(@totalRecords)=%% records
+%%[ ELSE ]%%
+Showing 0 records
+%%[ ENDIF ]%%
+</div>
+%%[ IF @contactTotalPages > 1 THEN ]%%
+<div class="pagination-controls">
+%%[ IF @contactUiPage > 1 THEN ]%%
+<a class="pagination-btn" href="%%=Concat(@contactNavBase,Subtract(@contactUiPage,1),"#filterscrollto")=%%">Previous</a>
+%%[ ELSE ]%%
+<span class="pagination-btn disabled">Previous</span>
+%%[ ENDIF ]%%
+<span class="page-number active">%%=v(@contactUiPage)=%% / %%=v(@contactTotalPages)=%%</span>
+%%[ IF @contactUiPage < @contactTotalPages THEN ]%%
+<a class="pagination-btn" href="%%=Concat(@contactNavBase,Add(@contactUiPage,1),"#filterscrollto")=%%">Next</a>
+%%[ ELSE ]%%
+<span class="pagination-btn disabled">Next</span>
+%%[ ENDIF ]%%
+</div>
+%%[ ENDIF ]%%
+</div>
+</div>
+%%[ ENDIF ]%%
+</div>
+</div>
+</main>
+</div>
+</body>
+</html>
