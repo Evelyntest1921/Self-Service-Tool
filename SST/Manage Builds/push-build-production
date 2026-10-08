@@ -3452,7 +3452,7 @@ function pbGetPushPlan(journeyType) {
  var automation = {
   id: "automation",
   label: "Automation",
-  note: "Same as stack build: REST automation with query step and hourly schedule."
+  note: "Create or update the Production automation (REST). Uses the existing Production query named like the build."
  };
  var event = {
   id: "event",
@@ -3465,7 +3465,7 @@ function pbGetPushPlan(journeyType) {
   note: "Journey clone from UAT with Production email references."
  };
  if (t === "Journey + Automation") {
-  return [de, queryAutomation, email, eventJourney];
+  return [automation];
  }
  if (t.indexOf("Survey") >= 0) {
   return [de, email, journey];
@@ -3512,9 +3512,9 @@ function pbResolvePushContext(journeyType, devToken, devSub, journeyId, fb) {
    live: {
     ok: true,
     msg:
-     "Recreate in Production using build name \"" +
+     "Production automation only. Query must already exist in Production as \"" +
      names.buildName +
-     "\" (same CustomerKey/Name as stack build; nothing copied from UAT).",
+     "\".",
     buildName: names.buildName,
     deCustomerKey: names.deCustomerKey,
     deName: names.deName,
@@ -3692,6 +3692,24 @@ function pbBuildStepsHtml(journeyType, plan, live, prodAuth, jid, uiOpts) {
  return html;
 }
 
+function pbPushProdAuthOnly() {
+ var logs = [];
+ var prodUser =
+  pbTrim(Platform.Variable.GetValue("@AUTH_PROD_USER") || "Admin_Production") || "Admin_Production";
+ var prodUserFallbacks = [
+  "Admin_production",
+  "Admin_Production",
+  "Production_Admin",
+  "Admin Production"
+ ];
+ var prodAuth = pbAuthForUser(prodUser, prodUserFallbacks);
+ if (!prodAuth.ok) {
+  return { ok: false, logs: logs, msg: "Production auth failed: " + prodAuth.msg, devAuth: null, prodAuth: null };
+ }
+ logs.push("Production (" + (prodAuth.userKey || prodUser) + ") authentication OK.");
+ return { ok: true, logs: logs, msg: "", devAuth: null, prodAuth: prodAuth };
+}
+
 function pbPushAuthPair() {
  var logs = [];
  var sourceUser = pbTrim(Platform.Variable.GetValue("@AUTH_SOURCE_USER") || "Admin") || "Admin";
@@ -3729,7 +3747,10 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
    msg: "Step \"" + sid + "\" is not part of the push plan for journeyType \"" + journeyType + "\"."
   };
  }
- var authPack = pbPushAuthPair();
+ var authPack =
+  sid === "automation"
+   ? pbPushProdAuthOnly()
+   : pbPushAuthPair();
  var li;
  for (li = 0; li < authPack.logs.length; li++) {
   log(authPack.logs[li]);
@@ -3845,11 +3866,23 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
   };
  }
  if (sid === "automation") {
-  var qk = live.queryKey || deKey;
-  var qOid = pbProdRetrieveQueryObjectId(prodAuth.subdomain, prodAuth.token, qk, qk);
-  if (!qOid) {
-   return { ok: false, logs: logs, msg: "Push query step first — query ObjectID not found in Production." };
+  var qk = live.queryKey || deKey || buildName;
+  log("Looking up Production query CustomerKey " + qk + ".");
+  var qOid = pbProdRetrieveQueryObjectId(prodAuth.subdomain, prodAuth.token, qk, buildName);
+  if (!qOid && buildName && buildName !== qk) {
+   qOid = pbProdRetrieveQueryObjectId(prodAuth.subdomain, prodAuth.token, buildName, buildName);
   }
+  if (!qOid) {
+   return {
+    ok: false,
+    logs: logs,
+    msg:
+     "Production query not found for key \"" +
+     qk +
+     "\". Create that QueryDefinition in Production first, then push automation."
+   };
+  }
+  log("Query ObjectID " + qOid + ".");
   var automationResult = pbStackCreateAutomationProd(prodAuth.token, prodAuth.subdomain, {
    automationName: live.automationName || buildName,
    automationKey: live.automationKey || buildName,
@@ -4410,8 +4443,8 @@ try {
   var isStackForUi = Platform.Variable.GetValue("@isStackBuild") === "true";
   stepsHtml = pbTruncateAmpVar(
    pbBuildStepsHtml(journeyType, plan, liveForUi, null, jid, {
-    showCampaignInput: isStackForUi,
-    campaignId: pbTrim(Platform.Variable.GetValue("@pushCampaignId") || ""),
+    showCampaignInput: false,
+    campaignId: "",
     skipLiveChecks: true
    })
   );
@@ -4531,7 +4564,7 @@ function pbConfirmPushStep(form){
 %%[ IF @pageStatus == "nodata" THEN ]%%
 <p class="sub">Open this page with <strong>journeyId</strong> from Manage Build.</p>
 %%[ ELSE ]%%
-<p class="sub">Recreate stack artifacts in Production using the <strong>build name</strong> as CustomerKey/Name (same as a new stack build). Nothing is copied from UAT. Steps depend on <strong>journeyType</strong>.</p>
+<p class="sub">Creates the <strong>automation</strong> in Production via REST. The query activity must already exist in Production under the build name.</p>
 %%=TreatAsContent(@pushResultBanner)=%%
 <div class="panel">
  <p class="panel-title">Build: %%=v(@dispName)=%%</p>
