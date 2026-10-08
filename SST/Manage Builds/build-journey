@@ -1,7 +1,7 @@
 %%[
 VAR @HOME_URL, @BUILD_PAGE_SELF, @PERFORMANCE_URL, @JOURNEY_VIEW_URL, @SURVEY_STAGE_URL, @SURVEY_ANALYTICS_URL
 VAR @navRows, @navRow, @jid, @detailRows, @detailRow, @detailCount
-VAR @dispName, @dispType, @dispSurveyId, @isSurveyBuild, @buildNavContext, @buildNavActive
+VAR @dispName, @dispType, @dispSurveyId, @isSurveyBuild, @isJourneyAutomation, @buildNavContext, @buildNavActive
 VAR @buildAutomationGuid, @buildAutomationCustomerKey, @buildAutomationName
 VAR @surveyUrlRows, @surveyUrlRow, @pageStatus, @loadError, @isRealJourney
 VAR @authOk, @accessToken, @subdomain, @clientId, @clientSecret, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader, @tokenPattern, @accountId, @authR, @authRow
@@ -92,6 +92,7 @@ SET @dispName = ""
 SET @dispType = ""
 SET @dispSurveyId = ""
 SET @isSurveyBuild = "false"
+SET @isJourneyAutomation = "false"
 SET @buildNavContext = "false"
 SET @buildNavActive = "journey"
 SET @pageStatus = "view"
@@ -134,6 +135,9 @@ ELSE
    SET @detailRow = Row(@detailRows,1)
    SET @dispName = Trim(Field(@detailRow,"journeyName"))
    SET @dispType = Trim(Field(@detailRow,"journeyType"))
+   IF @dispType == "Journey + Automation" THEN
+    SET @isJourneyAutomation = "true"
+   ENDIF
    SET @dispSurveyId = Trim(Field(@detailRow,"surveyId"))
    IF IndexOf(@dispType,"Survey") > 0 THEN
     SET @isSurveyBuild = "true"
@@ -2006,6 +2010,20 @@ function syncScheduleFormFromEvent(evObj) {
   Platform.Variable.SetValue("@scheduleSummary", buildScheduleSummaryFromEvent(evObj));
 }
 
+function applyEventContactEvaluationOnly(evObj, contactEvaluation) {
+  evObj.arguments = evObj.arguments || {};
+  evObj.arguments.useHighWatermark =
+    strTrim(contactEvaluation).toLowerCase() !== "all";
+  return evObj;
+}
+
+function buildAutomationEntryPanelSummary(contactEvaluation) {
+  if (strTrim(contactEvaluation).toLowerCase() === "all") {
+    return "Timing is controlled by the linked automation. Contact evaluation: all records each run.";
+  }
+  return "Timing is controlled by the linked automation. Contact evaluation: new records only each run.";
+}
+
 function applyEventScheduleForm(
   evObj,
   scheduleType,
@@ -2106,18 +2124,28 @@ try {
           Platform.Variable.SetValue("@scheduleEditorOpen", "true");
         }
         if (saveSchedule && evFetched.ok && evFetched.obj) {
-          var updatedEv = applyEventScheduleForm(
-            evFetched.obj,
-            Platform.Variable.GetValue("@entryScheduleType") || "runOnce",
-            Platform.Variable.GetValue("@entryScheduleRepeat") || "daily",
-            Platform.Variable.GetValue("@entryScheduleInterval") || "1",
-            Platform.Variable.GetValue("@entryScheduleStart") || "",
-            Platform.Variable.GetValue("@entryScheduleEnd") || "occurrences",
-            Platform.Variable.GetValue("@entryScheduleOccurrences") || "2",
-            Platform.Variable.GetValue("@entryScheduleEndDate") || "",
-            Platform.Variable.GetValue("@entryScheduleWeekdays") || "",
-            Platform.Variable.GetValue("@entryContactEvaluation") || "newOnly"
-          );
+          var isJourneyAutomation =
+            Platform.Variable.GetValue("@isJourneyAutomation") === "true";
+          var updatedEv;
+          if (isJourneyAutomation) {
+            updatedEv = applyEventContactEvaluationOnly(
+              evFetched.obj,
+              Platform.Variable.GetValue("@entryContactEvaluation") || "newOnly"
+            );
+          } else {
+            updatedEv = applyEventScheduleForm(
+              evFetched.obj,
+              Platform.Variable.GetValue("@entryScheduleType") || "runOnce",
+              Platform.Variable.GetValue("@entryScheduleRepeat") || "daily",
+              Platform.Variable.GetValue("@entryScheduleInterval") || "1",
+              Platform.Variable.GetValue("@entryScheduleStart") || "",
+              Platform.Variable.GetValue("@entryScheduleEnd") || "occurrences",
+              Platform.Variable.GetValue("@entryScheduleOccurrences") || "2",
+              Platform.Variable.GetValue("@entryScheduleEndDate") || "",
+              Platform.Variable.GetValue("@entryScheduleWeekdays") || "",
+              Platform.Variable.GetValue("@entryContactEvaluation") || "newOnly"
+            );
+          }
           var putUrl =
             "https://" +
             subdomain +
@@ -2130,7 +2158,12 @@ try {
             Platform.Function.Stringify(updatedEv)
           );
           if (putResp.status == 200 || putResp.status == 201) {
-            Platform.Variable.SetValue("@scheduleSaveMsg", "Entry schedule saved.");
+            Platform.Variable.SetValue(
+              "@scheduleSaveMsg",
+              isJourneyAutomation
+                ? "Contact evaluation saved."
+                : "Entry schedule saved."
+            );
             Platform.Variable.SetValue("@scheduleEditorOpen", "true");
             evFetched = getEventDefinition(
               subdomain,
@@ -2149,6 +2182,14 @@ try {
         }
         if (!saveSchedule && evFetched.ok && evFetched.obj) {
           syncScheduleFormFromEvent(evFetched.obj);
+          if (Platform.Variable.GetValue("@isJourneyAutomation") === "true") {
+            Platform.Variable.SetValue(
+              "@scheduleSummary",
+              buildAutomationEntryPanelSummary(
+                Platform.Variable.GetValue("@entryContactEvaluation") || "newOnly"
+              )
+            );
+          }
         } else if (
           saveSchedule &&
           evFetched.ok &&
@@ -2158,6 +2199,14 @@ try {
           ) !== 0
         ) {
           syncScheduleFormFromEvent(evFetched.obj);
+          if (Platform.Variable.GetValue("@isJourneyAutomation") === "true") {
+            Platform.Variable.SetValue(
+              "@scheduleSummary",
+              buildAutomationEntryPanelSummary(
+                Platform.Variable.GetValue("@entryContactEvaluation") || "newOnly"
+              )
+            );
+          }
         }
         if (evFetched.ok && evFetched.obj) {
           entryEventDefObj = evFetched.obj;
@@ -2370,6 +2419,7 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 .btn-sst-black{display:inline-flex;align-items:center;justify-content:center;padding:11px 18px;font-size:14px;font-weight:600;border-radius:0;border:1px solid #000;background:#000;color:#fff;cursor:pointer;font-family:inherit;text-decoration:none;line-height:1.2}
 .btn-sst-black:hover{background:#000;border-color:#000;color:#fff}
 .schedule-panel-lead{margin-bottom:12px}
+.schedule-automation-note{margin:0 0 16px}
 .schedule-panel-summary{margin-top:4px}
 .schedule-panel-editor{display:none;margin-top:16px;padding-top:16px;border-top:1px solid var(--border-color)}
 .schedule-panel.is-editing .schedule-panel-editor{display:block}
@@ -2439,20 +2489,23 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
     </nav>
 <div class="panel">%%[ IF NOT Empty(@journeyMetaHtml) THEN ]%%%%=TreatAsContent(@journeyMetaHtml)=%%%%[ ENDIF ]%%</div>
 %%[ IF @schedulePanelVisible == "true" THEN ]%%
-<div class="panel schedule-panel%%[ IF @scheduleEditorOpen == "true" THEN ]%% is-editing%%[ ENDIF ]%%" id="schedulePanel">
-  <h2 class="panel-title">Schedule</h2>
-  <p class="flow-hint schedule-panel-lead">%%=IIF(NOT Empty(@scheduleSummary), @scheduleSummary, "Loading schedule…")=%%</p>
+<div class="panel schedule-panel%%[ IF @isJourneyAutomation == "true" THEN ]%% schedule-panel-automation%%[ ENDIF ]%%%%[ IF @scheduleEditorOpen == "true" THEN ]%% is-editing%%[ ENDIF ]%%" id="schedulePanel">
+  <h2 class="panel-title">%%[ IF @isJourneyAutomation == "true" THEN ]%%Entry%%[ ELSE ]%%Schedule%%[ ENDIF ]%%</h2>
+  <p class="flow-hint schedule-panel-lead">%%=IIF(NOT Empty(@scheduleSummary), @scheduleSummary, IIF(@isJourneyAutomation == "true", "Loading entry settings…", "Loading schedule…"))=%%</p>
 %%[ IF NOT Empty(@scheduleSaveMsg) THEN ]%%
   <p class="schedule-save-msg%%[ IF IndexOf(@scheduleSaveMsg,"Could not") > 0 THEN ]%% is-error%%[ ENDIF ]%%">%%=v(@scheduleSaveMsg)=%%</p>
 %%[ ENDIF ]%%
   <div class="schedule-panel-summary" id="schedulePanelSummary">
-    <button type="button" class="btn-sst-black" id="scheduleEditOpenBtn">Edit schedule</button>
+    <button type="button" class="btn-sst-black" id="scheduleEditOpenBtn">%%[ IF @isJourneyAutomation == "true" THEN ]%%Edit contact evaluation%%[ ELSE ]%%Edit schedule%%[ ENDIF ]%%</button>
   </div>
   <div class="schedule-panel-editor" id="schedulePanelEditor">
   <form method="post" action="" class="schedule-form" id="scheduleEditForm">
     <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
     <input type="hidden" name="scheduleEventDefId" value="%%=v(@scheduleEventDefId)=%%">
     <input type="hidden" name="entryScheduleWeekdays" id="entryScheduleWeekdays" value="%%=v(@entryScheduleWeekdays)=%%">
+%%[ IF @isJourneyAutomation == "true" THEN ]%%
+    <p class="flow-hint schedule-automation-note">When contacts enter is set by the linked Automation Studio schedule (after the query step). Journey Builder run-once or recurring entry schedules do not apply here.</p>
+%%[ ELSE ]%%
     <div class="schedule-field">
       <span class="schedule-radio-title">Schedule mode</span>
       <div class="schedule-radio-group">
@@ -2520,21 +2573,22 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
         </div>
         <p class="schedule-eastern-note">On date ends at 11:59 PM Eastern. Never maps to a far-future end date in the API (same as Journey Builder).</p>
       </div>
-      <div class="schedule-field">
-        <span class="schedule-radio-title">Contact evaluation</span>
-        <div class="schedule-radio-group">
-          <label class="schedule-radio-option">
-            <input type="radio" name="entryContactEvaluation" value="newOnly" %%[ IF @entryContactEvaluation != "all" THEN ]%%checked%%[ ENDIF ]%%>
-            <span><span class="schedule-radio-title">Evaluate new records only</span></span>
-          </label>
-          <label class="schedule-radio-option">
-            <input type="radio" name="entryContactEvaluation" value="all" %%[ IF @entryContactEvaluation == "all" THEN ]%%checked%%[ ENDIF ]%%>
-            <span><span class="schedule-radio-title">Evaluate all records</span></span>
-          </label>
-        </div>
+    </div>
+%%[ ENDIF ]%%
+    <div class="schedule-field schedule-contact-eval-field">
+      <span class="schedule-radio-title">Contact evaluation</span>
+      <div class="schedule-radio-group">
+        <label class="schedule-radio-option">
+          <input type="radio" name="entryContactEvaluation" value="newOnly" %%[ IF @entryContactEvaluation != "all" THEN ]%%checked%%[ ENDIF ]%%>
+          <span><span class="schedule-radio-title">Evaluate new records only</span></span>
+        </label>
+        <label class="schedule-radio-option">
+          <input type="radio" name="entryContactEvaluation" value="all" %%[ IF @entryContactEvaluation == "all" THEN ]%%checked%%[ ENDIF ]%%>
+          <span><span class="schedule-radio-title">Evaluate all records</span></span>
+        </label>
       </div>
     </div>
-    <button type="submit" name="saveSchedule" value="1" class="btn-sst-black">Save schedule</button>
+    <button type="submit" name="saveSchedule" value="1" class="btn-sst-black">%%[ IF @isJourneyAutomation == "true" THEN ]%%Save contact evaluation%%[ ELSE ]%%Save schedule%%[ ENDIF ]%%</button>
   </form>
   </div>
 </div>
@@ -2579,6 +2633,9 @@ if (schedulePanel && scheduleOpenBtn) {
 }
 var scheduleForm = document.getElementById("scheduleEditForm");
 if (!scheduleForm) {
+  return;
+}
+if (schedulePanel && schedulePanel.classList.contains("schedule-panel-automation")) {
   return;
 }
 var repeatSelect = document.getElementById("entryScheduleRepeat");
