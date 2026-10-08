@@ -1,7 +1,7 @@
 %%[
 VAR @HOME_URL, @BUILD_PAGE_SELF, @CONTACTS_PAGE_SELF, @EDIT_DE_OPEN_URL, @jid, @contactUiPage
 VAR @navRows, @navRow, @detailRows, @detailRow, @detailCount
-VAR @dispName, @dispType, @dispDeName, @dispDeId, @sourceDeKey
+VAR @dispName, @dispType, @dispDeName, @dispDeId, @dispQueryKey, @sourceDeKey
 VAR @pageStatus, @loadError, @contactsTableHtml, @totalRecords
 VAR @contactTotalPages, @contactPageSize, @contactStartRow, @contactEndRow, @contactNavBase
 VAR @editSidebarHtml, @buildNavContext, @buildNavActive, @journeyDisplayName
@@ -43,6 +43,7 @@ SET @dispName = ""
 SET @dispType = ""
 SET @dispDeName = ""
 SET @dispDeId = ""
+SET @dispQueryKey = ""
 SET @sourceDeKey = ""
 SET @journeyDisplayName = "Contacts"
 SET @detailCount = 0
@@ -82,6 +83,7 @@ ELSE
   SET @dispType = Field(@detailRow,"journeyType")
   SET @dispDeName = Trim(Field(@detailRow,"deName"))
   SET @dispDeId = Trim(Field(@detailRow,"deId"))
+  SET @dispQueryKey = Trim(Field(@detailRow,"queryKey"))
   SET @automationGuid = Trim(Field(@detailRow,"automationGuid"))
   SET @automationCustomerKey = Trim(Field(@detailRow,"automationCustomerKey"))
   SET @automationName = Trim(Field(@detailRow,"automationName"))
@@ -90,6 +92,9 @@ ELSE
   ENDIF
   IF Lowercase(@automationCustomerKey) == "null" OR Lowercase(@automationCustomerKey) == "n/a" THEN
    SET @automationCustomerKey = ""
+  ENDIF
+  IF Lowercase(@dispQueryKey) == "null" OR Lowercase(@dispQueryKey) == "n/a" THEN
+   SET @dispQueryKey = ""
   ENDIF
   IF @automationGuid == "00000000-0000-0000-0000-000000000000" THEN
    SET @automationGuid = ""
@@ -537,25 +542,93 @@ function ctAutomationHasJourneyStep(obj) {
  return false;
 }
 
+function ctNormalizeQueryKey(raw) {
+ var k = ctTrim(raw);
+ if (!k) {
+  return "";
+ }
+ var lower = k.toLowerCase();
+ if (lower == "null" || lower == "n/a") {
+  return "";
+ }
+ return k;
+}
+
+function ctPerformQueryDefinition(identProp, identValue) {
+ var prop = ctTrim(identProp);
+ var ident = ctTrim(identValue);
+ if (!prop || !ident) {
+  return { ok: false, msg: "Missing query identifier." };
+ }
+ try {
+  var prox = new Script.Util.WSProxy();
+  var props = {};
+  props[prop] = ident;
+  var perform = prox.performItem("QueryDefinition", props, "start", {});
+  var topStatus = perform && perform.Status ? ctTrim(perform.Status) : "";
+  var itemCode = "";
+  var itemMsg = "";
+  if (perform && perform.Results && perform.Results.length > 0) {
+   itemCode = ctTrim(perform.Results[0].StatusCode);
+   itemMsg = ctTrim(perform.Results[0].StatusMessage);
+  }
+  if (topStatus === "OK" || itemCode === "OK") {
+   return {
+    ok: true,
+    msg: "Query run started. Refresh this page in a minute to see updated entry DE rows."
+   };
+  }
+  var errDetail = itemMsg || itemCode || topStatus || "Perform failed.";
+  return { ok: false, msg: "Could not start query: " + errDetail };
+ } catch (performEx) {
+  return {
+   ok: false,
+   msg: ctTrim(performEx.message || ctStr(performEx)) || "Query perform failed."
+  };
+ }
+}
+
+function ctRunQueryFromAnalyticsKey(queryKey) {
+ var byKey = ctPerformQueryDefinition("CustomerKey", queryKey);
+ if (byKey.ok) {
+  return byKey;
+ }
+ var byName = ctPerformQueryDefinition("Name", queryKey);
+ if (byName.ok) {
+  return byName;
+ }
+ return byKey;
+}
+
 function ctRunFirstQueryAutomation() {
+ var queryKey = ctNormalizeQueryKey(Platform.Variable.GetValue("@dispQueryKey") || "");
+ if (queryKey) {
+  return ctRunQueryFromAnalyticsKey(queryKey);
+ }
  var guid = ctTrim(Platform.Variable.GetValue("@automationGuid") || "");
- var key = ctTrim(Platform.Variable.GetValue("@automationCustomerKey") || "");
+ var autoKey = ctTrim(Platform.Variable.GetValue("@automationCustomerKey") || "");
  var name = ctTrim(Platform.Variable.GetValue("@automationName") || "");
  var auth = ctAuthAdmin();
  if (!auth.ok) {
   return { ok: false, msg: auth.msg };
  }
- var fetched = ctGetAutomation(auth.subdomain, auth.token, guid, key, name);
+ var fetched = ctGetAutomation(auth.subdomain, auth.token, guid, autoKey, name);
  if (!fetched.ok || !fetched.obj) {
-  return { ok: false, msg: "Could not load automation for this build." };
+  return {
+   ok: false,
+   msg: "No queryKey on analytics and could not load automation for this build."
+  };
  }
  var autoObj = fetched.obj;
- if (ctAutomationHasJourneyStep(autoObj)) {
-  return { ok: false, msg: "Automation includes a Journey step. Run Query is only allowed for query-only automations." };
- }
  var queryOid = ctFirstQueryActivityId(autoObj);
- if (!queryOid) {
-  return { ok: false, msg: "No query activity found as the first step in this automation." };
+ if (queryOid) {
+  return ctPerformQueryDefinition("ObjectID", queryOid);
+ }
+ if (ctAutomationHasJourneyStep(autoObj)) {
+  return {
+   ok: false,
+   msg: "Automation includes a Journey step. Add queryKey to Bd_journey_analytics or run the query from Automation Studio."
+  };
  }
  if (ctAutomationIsRunning(autoObj)) {
   return { ok: false, msg: "Automation is already running. Wait for it to finish or stop it in Automation view." };
@@ -784,7 +857,7 @@ Manage Build
 </div>
 <div class="responses-header-actions">
 %%[ IF @isStackBuild == "true" THEN ]%%
-<form method="post" action="" class="run-query-form" onsubmit="return confirm('Run the first query activity in this automation now?');">
+<form method="post" action="" class="run-query-form" onsubmit="return confirm('Run the stack query now? This refreshes data only and does not run the Journey step.');">
 <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
 <input type="hidden" name="contactPage" value="%%=v(@contactUiPage)=%%">
 <input type="hidden" name="confirmRunQuery" value="1">
