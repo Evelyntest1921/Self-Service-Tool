@@ -310,6 +310,253 @@ function ctHttpGet(token, url) {
  };
 }
 
+function ctHttpPost(token, url, postData) {
+ var req = new Script.Util.HttpRequest(url);
+ req.emptyContentHandling = 0;
+ req.retries = 1;
+ req.continueOnError = true;
+ req.method = "POST";
+ req.contentType = "application/json";
+ req.setHeader("Authorization", "Bearer " + token);
+ req.postData = postData == null ? "{}" : ctStr(postData);
+ var resp = req.send();
+ var body = "";
+ if (resp.content) {
+  body = ctStr(resp.content);
+ }
+ return {
+  status: resp.statusCode,
+  body: body
+ };
+}
+
+function ctGuidLike(id) {
+ var v = ctTrim(id);
+ if (!v || v.length !== 36) {
+  return false;
+ }
+ if (
+  v.charAt(8) !== "-" ||
+  v.charAt(13) !== "-" ||
+  v.charAt(18) !== "-" ||
+  v.charAt(23) !== "-"
+ ) {
+  return false;
+ }
+ return true;
+}
+
+function ctQueryRestIdFromObj(obj) {
+ if (!obj) {
+  return "";
+ }
+ if (obj.id) {
+  return ctTrim(obj.id);
+ }
+ if (obj.queryDefinitionId) {
+  return ctTrim(obj.queryDefinitionId);
+ }
+ if (obj.objectId) {
+  return ctTrim(obj.objectId);
+ }
+ if (obj.queryId) {
+  return ctTrim(obj.queryId);
+ }
+ return "";
+}
+
+function ctFindQueryRestId(sub, token, queryRef) {
+ var ref = ctTrim(queryRef);
+ if (!ref) {
+  return "";
+ }
+ var base = "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/queries";
+ var byKey = ctHttpGet(token, base + "/key:" + encodeURIComponent(ref));
+ if (byKey.status == 200 && byKey.body) {
+  var keyed = ctParseJson(byKey.body);
+  var keyedId = ctQueryRestIdFromObj(keyed);
+  if (keyedId) {
+   return keyedId;
+  }
+ }
+ var page = 1;
+ var refLc = ref.toLowerCase();
+ while (page <= 5) {
+  var listUrl = base + "?" + "$page=" + page + "&" + "$pagesize=100";
+  var listResp = ctHttpGet(token, listUrl);
+  if (listResp.status != 200) {
+   break;
+  }
+  var listObj = ctParseJson(listResp.body);
+  var items = listObj && listObj.items ? listObj.items : [];
+  var i;
+  for (i = 0; i < items.length; i++) {
+   var itemKey = ctTrim(items[i].key);
+   if (itemKey && itemKey.toLowerCase() == refLc) {
+    return ctQueryRestIdFromObj(items[i]);
+   }
+  }
+  for (i = 0; i < items.length; i++) {
+   var itemName = ctTrim(items[i].name);
+   if (itemName && itemName.toLowerCase() == refLc) {
+    return ctQueryRestIdFromObj(items[i]);
+   }
+  }
+  if (items.length < 100) {
+   break;
+  }
+  page += 1;
+ }
+ return "";
+}
+
+function ctResolveQueryObjectIdWproxy(queryRef) {
+ var ref = ctTrim(queryRef);
+ if (!ref) {
+  return "";
+ }
+ try {
+  var prox = new Script.Util.WSProxy();
+  var filters = [
+   { Property: "CustomerKey", Value: ref },
+   { Property: "Name", Value: ref }
+  ];
+  if (ctGuidLike(ref)) {
+   filters.push({ Property: "ObjectID", Value: ref });
+  }
+  var fi;
+  for (fi = 0; fi < filters.length; fi++) {
+   var got = prox.retrieve("QueryDefinition", ["ObjectID"], {
+    Property: filters[fi].Property,
+    SimpleOperator: "equals",
+    Value: filters[fi].Value
+   });
+   if (got && got.Results && got.Results.length > 0) {
+    var oid = ctTrim(got.Results[0].ObjectID);
+    if (oid) {
+     return oid;
+    }
+   }
+  }
+ } catch (resolveEx) {}
+ return "";
+}
+
+function ctInvokePerformQuery(objectId) {
+ var oid = ctTrim(objectId);
+ if (!oid) {
+  return { ok: false, msg: "Missing query ObjectID." };
+ }
+ try {
+  var statusAndRequestId = ["", 0, ""];
+  var qd = Platform.Function.CreateObject("QueryDefinition");
+  Platform.Function.SetObjectProperty(qd, "ObjectID", oid);
+  Platform.Function.InvokePerform(qd, "Start", statusAndRequestId, null);
+  var statusMessage = ctStr(statusAndRequestId[0]);
+  var errorCode = statusAndRequestId[1];
+  if (errorCode === 0 || errorCode === "0") {
+   return {
+    ok: true,
+    msg: "Query run started. Refresh this page in a minute to see updated entry DE rows."
+   };
+  }
+  if (statusMessage && statusMessage.toLowerCase().indexOf("success") >= 0) {
+   return {
+    ok: true,
+    msg: "Query run started. Refresh this page in a minute to see updated entry DE rows."
+   };
+  }
+  return {
+   ok: false,
+   msg: "Could not start query: " + (statusMessage || "InvokePerform error " + ctStr(errorCode))
+  };
+ } catch (invokeEx) {
+  return {
+   ok: false,
+   msg: ctTrim(invokeEx.message || ctStr(invokeEx)) || "Query perform failed."
+  };
+ }
+}
+
+function ctStartQueryRest(sub, token, queryRef) {
+ var ref = ctTrim(queryRef);
+ if (!ref) {
+  return { ok: false, msg: "Missing query reference." };
+ }
+ var base = "https://" + sub + ".rest.marketingcloudapis.com/automation/v1/queries/";
+ var startUrls = [
+  base + "key:" + encodeURIComponent(ref) + "/actions/start",
+  base + encodeURIComponent(ref) + "/actions/start"
+ ];
+ var ui;
+ var lastStatus = 0;
+ var lastBody = "";
+ for (ui = 0; ui < startUrls.length; ui++) {
+  var resp = ctHttpPost(token, startUrls[ui], "{}");
+  lastStatus = resp.status;
+  lastBody = resp.body;
+  if (resp.status == 200 || resp.status == 202) {
+   return {
+    ok: true,
+    msg: "Query run started. Refresh this page in a minute to see updated entry DE rows."
+   };
+  }
+ }
+ var restId = ctFindQueryRestId(sub, token, ref);
+ if (restId && restId.toLowerCase() !== ref.toLowerCase()) {
+  var byIdUrl = base + encodeURIComponent(restId) + "/actions/start";
+  var idResp = ctHttpPost(token, byIdUrl, "{}");
+  lastStatus = idResp.status;
+  lastBody = idResp.body;
+  if (idResp.status == 200 || idResp.status == 202) {
+   return {
+    ok: true,
+    msg: "Query run started. Refresh this page in a minute to see updated entry DE rows."
+   };
+  }
+ }
+ var clip = ctTrim(lastBody).substring(0, 160);
+ return {
+  ok: false,
+  msg:
+   "Could not start query via REST (HTTP " +
+   lastStatus +
+   ")" +
+   (clip ? " — " + clip : "") +
+   ". Check queryKey matches the query external key in Automation Studio."
+ };
+}
+
+function ctRunQueryByRef(queryRef) {
+ var ref = ctTrim(queryRef);
+ if (!ref) {
+  return { ok: false, msg: "Missing query reference." };
+ }
+ var auth = ctAuthAdmin();
+ if (!auth.ok) {
+  return { ok: false, msg: auth.msg };
+ }
+ var restResult = ctStartQueryRest(auth.subdomain, auth.token, ref);
+ if (restResult.ok) {
+  return restResult;
+ }
+ var oid = ctResolveQueryObjectIdWproxy(ref);
+ if (!oid && ctGuidLike(ref)) {
+  oid = ref;
+ }
+ if (oid) {
+  var soapResult = ctInvokePerformQuery(oid);
+  if (soapResult.ok) {
+   return soapResult;
+  }
+  return {
+   ok: false,
+   msg: soapResult.msg || restResult.msg
+  };
+ }
+ return restResult;
+}
+
 function ctAuthAdmin() {
  var clientId = ctLookupAuthScalar("Admin", "clientId");
  if (!clientId) {
@@ -497,56 +744,10 @@ function ctNormalizeQueryKey(raw) {
  return k;
 }
 
-function ctPerformQueryDefinition(identProp, identValue) {
- var prop = ctTrim(identProp);
- var ident = ctTrim(identValue);
- if (!prop || !ident) {
-  return { ok: false, msg: "Missing query identifier." };
- }
- try {
-  var prox = new Script.Util.WSProxy();
-  var props = {};
-  props[prop] = ident;
-  var perform = prox.performItem("QueryDefinition", props, "start", {});
-  var topStatus = perform && perform.Status ? ctTrim(perform.Status) : "";
-  var itemCode = "";
-  var itemMsg = "";
-  if (perform && perform.Results && perform.Results.length > 0) {
-   itemCode = ctTrim(perform.Results[0].StatusCode);
-   itemMsg = ctTrim(perform.Results[0].StatusMessage);
-  }
-  if (topStatus === "OK" || itemCode === "OK") {
-   return {
-    ok: true,
-    msg: "Query run started. Refresh this page in a minute to see updated entry DE rows."
-   };
-  }
-  var errDetail = itemMsg || itemCode || topStatus || "Perform failed.";
-  return { ok: false, msg: "Could not start query: " + errDetail };
- } catch (performEx) {
-  return {
-   ok: false,
-   msg: ctTrim(performEx.message || ctStr(performEx)) || "Query perform failed."
-  };
- }
-}
-
-function ctRunQueryFromAnalyticsKey(queryKey) {
- var byKey = ctPerformQueryDefinition("CustomerKey", queryKey);
- if (byKey.ok) {
-  return byKey;
- }
- var byName = ctPerformQueryDefinition("Name", queryKey);
- if (byName.ok) {
-  return byName;
- }
- return byKey;
-}
-
 function ctRunFirstQueryAutomation() {
  var queryKey = ctNormalizeQueryKey(Platform.Variable.GetValue("@dispQueryKey") || "");
  if (queryKey) {
-  return ctRunQueryFromAnalyticsKey(queryKey);
+  return ctRunQueryByRef(queryKey);
  }
  var guid = ctTrim(Platform.Variable.GetValue("@automationGuid") || "");
  var autoKey = ctTrim(Platform.Variable.GetValue("@automationCustomerKey") || "");
@@ -565,7 +766,7 @@ function ctRunFirstQueryAutomation() {
  var autoObj = fetched.obj;
  var queryOid = ctFirstQueryActivityId(autoObj);
  if (queryOid) {
-  return ctPerformQueryDefinition("ObjectID", queryOid);
+  return ctRunQueryByRef(queryOid);
  }
  return {
   ok: false,
