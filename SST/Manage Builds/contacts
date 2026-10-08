@@ -1,5 +1,5 @@
 %%[
-VAR @HOME_URL, @BUILD_PAGE_SELF, @CONTACTS_PAGE_SELF, @jid, @contactUiPage
+VAR @HOME_URL, @BUILD_PAGE_SELF, @CONTACTS_PAGE_SELF, @EDIT_DE_OPEN_URL, @jid, @contactUiPage
 VAR @navRows, @navRow, @detailRows, @detailRow, @detailCount
 VAR @dispName, @dispType, @dispDeName, @dispDeId, @sourceDeKey
 VAR @pageStatus, @loadError, @contactsTableHtml, @totalRecords
@@ -12,6 +12,7 @@ SET @STACK_JOURNEY_TYPE = "Journey + Automation"
 SET @HOME_URL = ""
 SET @BUILD_PAGE_SELF = ""
 SET @CONTACTS_PAGE_SELF = ""
+SET @EDIT_DE_OPEN_URL = ""
 SET @jid = Trim(RequestParameter("journeyId"))
 IF Empty(@jid) THEN
  SET @jid = Trim(QueryParameter("journeyId"))
@@ -63,6 +64,7 @@ IF RowCount(@navRows) > 0 THEN
  SET @HOME_URL = Field(@navRow,"ss_home")
  SET @BUILD_PAGE_SELF = Field(@navRow,"ss_edit")
  SET @CONTACTS_PAGE_SELF = Trim(Field(@navRow,"ss_contacts"))
+ SET @EDIT_DE_OPEN_URL = Trim(Field(@navRow,"ss_edit_de_open"))
 ENDIF
 
 IF Empty(@jid) THEN
@@ -706,9 +708,13 @@ body{font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif;background:va
 .chart-content{flex:1;min-width:0}
 .responses-header-row{display:flex;align-items:center;justify-content:space-between;gap:16px;width:100%}
 .responses-header-text{flex:1;min-width:0}
-.run-query-form{margin:0;flex-shrink:0}
+.responses-header-actions{display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
+.run-query-form{margin:0}
 .download-button{padding:10px 20px;border:1px solid #000;background:#000;color:#fff;border-radius:0.375rem;font-size:0.875rem;font-weight:600;font-family:Inter,sans-serif;cursor:pointer;transition:all 0.2s ease;white-space:nowrap}
 .download-button:hover{background:#353333;border-color:#353333}
+.de-open-button{padding:10px 20px;border:1px solid var(--border-color);background:#fff;color:var(--gray-900);border-radius:0.375rem;font-size:0.875rem;font-weight:600;font-family:Inter,sans-serif;cursor:pointer;transition:all 0.2s ease;white-space:nowrap}
+.de-open-button:hover{border-color:#d1d5db;background:#fafafa}
+.de-open-button:disabled{opacity:0.6;cursor:not-allowed}
 .banner.good{border-color:#a7f3d0;background:#ecfdf5;color:#065f46}
 .responses-title{font-size:1.125rem;font-weight:600;color:var(--text-primary);margin-bottom:8px}
 .responses-subtitle{font-size:0.875rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em}
@@ -779,6 +785,7 @@ Manage Build
 <div class="responses-title">Individual Records</div>
 <div class="responses-subtitle">Contact Engagement Details</div>
 </div>
+<div class="responses-header-actions">
 %%[ IF @showRunQueryButton == "true" THEN ]%%
 <form method="post" action="" class="run-query-form" onsubmit="return confirm('Run the first query activity in this automation now?');">
 <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
@@ -787,6 +794,10 @@ Manage Build
 <button type="submit" class="download-button">Run Query</button>
 </form>
 %%[ ENDIF ]%%
+%%[ IF (NOT Empty(@dispDeId) AND @dispDeId != "N/A") OR (NOT Empty(@dispDeName) AND @dispDeName != "N/A") THEN ]%%
+<button type="button" class="de-open-button" id="openEntryDeBtn" data-de-open-url="%%=Replace(Replace(v(@EDIT_DE_OPEN_URL),'"','&quot;'),'&','&amp;')=%%" data-journey-id="%%=Replace(Replace(v(@jid),'"','&quot;'),'&','&amp;')=%%" title="%%=Replace(Replace(IIF(NOT Empty(@dispDeName) AND @dispDeName != "N/A", @dispDeName, @dispDeId),'"','&quot;'),'&','&amp;')=%%">Open data extension</button>
+%%[ ENDIF ]%%
+</div>
 </div>
 </div>
 <div class="table-wrapper" id="filterscrollto">
@@ -853,5 +864,64 @@ Showing 0 records
 </footer>
 </main>
 </div>
+<script>
+(function () {
+ var openDeBtn = document.getElementById("openEntryDeBtn");
+ if (!openDeBtn) {
+  return;
+ }
+ openDeBtn.addEventListener("click", function () {
+  var deOpenBase = openDeBtn.getAttribute("data-de-open-url") || "";
+  var journeyId = openDeBtn.getAttribute("data-journey-id") || "";
+  if (!deOpenBase) {
+   alert(
+    "Entry DE link is not configured. Add text field ss_edit_de_open on bd_sst_page_navigation with the published edit-build-de-open Cloud Page URL."
+   );
+   return;
+  }
+  if (!journeyId) {
+   alert("Missing journeyId for this build.");
+   return;
+  }
+  var url = new URL(deOpenBase, window.location.href);
+  url.searchParams.set("journeyId", journeyId);
+  openDeBtn.disabled = true;
+  var prevLabel = openDeBtn.textContent;
+  openDeBtn.textContent = "Opening…";
+  fetch(url.toString(), { credentials: "same-origin" })
+   .then(function (resp) {
+    return resp.text();
+   })
+   .then(function (text) {
+    var payload = null;
+    var raw = String(text || "").replace(/^\uFEFF/, "");
+    var jsonStart = raw.indexOf("{");
+    if (jsonStart > 0) {
+     raw = raw.substring(jsonStart);
+    }
+    try {
+     payload = JSON.parse(raw);
+    } catch (parseEx) {
+     payload = { ok: false, error: "Invalid response from server." };
+    }
+    if (payload && payload.ok && payload.url) {
+     window.open(payload.url, "_blank", "noopener");
+    } else {
+     alert(
+      (payload && payload.error) ||
+       "Could not open this data extension. Try Contact Builder and search by name or customer key."
+     );
+    }
+   })
+   .catch(function () {
+    alert("Network error resolving data extension link.");
+   })
+   .finally(function () {
+    openDeBtn.disabled = false;
+    openDeBtn.textContent = prevLabel;
+   });
+ });
+})();
+</script>
 </body>
 </html>
