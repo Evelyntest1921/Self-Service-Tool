@@ -1510,38 +1510,12 @@ function pbBuildStackAudienceQueryForProd(fb, journeyId, senderProfileId, liveQu
    audienceSource = "campaign";
   }
  }
- var prox = new Script.Util.WSProxy();
  if (audienceSource === "dataextension") {
-  var sourceDe = pbTrim(opts.sourceDataExtension);
-  if (!sourceDe) {
-   sourceDe = pbInferBracketDeFromQuerySql(liveQueryText);
-  }
-  if (!sourceDe) {
-   return {
-    ok: false,
-    sql: "",
-    msg: "Data Extension audience: source DE name not in analytics and could not be inferred from UAT query SQL."
-   };
-  }
-  var deSql = pbStackBuildDataExtensionQuery(
-   prox,
-   sourceDe,
-   opts.sfUserId,
-   prodEnv,
-   senderProfileId
-  );
-  if (!deSql) {
-   return {
-    ok: false,
-    sql: "",
-    msg: "Source Data Extension not found in UAT or missing SubscriberKey field."
-   };
-  }
   return {
-  ok: true,
-  sql: deSql,
-  msg: "Query SQL rebuilt for push (sync env=" + prodEnv + ", DE audience)."
- };
+   ok: false,
+   sql: "",
+   msg: "Production push uses campaign-member SQL via API. Data Extension audience is not recreated on this path."
+  };
  }
  var campResolve = pbResolveStackCampaignId(opts, liveQueryText);
  var campaignId = campResolve.campaignId;
@@ -1593,7 +1567,9 @@ function pbBuildQueryMutationBody(opts) {
  var deTargetOid = o.useDeOid && o.deOid ? "<ObjectID>" + pbXmlSafe(o.deOid) + "</ObjectID>" : "";
  var targetUpdate = pbTrim(o.targetUpdateType || "Update") || "Update";
  var optionsXml = "";
- if (!o.existingId && requestTag !== "CreateRequest") {
+ if (o.partnerApi) {
+  requestTag = o.existingId ? "UpdateRequest" : "CreateRequest";
+ } else if (!o.existingId && requestTag !== "CreateRequest") {
   optionsXml = "<Options></Options>";
  }
  return (
@@ -2375,6 +2351,14 @@ function pbProdEnsureEntryDe(sub, token, customerKey, deName, uatOpts) {
  if (!ck) {
   return { ok: false, msg: "Entry DE customer key missing." };
  }
+ var restExisting = pbProdRestDeObjectId(sub, token, ck);
+ if (restExisting) {
+  return {
+   ok: true,
+   objectId: restExisting,
+   msg: "Entry DE already exists in Production (REST id " + restExisting + ")."
+  };
+ }
  var existing = pbProdRetrieveDeObjectId(sub, token, ck, name);
  if (existing.ok && existing.objectId) {
   return {
@@ -2389,8 +2373,12 @@ function pbProdEnsureEntryDe(sub, token, customerKey, deName, uatOpts) {
   uo.deObjectId,
   uo.uatToken,
   uo.uatSub,
-  uo.schemaOnly === true
+  true
  );
+ var restCreate = pbProdRestCreateEntryDe(sub, token, ck, name, uatSpec);
+ if (restCreate.ok && restCreate.objectId) {
+  return restCreate;
+ }
  var fieldsXml = pbBuildDeFieldsXmlFromUat(uatSpec.fields);
  var sendableName = uatSpec ? uatSpec.sendableField : "ContactId";
  var subscriberName = uatSpec ? uatSpec.subscriberField : "Subscriber Key";
@@ -2845,10 +2833,10 @@ function pbProdCreateQueryDefinitionStackParity(sub, token, queryKey, queryName,
   deOid: "",
   deCustomerKey: deKey,
   deName: deDisplay,
-  createRoot: ""
+  partnerApi: true
  });
  var action = existingId ? "Update" : "Create";
- var resp = pbSoapCall(sub, token, action, body);
+ var resp = pbSoapCallEx(sub, token, action, body, "11");
  var objectId = pbParseSoapObjectId(resp.body) || existingId || "";
  if (!objectId) {
   objectId = pbProdRetrieveQueryObjectId(sub, token, key, qName) || "";
@@ -3875,7 +3863,7 @@ function pbExecutePushStep(stepId, journeyType, ctx) {
    return { ok: false, logs: logs, msg: "Entry DE key missing." };
   }
   var queryKeyCombo = live.queryKey || deKey;
-  log("Query CustomerKey " + queryKeyCombo + " (recreate, target DE " + deKey + ").");
+  log("Production APIs only (REST + SOAP to prod). Query CustomerKey " + queryKeyCombo + ", target DE " + deKey + ".");
   var deProdCombo = pbProdRetrieveDeObjectId(prodAuth.subdomain, prodAuth.token, deKey, deName);
   if (!deProdCombo.ok || !deProdCombo.objectId) {
    return { ok: false, logs: logs, msg: "Push entry DE first — not found in Production." };
