@@ -12,6 +12,7 @@ VAR @confirmUpdateQuery, @updateQueryBanner, @updateQueryOk
 VAR @contactsQueryJson, @contactsQueryJsonMode
 VAR @entryDeData, @contactBatchRowCount, @contactMaxPageRows, @contactMaxPageNum, @contactTotalPagesFromField, @contactDePageKey, @contactRem
 VAR @contactsUseWsProxy, @contactsAmpLoaded, @entryDeLookupKey, @row, @i, @cellContactId, @cellEmail, @cellOwnerName, @cellOwnerEmail
+VAR @postedClearJid, @postedUpdateJid, @contactsEmptyPageRow, @contactsEmptyDeRow
 
 SET @STACK_JOURNEY_TYPE = "Journey + Automation"
 SET @HOME_URL = ""
@@ -67,7 +68,6 @@ SET @updateQueryBanner = ""
 SET @updateQueryOk = ""
 SET @contactsQueryJson = ""
 SET @contactsQueryJsonMode = IIF(RequestParameter("contactsQueryData") == "1", "1", "0")
-SET @entryDeData = ""
 SET @contactBatchRowCount = 0
 SET @contactMaxPageNum = 0
 SET @contactTotalPagesFromField = 0
@@ -176,7 +176,11 @@ IF NOT Empty(@CONTACTS_PAGE_SELF) AND NOT Empty(@jid) THEN
  SET @contactNavBase = Concat(@CONTACTS_PAGE_SELF,"?journeyId=",@jid,"&contactPage=")
 ENDIF
 
+SET @contactsEmptyPageRow = "<tr><td colspan='4' style='text-align:center;padding:24px;color:#6b7280;'>No rows on this page. Confirm PageNumber is populated on the entry data extension.</td></tr>"
+SET @contactsEmptyDeRow = "<tr><td colspan='4' style='text-align:center;padding:24px;color:#6b7280;'>No rows in the entry data extension.</td></tr>"
+
 IF @pageStatus == "ready" AND @contactsQueryJsonMode != "1" AND NOT Empty(@sourceDeKey) THEN
+ TRY
  SET @entryDeLookupKey = @sourceDeKey
  SET @contactMaxPageRows = LookupOrderedRows(@sourceDeKey, 1, "PageNumber DESC")
  IF RowCount(@contactMaxPageRows) == 0 AND NOT Empty(@dispDeName) AND @dispDeName != "N/A" AND @dispDeName != @sourceDeKey THEN
@@ -277,9 +281,9 @@ IF @pageStatus == "ready" AND @contactsQueryJsonMode != "1" AND NOT Empty(@sourc
     SET @contactsTableHtml = Concat(@contactsTableHtml, "<tr><td>", @cellContactId, "</td><td>", @cellEmail, "</td><td>", @cellOwnerName, "</td><td>", @cellOwnerEmail, "</td></tr>")
    NEXT @i
   ELSEIF @contactTotalPages > 1 OR RowCount(@contactMaxPageRows) > 0 THEN
-   SET @contactsTableHtml = Concat(@contactsTableHtml, '<tr><td colspan="4" style="text-align:center;padding:24px;color:#6b7280;">No rows on this page. Confirm PageNumber is populated on the entry data extension.</td></tr>')
+   SET @contactsTableHtml = Concat(@contactsTableHtml, @contactsEmptyPageRow)
   ELSE
-   SET @contactsTableHtml = Concat(@contactsTableHtml, '<tr><td colspan="4" style="text-align:center;padding:24px;color:#6b7280;">No rows in the entry data extension.</td></tr>')
+   SET @contactsTableHtml = Concat(@contactsTableHtml, @contactsEmptyDeRow)
   ENDIF
   SET @contactsAmpLoaded = "true"
   IF @totalRecords == 0 AND @contactTotalPages > 1 THEN
@@ -300,6 +304,11 @@ IF @pageStatus == "ready" AND @contactsQueryJsonMode != "1" AND NOT Empty(@sourc
    ENDIF
   ENDIF
  ENDIF
+ CATCH
+  SET @contactsUseWsProxy = "true"
+  SET @contactsAmpLoaded = "false"
+  SET @contactsTableHtml = ""
+ ENDTRY
 ENDIF
 ]%%
 <script runat="server">
