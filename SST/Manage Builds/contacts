@@ -8,6 +8,8 @@ VAR @editSidebarHtml, @buildNavContext, @buildNavActive, @journeyDisplayName
 VAR @STACK_JOURNEY_TYPE, @isStackBuild, @automationGuid, @automationCustomerKey, @automationName
 VAR @confirmRunQuery, @runQueryBanner, @runQueryOk
 VAR @confirmClearDe, @clearDeBanner, @clearDeOk
+VAR @confirmUpdateQuery, @updateQueryBanner, @updateQueryOk
+VAR @contactsQueryJson, @contactsQueryJsonMode
 
 SET @STACK_JOURNEY_TYPE = "Journey + Automation"
 SET @HOME_URL = ""
@@ -58,11 +60,22 @@ SET @runQueryOk = ""
 SET @confirmClearDe = "0"
 SET @clearDeBanner = ""
 SET @clearDeOk = ""
+SET @confirmUpdateQuery = "0"
+SET @updateQueryBanner = ""
+SET @updateQueryOk = ""
+SET @contactsQueryJson = ""
+SET @contactsQueryJsonMode = IIF(RequestParameter("contactsQueryData") == "1", "1", "0")
+IF @contactsQueryJsonMode != "1" AND QueryParameter("contactsQueryData") == "1" THEN
+ SET @contactsQueryJsonMode = "1"
+ENDIF
 IF RequestParameter("confirmRunQuery") == "1" THEN
  SET @confirmRunQuery = "1"
 ENDIF
 IF RequestParameter("confirmClearRecords") == "1" THEN
  SET @confirmClearDe = "1"
+ENDIF
+IF RequestParameter("confirmUpdateQuery") == "1" THEN
+ SET @confirmUpdateQuery = "1"
 ENDIF
 
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
@@ -131,7 +144,21 @@ ELSE
     SET @loadError = "Clear request did not match this build."
    ENDIF
   ENDIF
+  IF @confirmUpdateQuery == "1" AND @pageStatus == "ready" THEN
+   SET @postedUpdateJid = Trim(RequestParameter("journeyId"))
+   IF Empty(@postedUpdateJid) THEN
+    SET @postedUpdateJid = @jid
+   ENDIF
+   IF @postedUpdateJid != @jid THEN
+    SET @pageStatus = "tamper"
+    SET @loadError = "Query update request did not match this build."
+   ENDIF
+  ENDIF
  ENDIF
+ENDIF
+
+IF @contactsQueryJsonMode == "1" THEN
+ SET @pageStatus = "queryjson"
 ENDIF
 
 IF NOT Empty(@CONTACTS_PAGE_SELF) AND NOT Empty(@jid) THEN
@@ -791,6 +818,187 @@ function ctRunFirstQueryAutomation() {
  };
 }
 
+function ctRequestField(name) {
+ var value = "";
+ try {
+  value = Platform.Request.GetQueryStringParameter(name);
+ } catch (ctQueryEx) {}
+ if (value === null || typeof value === "undefined") {
+  value = "";
+ }
+ if (!value) {
+  try {
+   value = Platform.Request.GetFormField(name);
+  } catch (ctFormEx) {}
+ }
+ if (value === null || typeof value === "undefined") {
+  return "";
+ }
+ return ctTrim(value);
+}
+
+function ctIsContactsQueryDataRequest() {
+ return ctRequestField("contactsQueryData") === "1";
+}
+
+function ctResolveBuildQueryRef() {
+ var queryKey = ctNormalizeQueryKey(Platform.Variable.GetValue("@dispQueryKey") || "");
+ if (queryKey) {
+  return { ok: true, ref: queryKey, error: "" };
+ }
+ var guid = ctTrim(Platform.Variable.GetValue("@automationGuid") || "");
+ var autoKey = ctTrim(Platform.Variable.GetValue("@automationCustomerKey") || "");
+ var name = ctTrim(Platform.Variable.GetValue("@automationName") || "");
+ var auth = ctAuthAdmin();
+ if (!auth.ok) {
+  return { ok: false, ref: "", error: auth.msg };
+ }
+ var fetched = ctGetAutomation(auth.subdomain, auth.token, guid, autoKey, name);
+ if (!fetched.ok || !fetched.obj) {
+  return {
+   ok: false,
+   ref: "",
+   error: "No queryKey on analytics and could not load automation for this build."
+  };
+ }
+ var queryOid = ctFirstQueryActivityId(fetched.obj);
+ if (queryOid) {
+  return { ok: true, ref: queryOid, error: "" };
+ }
+ return {
+  ok: false,
+  ref: "",
+  error: "Could not resolve a query for this build. Add queryKey to Bd_journey_analytics."
+ };
+}
+
+function ctRetrieveQueryDefinitionRow(ref) {
+ var filters = [];
+ var trimmed = ctTrim(ref);
+ if (!trimmed) {
+  return null;
+ }
+ filters.push({ Property: "CustomerKey", Value: trimmed });
+ filters.push({ Property: "Name", Value: trimmed });
+ if (ctGuidLike(trimmed)) {
+  filters.push({ Property: "ObjectID", Value: trimmed });
+ }
+ try {
+  var prox = new Script.Util.WSProxy();
+  var fi;
+  for (fi = 0; fi < filters.length; fi++) {
+   var got = prox.retrieve(
+    "QueryDefinition",
+    [
+     "CustomerKey",
+     "QueryText",
+     "Name",
+     "ObjectID",
+     "TargetType",
+     "TargetUpdateType"
+    ],
+    {
+     Property: filters[fi].Property,
+     SimpleOperator: "equals",
+     Value: filters[fi].Value
+    }
+   );
+   if (got && got.Results && got.Results.length > 0) {
+    return got.Results[0];
+   }
+  }
+ } catch (retrieveEx) {}
+ return null;
+}
+
+function ctDeTargetFromRow(row) {
+ if (!row) {
+  return null;
+ }
+ if (row.DataExtensionTarget) {
+  return row.DataExtensionTarget;
+ }
+ return null;
+}
+
+function ctBuildContactsQueryJsonPayload() {
+ var isStack = Platform.Variable.GetValue("@isStackBuild") == "true";
+ if (!isStack) {
+  return '{"ok":false,"error":"Query edit is only for Journey + Automation builds."}';
+ }
+ var resolved = ctResolveBuildQueryRef();
+ if (!resolved.ok) {
+  return '{"ok":false,"error":"' + ctEscJson(resolved.error) + '"}';
+ }
+ var row = ctRetrieveQueryDefinitionRow(resolved.ref);
+ if (!row) {
+  return '{"ok":false,"error":"Query definition not found for this build."}';
+ }
+ return (
+  '{"ok":true,"objectId":"' +
+  ctEscJson(ctTrim(row.ObjectID)) +
+  '","customerKey":"' +
+  ctEscJson(ctTrim(row.CustomerKey)) +
+  '","name":"' +
+  ctEscJson(ctTrim(row.Name)) +
+  '","queryText":"' +
+  ctEscJson(ctStr(row.QueryText || "")) +
+  '"}'
+ );
+}
+
+function ctUpdateQueryDefinitionText(newText) {
+ var isStack = Platform.Variable.GetValue("@isStackBuild") == "true";
+ if (!isStack) {
+  return { ok: false, msg: "Query edit is only for Journey + Automation builds." };
+ }
+ var resolved = ctResolveBuildQueryRef();
+ if (!resolved.ok) {
+  return { ok: false, msg: resolved.error };
+ }
+ var row = ctRetrieveQueryDefinitionRow(resolved.ref);
+ if (!row || !ctTrim(row.ObjectID)) {
+  return { ok: false, msg: "Query definition not found for this build." };
+ }
+ var text = ctStr(newText);
+ if (!ctTrim(text)) {
+  return { ok: false, msg: "Query SQL cannot be empty." };
+ }
+ var deKey = ctTrim(Platform.Variable.GetValue("@sourceDeKey") || "");
+ var deName = ctTrim(Platform.Variable.GetValue("@dispDeName") || "");
+ var deTarget = ctDeTargetFromRow(row);
+ if (!deTarget) {
+  deTarget = {
+   CustomerKey: ctResolveDeCustomerKey(deKey) || deKey,
+   Name: deName || deKey
+  };
+ }
+ var payload = {
+  ObjectID: ctTrim(row.ObjectID),
+  Name: ctTrim(row.Name),
+  CustomerKey: ctTrim(row.CustomerKey),
+  QueryText: text,
+  TargetType: ctTrim(row.TargetType) || "DE",
+  TargetUpdateType: ctTrim(row.TargetUpdateType) || "Update",
+  DataExtensionTarget: deTarget
+ };
+ try {
+  var prox = new Script.Util.WSProxy();
+  var upd = prox.updateItem("QueryDefinition", payload);
+  var status = ctTrim(upd && upd.Status);
+  if (status.toUpperCase() === "OK") {
+   return { ok: true, msg: "Query definition updated. Use Run Query when you are ready to refresh the entry list." };
+  }
+  var msg = "";
+  if (upd && upd.Results && upd.Results.length > 0) {
+   msg = ctTrim(upd.Results[0].StatusMessage || upd.Results[0].ErrorMessage);
+  }
+  return { ok: false, msg: msg || status || "Could not update query definition." };
+ } catch (updEx) {
+  return { ok: false, msg: ctTrim(updEx.message || ctStr(updEx)) || "Query update failed." };
+ }
+}
+
 function ctResolveDeCustomerKey(deRef) {
  var ref = ctTrim(deRef);
  if (!ref) {
@@ -983,10 +1191,35 @@ if (isNaN(pageSize) || pageSize < 1) {
  pageSize = 20;
 }
 
+var contactsQueryJsonMode =
+ Platform.Variable.GetValue("@contactsQueryJsonMode") == "1" || ctIsContactsQueryDataRequest();
+if (contactsQueryJsonMode) {
+ ctSet("contactsQueryJson", ctBuildContactsQueryJsonPayload());
+}
+
 var confirmRunQuery = Platform.Variable.GetValue("@confirmRunQuery") == "1";
 var confirmClearDe = Platform.Variable.GetValue("@confirmClearDe") == "1";
+var confirmUpdateQuery = Platform.Variable.GetValue("@confirmUpdateQuery") == "1";
 var isStackBuild = Platform.Variable.GetValue("@isStackBuild") == "true";
-if (confirmClearDe && pageStatus == "ready" && sourceDeKey) {
+
+if (!contactsQueryJsonMode && confirmUpdateQuery && isStackBuild && pageStatus == "ready") {
+ var postedQueryText = ctRequestField("queryText");
+ var updateResult = ctUpdateQueryDefinitionText(postedQueryText);
+ ctSet("updateQueryOk", updateResult.ok ? "true" : "false");
+ if (updateResult.ok) {
+  ctSet(
+   "updateQueryBanner",
+   '<div class="banner good">' + ctHtml(updateResult.msg) + "</div>"
+  );
+ } else {
+  ctSet(
+   "updateQueryBanner",
+   '<div class="banner bad">' + ctHtml(updateResult.msg) + "</div>"
+  );
+ }
+}
+
+if (!contactsQueryJsonMode && confirmClearDe && pageStatus == "ready" && sourceDeKey) {
  var clearResult = ctClearEntryDe(sourceDeKey);
  ctSet("clearDeOk", clearResult.ok ? "true" : "false");
  if (clearResult.ok) {
@@ -998,7 +1231,7 @@ if (confirmClearDe && pageStatus == "ready" && sourceDeKey) {
   );
  }
 }
-if (confirmRunQuery && isStackBuild) {
+if (!contactsQueryJsonMode && confirmRunQuery && isStackBuild) {
  var runResult = ctRunFirstQueryAutomation();
  ctSet("runQueryOk", runResult.ok ? "true" : "false");
  if (runResult.ok) {
@@ -1008,7 +1241,7 @@ if (confirmRunQuery && isStackBuild) {
  }
 }
 
-if (pageStatus == "ready" && sourceDeKey) {
+if (!contactsQueryJsonMode && pageStatus == "ready" && sourceDeKey) {
  try {
   var allRows = ctRetrieveDeRows(sourceDeKey);
   var built = ctBuildTableHtml(allRows, pageNum, pageSize);
@@ -1030,6 +1263,9 @@ if (pageStatus == "ready" && sourceDeKey) {
 %%[
 SET @editSidebarHtml = ContentBlockByName("sst_shell_edit_sidebar")
 ]%%
+%%[ IF @contactsQueryJsonMode == "1" THEN ]%%
+%%=v(@contactsQueryJson)=%%
+%%[ ELSE ]%%
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1074,6 +1310,12 @@ body{font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif;background:va
 .action-confirm-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 .confirm-action-button{border:1px solid #059669;background:#059669;color:#fff}
 .confirm-action-button:hover{background:#047857;border-color:#047857}
+.edit-query-button{border:1px solid var(--primary-color);background:#fff;color:var(--primary-dark)}
+.edit-query-button:hover{background:#eef2ff;border-color:var(--primary-dark)}
+.edit-query-form{margin:0;width:100%}
+.edit-query-meta{margin:0 0 10px;font-size:0.8125rem;color:var(--gray-600)}
+.edit-query-textarea{display:block;width:100%;min-height:220px;margin:0 0 14px;padding:12px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;line-height:1.45;border:1px solid var(--border-color);border-radius:0.375rem;resize:vertical;box-sizing:border-box}
+.edit-query-textarea:disabled{background:#f3f4f6;color:var(--gray-600)}
 .responses-header-text{flex:1;min-width:0}
 .responses-header-actions{display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
 .run-query-form{margin:0;display:inline-flex;align-items:stretch}
@@ -1158,6 +1400,7 @@ Manage Build
 <div class="responses-section">
 %%=TreatAsContent(@runQueryBanner)=%%
 %%=TreatAsContent(@clearDeBanner)=%%
+%%=TreatAsContent(@updateQueryBanner)=%%
 <div class="responses-header">
 <div class="chart-number">🖄</div>
 <div class="chart-content">
@@ -1168,6 +1411,9 @@ Manage Build
 </div>
 <div class="responses-header-actions">
 %%[ IF @isStackBuild == "true" THEN ]%%
+%%[ IF @runQueryOk != "true" THEN ]%%
+<button type="button" class="header-action-btn edit-query-button" id="editQueryBtn" aria-expanded="false" aria-controls="editQueryConfirmPanel">Edit Query</button>
+%%[ ENDIF ]%%
 %%[ IF @runQueryOk == "true" THEN ]%%
 <button type="button" class="header-action-btn download-button run-query-button-running" disabled aria-disabled="true" aria-live="polite" tabindex="-1">Running</button>
 %%[ ELSE ]%%
@@ -1181,6 +1427,20 @@ Manage Build
 </div>
 </div>
 %%[ IF @isStackBuild == "true" AND @runQueryOk != "true" THEN ]%%
+<div class="action-confirm-panel" id="editQueryConfirmPanel" role="region" aria-labelledby="editQueryConfirmTitle" hidden%%[ IF @confirmUpdateQuery == "1" AND @updateQueryOk == "false" THEN ]%% data-auto-open="true"%%[ ENDIF ]%%>
+<p class="action-confirm-text" id="editQueryConfirmTitle"><strong>Edit the automation query SQL.</strong> Changes apply to the query activity linked to%%[ IF NOT Empty(@automationName) THEN ]%% <strong>%%=v(@automationName)=%%</strong>%%[ ELSE ]%% your Journey + Automation build%%[ ENDIF ]%%. The target data extension stays <strong>%%=IIF(NOT Empty(@dispDeName) AND @dispDeName != "N/A", @dispDeName, @dispDeId)=%%</strong>. Saving does not run the query or change who is already in the journey. Use <strong>Run Query</strong> after updating to refresh the entry list.</p>
+<p class="edit-query-meta" id="editQueryLoadMeta" aria-live="polite"></p>
+<form method="post" action="" class="edit-query-form" id="editQueryConfirmForm">
+<input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
+<input type="hidden" name="contactPage" value="%%=v(@contactUiPage)=%%">
+<input type="hidden" name="confirmUpdateQuery" value="1">
+<textarea class="edit-query-textarea" id="editQueryTextarea" name="queryText" rows="12" spellcheck="false" disabled placeholder="Open this panel to load query SQL…"></textarea>
+<div class="action-confirm-actions">
+<button type="button" class="header-action-btn de-open-button" id="editQueryCancelBtn">Cancel</button>
+<button type="submit" class="header-action-btn confirm-action-button" id="editQueryConfirmBtn" disabled>Confirm update</button>
+</div>
+</form>
+</div>
 <div class="action-confirm-panel" id="runQueryConfirmPanel" role="region" aria-labelledby="runQueryConfirmTitle" hidden%%[ IF @confirmRunQuery == "1" AND @runQueryOk == "false" THEN ]%% data-auto-open="true"%%[ ENDIF ]%%>
 <p class="action-confirm-text" id="runQueryConfirmTitle"><strong>Run the automation query only.</strong> This starts the query step linked to%%[ IF NOT Empty(@automationName) THEN ]%% <strong>%%=v(@automationName)=%%</strong>%%[ ELSE ]%% your Journey + Automation build%%[ ENDIF ]%% and refreshes who appears in the entry data extension (<strong>%%=IIF(NOT Empty(@dispDeName) AND @dispDeName != "N/A", @dispDeName, @dispDeId)=%%</strong>). It does <strong>not</strong> run the full automation, Journey Builder send steps, or email anyone. Contacts already in the journey are not affected. The table below updates after the query finishes.</p>
 <div class="action-confirm-actions">
@@ -1286,16 +1546,42 @@ Showing 0 records
    toggleBtn.setAttribute("aria-expanded", "false");
   }
  }
- function openActionPanel(panel, toggleBtn, otherPanel, otherToggleBtn) {
+ function openActionPanel(panel, toggleBtn, otherPanels) {
   if (!panel) {
    return;
   }
-  closeActionPanel(otherPanel, otherToggleBtn);
+  var pi;
+  if (otherPanels && otherPanels.length) {
+   for (pi = 0; pi < otherPanels.length; pi++) {
+    var entry = otherPanels[pi];
+    closeActionPanel(entry.panel, entry.toggleBtn);
+   }
+  }
   panel.hidden = false;
   panel.classList.add("is-open");
   if (toggleBtn) {
    toggleBtn.setAttribute("aria-expanded", "true");
   }
+ }
+ var editQueryCache = null;
+ var actionPanelPeers = [
+  { panelId: "runQueryConfirmPanel", toggleBtnId: "runQueryBtn" },
+  { panelId: "clearRecordsConfirmPanel", toggleBtnId: "clearRecordsBtn" },
+  { panelId: "editQueryConfirmPanel", toggleBtnId: "editQueryBtn" }
+ ];
+ function otherPanelsExcept(panelId) {
+  var out = [];
+  var i;
+  for (i = 0; i < actionPanelPeers.length; i++) {
+   if (actionPanelPeers[i].panelId === panelId) {
+    continue;
+   }
+   out.push({
+    panel: document.getElementById(actionPanelPeers[i].panelId),
+    toggleBtn: document.getElementById(actionPanelPeers[i].toggleBtnId)
+   });
+  }
+  return out;
  }
  function wireActionConfirm(opts) {
   var toggleBtn = document.getElementById(opts.toggleBtnId);
@@ -1303,24 +1589,28 @@ Showing 0 records
   var cancelBtn = document.getElementById(opts.cancelBtnId);
   var confirmForm = document.getElementById(opts.confirmFormId);
   var confirmBtn = document.getElementById(opts.confirmBtnId);
-  var otherPanel = opts.otherPanelId
-   ? document.getElementById(opts.otherPanelId)
-   : null;
-  var otherToggleBtn = opts.otherToggleBtnId
-   ? document.getElementById(opts.otherToggleBtnId)
-   : null;
+  var otherPanels = opts.otherPanels || [];
   if (toggleBtn && panel) {
    toggleBtn.addEventListener("click", function () {
     if (panel.classList.contains("is-open")) {
      closeActionPanel(panel, toggleBtn);
+     if (opts.onClose) {
+      opts.onClose();
+     }
     } else {
-     openActionPanel(panel, toggleBtn, otherPanel, otherToggleBtn);
+     openActionPanel(panel, toggleBtn, otherPanels);
+     if (opts.onOpen) {
+      opts.onOpen();
+     }
     }
    });
   }
   if (cancelBtn) {
    cancelBtn.addEventListener("click", function () {
     closeActionPanel(panel, toggleBtn);
+    if (opts.onClose) {
+     opts.onClose();
+    }
    });
   }
   if (confirmForm) {
@@ -1332,12 +1622,130 @@ Showing 0 records
     if (opts.onSubmit) {
      opts.onSubmit();
     }
+    if (opts.clearQueryCacheOnSubmit) {
+     editQueryCache = null;
+    }
    });
   }
   if (panel && panel.getAttribute("data-auto-open") === "true") {
-   openActionPanel(panel, toggleBtn, otherPanel, otherToggleBtn);
+   openActionPanel(panel, toggleBtn, otherPanels);
+   if (opts.onOpen) {
+    opts.onOpen();
+   }
   }
  }
+ function parseContactsJsonResponse(text) {
+  var raw = String(text || "").replace(/^\uFEFF/, "");
+  var jsonStart = raw.indexOf("{");
+  if (jsonStart > 0) {
+   raw = raw.substring(jsonStart);
+  }
+  return JSON.parse(raw);
+ }
+ function loadEditQuerySql() {
+  var meta = document.getElementById("editQueryLoadMeta");
+  var textarea = document.getElementById("editQueryTextarea");
+  var confirmBtn = document.getElementById("editQueryConfirmBtn");
+  if (!textarea) {
+   return;
+  }
+  if (editQueryCache && editQueryCache.ok) {
+   if (meta) {
+    var parts = [];
+    if (editQueryCache.name) {
+     parts.push("Name: " + editQueryCache.name);
+    }
+    if (editQueryCache.customerKey) {
+     parts.push("Key: " + editQueryCache.customerKey);
+    }
+    meta.textContent = parts.length ? parts.join(" · ") : "Query loaded.";
+   }
+   textarea.value = editQueryCache.queryText || "";
+   textarea.disabled = false;
+   if (confirmBtn) {
+    confirmBtn.disabled = false;
+   }
+   return;
+  }
+  if (meta) {
+   meta.textContent = "Loading query…";
+  }
+  textarea.value = "";
+  textarea.disabled = true;
+  if (confirmBtn) {
+   confirmBtn.disabled = true;
+  }
+  var url = new URL(window.location.href);
+  url.searchParams.set("contactsQueryData", "1");
+  fetch(url.toString(), { credentials: "same-origin" })
+   .then(function (resp) {
+    return resp.text();
+   })
+   .then(function (text) {
+    var payload = null;
+    try {
+     payload = parseContactsJsonResponse(text);
+    } catch (parseEx) {
+     payload = { ok: false, error: "Invalid response from server." };
+    }
+    editQueryCache = payload;
+    if (!payload || !payload.ok) {
+     if (meta) {
+      meta.textContent =
+       (payload && payload.error) || "Could not load query.";
+     }
+     return;
+    }
+    if (meta) {
+     var metaParts = [];
+     if (payload.name) {
+      metaParts.push("Name: " + payload.name);
+     }
+     if (payload.customerKey) {
+      metaParts.push("Key: " + payload.customerKey);
+     }
+     meta.textContent = metaParts.length ? metaParts.join(" · ") : "Query loaded.";
+    }
+    textarea.value = payload.queryText || "";
+    textarea.disabled = false;
+    if (confirmBtn) {
+     confirmBtn.disabled = false;
+    }
+   })
+   .catch(function () {
+    if (meta) {
+     meta.textContent = "Network error loading query.";
+    }
+   });
+ }
+ function resetEditQueryDraft() {
+  var textarea = document.getElementById("editQueryTextarea");
+  var meta = document.getElementById("editQueryLoadMeta");
+  var confirmBtn = document.getElementById("editQueryConfirmBtn");
+  if (textarea) {
+   textarea.value = "";
+   textarea.disabled = true;
+   textarea.placeholder = "Open this panel to load query SQL…";
+  }
+  if (meta) {
+   meta.textContent = "";
+  }
+  if (confirmBtn) {
+   confirmBtn.disabled = true;
+  }
+ }
+ wireActionConfirm({
+  toggleBtnId: "editQueryBtn",
+  panelId: "editQueryConfirmPanel",
+  cancelBtnId: "editQueryCancelBtn",
+  confirmFormId: "editQueryConfirmForm",
+  confirmBtnId: "editQueryConfirmBtn",
+  confirmPendingLabel: "Saving…",
+  clearQueryCacheOnSubmit: true,
+  otherPanels: otherPanelsExcept("editQueryConfirmPanel"),
+  onOpen: loadEditQuerySql,
+  onClose: resetEditQueryDraft
+ });
  wireActionConfirm({
   toggleBtnId: "clearRecordsBtn",
   panelId: "clearRecordsConfirmPanel",
@@ -1345,8 +1753,7 @@ Showing 0 records
   confirmFormId: "clearRecordsConfirmForm",
   confirmBtnId: "clearRecordsConfirmBtn",
   confirmPendingLabel: "Clearing…",
-  otherPanelId: "runQueryConfirmPanel",
-  otherToggleBtnId: "runQueryBtn"
+  otherPanels: otherPanelsExcept("clearRecordsConfirmPanel")
  });
  wireActionConfirm({
   toggleBtnId: "runQueryBtn",
@@ -1355,8 +1762,7 @@ Showing 0 records
   confirmFormId: "runQueryConfirmForm",
   confirmBtnId: "runQueryConfirmBtn",
   confirmPendingLabel: "Starting…",
-  otherPanelId: "clearRecordsConfirmPanel",
-  otherToggleBtnId: "clearRecordsBtn",
+  otherPanels: otherPanelsExcept("runQueryConfirmPanel"),
   onSubmit: function () {
    var runQueryBtn = document.getElementById("runQueryBtn");
    if (!runQueryBtn) {
@@ -1430,3 +1836,4 @@ Showing 0 records
 </script>
 </body>
 </html>
+%%[ ENDIF ]%%
