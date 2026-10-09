@@ -2,7 +2,7 @@
 VAR @HOME_URL, @BUILD_PAGE_SELF, @CONTACTS_PAGE_SELF, @EDIT_DE_OPEN_URL, @jid, @contactUiPage
 VAR @navRows, @navRow, @detailRows, @detailRow, @detailCount
 VAR @dispName, @dispType, @dispDeName, @dispDeId, @dispQueryKey, @sourceDeKey
-VAR @pageStatus, @loadError, @contactsTableHtml, @totalRecords
+VAR @pageStatus, @loadError, @contactsTableHtml, @contactsPaginationPagesHtml, @totalRecords
 VAR @contactTotalPages, @contactPageSize, @contactStartRow, @contactEndRow, @contactNavBase
 VAR @editSidebarHtml, @buildNavContext, @buildNavActive, @journeyDisplayName
 VAR @STACK_JOURNEY_TYPE, @isStackBuild, @automationGuid, @automationCustomerKey, @automationName
@@ -36,6 +36,7 @@ ENDIF
 SET @pageStatus = "ready"
 SET @loadError = ""
 SET @contactsTableHtml = ""
+SET @contactsPaginationPagesHtml = ""
 SET @totalRecords = 0
 SET @contactTotalPages = 1
 SET @contactPageSize = 20
@@ -1313,6 +1314,70 @@ function ctClearEntryDe(deRef) {
  return { ok: false, msg: wsResult.msg || rowFallback.msg };
 }
 
+function ctPaginationPageLinkHtml(base, hash, pageNum, isActive) {
+ var cls = "page-number";
+ if (isActive) {
+  cls += " active";
+ }
+ var href = base + String(pageNum) + hash;
+ return (
+  '<a class="' +
+  cls +
+  '" href="' +
+  ctHtml(href) +
+  '">' +
+  ctHtml(String(pageNum)) +
+  "</a>"
+ );
+}
+
+function ctBuildPaginationPagesHtml(navBase, activePage, totalPages) {
+ var maxVisible = 10;
+ var base = ctTrim(navBase);
+ var active = parseInt(String(activePage), 10);
+ var total = parseInt(String(totalPages), 10);
+ if (isNaN(active) || active < 1) {
+  active = 1;
+ }
+ if (isNaN(total) || total < 1) {
+  total = 1;
+ }
+ if (total <= 1) {
+  return "";
+ }
+ var hash = "#filterscrollto";
+ var html = "";
+ var i;
+ if (total <= maxVisible) {
+  for (i = 1; i <= total; i++) {
+   html += ctPaginationPageLinkHtml(base, hash, i, i === active);
+  }
+  return html;
+ }
+ var startPage = Math.max(1, active - Math.floor(maxVisible / 2));
+ var endPage = startPage + maxVisible - 1;
+ if (endPage > total) {
+  endPage = total;
+  startPage = Math.max(1, endPage - maxVisible + 1);
+ }
+ if (startPage > 1) {
+  html += ctPaginationPageLinkHtml(base, hash, 1, active === 1);
+  if (startPage > 2) {
+   html += '<span class="page-ellipsis">...</span>';
+  }
+ }
+ for (i = startPage; i <= endPage; i++) {
+  html += ctPaginationPageLinkHtml(base, hash, i, i === active);
+ }
+ if (endPage < total) {
+  if (endPage < total - 1) {
+   html += '<span class="page-ellipsis">...</span>';
+  }
+  html += ctPaginationPageLinkHtml(base, hash, total, active === total);
+ }
+ return html;
+}
+
 function ctBuildTableHtml(rows, page, pageSize) {
  var total = rows.length;
  var totalPages = total > 0 ? Math.ceil(total / pageSize) : 1;
@@ -1434,12 +1499,18 @@ if (!contactsQueryJsonMode && pageStatus == "ready" && sourceDeKey) {
   ctSet("contactUiPage", String(built.page));
   ctSet("contactStartRow", String(built.startRow));
   ctSet("contactEndRow", String(built.endRow));
+  var navBase = ctTrim(Platform.Variable.GetValue("@contactNavBase") || "");
+  ctSet(
+   "contactsPaginationPagesHtml",
+   ctBuildPaginationPagesHtml(navBase, built.page, built.totalPages)
+  );
  } catch (loadEx) {
   pageStatus = "error";
   loadError = loadEx.message || ctStr(loadEx);
   ctSet("pageStatus", pageStatus);
   ctSet("loadError", loadError);
   ctSet("contactsTableHtml", '<tr><td colspan="4" style="text-align:center;padding:24px;color:#b91c1c;">Could not load entry DE rows.</td></tr>');
+  ctSet("contactsPaginationPagesHtml", "");
  }
 }
 </script>
@@ -1698,19 +1769,7 @@ Showing 0 records
 <span class="pagination-btn disabled"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg> Previous</span>
 %%[ ENDIF ]%%
 <div class="pagination-pages">
-<a class="page-number%%[ IF @contactUiPage == 1 THEN ]%% active%%[ ENDIF ]%%" href="%%=Concat(@contactNavBase,"1","#filterscrollto")=%%">1</a>
-%%[ IF @contactUiPage > 3 THEN ]%%
-<span class="page-ellipsis">...</span>
-%%[ ENDIF ]%%
-%%[ IF @contactUiPage > 2 AND @contactUiPage != 1 AND @contactUiPage != @contactTotalPages THEN ]%%
-<a class="page-number active" href="%%=Concat(@contactNavBase,@contactUiPage,"#filterscrollto")=%%">%%=v(@contactUiPage)=%%</a>
-%%[ ENDIF ]%%
-%%[ IF Add(@contactUiPage,1) < @contactTotalPages AND @contactUiPage != 1 THEN ]%%
-<span class="page-ellipsis">...</span>
-%%[ ENDIF ]%%
-%%[ IF @contactTotalPages > 1 THEN ]%%
-<a class="page-number%%[ IF @contactUiPage == @contactTotalPages THEN ]%% active%%[ ENDIF ]%%" href="%%=Concat(@contactNavBase,@contactTotalPages,"#filterscrollto")=%%">%%=v(@contactTotalPages)=%%</a>
-%%[ ENDIF ]%%
+%%=TreatAsContent(@contactsPaginationPagesHtml)=%%
 </div>
 %%[ IF @contactUiPage < @contactTotalPages THEN ]%%
 <a class="pagination-btn" href="%%=Concat(@contactNavBase,Add(@contactUiPage,1),"#filterscrollto")=%%">Next <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg></a>
