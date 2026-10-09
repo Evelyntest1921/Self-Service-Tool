@@ -328,6 +328,183 @@ function ctRetrieveDeRows(deKey) {
  return [];
 }
 
+function ctDeHasField(deKey, fieldName) {
+ var ck = ctResolveDeCustomerKey(deKey);
+ if (!ck) {
+  ck = ctTrim(deKey);
+ }
+ if (!ck) {
+  return false;
+ }
+ var want = ctTrim(fieldName).toLowerCase();
+ if (!want) {
+  return false;
+ }
+ try {
+  var prox = new Script.Util.WSProxy();
+  var deRes = prox.retrieve("DataExtension", ["ObjectID"], {
+   Property: "CustomerKey",
+   SimpleOperator: "equals",
+   Value: ck
+  });
+  if (!deRes || !deRes.Results || !deRes.Results.length) {
+   deRes = prox.retrieve("DataExtension", ["ObjectID"], {
+    Property: "Name",
+    SimpleOperator: "equals",
+    Value: ck
+   });
+  }
+  if (!deRes || !deRes.Results || !deRes.Results.length) {
+   return false;
+  }
+  var deOid = ctTrim(deRes.Results[0].ObjectID);
+  if (!deOid) {
+   return false;
+  }
+  var fieldsRes = prox.retrieve("DataExtensionField", ["Name"], {
+   Property: "DataExtension.ObjectID",
+   SimpleOperator: "equals",
+   Value: deOid
+  });
+  var fields = ctCoerceRows(fieldsRes);
+  var fi;
+  for (fi = 0; fi < fields.length; fi++) {
+   var nm = ctTrim(fields[fi].Name).toLowerCase();
+   if (nm === want) {
+    return true;
+   }
+  }
+ } catch (deFieldEx) {}
+ return false;
+}
+
+function ctAmpRowToPlainObject(r) {
+ var out = {};
+ var names = [
+  "ContactId",
+  "contactId",
+  "SubscriberKey",
+  "Email",
+  "email",
+  "Account_Owner_Name",
+  "Account_owner_name",
+  "account_owner_name",
+  "Account_Owner_Email",
+  "Account_owner_email",
+  "account_owner_email"
+ ];
+ var i;
+ for (i = 0; i < names.length; i++) {
+  try {
+   var v = Platform.Function.Field(r, names[i]);
+   if (v !== null && typeof v !== "undefined" && ctTrim(v)) {
+    out[names[i]] = v;
+   }
+  } catch (fieldEx) {}
+ }
+ return out;
+}
+
+function ctAmpLookupRowsByPage(deKey, pageNum) {
+ var key = ctTrim(deKey);
+ if (!key) {
+  return [];
+ }
+ var pageKeys = [String(pageNum), pageNum];
+ if (typeof pageNum === "number") {
+  pageKeys.push(pageNum + 0);
+ }
+ var rows = [];
+ var pi;
+ for (pi = 0; pi < pageKeys.length; pi++) {
+  var pk = pageKeys[pi];
+  try {
+   var rs = Platform.Function.LookupRows(key, "PageNumber", pk);
+   var cnt = Platform.Function.RowCount(rs);
+   if (cnt > 0) {
+    var ri;
+    for (ri = 1; ri <= cnt; ri++) {
+     rows.push(ctAmpRowToPlainObject(Platform.Function.Row(rs, ri)));
+    }
+    return rows;
+   }
+  } catch (lookupEx) {}
+ }
+ return rows;
+}
+
+function ctAmpMaxPageMeta(deKey) {
+ var key = ctTrim(deKey);
+ if (!key) {
+  return { totalPages: 1, hasMeta: false };
+ }
+ var rs = null;
+ try {
+  rs = Platform.Function.LookupOrderedRows(key, 1, "PageNumber DESC");
+ } catch (orderedEx) {
+  rs = null;
+ }
+ if (!rs || Platform.Function.RowCount(rs) < 1) {
+  return { totalPages: 1, hasMeta: false };
+ }
+ var metaRow = Platform.Function.Row(rs, 1);
+ var totalPages = 1;
+ var maxPageNum = 0;
+ var totalPagesField = 0;
+ try {
+  maxPageNum = parseInt(ctStr(Platform.Function.Field(metaRow, "PageNumber")), 10);
+ } catch (maxPageEx) {
+  maxPageNum = 0;
+ }
+ if (!isNaN(maxPageNum) && maxPageNum > 0) {
+  totalPages = maxPageNum;
+ }
+ try {
+  totalPagesField = parseInt(ctStr(Platform.Function.Field(metaRow, "TotalPages")), 10);
+ } catch (tpEx) {
+  totalPagesField = 0;
+ }
+ if (!isNaN(totalPagesField) && totalPagesField > 0) {
+  totalPages = totalPagesField;
+ }
+ if (totalPages < 1) {
+  totalPages = 1;
+ }
+ return { totalPages: totalPages, hasMeta: true };
+}
+
+function ctLoadContactsTableBatch(deKey, pageNum, pageSize) {
+ var lookupKey = ctResolveDeCustomerKey(deKey) || ctTrim(deKey);
+ var meta = ctAmpMaxPageMeta(lookupKey);
+ if (!meta.hasMeta) {
+  meta = ctAmpMaxPageMeta(deKey);
+ }
+ var totalPages = meta.totalPages;
+ if (pageNum > totalPages) {
+  pageNum = totalPages;
+ }
+ if (pageNum < 1) {
+  pageNum = 1;
+ }
+ var batchRows = ctAmpLookupRowsByPage(lookupKey, pageNum);
+ if (!batchRows.length) {
+  batchRows = ctAmpLookupRowsByPage(deKey, pageNum);
+ }
+ var totalRecords = totalPages * pageSize;
+ if (totalRecords < 1 && batchRows.length > 0) {
+  totalRecords = batchRows.length;
+ }
+ return ctBuildTableHtmlPaged(batchRows, pageNum, pageSize, totalRecords, totalPages);
+}
+
+function ctLoadContactsTable(deKey, pageNum, pageSize) {
+ if (ctDeHasField(deKey, "PageNumber")) {
+  return ctLoadContactsTableBatch(deKey, pageNum, pageSize);
+ }
+ var allRows = ctRetrieveDeRows(deKey);
+ return ctBuildTableHtml(allRows, pageNum, pageSize);
+}
+
 function ctParseJson(text) {
  try {
   return Platform.Function.ParseJSON(ctStr(text));
@@ -1207,6 +1384,52 @@ function ctBuildTableHtml(rows, page, pageSize) {
  };
 }
 
+function ctBuildTableHtmlPaged(rows, page, pageSize, totalRecords, totalPages) {
+ var batchCount = rows ? rows.length : 0;
+ var html = "";
+ var i;
+ if (batchCount == 0) {
+  if (totalPages > 1 || totalRecords > 0) {
+   html =
+    '<tr><td colspan="4" style="text-align:center;padding:24px;color:#6b7280;">No rows on this page. Confirm PageNumber is populated on the entry data extension.</td></tr>';
+  } else {
+   html =
+    '<tr><td colspan="4" style="text-align:center;padding:24px;color:#6b7280;">No rows in the entry data extension.</td></tr>';
+  }
+ } else {
+  for (i = 0; i < batchCount; i++) {
+   var row = rows[i];
+   var contactId = ctField(row, ["ContactId", "contactId", "contactid", "SubscriberKey"]);
+   var email = ctField(row, ["Email", "email"]);
+   var ownerName = ctField(row, ["Account_Owner_Name", "Account_owner_name", "account_owner_name"]);
+   var ownerEmail = ctField(row, ["Account_Owner_Email", "Account_owner_email", "account_owner_email"]);
+   html += "<tr>";
+   html += "<td>" + ctHtml(contactId || "-") + "</td>";
+   html += "<td>" + ctHtml(email || "-") + "</td>";
+   html += "<td>" + ctHtml(ownerName || "-") + "</td>";
+   html += "<td>" + ctHtml(ownerEmail || "-") + "</td>";
+   html += "</tr>";
+  }
+ }
+ if (page > totalPages) {
+  page = totalPages;
+ }
+ if (page < 1) {
+  page = 1;
+ }
+ var startRow = batchCount > 0 ? (page - 1) * pageSize + 1 : 0;
+ var endRow = batchCount > 0 ? startRow + batchCount - 1 : 0;
+ var total = totalRecords > 0 ? totalRecords : batchCount;
+ return {
+  html: html,
+  total: total,
+  totalPages: totalPages > 0 ? totalPages : 1,
+  page: page,
+  startRow: startRow,
+  endRow: endRow
+ };
+}
+
 var pageStatus = ctTrim(Platform.Variable.GetValue("@pageStatus") || "ready");
 var loadError = ctTrim(Platform.Variable.GetValue("@loadError") || "");
 var sourceDeKey = ctTrim(Platform.Variable.GetValue("@sourceDeKey") || "");
@@ -1272,8 +1495,7 @@ if (!contactsQueryJsonMode && confirmRunQuery && isStackBuild) {
 
 if (!contactsQueryJsonMode && pageStatus == "ready" && sourceDeKey) {
  try {
-  var allRows = ctRetrieveDeRows(sourceDeKey);
-  var built = ctBuildTableHtml(allRows, pageNum, pageSize);
+  var built = ctLoadContactsTable(sourceDeKey, pageNum, pageSize);
   ctSet("contactsTableHtml", built.html);
   ctSet("totalRecords", String(built.total));
   ctSet("contactTotalPages", String(built.totalPages));
