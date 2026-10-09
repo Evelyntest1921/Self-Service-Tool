@@ -921,6 +921,24 @@ function ctDeTargetFromRow(row) {
  return null;
 }
 
+function ctNormalizeTargetUpdateType(raw) {
+ var s = ctTrim(raw);
+ if (!s) {
+  return "";
+ }
+ var lower = s.toLowerCase();
+ if (lower === "append") {
+  return "Append";
+ }
+ if (lower === "update") {
+  return "Update";
+ }
+ if (lower === "overwrite") {
+  return "Overwrite";
+ }
+ return "";
+}
+
 function ctBuildContactsQueryJsonPayload() {
  var isStack = Platform.Variable.GetValue("@isStackBuild") == "true";
  if (!isStack) {
@@ -943,11 +961,13 @@ function ctBuildContactsQueryJsonPayload() {
   ctEscJson(ctTrim(row.Name)) +
   '","queryText":"' +
   ctEscJson(ctStr(row.QueryText || "")) +
+  '","targetUpdateType":"' +
+  ctEscJson(ctNormalizeTargetUpdateType(row.TargetUpdateType) || "Update") +
   '"}'
  );
 }
 
-function ctUpdateQueryDefinitionText(newText) {
+function ctUpdateQueryDefinition(newText, targetUpdateTypeRaw) {
  var isStack = Platform.Variable.GetValue("@isStackBuild") == "true";
  if (!isStack) {
   return { ok: false, msg: "Query edit is only for Journey + Automation builds." };
@@ -964,6 +984,14 @@ function ctUpdateQueryDefinitionText(newText) {
  if (!ctTrim(text)) {
   return { ok: false, msg: "Query SQL cannot be empty." };
  }
+ var postedAction = ctTrim(targetUpdateTypeRaw);
+ var targetUpdateType = ctNormalizeTargetUpdateType(targetUpdateTypeRaw);
+ if (postedAction && !targetUpdateType) {
+  return { ok: false, msg: "Data action must be Append, Update, or Overwrite." };
+ }
+ if (!targetUpdateType) {
+  targetUpdateType = ctNormalizeTargetUpdateType(row.TargetUpdateType) || "Update";
+ }
  var deKey = ctTrim(Platform.Variable.GetValue("@sourceDeKey") || "");
  var deName = ctTrim(Platform.Variable.GetValue("@dispDeName") || "");
  var deTarget = ctDeTargetFromRow(row);
@@ -979,7 +1007,7 @@ function ctUpdateQueryDefinitionText(newText) {
   CustomerKey: ctTrim(row.CustomerKey),
   QueryText: text,
   TargetType: ctTrim(row.TargetType) || "DE",
-  TargetUpdateType: ctTrim(row.TargetUpdateType) || "Update",
+  TargetUpdateType: targetUpdateType,
   DataExtensionTarget: deTarget
  };
  try {
@@ -1204,7 +1232,8 @@ var isStackBuild = Platform.Variable.GetValue("@isStackBuild") == "true";
 
 if (!contactsQueryJsonMode && confirmUpdateQuery && isStackBuild && pageStatus == "ready") {
  var postedQueryText = ctRequestField("queryText");
- var updateResult = ctUpdateQueryDefinitionText(postedQueryText);
+ var postedTargetUpdateType = ctRequestField("targetUpdateType");
+ var updateResult = ctUpdateQueryDefinition(postedQueryText, postedTargetUpdateType);
  ctSet("updateQueryOk", updateResult.ok ? "true" : "false");
  if (updateResult.ok) {
   ctSet(
@@ -1314,6 +1343,11 @@ body{font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif;background:va
 .edit-query-button:hover{background:#eef2ff;border-color:var(--primary-dark)}
 .edit-query-form{margin:0;width:100%}
 .edit-query-meta{margin:0 0 10px;font-size:0.8125rem;color:var(--gray-600)}
+.edit-query-field{margin:0 0 14px}
+.edit-query-field-label{display:block;margin:0 0 6px;font-size:0.8125rem;font-weight:600;color:var(--gray-700)}
+.edit-query-field-hint{margin:6px 0 0;font-size:0.75rem;line-height:1.45;color:var(--gray-600)}
+.edit-query-select{display:block;width:100%;max-width:320px;min-height:40px;padding:8px 12px;font-size:0.875rem;font-family:Inter,sans-serif;border:1px solid var(--border-color);border-radius:0.375rem;background:#fff;color:var(--gray-900);box-sizing:border-box}
+.edit-query-select:disabled{background:#f3f4f6;color:var(--gray-600);cursor:not-allowed}
 .edit-query-textarea{display:block;width:100%;min-height:220px;margin:0 0 14px;padding:12px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;line-height:1.45;border:1px solid var(--border-color);border-radius:0.375rem;resize:vertical;box-sizing:border-box}
 .edit-query-textarea:disabled{background:#f3f4f6;color:var(--gray-600)}
 .responses-header-text{flex:1;min-width:0}
@@ -1428,12 +1462,21 @@ Manage Build
 </div>
 %%[ IF @isStackBuild == "true" AND @runQueryOk != "true" THEN ]%%
 <div class="action-confirm-panel" id="editQueryConfirmPanel" role="region" aria-labelledby="editQueryConfirmTitle" hidden%%[ IF @confirmUpdateQuery == "1" AND @updateQueryOk == "false" THEN ]%% data-auto-open="true"%%[ ENDIF ]%%>
-<p class="action-confirm-text" id="editQueryConfirmTitle"><strong>Edit the automation query SQL.</strong> Changes apply to the query activity linked to%%[ IF NOT Empty(@automationName) THEN ]%% <strong>%%=v(@automationName)=%%</strong>%%[ ELSE ]%% your Journey + Automation build%%[ ENDIF ]%%. The target data extension stays <strong>%%=IIF(NOT Empty(@dispDeName) AND @dispDeName != "N/A", @dispDeName, @dispDeId)=%%</strong>. Saving does not run the query or change who is already in the journey. Use <strong>Run Query</strong> after updating to refresh the entry list.</p>
+<p class="action-confirm-text" id="editQueryConfirmTitle"><strong>Edit the automation query.</strong> Changes apply to the query activity linked to%%[ IF NOT Empty(@automationName) THEN ]%% <strong>%%=v(@automationName)=%%</strong>%%[ ELSE ]%% your Journey + Automation build%%[ ENDIF ]%%. The target data extension stays <strong>%%=IIF(NOT Empty(@dispDeName) AND @dispDeName != "N/A", @dispDeName, @dispDeId)=%%</strong>. You can change SQL and how results land in that extension (<strong>Append</strong>, <strong>Update</strong>, or <strong>Overwrite</strong>). Saving does not run the query or change who is already in the journey. Use <strong>Run Query</strong> after updating to refresh the entry list.</p>
 <p class="edit-query-meta" id="editQueryLoadMeta" aria-live="polite"></p>
 <form method="post" action="" class="edit-query-form" id="editQueryConfirmForm">
 <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
 <input type="hidden" name="contactPage" value="%%=v(@contactUiPage)=%%">
 <input type="hidden" name="confirmUpdateQuery" value="1">
+<div class="edit-query-field">
+<label class="edit-query-field-label" for="editQueryTargetUpdateType">Data action</label>
+<select class="edit-query-select" id="editQueryTargetUpdateType" name="targetUpdateType" disabled>
+<option value="Append">Append</option>
+<option value="Update">Update</option>
+<option value="Overwrite">Overwrite</option>
+</select>
+<p class="edit-query-field-hint"><strong>Append</strong> adds rows. <strong>Update</strong> upserts by primary key. <strong>Overwrite</strong> replaces all rows in the target data extension.</p>
+</div>
 <textarea class="edit-query-textarea" id="editQueryTextarea" name="queryText" rows="12" spellcheck="false" disabled placeholder="Open this panel to load query SQL…"></textarea>
 <div class="action-confirm-actions">
 <button type="button" class="header-action-btn de-open-button" id="editQueryCancelBtn">Cancel</button>
@@ -1642,29 +1685,68 @@ Showing 0 records
   }
   return JSON.parse(raw);
  }
+ function applyEditQueryPayload(payload) {
+  var meta = document.getElementById("editQueryLoadMeta");
+  var textarea = document.getElementById("editQueryTextarea");
+  var targetSelect = document.getElementById("editQueryTargetUpdateType");
+  var confirmBtn = document.getElementById("editQueryConfirmBtn");
+  if (!payload || !payload.ok) {
+   if (meta) {
+    meta.textContent =
+     (payload && payload.error) || "Could not load query.";
+   }
+   if (textarea) {
+    textarea.value = "";
+    textarea.disabled = true;
+   }
+   if (targetSelect) {
+    targetSelect.disabled = true;
+   }
+   if (confirmBtn) {
+    confirmBtn.disabled = true;
+   }
+   return;
+  }
+  if (meta) {
+   var metaParts = [];
+   if (payload.name) {
+    metaParts.push("Name: " + payload.name);
+   }
+   if (payload.customerKey) {
+    metaParts.push("Key: " + payload.customerKey);
+   }
+   meta.textContent = metaParts.length ? metaParts.join(" · ") : "Query loaded.";
+  }
+  if (textarea) {
+   textarea.value = payload.queryText || "";
+   textarea.disabled = false;
+  }
+  if (targetSelect) {
+   var action = payload.targetUpdateType || "Update";
+   if (
+    action !== "Append" &&
+    action !== "Update" &&
+    action !== "Overwrite"
+   ) {
+    action = "Update";
+   }
+   targetSelect.value = action;
+   targetSelect.disabled = false;
+  }
+  if (confirmBtn) {
+   confirmBtn.disabled = false;
+  }
+ }
  function loadEditQuerySql() {
   var meta = document.getElementById("editQueryLoadMeta");
   var textarea = document.getElementById("editQueryTextarea");
+  var targetSelect = document.getElementById("editQueryTargetUpdateType");
   var confirmBtn = document.getElementById("editQueryConfirmBtn");
   if (!textarea) {
    return;
   }
   if (editQueryCache && editQueryCache.ok) {
-   if (meta) {
-    var parts = [];
-    if (editQueryCache.name) {
-     parts.push("Name: " + editQueryCache.name);
-    }
-    if (editQueryCache.customerKey) {
-     parts.push("Key: " + editQueryCache.customerKey);
-    }
-    meta.textContent = parts.length ? parts.join(" · ") : "Query loaded.";
-   }
-   textarea.value = editQueryCache.queryText || "";
-   textarea.disabled = false;
-   if (confirmBtn) {
-    confirmBtn.disabled = false;
-   }
+   applyEditQueryPayload(editQueryCache);
    return;
   }
   if (meta) {
@@ -1672,6 +1754,9 @@ Showing 0 records
   }
   textarea.value = "";
   textarea.disabled = true;
+  if (targetSelect) {
+   targetSelect.disabled = true;
+  }
   if (confirmBtn) {
    confirmBtn.disabled = true;
   }
@@ -1689,28 +1774,7 @@ Showing 0 records
      payload = { ok: false, error: "Invalid response from server." };
     }
     editQueryCache = payload;
-    if (!payload || !payload.ok) {
-     if (meta) {
-      meta.textContent =
-       (payload && payload.error) || "Could not load query.";
-     }
-     return;
-    }
-    if (meta) {
-     var metaParts = [];
-     if (payload.name) {
-      metaParts.push("Name: " + payload.name);
-     }
-     if (payload.customerKey) {
-      metaParts.push("Key: " + payload.customerKey);
-     }
-     meta.textContent = metaParts.length ? metaParts.join(" · ") : "Query loaded.";
-    }
-    textarea.value = payload.queryText || "";
-    textarea.disabled = false;
-    if (confirmBtn) {
-     confirmBtn.disabled = false;
-    }
+    applyEditQueryPayload(payload);
    })
    .catch(function () {
     if (meta) {
@@ -1721,11 +1785,16 @@ Showing 0 records
  function resetEditQueryDraft() {
   var textarea = document.getElementById("editQueryTextarea");
   var meta = document.getElementById("editQueryLoadMeta");
+  var targetSelect = document.getElementById("editQueryTargetUpdateType");
   var confirmBtn = document.getElementById("editQueryConfirmBtn");
   if (textarea) {
    textarea.value = "";
    textarea.disabled = true;
    textarea.placeholder = "Open this panel to load query SQL…";
+  }
+  if (targetSelect) {
+   targetSelect.value = "Update";
+   targetSelect.disabled = true;
   }
   if (meta) {
    meta.textContent = "";
