@@ -35,6 +35,9 @@
   IF @homeRecentBuildsJsonMode != "1" AND QueryParameter("homeRecentBuildsData") == "1" THEN
    SET @homeRecentBuildsJsonMode = "1"
   ENDIF
+  IF @homePerformanceJsonMode != "1" AND QueryParameter("homePerformanceData") == "1" THEN
+   SET @homePerformanceJsonMode = "1"
+  ENDIF
   SET @specDeCountForCharts = "0"
   SET @browseMode = "0"
   SET @jaBrowseMarkup = ""
@@ -1293,6 +1296,7 @@
     return String(v || "") === "1";
   }
   if (isJourneyPickerDataRequest()) {
+    Platform.Variable.SetValue("@homeJourneyPickerJsonMode", "1");
     var journeyPickerJson = '{"ok":false,"error":"Could not load journeys.","journeys":[]}';
     try {
       journeyPickerJson = stringifyHomeJson(buildJourneyPickerPayload());
@@ -1303,9 +1307,10 @@
         String(pickerMsg).replace(/\\/g, "\\\\").replace(/"/g, '\\"') +
         '","journeys":[]}';
     }
-    setV("homeJourneyPickerJson", journeyPickerJson);
+    Platform.Variable.SetValue("@homeJourneyPickerJson", journeyPickerJson);
   }
   if (isRecentBuildsDataRequest()) {
+    Platform.Variable.SetValue("@homeRecentBuildsJsonMode", "1");
     var recentBuildsJson = '{"ok":false,"error":"Could not load recent builds."}';
     try {
       recentBuildsJson = stringifyHomeJson(buildRecentBuildsPayload());
@@ -1317,7 +1322,7 @@
         String(recentBuildsMsg).replace(/\\/g, "\\\\").replace(/"/g, '\\"') +
         '"}';
     }
-    setV("homeRecentBuildsJson", recentBuildsJson);
+    Platform.Variable.SetValue("@homeRecentBuildsJson", recentBuildsJson);
   }
 </script>
 <script runat="server" language="javascript">
@@ -1515,6 +1520,7 @@
     return raw;
   }
   if (isPerformanceDataRequest()) {
+    Platform.Variable.SetValue("@homePerformanceJsonMode", "1");
     var performanceJson = '{"ok":false,"error":"Could not load performance data."}';
     try {
     var performancePayload = {
@@ -3791,6 +3797,51 @@
     return base;
   }
 
+  function homeDataRequestUrl(flagParam, extraParams) {
+    var url;
+    try {
+      url = new URL(window.location.href);
+    } catch (urlEx) {
+      var base = hubBaseUrl();
+      var sep = base.indexOf("?") >= 0 ? "&" : "?";
+      var fallback = base + sep + encodeURIComponent(flagParam) + "=1";
+      if (extraParams) {
+        Object.keys(extraParams).forEach(function (key) {
+          var val = extraParams[key];
+          if (val !== null && val !== undefined && String(val) !== "") {
+            fallback += "&" + encodeURIComponent(key) + "=" + encodeURIComponent(String(val));
+          }
+        });
+      }
+      return fallback;
+    }
+    url.searchParams.set(flagParam, "1");
+    if (extraParams) {
+      Object.keys(extraParams).forEach(function (key) {
+        var val = extraParams[key];
+        if (val === null || val === undefined || String(val) === "") {
+          url.searchParams.delete(key);
+        } else {
+          url.searchParams.set(key, String(val));
+        }
+      });
+    }
+    return url.toString();
+  }
+
+  function parseHomeJsonResponse(text, label) {
+    var trimmed = (text || "").replace(/^\uFEFF/, "").trim();
+    if (trimmed && trimmed.charAt(0) === "{") {
+      return JSON.parse(trimmed);
+    }
+    var start = trimmed.indexOf("{");
+    var end = trimmed.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      return JSON.parse(trimmed.substring(start, end + 1));
+    }
+    throw new Error((label || "Data") + " response was not JSON.");
+  }
+
   function setAddJourneyPickerStatus(message, isError) {
     var statusEl = document.getElementById('addJourneyPickerStatus');
     if (!statusEl) return;
@@ -3871,13 +3922,11 @@
       select.innerHTML = '<option value="">Loading journeys…</option>';
     }
     setAddJourneyPickerStatus('Loading journeys from Journey Builder…', false);
-    var base = hubBaseUrl();
-    var sep = base.indexOf('?') >= 0 ? '&' : '?';
-    var url = base + sep + 'homeJourneyPickerData=1';
+    var url = homeDataRequestUrl("homeJourneyPickerData");
     fetch(url, { credentials: 'same-origin' })
       .then(function (resp) { return resp.text(); })
       .then(function (text) {
-        var data = JSON.parse(text);
+        var data = parseHomeJsonResponse(text, "Journey picker");
         if (!data.ok) {
           throw new Error(data.error || 'Could not load journeys.');
         }
@@ -3929,20 +3978,13 @@
   var homeRecentBuildsSearchTimer = null;
 
   function recentBuildsDataUrl(page, searchTerm) {
-    var base = hubBaseUrl();
-    if (!base) {
-      base = window.location.pathname;
-    }
-    var sep = base.indexOf("?") >= 0 ? "&" : "?";
-    var url =
-      base +
-      sep +
-      "homeRecentBuildsData=1&buildsPage=" +
-      encodeURIComponent(String(page || 1));
+    var extra = {
+      buildsPage: String(page || 1)
+    };
     if (searchTerm) {
-      url += "&buildsSearch=" + encodeURIComponent(searchTerm);
+      extra.buildsSearch = searchTerm;
     }
-    return url;
+    return homeDataRequestUrl("homeRecentBuildsData", extra);
   }
 
   function renderRecentBuildsEmptyState(title, message) {
@@ -4038,11 +4080,7 @@
         if (token !== window.homeRecentBuildsLoadToken) {
           return;
         }
-        var trimmed = (text || "").replace(/^\uFEFF/, "").trim();
-        if (!trimmed || trimmed.charAt(0) !== "{") {
-          throw new Error("Recent builds response was not JSON.");
-        }
-        applyRecentBuildsPayload(JSON.parse(trimmed));
+        applyRecentBuildsPayload(parseHomeJsonResponse(text, "Recent builds"));
       })
       .catch(function (err) {
         if (token !== window.homeRecentBuildsLoadToken) {
@@ -4561,27 +4599,12 @@
       done(null);
       return;
     }
-    var dataEl = document.getElementById('homeHubUrlData');
-    var base = dataEl ? (dataEl.getAttribute('data-url') || '') : '';
-    if (!base) {
-      base = window.location.pathname;
-    }
-    var sep = base.indexOf('?') >= 0 ? '&' : '?';
-    fetch(base + sep + 'homePerformanceData=1', { credentials: 'same-origin' })
+    fetch(homeDataRequestUrl("homePerformanceData"), { credentials: 'same-origin' })
       .then(function (response) {
         return response.text();
       })
       .then(function (text) {
-        var trimmed = (text || '').replace(/^\uFEFF/, '').trim();
-        if (!trimmed || trimmed.charAt(0) !== '{') {
-          throw new Error('Performance data response was not JSON.');
-        }
-        var data;
-        try {
-          data = JSON.parse(trimmed);
-        } catch (parseErr) {
-          throw new Error('Could not parse performance data.');
-        }
+        var data = parseHomeJsonResponse(text, "Performance data");
         if (!data || !data.ok) {
           throw new Error((data && data.error) || 'Could not load performance data.');
         }
