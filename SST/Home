@@ -27,8 +27,13 @@
   SET @homePerformanceJsonMode = IIF(RequestParameter("homePerformanceData") == "1", "1", "0")
   SET @homeJourneyPickerJson = ""
   SET @homeJourneyPickerJsonMode = IIF(RequestParameter("homeJourneyPickerData") == "1", "1", "0")
+  SET @homeRecentBuildsJson = ""
+  SET @homeRecentBuildsJsonMode = IIF(RequestParameter("homeRecentBuildsData") == "1", "1", "0")
   IF @homeJourneyPickerJsonMode != "1" AND QueryParameter("homeJourneyPickerData") == "1" THEN
    SET @homeJourneyPickerJsonMode = "1"
+  ENDIF
+  IF @homeRecentBuildsJsonMode != "1" AND QueryParameter("homeRecentBuildsData") == "1" THEN
+   SET @homeRecentBuildsJsonMode = "1"
   ENDIF
   SET @specDeCountForCharts = "0"
   SET @browseMode = "0"
@@ -43,7 +48,7 @@
   SET @addBuildError = ""
   SET @accessToken = ""
   SET @subdomain = ""
-  SET @recentBuildsOk = "false"
+  SET @recentBuildsOk = "pending"
   SET @jaBuildsLoadError = ""
   SET @jaEmpty = "1"
   SET @jaRecentBuildsMarkup = ""
@@ -730,15 +735,172 @@
     }
     return total > 0 ? total : 0;
   }
-  function hubUrlWithBuildsPage(hubUrl, page) {
-    var base = String(hubUrl || "");
-    if (!base) {
-      return "?buildsPage=" + page;
+  function parseBuildsSearchTerm() {
+    var v = "";
+    try {
+      v = Platform.Request.GetQueryStringParameter("buildsSearch");
     }
-    if (base.indexOf("?") >= 0) {
-      return base + "&buildsPage=" + page;
+    catch (searchQsEx) {
     }
-    return base + "?buildsPage=" + page;
+    if (!v) {
+      try {
+        v = Platform.Request.GetFormField("buildsSearch");
+      }
+      catch (searchFormEx) {
+      }
+    }
+    if (!v) {
+      return "";
+    }
+    return String(v).replace(/^\s+|\s+$/g, "");
+  }
+  function rowMatchesBuildSearch(row, term) {
+    if (!term) {
+      return true;
+    }
+    var t = String(term).toLowerCase();
+    var nm = String(
+      fieldFromRow(row, ["buildName", "BuildName", "journeyName", "JourneyName", "emailName", "EmailName"]) || ""
+    ).toLowerCase();
+    var jid = journeyIdFromRow(row).toLowerCase();
+    var tp = String(fieldFromRow(row, ["journeyType", "JourneyType"]) || "").toLowerCase();
+    var js = String(fieldFromRow(row, ["JourneyStatus", "journeyStatus"]) || "").toLowerCase();
+    return nm.indexOf(t) >= 0 || jid.indexOf(t) >= 0 || tp.indexOf(t) >= 0 || js.indexOf(t) >= 0;
+  }
+  function isRecentBuildsDataRequest() {
+    var v = Platform.Request.GetQueryStringParameter("homeRecentBuildsData");
+    if (v === null || v === undefined || v === "") {
+      v = Platform.Request.GetFormField("homeRecentBuildsData");
+    }
+    return String(v || "") === "1";
+  }
+  function buildRecentBuildsPayload() {
+    var hubUrl = Platform.Variable.GetValue("@hubUrl") || "";
+    var buildsPage = parseBrowsePage(getAmpVar("buildsPage"));
+    if (!buildsPage || buildsPage === 1) {
+      try {
+        buildsPage = parseBrowsePage(Platform.Request.GetQueryStringParameter("buildsPage"));
+      }
+      catch (buildsPageEx) {
+      }
+    }
+    if (!buildsPage || buildsPage < 1) {
+      buildsPage = 1;
+    }
+    var searchTerm = parseBuildsSearchTerm();
+    var totalInDe = getDeRowCount();
+    var fetchLimit = totalInDe > 0 ? (totalInDe > MAX_DE_FETCH ? MAX_DE_FETCH : totalInDe) : MAX_DE_FETCH;
+    var recentLoad = loadRecentBuildRows(fetchLimit);
+    var orderedRows = recentLoad.rows;
+    if (searchTerm) {
+      var filtered = [];
+      var fi;
+      for (fi = 0; fi < orderedRows.length; fi++) {
+        if (rowMatchesBuildSearch(orderedRows[fi], searchTerm)) {
+          filtered.push(orderedRows[fi]);
+        }
+      }
+      orderedRows = filtered;
+    }
+    var rowCount = orderedRows.length;
+    var totalPages = rowCount > 0 ? Math.ceil(rowCount / BUILD_PAGE_SIZE) : 1;
+    if (buildsPage > totalPages) {
+      buildsPage = totalPages;
+    }
+    if (buildsPage < 1) {
+      buildsPage = 1;
+    }
+    if (!rowCount) {
+      return {
+        ok: true,
+        empty: "1",
+        markup: "",
+        pagination: "",
+        error: "",
+        page: String(buildsPage),
+        totalPages: String(totalPages),
+        searchTerm: searchTerm
+      };
+    }
+    var startIdx = (buildsPage - 1) * BUILD_PAGE_SIZE;
+    var endIdx = buildsPage * BUILD_PAGE_SIZE;
+    if (endIdx > rowCount) {
+      endIdx = rowCount;
+    }
+    var gx, r, nm, jidv, tp, cr, js, prog;
+    var parts = [];
+    for (gx = startIdx; gx < endIdx; gx++) {
+      r = orderedRows[gx];
+      nm = fieldFromRow(r, ["buildName", "BuildName"]);
+      if (!nm) {
+        nm = fieldFromRow(r, ["journeyName", "JourneyName", "emailName", "EmailName"]);
+      }
+      if (!nm) nm = "Untitled journey";
+      jidv = String(fieldFromRow(r, ["journeyId", "JourneyId", "JourneyID"]));
+      tp = String(fieldFromRow(r, ["journeyType", "JourneyType"]));
+      cr = formatRowDate(r);
+      js = String(fieldFromRow(r, ["JourneyStatus", "journeyStatus"]));
+      prog = resolveJourneyProgress(js);
+      var sentRaw = fieldFromRow(r, ["sentCount", "SentCount"]);
+      var sentHtml = "";
+      if (sentRaw !== null && sentRaw !== undefined && String(sentRaw).replace(/^\s+|\s+$/g, "") !== "") {
+        sentHtml = '<span class="progress-sent-count">' + esc(String(sentRaw)) + " sent</span>";
+      }
+      var detailHref =
+          jidv !== ""
+        ? BUILD_DETAIL_URL + "?journeyId=" + encodeURIComponent(jidv)
+        : BUILD_DETAIL_URL;
+      parts.push(
+        '<div class="survey-card">' +
+        '<div class="survey-header">' +
+        '<div class="survey-icon" data-build-icon="' + escAttr(buildTypeIconKey(tp)) + '"></div>' +
+        '<div class="survey-status status-Active">' +
+        esc(tp.length > 28 ? tp.substring(0, 28) + "..." : tp) +
+        "</div>" +
+        "</div>" +
+        '<h3 class="survey-title">' +
+        wrapTitle(nm, 30) +
+        "</h3>" +
+        '<div class="survey-meta">' +
+        '<span class="survey-id">ID: ' + esc(jidv) + '</span>' +
+        '<span class="survey-date">' + esc(cr) + "</span>" +
+        "</div>" +
+        '<div class="survey-progress">' +
+        '<div class="progress-info">' +
+        '<span class="progress-percentage ' +
+        prog.labelClass +
+        '">' +
+        esc(prog.label) +
+        "</span>" +
+        sentHtml +
+        "</div>" +
+        '<div class="progress-bar">' +
+        '<div class="progress-fill ' +
+        prog.fillClass +
+        '" style="width:' +
+        prog.width +
+        ';">' +
+        "</div>" +
+        "</div>" +
+        "</div>" +
+        '<div class="survey-actions">' +
+        '<a href="' +
+        detailHref +
+        '" class="btn-secondary">Manage build</a>' +
+        "</div>" +
+        "</div>"
+      );
+    }
+    return {
+      ok: true,
+      empty: "0",
+      markup: parts.join(""),
+      pagination: renderBuildsPagination(hubUrl, buildsPage, totalPages, rowCount),
+      error: "",
+      page: String(buildsPage),
+      totalPages: String(totalPages),
+      searchTerm: searchTerm
+    };
   }
   function renderBuildsPagination(hubUrl, page, totalPages, totalCount) {
     if (totalPages <= 1) {
@@ -750,9 +912,9 @@
     ];
     if (page > 1) {
       parts.push(
-        '<a href="' +
-        esc(hubUrlWithBuildsPage(hubUrl, page - 1)) +
-        '" class="filter-btn">Previous</a>'
+        '<a href="#" class="filter-btn" data-builds-page="' +
+        (page - 1) +
+        '">Previous</a>'
       );
     }
     else {
@@ -769,9 +931,9 @@
     );
     if (page < totalPages) {
       parts.push(
-        '<a href="' +
-        esc(hubUrlWithBuildsPage(hubUrl, page + 1)) +
-        '" class="filter-btn">Next</a>'
+        '<a href="#" class="filter-btn" data-builds-page="' +
+        (page + 1) +
+        '">Next</a>'
       );
     }
     else {
@@ -1143,128 +1305,19 @@
     }
     setV("homeJourneyPickerJson", journeyPickerJson);
   }
-  if (!isPerformanceDataRequest() && !isJourneyPickerDataRequest()) {
+  if (isRecentBuildsDataRequest()) {
+    var recentBuildsJson = '{"ok":false,"error":"Could not load recent builds."}';
     try {
-      var hubUrl = Platform.Variable.GetValue("@hubUrl") || "";
-      var buildsPage = parseBrowsePage(getAmpVar("buildsPage"));
-      if (!buildsPage || buildsPage === 1) {
-        try {
-          buildsPage = parseBrowsePage(Request.GetQueryStringParameter("buildsPage"));
-        }
-        catch (buildsPageEx) {
-        }
-      }
-      var totalInDe = getDeRowCount();
-      var fetchLimit = totalInDe > 0 ? (totalInDe > MAX_DE_FETCH ? MAX_DE_FETCH : totalInDe) : MAX_DE_FETCH;
-      var recentLoad = loadRecentBuildRows(fetchLimit);
-      var orderedRows = recentLoad.rows;
-      var rowCount = recentLoad.count;
-      var totalPages = rowCount > 0 ? Math.ceil(rowCount / BUILD_PAGE_SIZE) : 1;
-      if (buildsPage > totalPages) {
-        buildsPage = totalPages;
-      }
-      if (buildsPage < 1) {
-        buildsPage = 1;
-      }
-      setV("buildsPage", String(buildsPage));
-      if (!rowCount) {
-        setV("recentBuildsOk", "true");
-        setV("jaEmpty", "1");
-        setV("jaRecentBuildsMarkup", "");
-        setV("jaBuildsLoadError", "");
-        setV("jaBuildsPagination", "");
-      }
-      else {
-        var startIdx = (buildsPage - 1) * BUILD_PAGE_SIZE;
-        var endIdx = buildsPage * BUILD_PAGE_SIZE;
-        if (endIdx > rowCount) {
-          endIdx = rowCount;
-        }
-        var gx, r, nm, jidv, tp, cr, js, prog;
-        var parts = [];
-        for (gx = startIdx; gx < endIdx; gx++) {
-          r = orderedRows[gx];
-          nm = fieldFromRow(r, ["buildName", "BuildName"]);
-          if (!nm) {
-            nm = fieldFromRow(r, ["journeyName", "JourneyName", "emailName", "EmailName"]);
-          }
-          if (!nm) nm = "Untitled journey";
-          jidv = String(fieldFromRow(r, ["journeyId", "JourneyId", "JourneyID"]));
-          tp = String(fieldFromRow(r, ["journeyType", "JourneyType"]));
-          cr = formatRowDate(r);
-          js = String(fieldFromRow(r, ["JourneyStatus", "journeyStatus"]));
-          prog = resolveJourneyProgress(js);
-          var sentRaw = fieldFromRow(r, ["sentCount", "SentCount"]);
-          var sentHtml = "";
-          if (sentRaw !== null && sentRaw !== undefined && String(sentRaw).replace(/^\s+|\s+$/g, "") !== "") {
-            sentHtml = '<span class="progress-sent-count">' + esc(String(sentRaw)) + " sent</span>";
-          }
-          var detailHref =
-              jidv !== ""
-          ? BUILD_DETAIL_URL + "?journeyId=" + encodeURIComponent(jidv)
-          : BUILD_DETAIL_URL;
-          parts.push(
-            '<div class="survey-card">' +
-            '<div class="survey-header">' +
-            '<div class="survey-icon" data-build-icon="' + escAttr(buildTypeIconKey(tp)) + '"></div>' +
-            '<div class="survey-status status-Active">' +
-            esc(tp.length > 28 ? tp.substring(0, 28) + "..." : tp) +
-            "</div>" +
-            "</div>" +
-            '<h3 class="survey-title">' +
-            wrapTitle(nm, 30) +
-            "</h3>" +
-            '<div class="survey-meta">' +
-            '<span class="survey-id">ID: ' + esc(jidv) + '</span>' +
-            '<span class="survey-date">' + esc(cr) + "</span>" +
-            "</div>" +
-            '<div class="survey-progress">' +
-            '<div class="progress-info">' +
-            '<span class="progress-percentage ' +
-            prog.labelClass +
-            '">' +
-            esc(prog.label) +
-            "</span>" +
-            sentHtml +
-            "</div>" +
-            '<div class="progress-bar">' +
-            '<div class="progress-fill ' +
-            prog.fillClass +
-            '" style="width:' +
-            prog.width +
-            ';">' +
-            "</div>" +
-            "</div>" +
-            "</div>" +
-            '<div class="survey-actions">' +
-            '<a href="' +
-            detailHref +
-            '" class="btn-secondary">Manage build</a>' +
-            "</div>" +
-            "</div>"
-          );
-        }
-        setV("jaRecentBuildsMarkup", parts.join(""));
-        setV("jaEmpty", "0");
-        setV("recentBuildsOk", "true");
-        setV("jaBuildsLoadError", "");
-        setV("jaBuildsPagination", renderBuildsPagination(hubUrl, buildsPage, totalPages, rowCount));
-      }
+      recentBuildsJson = stringifyHomeJson(buildRecentBuildsPayload());
+    } catch (recentBuildsEx) {
+      var recentBuildsMsg =
+        recentBuildsEx.message != null ? String(recentBuildsEx.message) : String(recentBuildsEx);
+      recentBuildsJson =
+        '{"ok":false,"error":"' +
+        String(recentBuildsMsg).replace(/\\/g, "\\\\").replace(/"/g, '\\"') +
+        '"}';
     }
-    catch (e) {
-      var errMsg = "Could not read recent builds.";
-      try {
-        errMsg = e.message != null && e.message !== "" ? String(e.message) : String(e);
-        if (errMsg.length > 400) errMsg = errMsg.substring(0, 400);
-      }
-      catch (err2) {
-      }
-      setV("jaBuildsLoadError", errMsg);
-      setV("recentBuildsOk", "false");
-      setV("jaEmpty", "1");
-      setV("jaRecentBuildsMarkup", "");
-      setV("jaBuildsPagination", "");
-    }
+    setV("homeRecentBuildsJson", recentBuildsJson);
   }
 </script>
 <script runat="server" language="javascript">
@@ -1491,11 +1544,13 @@
     }
     Platform.Variable.SetValue("@homePerformanceJson", performanceJson);
   } else {
-    setChartVar("sendLogChartJson", buildSendLogChartJson());
+    setChartVar("sendLogChartJson", "{}");
   }
 </script>
 %%[ IF @homeJourneyPickerJsonMode == "1" THEN ]%%
 %%=v(@homeJourneyPickerJson)=%%
+%%[ ELSEIF @homeRecentBuildsJsonMode == "1" THEN ]%%
+%%=v(@homeRecentBuildsJson)=%%
 %%[ ELSEIF @homePerformanceJsonMode == "1" THEN ]%%
 %%=v(@homePerformanceJson)=%%
 %%[ ELSE ]%%
@@ -1509,7 +1564,7 @@
     <div class="sst-page-loading-panel" id="sstPageLoadingPanel" aria-live="polite">
       <div class="sst-page-loading-spinner" aria-hidden="true"></div>
       <p class="sst-page-loading-title">Loading home</p>
-      <p class="sst-page-loading-sub">Fetching recent builds and dashboard data. This may take a moment.</p>
+      <p class="sst-page-loading-sub">Loading dashboard. Recent builds and reports load when you open those menu items.</p>
     </div>
     <!-- Breadcrumb Section (Hidden by default) -->
     <div class="breadcrumb-section" id="breadcrumbSection" style="display: none;">
@@ -1737,7 +1792,7 @@
     <script type="application/json" id="reportsChartData">
 %%=TreatAsContent(@sendLogChartJson)=%%
     </script>
-    <div class="section-header recent-builds-header" id="allSurveysSection">
+    <div class="section-header recent-builds-header" id="allSurveysSection" style="display: none;">
       <div class="recent-builds-header-row">
         <div class="recent-builds-header-left">
           <h2>Recent builds
@@ -1789,8 +1844,14 @@
         <p class="add-journey-picker-status" id="addJourneyPickerStatus" role="status"></p>
       </div>
     </div>
-    <div class="surveys-grid" id="surveysGrid">
-      %%[ IF @recentBuildsOk == "true" AND @jaEmpty == "1" THEN ]%%
+    <div class="surveys-grid" id="surveysGrid" style="display: none;">
+      %%[ IF @recentBuildsOk == "pending" THEN ]%%
+      <div class="no-surveys-message recent-builds-lazy-placeholder" id="recentBuildsLazyPlaceholder">
+        <div class="empty-state" style="padding: 16px 20px;">
+          <p style="margin: 0; font-size: 14px;">Open <strong>Recent builds</strong> in the menu to load your journey list.</p>
+        </div>
+      </div>
+      %%[ ELSEIF @recentBuildsOk == "true" AND @jaEmpty == "1" THEN ]%%
       <div class="no-surveys-message">
         <div class="empty-state">
           <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
@@ -1817,7 +1878,7 @@
       %%[ ENDIF ]%%
       %%[ ENDIF ]%%
     </div>
-    <div id="buildsPaginationSection">
+    <div id="buildsPaginationSection" style="display: none;">
       %%[ IF NOT Empty(@jaBuildsPagination) THEN ]%%
       %%=TreatAsContent(@jaBuildsPagination)=%%
       %%[ ENDIF ]%%
@@ -3852,29 +3913,157 @@
     }
     return true;
   }
-  // Journey roster search
-  function searchJourneys() {
-    const searchInput = document.getElementById('journeySearch');
-    const searchTerm = searchInput.value.toLowerCase();
-    const journeyCards = document.querySelectorAll('.survey-card');
-    let visibleCount = 0;
-    journeyCards.forEach(card => {
-      const journeyTitle = card.querySelector('.survey-title').textContent.toLowerCase();
-      const journeyId = card.querySelector('.survey-id').textContent.toLowerCase();
-      const journeyStatus = card.querySelector('.survey-status').textContent.toLowerCase();
-      const isMatch = journeyTitle.includes(searchTerm) || 
-            journeyId.includes(searchTerm) || 
-            journeyStatus.includes(searchTerm);
-      if (isMatch) {
-        card.style.display = 'block';
-        visibleCount++;
-      }
-      else {
-        card.style.display = 'none';
-      }
+  window.homeRecentBuildsSearchTerm = "";
+  window.homeRecentBuildsLoadToken = 0;
+  var homeRecentBuildsSearchTimer = null;
+
+  function recentBuildsDataUrl(page, searchTerm) {
+    var base = hubBaseUrl();
+    if (!base) {
+      base = window.location.pathname;
     }
-                        );
-    toggleNoResultsMessage(visibleCount === 0 && searchTerm !== '');
+    var sep = base.indexOf("?") >= 0 ? "&" : "?";
+    var url =
+      base +
+      sep +
+      "homeRecentBuildsData=1&buildsPage=" +
+      encodeURIComponent(String(page || 1));
+    if (searchTerm) {
+      url += "&buildsSearch=" + encodeURIComponent(searchTerm);
+    }
+    return url;
+  }
+
+  function renderRecentBuildsEmptyState(title, message) {
+    return (
+      '<div class="no-surveys-message" style="grid-column: 1 / -1; margin-bottom: 0;">' +
+      '<div class="empty-state">' +
+      "<h3>" +
+      title +
+      "</h3>" +
+      "<p>" +
+      message +
+      "</p>" +
+      "</div></div>"
+    );
+  }
+
+  function bindBuildsPaginationClicks() {
+    var section = document.getElementById("buildsPaginationSection");
+    if (!section || section._buildsPaginationBound) {
+      return;
+    }
+    section._buildsPaginationBound = true;
+    section.addEventListener("click", function (ev) {
+      var link = ev.target.closest("[data-builds-page]");
+      if (!link) {
+        return;
+      }
+      ev.preventDefault();
+      var page = parseInt(link.getAttribute("data-builds-page"), 10);
+      if (isNaN(page) || page < 1) {
+        return;
+      }
+      loadRecentBuilds(page, window.homeRecentBuildsSearchTerm || "");
+    });
+  }
+
+  function applyRecentBuildsPayload(payload) {
+    var grid = document.getElementById("surveysGrid");
+    var paginationSection = document.getElementById("buildsPaginationSection");
+    if (!grid) {
+      return;
+    }
+    if (!payload || !payload.ok) {
+      grid.innerHTML = renderRecentBuildsEmptyState(
+        "Could not load builds",
+        payload && payload.error ? payload.error : "Try again in a moment."
+      );
+      if (paginationSection) {
+        paginationSection.innerHTML = "";
+      }
+      return;
+    }
+    window.homeRecentBuildsSearchTerm = payload.searchTerm || window.homeRecentBuildsSearchTerm || "";
+    if (payload.empty === "1") {
+      grid.innerHTML = renderRecentBuildsEmptyState(
+        "No journeys found",
+        window.homeRecentBuildsSearchTerm
+          ? "Adjust your search or clear it to see the full list."
+          : "You have not built anything yet."
+      );
+    } else {
+      grid.innerHTML = payload.markup || "";
+    }
+    if (paginationSection) {
+      paginationSection.innerHTML = payload.pagination || "";
+      paginationSection._buildsPaginationBound = false;
+      bindBuildsPaginationClicks();
+    }
+    applyBuildTypeIcons();
+    var noResults = document.querySelector(".no-search-results");
+    if (noResults) {
+      noResults.remove();
+    }
+  }
+
+  function loadRecentBuilds(page, searchTerm) {
+    var grid = document.getElementById("surveysGrid");
+    if (!grid) {
+      return;
+    }
+    if (searchTerm == null) {
+      searchTerm = window.homeRecentBuildsSearchTerm || "";
+    }
+    window.homeRecentBuildsSearchTerm = searchTerm;
+    var token = ++window.homeRecentBuildsLoadToken;
+    grid.innerHTML =
+      '<div class="no-surveys-message" style="grid-column: 1 / -1;"><div class="empty-state" style="padding: 16px 20px;"><p style="margin:0;font-size:14px;">Loading recent builds…</p></div></div>';
+    fetch(recentBuildsDataUrl(page, searchTerm), { credentials: "same-origin" })
+      .then(function (response) {
+        return response.text();
+      })
+      .then(function (text) {
+        if (token !== window.homeRecentBuildsLoadToken) {
+          return;
+        }
+        var trimmed = (text || "").replace(/^\uFEFF/, "").trim();
+        if (!trimmed || trimmed.charAt(0) !== "{") {
+          throw new Error("Recent builds response was not JSON.");
+        }
+        applyRecentBuildsPayload(JSON.parse(trimmed));
+      })
+      .catch(function (err) {
+        if (token !== window.homeRecentBuildsLoadToken) {
+          return;
+        }
+        applyRecentBuildsPayload({
+          ok: false,
+          error: err && err.message ? err.message : "Could not load recent builds."
+        });
+      });
+  }
+
+  function ensureRecentBuildsLoaded(page) {
+    var p = page;
+    if (p == null || isNaN(p) || p < 1) {
+      p = 1;
+    }
+    var searchInput = document.getElementById("journeySearch");
+    var term =
+      searchInput && searchInput.value ? searchInput.value.trim() : window.homeRecentBuildsSearchTerm || "";
+    loadRecentBuilds(p, term);
+  }
+
+  function searchJourneys() {
+    if (homeRecentBuildsSearchTimer) {
+      clearTimeout(homeRecentBuildsSearchTimer);
+    }
+    homeRecentBuildsSearchTimer = setTimeout(function () {
+      var searchInput = document.getElementById("journeySearch");
+      var searchTerm = searchInput ? searchInput.value.trim() : "";
+      loadRecentBuilds(1, searchTerm);
+    }, 300);
   }
   function toggleFilter() {
     alert('Filter is not available yet. Use search to find journeys by name, ID, or status.');
@@ -3907,7 +4096,7 @@
     if (searchInput) {
       searchInput.value = '';
     }
-    searchJourneys();
+    loadRecentBuilds(1, '');
   }
   document.addEventListener('DOMContentLoaded', function() {
     const searchInput = document.getElementById('journeySearch');
@@ -3965,7 +4154,19 @@
                            );
   document.addEventListener('DOMContentLoaded', function () {
     applyBuildTypeIcons();
-    initializeActivityChart();
+    bindBuildsPaginationClicks();
+    ensureHomePerformanceChartData(function (perfErr) {
+      if (!perfErr) {
+        initializeActivityChart();
+      }
+    });
+    try {
+      var homeParams = new URLSearchParams(window.location.search);
+      if (homeParams.get("buildsPage") || homeParams.get("buildsSearch")) {
+        showAllJourneys();
+      }
+    } catch (homeUrlEx) {
+    }
     var addJourneyFilter = document.getElementById('addJourneyFilter');
     if (addJourneyFilter) {
       addJourneyFilter.addEventListener('input', function () {
@@ -4758,6 +4959,24 @@
     }
                                                   );
     document.querySelector('.nav-link[onclick*="showAllJourneys"]').classList.add('active');
+    var pageFromUrl = 1;
+    try {
+      var params = new URLSearchParams(window.location.search);
+      var bp = parseInt(params.get("buildsPage"), 10);
+      if (!isNaN(bp) && bp > 0) {
+        pageFromUrl = bp;
+      }
+      var bs = params.get("buildsSearch");
+      if (bs) {
+        var searchInput = document.getElementById("journeySearch");
+        if (searchInput) {
+          searchInput.value = bs;
+        }
+        window.homeRecentBuildsSearchTerm = bs;
+      }
+    } catch (urlEx) {
+    }
+    ensureRecentBuildsLoaded(pageFromUrl);
     document.getElementById('allSurveysSection').scrollIntoView({
       behavior: 'smooth' }
                                                                );
@@ -4851,7 +5070,6 @@
     updateDeployChecklistProgress();
   }
   document.addEventListener('DOMContentLoaded', function () {
-    initDeployChecklist();
     var resetBtn = document.getElementById('deployChecklistResetBtn');
     if (resetBtn) {
       resetBtn.addEventListener('click', function () {
@@ -5001,47 +5219,19 @@
 </script>
 <script>
   (function () {
-    var homeLoadingObserver = null;
+    var HOME_LOADING_MIN_MS = 2000;
+    var homeLoadingStartedAt = 0;
 
     function dismissHomePageLoading() {
       var mainEl = document.querySelector('.main-content.is-page-loading');
       if (mainEl) {
         mainEl.classList.remove('is-page-loading');
       }
-      if (homeLoadingObserver) {
-        homeLoadingObserver.disconnect();
-        homeLoadingObserver = null;
-      }
-    }
-
-    function gridReadyForHomeDismiss(grid) {
-      if (!grid) {
-        return true;
-      }
-      if (grid.querySelector('.survey-card')) {
-        return true;
-      }
-      if (grid.querySelector('.no-surveys-message')) {
-        return true;
-      }
-      return false;
-    }
-
-    function watchHomeGridForFirstCard(grid) {
-      if (gridReadyForHomeDismiss(grid)) {
-        dismissHomePageLoading();
-        return;
-      }
-      homeLoadingObserver = new MutationObserver(function () {
-        if (grid.querySelector('.survey-card')) {
-          dismissHomePageLoading();
-        }
-      });
-      homeLoadingObserver.observe(grid, { childList: true, subtree: true });
     }
 
     document.addEventListener('DOMContentLoaded', function () {
-      watchHomeGridForFirstCard(document.getElementById('surveysGrid'));
+      homeLoadingStartedAt = Date.now();
+      setTimeout(dismissHomePageLoading, HOME_LOADING_MIN_MS);
     });
   })();
 </script>
