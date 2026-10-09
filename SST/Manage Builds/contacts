@@ -1067,13 +1067,13 @@ body{font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif;background:va
 .chart-number{background:#000;color:#fff;width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:600;margin-right:16px;flex-shrink:0}
 .chart-content{flex:1;min-width:0;display:flex;flex-direction:column;gap:0}
 .responses-header-row{display:flex;align-items:center;justify-content:space-between;gap:16px;width:100%}
-.clear-records-confirm-panel{display:none;margin-top:16px;padding:16px 18px;border:1px solid var(--border-color);background:#fafafa;border-radius:0.375rem;width:100%}
-.clear-records-confirm-panel.is-open{display:block}
-.clear-records-confirm-text{margin:0 0 14px;font-size:0.875rem;line-height:1.55;color:var(--gray-700)}
-.clear-records-confirm-text strong{color:var(--gray-900);font-weight:600}
-.clear-records-confirm-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
-.confirm-clear-button{border:1px solid #059669;background:#059669;color:#fff}
-.confirm-clear-button:hover{background:#047857;border-color:#047857}
+.action-confirm-panel{display:none;margin-top:16px;padding:16px 18px;border:1px solid var(--border-color);background:#fafafa;border-radius:0.375rem;width:100%}
+.action-confirm-panel.is-open{display:block}
+.action-confirm-text{margin:0 0 14px;font-size:0.875rem;line-height:1.55;color:var(--gray-700)}
+.action-confirm-text strong{color:var(--gray-900);font-weight:600}
+.action-confirm-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.confirm-action-button{border:1px solid #059669;background:#059669;color:#fff}
+.confirm-action-button:hover{background:#047857;border-color:#047857}
 .responses-header-text{flex:1;min-width:0}
 .responses-header-actions{display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
 .run-query-form{margin:0;display:inline-flex;align-items:stretch}
@@ -1168,18 +1168,11 @@ Manage Build
 </div>
 <div class="responses-header-actions">
 %%[ IF @isStackBuild == "true" THEN ]%%
-<form method="post" action="" class="run-query-form%%[ IF @runQueryOk == "true" THEN ]%% is-running%%[ ENDIF ]%%" id="runQueryForm" onsubmit="%%[ IF @runQueryOk == "true" THEN ]%%return false;%%[ ELSE ]%%return confirm('Run the stack query now? This refreshes data only and does not run the Journey step.');%%[ ENDIF ]%%">
-<input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
-<input type="hidden" name="contactPage" value="%%=v(@contactUiPage)=%%">
-%%[ IF @runQueryOk != "true" THEN ]%%
-<input type="hidden" name="confirmRunQuery" value="1">
-%%[ ENDIF ]%%
 %%[ IF @runQueryOk == "true" THEN ]%%
 <button type="button" class="header-action-btn download-button run-query-button-running" disabled aria-disabled="true" aria-live="polite" tabindex="-1">Running</button>
 %%[ ELSE ]%%
-<button type="submit" class="header-action-btn download-button" id="runQueryBtn">Run Query</button>
+<button type="button" class="header-action-btn download-button" id="runQueryBtn" aria-expanded="false" aria-controls="runQueryConfirmPanel">Run Query</button>
 %%[ ENDIF ]%%
-</form>
 %%[ ENDIF ]%%
 %%[ IF (NOT Empty(@dispDeId) AND @dispDeId != "N/A") OR (NOT Empty(@dispDeName) AND @dispDeName != "N/A") THEN ]%%
 <button type="button" class="header-action-btn clear-records-button" id="clearRecordsBtn" aria-expanded="false" aria-controls="clearRecordsConfirmPanel">Clear Records</button>
@@ -1187,16 +1180,30 @@ Manage Build
 %%[ ENDIF ]%%
 </div>
 </div>
+%%[ IF @isStackBuild == "true" AND @runQueryOk != "true" THEN ]%%
+<div class="action-confirm-panel" id="runQueryConfirmPanel" role="region" aria-labelledby="runQueryConfirmTitle" hidden%%[ IF @confirmRunQuery == "1" AND @runQueryOk == "false" THEN ]%% data-auto-open="true"%%[ ENDIF ]%%>
+<p class="action-confirm-text" id="runQueryConfirmTitle"><strong>Run the automation query only.</strong> This starts the query step linked to%%[ IF NOT Empty(@automationName) THEN ]%% <strong>%%=v(@automationName)=%%</strong>%%[ ELSE ]%% your Journey + Automation build%%[ ENDIF ]%% and refreshes who appears in the entry data extension (<strong>%%=IIF(NOT Empty(@dispDeName) AND @dispDeName != "N/A", @dispDeName, @dispDeId)=%%</strong>). It does <strong>not</strong> run the full automation, Journey Builder send steps, or email anyone. Contacts already in the journey are not affected. The table below updates after the query finishes.</p>
+<div class="action-confirm-actions">
+<button type="button" class="header-action-btn de-open-button" id="runQueryCancelBtn">Cancel</button>
+<form method="post" action="" class="run-query-form" id="runQueryConfirmForm">
+<input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
+<input type="hidden" name="contactPage" value="%%=v(@contactUiPage)=%%">
+<input type="hidden" name="confirmRunQuery" value="1">
+<button type="submit" class="header-action-btn confirm-action-button" id="runQueryConfirmBtn">Confirm run query</button>
+</form>
+</div>
+</div>
+%%[ ENDIF ]%%
 %%[ IF (NOT Empty(@dispDeId) AND @dispDeId != "N/A") OR (NOT Empty(@dispDeName) AND @dispDeName != "N/A") THEN ]%%
-<div class="clear-records-confirm-panel" id="clearRecordsConfirmPanel" role="region" aria-labelledby="clearRecordsConfirmTitle" hidden%%[ IF @confirmClearDe == "1" AND @clearDeOk != "true" THEN ]%% data-auto-open="true"%%[ ENDIF ]%%>
-<p class="clear-records-confirm-text" id="clearRecordsConfirmTitle"><strong>Clear all entry list rows.</strong> This removes every contact currently listed in the journey entry data extension (<strong>%%=IIF(NOT Empty(@dispDeName) AND @dispDeName != "N/A", @dispDeName, @dispDeId)=%%</strong>). The data extension itself is not deleted. This does not stop the journey, pause automation, or remove anyone already in the journey. You can repopulate the list later with <strong>Run Query</strong> (automation builds) or your normal import process. This action cannot be undone.</p>
-<div class="clear-records-confirm-actions">
+<div class="action-confirm-panel" id="clearRecordsConfirmPanel" role="region" aria-labelledby="clearRecordsConfirmTitle" hidden%%[ IF @confirmClearDe == "1" AND @clearDeOk != "true" THEN ]%% data-auto-open="true"%%[ ENDIF ]%%>
+<p class="action-confirm-text" id="clearRecordsConfirmTitle"><strong>Clear all entry list rows.</strong> This removes every contact currently listed in the journey entry data extension (<strong>%%=IIF(NOT Empty(@dispDeName) AND @dispDeName != "N/A", @dispDeName, @dispDeId)=%%</strong>). The data extension itself is not deleted. This does not stop the journey, pause automation, or remove anyone already in the journey. You can repopulate the list later with <strong>Run Query</strong> (automation builds) or your normal import process. This action cannot be undone.</p>
+<div class="action-confirm-actions">
 <button type="button" class="header-action-btn de-open-button" id="clearRecordsCancelBtn">Cancel</button>
 <form method="post" action="" class="clear-de-form" id="clearRecordsConfirmForm">
 <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
 <input type="hidden" name="contactPage" value="%%=v(@contactUiPage)=%%">
 <input type="hidden" name="confirmClearRecords" value="1">
-<button type="submit" class="header-action-btn confirm-clear-button" id="clearRecordsConfirmBtn">Confirm clear records</button>
+<button type="submit" class="header-action-btn confirm-action-button" id="clearRecordsConfirmBtn">Confirm clear records</button>
 </form>
 </div>
 </div>
@@ -1269,54 +1276,99 @@ Showing 0 records
 </div>
 <script>
 (function () {
- var clearRecordsBtn = document.getElementById("clearRecordsBtn");
- var clearPanel = document.getElementById("clearRecordsConfirmPanel");
- var clearCancelBtn = document.getElementById("clearRecordsCancelBtn");
- var clearConfirmForm = document.getElementById("clearRecordsConfirmForm");
- function openClearPanel() {
-  if (!clearPanel) {
+ function closeActionPanel(panel, toggleBtn) {
+  if (!panel) {
    return;
   }
-  clearPanel.hidden = false;
-  clearPanel.classList.add("is-open");
-  if (clearRecordsBtn) {
-   clearRecordsBtn.setAttribute("aria-expanded", "true");
+  panel.hidden = true;
+  panel.classList.remove("is-open");
+  if (toggleBtn) {
+   toggleBtn.setAttribute("aria-expanded", "false");
   }
  }
- function closeClearPanel() {
-  if (!clearPanel) {
+ function openActionPanel(panel, toggleBtn, otherPanel, otherToggleBtn) {
+  if (!panel) {
    return;
   }
-  clearPanel.hidden = true;
-  clearPanel.classList.remove("is-open");
-  if (clearRecordsBtn) {
-   clearRecordsBtn.setAttribute("aria-expanded", "false");
+  closeActionPanel(otherPanel, otherToggleBtn);
+  panel.hidden = false;
+  panel.classList.add("is-open");
+  if (toggleBtn) {
+   toggleBtn.setAttribute("aria-expanded", "true");
   }
  }
- if (clearRecordsBtn && clearPanel) {
-  clearRecordsBtn.addEventListener("click", function () {
-   if (clearPanel.classList.contains("is-open")) {
-    closeClearPanel();
-   } else {
-    openClearPanel();
+ function wireActionConfirm(opts) {
+  var toggleBtn = document.getElementById(opts.toggleBtnId);
+  var panel = document.getElementById(opts.panelId);
+  var cancelBtn = document.getElementById(opts.cancelBtnId);
+  var confirmForm = document.getElementById(opts.confirmFormId);
+  var confirmBtn = document.getElementById(opts.confirmBtnId);
+  var otherPanel = opts.otherPanelId
+   ? document.getElementById(opts.otherPanelId)
+   : null;
+  var otherToggleBtn = opts.otherToggleBtnId
+   ? document.getElementById(opts.otherToggleBtnId)
+   : null;
+  if (toggleBtn && panel) {
+   toggleBtn.addEventListener("click", function () {
+    if (panel.classList.contains("is-open")) {
+     closeActionPanel(panel, toggleBtn);
+    } else {
+     openActionPanel(panel, toggleBtn, otherPanel, otherToggleBtn);
+    }
+   });
+  }
+  if (cancelBtn) {
+   cancelBtn.addEventListener("click", function () {
+    closeActionPanel(panel, toggleBtn);
+   });
+  }
+  if (confirmForm) {
+   confirmForm.addEventListener("submit", function () {
+    if (confirmBtn) {
+     confirmBtn.disabled = true;
+     confirmBtn.textContent = opts.confirmPendingLabel || "Working…";
+    }
+    if (opts.onSubmit) {
+     opts.onSubmit();
+    }
+   });
+  }
+  if (panel && panel.getAttribute("data-auto-open") === "true") {
+   openActionPanel(panel, toggleBtn, otherPanel, otherToggleBtn);
+  }
+ }
+ wireActionConfirm({
+  toggleBtnId: "clearRecordsBtn",
+  panelId: "clearRecordsConfirmPanel",
+  cancelBtnId: "clearRecordsCancelBtn",
+  confirmFormId: "clearRecordsConfirmForm",
+  confirmBtnId: "clearRecordsConfirmBtn",
+  confirmPendingLabel: "Clearing…",
+  otherPanelId: "runQueryConfirmPanel",
+  otherToggleBtnId: "runQueryBtn"
+ });
+ wireActionConfirm({
+  toggleBtnId: "runQueryBtn",
+  panelId: "runQueryConfirmPanel",
+  cancelBtnId: "runQueryCancelBtn",
+  confirmFormId: "runQueryConfirmForm",
+  confirmBtnId: "runQueryConfirmBtn",
+  confirmPendingLabel: "Starting…",
+  otherPanelId: "clearRecordsConfirmPanel",
+  otherToggleBtnId: "clearRecordsBtn",
+  onSubmit: function () {
+   var runQueryBtn = document.getElementById("runQueryBtn");
+   if (!runQueryBtn) {
+    return;
    }
-  });
- }
- if (clearCancelBtn) {
-  clearCancelBtn.addEventListener("click", closeClearPanel);
- }
- if (clearConfirmForm) {
-  clearConfirmForm.addEventListener("submit", function () {
-   var confirmBtn = document.getElementById("clearRecordsConfirmBtn");
-   if (confirmBtn) {
-    confirmBtn.disabled = true;
-    confirmBtn.textContent = "Clearing…";
-   }
-  });
- }
- if (clearPanel && clearPanel.getAttribute("data-auto-open") === "true") {
-  openClearPanel();
- }
+   runQueryBtn.disabled = true;
+   runQueryBtn.setAttribute("aria-disabled", "true");
+   runQueryBtn.tabIndex = -1;
+   runQueryBtn.classList.add("run-query-button-running");
+   runQueryBtn.textContent = "Running";
+  }
+ });
 })();
 (function () {
  var openDeBtn = document.getElementById("openEntryDeBtn");
@@ -1373,38 +1425,6 @@ Showing 0 records
     openDeBtn.disabled = false;
     openDeBtn.textContent = prevLabel;
    });
- });
-})();
-(function () {
- var runQueryForm = document.getElementById("runQueryForm");
- var runQueryBtn = document.getElementById("runQueryBtn");
- if (!runQueryForm || !runQueryBtn) {
-  return;
- }
- function lockRunQueryUi() {
-  runQueryForm.classList.add("is-running");
-  runQueryBtn.disabled = true;
-  runQueryBtn.setAttribute("aria-disabled", "true");
-  runQueryBtn.tabIndex = -1;
-  runQueryBtn.classList.add("run-query-button-running");
-  runQueryBtn.textContent = "Running";
- }
- runQueryBtn.addEventListener(
-  "click",
-  function (ev) {
-   if (runQueryForm.classList.contains("is-running") || runQueryBtn.disabled) {
-    ev.preventDefault();
-    ev.stopPropagation();
-   }
-  },
-  true
- );
- runQueryForm.addEventListener("submit", function (ev) {
-  if (runQueryForm.classList.contains("is-running")) {
-   ev.preventDefault();
-   return;
-  }
-  lockRunQueryUi();
  });
 })();
 </script>
