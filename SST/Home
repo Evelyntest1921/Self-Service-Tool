@@ -133,6 +133,16 @@
   IF Empty(@buildsPage) THEN
     SET @buildsPage = "1"
   ENDIF
+  IF Empty(@buildsPage) THEN
+    SET @buildsPage = Trim(QueryParameter("buildsPage"))
+  ENDIF
+  IF Empty(@buildsPage) THEN
+    SET @buildsPage = "1"
+  ENDIF
+  SET @buildsSearch = Trim(RequestParameter("buildsSearch"))
+  IF Empty(@buildsSearch) THEN
+    SET @buildsSearch = Trim(QueryParameter("buildsSearch"))
+  ENDIF
   SET @addedBuild = RequestParameter("added")
   IF @addedBuild == "1" THEN
     SET @addBuildMessage = "Journey added to Recent builds."
@@ -692,6 +702,7 @@
       "Journey + Automation",
       "One Sender",
       "Campaign Journey",
+      "Campaign journey",
       "Existing Journey",
       "Create an Email",
       "Create empty journey",
@@ -709,6 +720,56 @@
     mergeLookupRows(rows, seen, "emailId", "N/A");
     mergeLookupRows(rows, seen, "deId", "N/A");
     return rows;
+  }
+  function retrieveAllAnalyticsRows() {
+    var rows = [];
+    var keys = [DE_EXTERNAL_KEY, String(DE_EXTERNAL_KEY).toLowerCase()];
+    var i;
+    for (i = 0; i < keys.length; i++) {
+      try {
+        rows = coerceDeRows(DataExtension.Init(keys[i]).Rows.Retrieve());
+        if (rows.length) {
+          return rows;
+        }
+      }
+      catch (retrieveEx) {
+      }
+    }
+    try {
+      rows = coerceDeRows(
+        (new Script.Util.WSProxy()).retrieve(
+          "DataExtensionObject[" + DE_EXTERNAL_KEY + "]",
+          [
+            "journeyId",
+            "JourneyId",
+            "journeyName",
+            "JourneyName",
+            "buildName",
+            "BuildName",
+            "journeyType",
+            "JourneyType",
+            "updateDate",
+            "UpdateDate",
+            "JourneyStatus",
+            "journeyStatus",
+            "emailName",
+            "EmailName",
+            "sentCount",
+            "SentCount"
+          ],
+          {
+            Property: "journeyId",
+            SimpleOperator: "isNotNull"
+          }
+        )
+      );
+      if (rows.length) {
+        return rows;
+      }
+    }
+    catch (wsEx) {
+    }
+    return retrieveAnalyticsRows();
   }
   function loadRecentBuildRows(fetchLimit) {
     var rows = [];
@@ -753,9 +814,25 @@
       }
     }
     if (!v) {
+      v = getAmpVar("buildsSearch");
+    }
+    if (!v) {
       return "";
     }
     return String(v).replace(/^\s+|\s+$/g, "");
+  }
+  function filterRowsByBuildSearch(rows, searchTerm) {
+    if (!searchTerm) {
+      return rows;
+    }
+    var filtered = [];
+    var fi;
+    for (fi = 0; fi < rows.length; fi++) {
+      if (rowMatchesBuildSearch(rows[fi], searchTerm)) {
+        filtered.push(rows[fi]);
+      }
+    }
+    return filtered;
   }
   function rowMatchesBuildSearch(row, term) {
     if (!term) {
@@ -791,19 +868,19 @@
       buildsPage = 1;
     }
     var searchTerm = parseBuildsSearchTerm();
+    if (searchTerm) {
+      buildsPage = 1;
+    }
     var totalInDe = getDeRowCount();
     var fetchLimit = totalInDe > 0 ? (totalInDe > MAX_DE_FETCH ? MAX_DE_FETCH : totalInDe) : MAX_DE_FETCH;
-    var recentLoad = loadRecentBuildRows(fetchLimit);
-    var orderedRows = recentLoad.rows;
+    var orderedRows;
     if (searchTerm) {
-      var filtered = [];
-      var fi;
-      for (fi = 0; fi < orderedRows.length; fi++) {
-        if (rowMatchesBuildSearch(orderedRows[fi], searchTerm)) {
-          filtered.push(orderedRows[fi]);
-        }
-      }
-      orderedRows = filtered;
+      orderedRows = retrieveAllAnalyticsRows();
+      sortRowsByUpdateDate(orderedRows);
+      orderedRows = filterRowsByBuildSearch(orderedRows, searchTerm);
+    } else {
+      var recentLoad = loadRecentBuildRows(fetchLimit);
+      orderedRows = recentLoad.rows;
     }
     var rowCount = orderedRows.length;
     var totalPages = rowCount > 0 ? Math.ceil(rowCount / BUILD_PAGE_SIZE) : 1;
@@ -3978,13 +4055,11 @@
   var homeRecentBuildsSearchTimer = null;
 
   function recentBuildsDataUrl(page, searchTerm) {
-    var extra = {
-      buildsPage: String(page || 1)
-    };
-    if (searchTerm) {
-      extra.buildsSearch = searchTerm;
-    }
-    return homeDataRequestUrl("homeRecentBuildsData", extra);
+    var term = searchTerm == null ? "" : String(searchTerm).trim();
+    return homeDataRequestUrl("homeRecentBuildsData", {
+      buildsPage: String(page || 1),
+      buildsSearch: term
+    });
   }
 
   function renderRecentBuildsEmptyState(title, message) {
@@ -4069,6 +4144,9 @@
       searchTerm = window.homeRecentBuildsSearchTerm || "";
     }
     window.homeRecentBuildsSearchTerm = searchTerm;
+    if (searchTerm) {
+      page = 1;
+    }
     var token = ++window.homeRecentBuildsLoadToken;
     grid.innerHTML =
       '<div class="no-surveys-message" style="grid-column: 1 / -1;"><div class="empty-state" style="padding: 16px 20px;"><p style="margin:0;font-size:14px;">Loading recent builds…</p></div></div>';
