@@ -1564,7 +1564,7 @@
     <div class="sst-page-loading-panel" id="sstPageLoadingPanel" aria-live="polite">
       <div class="sst-page-loading-spinner" aria-hidden="true"></div>
       <p class="sst-page-loading-title">Loading home</p>
-      <p class="sst-page-loading-sub">Loading dashboard. Recent builds and reports load when you open those menu items.</p>
+      <p class="sst-page-loading-sub">Loading dashboard and recent builds.</p>
     </div>
     <!-- Breadcrumb Section (Hidden by default) -->
     <div class="breadcrumb-section" id="breadcrumbSection" style="display: none;">
@@ -1792,7 +1792,7 @@
     <script type="application/json" id="reportsChartData">
 %%=TreatAsContent(@sendLogChartJson)=%%
     </script>
-    <div class="section-header recent-builds-header" id="allSurveysSection" style="display: none;">
+    <div class="section-header recent-builds-header" id="allSurveysSection">
       <div class="recent-builds-header-row">
         <div class="recent-builds-header-left">
           <h2>Recent builds
@@ -1844,11 +1844,11 @@
         <p class="add-journey-picker-status" id="addJourneyPickerStatus" role="status"></p>
       </div>
     </div>
-    <div class="surveys-grid" id="surveysGrid" style="display: none;">
+    <div class="surveys-grid" id="surveysGrid">
       %%[ IF @recentBuildsOk == "pending" THEN ]%%
       <div class="no-surveys-message recent-builds-lazy-placeholder" id="recentBuildsLazyPlaceholder">
         <div class="empty-state" style="padding: 16px 20px;">
-          <p style="margin: 0; font-size: 14px;">Open <strong>Recent builds</strong> in the menu to load your journey list.</p>
+          <p style="margin: 0; font-size: 14px;">Loading recent builds…</p>
         </div>
       </div>
       %%[ ELSEIF @recentBuildsOk == "true" AND @jaEmpty == "1" THEN ]%%
@@ -1878,7 +1878,7 @@
       %%[ ENDIF ]%%
       %%[ ENDIF ]%%
     </div>
-    <div id="buildsPaginationSection" style="display: none;">
+    <div id="buildsPaginationSection">
       %%[ IF NOT Empty(@jaBuildsPagination) THEN ]%%
       %%=TreatAsContent(@jaBuildsPagination)=%%
       %%[ ENDIF ]%%
@@ -2235,6 +2235,17 @@
     margin-bottom: 40px;
     border-bottom: 1px solid #ded5d563;
     padding-bottom: 25px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+  }
+  .sidebar-logo a {
+    display: inline-block;
+    line-height: 0;
+  }
+  .sidebar-logo img {
+    display: block;
   }
   .nav-section-title {
     font-size: 11px;
@@ -4044,6 +4055,42 @@
       });
   }
 
+  function showRecentBuildsSections() {
+    var header = document.getElementById("allSurveysSection");
+    if (header) {
+      header.style.display = "block";
+    }
+    var grid = document.getElementById("surveysGrid");
+    if (grid) {
+      grid.style.display = "grid";
+    }
+    var paginationSection = document.getElementById("buildsPaginationSection");
+    if (paginationSection) {
+      paginationSection.style.display = "block";
+    }
+  }
+
+  function homeRecentBuildsPageFromUrl() {
+    var page = 1;
+    try {
+      var params = new URLSearchParams(window.location.search);
+      var bp = parseInt(params.get("buildsPage"), 10);
+      if (!isNaN(bp) && bp > 0) {
+        page = bp;
+      }
+      var bs = params.get("buildsSearch");
+      if (bs) {
+        var searchInput = document.getElementById("journeySearch");
+        if (searchInput) {
+          searchInput.value = bs;
+        }
+        window.homeRecentBuildsSearchTerm = bs;
+      }
+    } catch (urlEx) {
+    }
+    return page;
+  }
+
   function ensureRecentBuildsLoaded(page) {
     var p = page;
     if (p == null || isNaN(p) || p < 1) {
@@ -4164,8 +4211,13 @@
       var homeParams = new URLSearchParams(window.location.search);
       if (homeParams.get("buildsPage") || homeParams.get("buildsSearch")) {
         showAllJourneys();
+      } else {
+        showRecentBuildsSections();
+        ensureRecentBuildsLoaded(homeRecentBuildsPageFromUrl());
       }
     } catch (homeUrlEx) {
+      showRecentBuildsSections();
+      ensureRecentBuildsLoaded(1);
     }
     var addJourneyFilter = document.getElementById('addJourneyFilter');
     if (addJourneyFilter) {
@@ -4959,24 +5011,7 @@
     }
                                                   );
     document.querySelector('.nav-link[onclick*="showAllJourneys"]').classList.add('active');
-    var pageFromUrl = 1;
-    try {
-      var params = new URLSearchParams(window.location.search);
-      var bp = parseInt(params.get("buildsPage"), 10);
-      if (!isNaN(bp) && bp > 0) {
-        pageFromUrl = bp;
-      }
-      var bs = params.get("buildsSearch");
-      if (bs) {
-        var searchInput = document.getElementById("journeySearch");
-        if (searchInput) {
-          searchInput.value = bs;
-        }
-        window.homeRecentBuildsSearchTerm = bs;
-      }
-    } catch (urlEx) {
-    }
-    ensureRecentBuildsLoaded(pageFromUrl);
+    ensureRecentBuildsLoaded(homeRecentBuildsPageFromUrl());
     document.getElementById('allSurveysSection').scrollIntoView({
       behavior: 'smooth' }
                                                                );
@@ -4986,11 +5021,12 @@
     hideAllSections();
     document.getElementById('heroSection').style.display = 'flex';
     document.querySelector('.stats-grid').style.display = 'grid';
-    document.querySelector('.section-header').style.display = 'flex';
     var homeChartWrap = document.getElementById('homeEngagementChartWrap');
     if (homeChartWrap) {
       homeChartWrap.style.display = 'block';
     }
+    showRecentBuildsSections();
+    ensureRecentBuildsLoaded(homeRecentBuildsPageFromUrl());
     document.querySelectorAll('.nav-link').forEach(link => {
       link.classList.remove('active');
     }
