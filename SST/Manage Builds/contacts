@@ -137,13 +137,6 @@ ENDIF
 IF NOT Empty(@CONTACTS_PAGE_SELF) AND NOT Empty(@jid) THEN
  SET @contactNavBase = Concat(@CONTACTS_PAGE_SELF,"?journeyId=",@jid,"&contactPage=")
 ENDIF
-
-IF @confirmClearDe == "1" AND @pageStatus == "ready" AND NOT Empty(@sourceDeKey) THEN
- SET @clearDeOk = "false"
- SET @clearDeRowCount = ClearData(@sourceDeKey)
- SET @clearDeOk = "true"
- SET @clearDeBanner = Concat('<div class="banner good">All records were removed from the entry data extension.</div>')
-ENDIF
 ]%%
 <script runat="server">
 Platform.Load("core","1");
@@ -798,6 +791,142 @@ function ctRunFirstQueryAutomation() {
  };
 }
 
+function ctResolveDeCustomerKey(deRef) {
+ var ref = ctTrim(deRef);
+ if (!ref) {
+  return "";
+ }
+ try {
+  var prox = new Script.Util.WSProxy();
+  var filters = [
+   { Property: "CustomerKey", Value: ref },
+   { Property: "Name", Value: ref }
+  ];
+  var fi;
+  for (fi = 0; fi < filters.length; fi++) {
+   var got = prox.retrieve("DataExtension", ["CustomerKey", "Name"], {
+    Property: filters[fi].Property,
+    SimpleOperator: "equals",
+    Value: filters[fi].Value
+   });
+   if (got && got.Results && got.Results.length > 0) {
+    var ck = ctTrim(got.Results[0].CustomerKey);
+    if (ck) {
+     return ck;
+    }
+   }
+  }
+ } catch (resolveEx) {}
+ return ref;
+}
+
+function ctClearDePerformStatus(result) {
+ if (!result) {
+  return { ok: false, msg: "ClearData returned no result." };
+ }
+ var results = result.Results || result.results;
+ if (results && typeof results.length == "number" && results.length > 0) {
+  var r0 = results[0];
+  var code = ctTrim(r0.StatusCode || r0.statusCode);
+  if (code.toUpperCase() === "OK") {
+   return {
+    ok: true,
+    msg: "All records were removed from the entry data extension."
+   };
+  }
+  return {
+   ok: false,
+   msg: ctTrim(r0.StatusMessage || r0.ErrorMessage || r0.statusMessage) || "ClearData failed."
+  };
+ }
+ var overall = ctTrim(result.OverallStatus || result.overallStatus || result.Status);
+ if (overall.toUpperCase() === "OK") {
+  return {
+   ok: true,
+   msg: "All records were removed from the entry data extension."
+  };
+ }
+ return { ok: false, msg: overall || "ClearData failed." };
+}
+
+function ctClearDeByWsProxy(deRef) {
+ var customerKey = ctResolveDeCustomerKey(deRef);
+ if (!customerKey) {
+  return { ok: false, msg: "Could not resolve entry data extension key." };
+ }
+ try {
+  var prox = new Script.Util.WSProxy();
+  var performResult = prox.performItem(
+   "DataExtension",
+   { CustomerKey: customerKey },
+   "ClearData",
+   {}
+  );
+  return ctClearDePerformStatus(performResult);
+ } catch (wsClearEx) {
+  return { ok: false, msg: wsClearEx.message || ctStr(wsClearEx) };
+ }
+}
+
+function ctClearDeByRowDelete(deRef) {
+ var deKey = ctTrim(deRef);
+ if (!deKey) {
+  return { ok: false, msg: "Missing data extension key." };
+ }
+ var rows = ctRetrieveDeRows(deKey);
+ if (!rows.length) {
+  return { ok: true, msg: "Entry data extension is already empty." };
+ }
+ var pkCols = ["ContactId", "contactId", "SubscriberKey", "subscriberKey", "Email", "email"];
+ var deleted = 0;
+ var ri;
+ for (ri = 0; ri < rows.length; ri++) {
+  var row = rows[ri];
+  var pi;
+  for (pi = 0; pi < pkCols.length; pi++) {
+   var col = pkCols[pi];
+   var val = ctField(row, [col]);
+   if (!val) {
+    continue;
+   }
+   try {
+    var n = Platform.Function.DeleteData(deKey, col, val);
+    if (n > 0) {
+     deleted += n;
+    }
+   } catch (delEx) {}
+   break;
+  }
+ }
+ if (deleted > 0) {
+  return {
+   ok: true,
+   msg: "Removed " + deleted + " record(s) from the entry data extension."
+  };
+ }
+ return {
+  ok: false,
+  msg:
+   "Could not clear records. Confirm the Cloud Page collection can delete from this data extension."
+ };
+}
+
+function ctClearEntryDe(deRef) {
+ var wsResult = ctClearDeByWsProxy(deRef);
+ if (wsResult.ok) {
+  return wsResult;
+ }
+ var msg = ctTrim(wsResult.msg).toLowerCase();
+ if (msg.indexOf("security descriptor") >= 0) {
+  return ctClearDeByRowDelete(deRef);
+ }
+ var rowFallback = ctClearDeByRowDelete(deRef);
+ if (rowFallback.ok) {
+  return rowFallback;
+ }
+ return { ok: false, msg: wsResult.msg || rowFallback.msg };
+}
+
 function ctBuildTableHtml(rows, page, pageSize) {
  var total = rows.length;
  var totalPages = total > 0 ? Math.ceil(total / pageSize) : 1;
@@ -855,7 +984,20 @@ if (isNaN(pageSize) || pageSize < 1) {
 }
 
 var confirmRunQuery = Platform.Variable.GetValue("@confirmRunQuery") == "1";
+var confirmClearDe = Platform.Variable.GetValue("@confirmClearDe") == "1";
 var isStackBuild = Platform.Variable.GetValue("@isStackBuild") == "true";
+if (confirmClearDe && pageStatus == "ready" && sourceDeKey) {
+ var clearResult = ctClearEntryDe(sourceDeKey);
+ ctSet("clearDeOk", clearResult.ok ? "true" : "false");
+ if (clearResult.ok) {
+  ctSet("clearDeBanner", '<div class="banner good">' + ctHtml(clearResult.msg) + "</div>");
+ } else {
+  ctSet(
+   "clearDeBanner",
+   '<div class="banner bad">' + ctHtml(clearResult.msg) + "</div>"
+  );
+ }
+}
 if (confirmRunQuery && isStackBuild) {
  var runResult = ctRunFirstQueryAutomation();
  ctSet("runQueryOk", runResult.ok ? "true" : "false");
