@@ -12,7 +12,7 @@ VAR @confirmUpdateQuery, @updateQueryBanner, @updateQueryOk
 VAR @contactsQueryJson, @contactsQueryJsonMode
 VAR @postedClearJid, @postedUpdateJid
 VAR @entryDeData, @contactBatchRowCount, @entryDeLookupKey, @contactDePageKey, @pageOneData, @lastPageRows, @lastPageCount
-VAR @contactsAmpTableReady, @contactsUseSsProxyFallback, @row, @i, @cellContactId, @cellEmail, @cellOwnerName, @cellOwnerEmail
+VAR @contactsAmpTableReady, @contactsUseSsProxyFallback, @entryDeHasPageNumber, @row, @i, @cellContactId, @cellEmail, @cellOwnerName, @cellOwnerEmail
 
 SET @STACK_JOURNEY_TYPE = "Journey + Automation"
 SET @HOME_URL = ""
@@ -70,6 +70,7 @@ SET @contactsQueryJson = ""
 SET @contactsQueryJsonMode = IIF(RequestParameter("contactsQueryData") == "1", "1", "0")
 SET @contactsAmpTableReady = "false"
 SET @contactsUseSsProxyFallback = "false"
+SET @entryDeHasPageNumber = "false"
 SET @contactBatchRowCount = 0
 SET @entryDeLookupKey = ""
 IF @contactsQueryJsonMode != "1" AND QueryParameter("contactsQueryData") == "1" THEN
@@ -171,8 +172,110 @@ ENDIF
 IF NOT Empty(@CONTACTS_PAGE_SELF) AND NOT Empty(@jid) THEN
  SET @contactNavBase = Concat(@CONTACTS_PAGE_SELF,"?journeyId=",@jid,"&contactPage=")
 ENDIF
+]%%
+<script runat="server">
+Platform.Load("core","1");
 
+function ctFieldCheckTrim(v) {
+ if (v == null || typeof v === "undefined") {
+  return "";
+ }
+ try {
+  return String(v).replace(/^\s+|\s+$/g, "");
+ } catch (trimEx) {
+  return "";
+ }
+}
+
+function ctFieldCheckResolveDeKey(deRef) {
+ var ref = ctFieldCheckTrim(deRef);
+ if (!ref) {
+  return "";
+ }
+ try {
+  var prox = new Script.Util.WSProxy();
+  var got = prox.retrieve("DataExtension", ["CustomerKey", "Name"], {
+   Property: "CustomerKey",
+   SimpleOperator: "equals",
+   Value: ref
+  });
+  if (got && got.Results && got.Results.length > 0) {
+   var ck = ctFieldCheckTrim(got.Results[0].CustomerKey);
+   if (ck) {
+    return ck;
+   }
+  }
+  got = prox.retrieve("DataExtension", ["CustomerKey", "Name"], {
+   Property: "Name",
+   SimpleOperator: "equals",
+   Value: ref
+  });
+  if (got && got.Results && got.Results.length > 0) {
+   ck = ctFieldCheckTrim(got.Results[0].CustomerKey);
+   if (ck) {
+    return ck;
+   }
+  }
+ } catch (resolveEx) {}
+ return ref;
+}
+
+function ctDeHasPageNumberField(deKey) {
+ var ck = ctFieldCheckResolveDeKey(deKey);
+ if (!ck) {
+  return false;
+ }
+ try {
+  var prox = new Script.Util.WSProxy();
+  var deRes = prox.retrieve("DataExtension", ["ObjectID"], {
+   Property: "CustomerKey",
+   SimpleOperator: "equals",
+   Value: ck
+  });
+  if (!deRes || !deRes.Results || !deRes.Results.length) {
+   deRes = prox.retrieve("DataExtension", ["ObjectID"], {
+    Property: "Name",
+    SimpleOperator: "equals",
+    Value: ck
+   });
+  }
+  if (!deRes || !deRes.Results || !deRes.Results.length) {
+   return false;
+  }
+  var deOid = ctFieldCheckTrim(deRes.Results[0].ObjectID);
+  if (!deOid) {
+   return false;
+  }
+  var fieldsRes = prox.retrieve("DataExtensionField", ["Name"], {
+   Property: "DataExtension.ObjectID",
+   SimpleOperator: "equals",
+   Value: deOid
+  });
+  var results = fieldsRes && fieldsRes.Results ? fieldsRes.Results : [];
+  var fi;
+  for (fi = 0; fi < results.length; fi++) {
+   var nm = ctFieldCheckTrim(results[fi].Name).toLowerCase();
+   if (nm === "pagenumber") {
+    return true;
+   }
+  }
+ } catch (fieldEx) {}
+ return false;
+}
+
+var fcPageStatus = ctFieldCheckTrim(Platform.Variable.GetValue("@pageStatus") || "");
+var fcSourceDeKey = ctFieldCheckTrim(Platform.Variable.GetValue("@sourceDeKey") || "");
+var fcJsonMode = Platform.Variable.GetValue("@contactsQueryJsonMode") == "1";
+var fcHasPageNumber = "false";
+if (fcPageStatus === "ready" && fcSourceDeKey && !fcJsonMode) {
+ fcHasPageNumber = ctDeHasPageNumberField(fcSourceDeKey) ? "true" : "false";
+}
+Platform.Variable.SetValue("@entryDeHasPageNumber", fcHasPageNumber);
+</script>
+%%[
 IF @pageStatus == "ready" AND @contactsQueryJsonMode != "1" AND NOT Empty(@sourceDeKey) THEN
+ IF @entryDeHasPageNumber == "true" THEN
+ TRY
  SET @entryDeLookupKey = @sourceDeKey
  SET @contactDePageKey = Concat("", @contactUiPage)
  SET @entryDeData = LookupRows(@entryDeLookupKey, "PageNumber", @contactDePageKey)
@@ -287,6 +390,13 @@ IF @pageStatus == "ready" AND @contactsQueryJsonMode != "1" AND NOT Empty(@sourc
    SET @contactsTableHtml = Concat(@contactsTableHtml, "<tr><td colspan='4' style='text-align:center;padding:24px;color:#6b7280;'>No rows on this page.</td></tr>")
   ENDIF
   SET @contactsAmpTableReady = "true"
+ ELSE
+  SET @contactsUseSsProxyFallback = "true"
+ ENDIF
+ CATCH
+  SET @contactsUseSsProxyFallback = "true"
+  SET @contactsAmpTableReady = "false"
+ ENDTRY
  ELSE
   SET @contactsUseSsProxyFallback = "true"
  ENDIF
@@ -1404,7 +1514,13 @@ if (!contactsQueryJsonMode && confirmRunQuery && isStackBuild) {
 
 var contactsAmpTableReady = Platform.Variable.GetValue("@contactsAmpTableReady") == "true";
 var contactsUseSsProxyFallback = Platform.Variable.GetValue("@contactsUseSsProxyFallback") == "true";
-if (!contactsQueryJsonMode && pageStatus == "ready" && sourceDeKey && !contactsAmpTableReady && contactsUseSsProxyFallback) {
+if (
+ !contactsQueryJsonMode &&
+ pageStatus == "ready" &&
+ sourceDeKey &&
+ !contactsAmpTableReady &&
+ (contactsUseSsProxyFallback || Platform.Variable.GetValue("@entryDeHasPageNumber") != "true")
+) {
  try {
   var built = ctLoadContactsTableWsProxy(sourceDeKey, pageNum, pageSize);
   ctSet("contactsTableHtml", built.html);
