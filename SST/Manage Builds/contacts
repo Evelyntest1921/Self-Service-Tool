@@ -220,6 +220,24 @@ function ctFieldCheckResolveDeKey(deRef) {
  return ref;
 }
 
+function ctFieldCheckCoerceResults(results) {
+ if (!results) {
+  return [];
+ }
+ if (typeof results.length === "number") {
+  var out = [];
+  var i;
+  for (i = 0; i < results.length; i++) {
+   out.push(results[i]);
+  }
+  return out;
+ }
+ if (typeof results === "object") {
+  return [results];
+ }
+ return [];
+}
+
 function ctDeHasPageNumberField(deKey) {
  var ck = ctFieldCheckResolveDeKey(deKey);
  if (!ck) {
@@ -227,36 +245,27 @@ function ctDeHasPageNumberField(deKey) {
  }
  try {
   var prox = new Script.Util.WSProxy();
-  var deRes = prox.retrieve("DataExtension", ["ObjectID"], {
-   Property: "CustomerKey",
-   SimpleOperator: "equals",
-   Value: ck
-  });
-  if (!deRes || !deRes.Results || !deRes.Results.length) {
-   deRes = prox.retrieve("DataExtension", ["ObjectID"], {
-    Property: "Name",
-    SimpleOperator: "equals",
-    Value: ck
-   });
-  }
-  if (!deRes || !deRes.Results || !deRes.Results.length) {
-   return false;
-  }
-  var deOid = ctFieldCheckTrim(deRes.Results[0].ObjectID);
-  if (!deOid) {
-   return false;
-  }
-  var fieldsRes = prox.retrieve("DataExtensionField", ["Name"], {
-   Property: "DataExtension.ObjectID",
-   SimpleOperator: "equals",
-   Value: deOid
-  });
-  var results = fieldsRes && fieldsRes.Results ? fieldsRes.Results : [];
+  var fieldFilters = [
+   { Property: "DataExtension.CustomerKey", Value: ck },
+   { Property: "DataExtension.Name", Value: ck }
+  ];
   var fi;
-  for (fi = 0; fi < results.length; fi++) {
-   var nm = ctFieldCheckTrim(results[fi].Name).toLowerCase();
-   if (nm === "pagenumber") {
-    return true;
+  for (fi = 0; fi < fieldFilters.length; fi++) {
+   var fieldsRes = prox.retrieve("DataExtensionField", ["Name"], {
+    Property: fieldFilters[fi].Property,
+    SimpleOperator: "equals",
+    Value: fieldFilters[fi].Value
+   });
+   var results = ctFieldCheckCoerceResults(fieldsRes ? fieldsRes.Results : null);
+   var ri;
+   for (ri = 0; ri < results.length; ri++) {
+    var nm = ctFieldCheckTrim(results[ri].Name).toLowerCase();
+    if (nm === "pagenumber") {
+     return true;
+    }
+   }
+   if (results.length > 0) {
+    return false;
    }
   }
  } catch (fieldEx) {}
@@ -1519,7 +1528,7 @@ if (
  pageStatus == "ready" &&
  sourceDeKey &&
  !contactsAmpTableReady &&
- (contactsUseSsProxyFallback || Platform.Variable.GetValue("@entryDeHasPageNumber") != "true")
+ contactsUseSsProxyFallback
 ) {
  try {
   var built = ctLoadContactsTableWsProxy(sourceDeKey, pageNum, pageSize);
