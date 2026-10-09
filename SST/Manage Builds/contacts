@@ -369,7 +369,9 @@ function ctAmpRowToPlainObject(r) {
   "account_owner_name",
   "Account_Owner_Email",
   "Account_owner_email",
-  "account_owner_email"
+  "account_owner_email",
+  "TotalPages",
+  "totalPages"
  ];
  var i;
  for (i = 0; i < names.length; i++) {
@@ -410,6 +412,78 @@ function ctEntryDeLookupKeys(deKey) {
  return keys;
 }
 
+function ctAmpIntField(row, fieldName) {
+ try {
+  var v = parseInt(ctStr(Platform.Function.Field(row, fieldName)), 10);
+  if (isNaN(v)) {
+   return 0;
+  }
+  return v;
+ } catch (ampIntEx) {
+  return 0;
+ }
+}
+
+function ctResolveEntryDeTotalPages(keys, maxRs, batchRows, pageNum, pageSize, batchCount) {
+ var totalPages = 1;
+ var ki;
+ var pi;
+ if (maxRs && ctAmpRowCount(maxRs) > 0) {
+  try {
+   var metaRow = Platform.Function.Row(maxRs, 1);
+   var maxPage = ctAmpIntField(metaRow, "PageNumber");
+   if (maxPage > 0) {
+    totalPages = maxPage;
+   }
+   var tpMeta = ctAmpIntField(metaRow, "TotalPages");
+   if (tpMeta > 0) {
+    totalPages = tpMeta;
+   }
+  } catch (metaEx) {}
+ }
+ for (pi = 0; pi < keys.length; pi++) {
+  var p1Rs = ctSafeLookupRows(keys[pi], "PageNumber", "1");
+  if (ctAmpRowCount(p1Rs) === 0) {
+   p1Rs = ctSafeLookupRows(keys[pi], "PageNumber", 1);
+  }
+  if (ctAmpRowCount(p1Rs) > 0) {
+   var tp1 = ctAmpIntField(Platform.Function.Row(p1Rs, 1), "TotalPages");
+   if (tp1 > totalPages) {
+    totalPages = tp1;
+   }
+   break;
+  }
+ }
+ for (ki = 0; ki < batchRows.length; ki++) {
+  var row = batchRows[ki];
+  var tpRow = parseInt(ctStr(row.TotalPages || row.totalPages || ""), 10);
+  if (!isNaN(tpRow) && tpRow > totalPages) {
+   totalPages = tpRow;
+  }
+ }
+ if (pageNum > totalPages) {
+  totalPages = pageNum;
+ }
+ if (batchCount >= pageSize && pageNum >= totalPages) {
+  totalPages = pageNum + 1;
+ }
+ if (totalPages < 1) {
+  totalPages = 1;
+ }
+ return totalPages;
+}
+
+function ctEntryDeHasPageNumberBatch(deKey) {
+ var keys = ctEntryDeLookupKeys(deKey);
+ var ki;
+ for (ki = 0; ki < keys.length; ki++) {
+  if (ctAmpRowCount(ctSafeLookupOrderedRows(keys[ki], 1, "PageNumber DESC")) > 0) {
+   return true;
+  }
+ }
+ return false;
+}
+
 function ctLoadContactsTableBatch(deKey, pageNum, pageSize) {
  var keys = ctEntryDeLookupKeys(deKey);
  if (!keys.length) {
@@ -417,7 +491,7 @@ function ctLoadContactsTableBatch(deKey, pageNum, pageSize) {
  }
  var lookupKey = keys[0];
  var hasBatchMeta = false;
- var totalPages = 1;
+ var totalPages;
  var maxRs = null;
  var ki;
  for (ki = 0; ki < keys.length; ki++) {
@@ -427,27 +501,6 @@ function ctLoadContactsTableBatch(deKey, pageNum, pageSize) {
    hasBatchMeta = true;
    break;
   }
- }
- if (hasBatchMeta) {
-  try {
-   var metaRow = Platform.Function.Row(maxRs, 1);
-   var maxPage = parseInt(ctStr(Platform.Function.Field(metaRow, "PageNumber")), 10);
-   if (!isNaN(maxPage) && maxPage > 0) {
-    totalPages = maxPage;
-   }
-   try {
-    var tp = parseInt(ctStr(Platform.Function.Field(metaRow, "TotalPages")), 10);
-    if (!isNaN(tp) && tp > 0) {
-     totalPages = tp;
-    }
-   } catch (tpEx) {}
-  } catch (metaEx) {}
- }
- if (totalPages < 1) {
-  totalPages = 1;
- }
- if (pageNum > totalPages) {
-  pageNum = totalPages;
  }
  if (pageNum < 1) {
   pageNum = 1;
@@ -476,6 +529,16 @@ function ctLoadContactsTableBatch(deKey, pageNum, pageSize) {
  if (!hasBatchMeta && batchCount === 0) {
   return null;
  }
+ totalPages = ctResolveEntryDeTotalPages(keys, maxRs, batchRows, pageNum, pageSize, batchCount);
+ if (pageNum > totalPages && batchCount === 0) {
+  pageNum = totalPages;
+  batchRs = ctSafeLookupRows(lookupKey, "PageNumber", String(pageNum));
+  if (ctAmpRowCount(batchRs) === 0) {
+   batchRs = ctSafeLookupRows(lookupKey, "PageNumber", pageNum);
+  }
+  batchRows = ctAmpRowsToObjects(batchRs);
+  batchCount = batchRows.length;
+ }
  var totalRecords = totalPages * pageSize;
  if (totalRecords < 1 && batchCount > 0) {
   totalRecords = batchCount;
@@ -484,9 +547,13 @@ function ctLoadContactsTableBatch(deKey, pageNum, pageSize) {
 }
 
 function ctLoadContactsTable(deKey, pageNum, pageSize) {
+ var usesPageBatch = ctEntryDeHasPageNumberBatch(deKey);
  var batchBuilt = ctLoadContactsTableBatch(deKey, pageNum, pageSize);
  if (batchBuilt) {
   return batchBuilt;
+ }
+ if (usesPageBatch) {
+  return ctBuildTableHtmlPaged([], pageNum, pageSize, pageNum * pageSize, pageNum);
  }
  var allRows = ctRetrieveDeRows(deKey);
  return ctBuildTableHtml(allRows, pageNum, pageSize);
@@ -1404,8 +1471,11 @@ function ctBuildTableHtmlPaged(rows, page, pageSize, totalRecords, totalPages) {
  if (page < 1) {
   page = 1;
  }
- var startRow = batchCount > 0 ? (page - 1) * pageSize + 1 : 0;
- var endRow = batchCount > 0 ? startRow + batchCount - 1 : 0;
+ var startRow = (page - 1) * pageSize + 1;
+ var endRow = batchCount > 0 ? startRow + batchCount - 1 : startRow - 1;
+ if (endRow < startRow && totalPages > 1) {
+  endRow = startRow + pageSize - 1;
+ }
  var total = totalRecords > 0 ? totalRecords : batchCount;
  return {
   html: html,
