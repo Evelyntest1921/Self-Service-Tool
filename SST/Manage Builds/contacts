@@ -12,7 +12,8 @@ VAR @confirmUpdateQuery, @updateQueryBanner, @updateQueryOk
 VAR @contactsQueryJson, @contactsQueryJsonMode
 VAR @postedClearJid, @postedUpdateJid
 VAR @entryDeData, @contactBatchRowCount, @entryDeLookupKey, @contactDePageKey, @pageOneData, @lastPageRows, @lastPageCount
-VAR @contactsAmpTableReady, @contactsUseSsProxyFallback, @row, @i, @cellContactId, @cellEmail, @cellOwnerName, @cellOwnerEmail
+VAR @contactsAmpTableReady, @contactsUseSsProxyFallback, @entryDeFieldCount, @entryDeUseAmpBatch, @entryDeBatchFieldCount, @entryDeLegacyFieldCount
+VAR @row, @i, @cellContactId, @cellEmail, @cellOwnerName, @cellOwnerEmail
 
 SET @STACK_JOURNEY_TYPE = "Journey + Automation"
 SET @HOME_URL = ""
@@ -70,6 +71,10 @@ SET @contactsQueryJson = ""
 SET @contactsQueryJsonMode = IIF(RequestParameter("contactsQueryData") == "1", "1", "0")
 SET @contactsAmpTableReady = "false"
 SET @contactsUseSsProxyFallback = "false"
+SET @entryDeFieldCount = 0
+SET @entryDeUseAmpBatch = "false"
+SET @entryDeBatchFieldCount = 13
+SET @entryDeLegacyFieldCount = 11
 SET @contactBatchRowCount = 0
 SET @entryDeLookupKey = ""
 IF @contactsQueryJsonMode != "1" AND QueryParameter("contactsQueryData") == "1" THEN
@@ -172,8 +177,98 @@ IF NOT Empty(@CONTACTS_PAGE_SELF) AND NOT Empty(@jid) THEN
  SET @contactNavBase = Concat(@CONTACTS_PAGE_SELF,"?journeyId=",@jid,"&contactPage=")
 ENDIF
 ]%%
+<script runat="server">
+Platform.Load("core","1");
+
+function ctFcTrim(v) {
+ if (v == null || typeof v === "undefined") {
+  return "";
+ }
+ try {
+  return String(v).replace(/^\s+|\s+$/g, "");
+ } catch (trimEx) {
+  return "";
+ }
+}
+
+function ctFcCollectResults(results) {
+ var rows = [];
+ if (!results) {
+  return rows;
+ }
+ if (typeof results.length === "number") {
+  var i;
+  for (i = 0; i < results.length; i++) {
+   rows.push(results[i]);
+  }
+  return rows;
+ }
+ if (typeof results === "object") {
+  rows.push(results);
+ }
+ return rows;
+}
+
+function ctFcEntryDeFieldCount(deRef) {
+ var ref = ctFcTrim(deRef);
+ if (!ref || ref.toUpperCase() === "N/A") {
+  return 0;
+ }
+ try {
+  var prox = new Script.Util.WSProxy();
+  var deFilters = [
+   { Property: "CustomerKey", Value: ref },
+   { Property: "Name", Value: ref }
+  ];
+  var deRow = null;
+  var fi;
+  for (fi = 0; fi < deFilters.length; fi++) {
+   var deResp = prox.retrieve("DataExtension", ["CustomerKey", "Name"], {
+    Property: deFilters[fi].Property,
+    SimpleOperator: "equals",
+    Value: deFilters[fi].Value
+   });
+   var deRows = ctFcCollectResults(deResp ? deResp.Results : null);
+   if (deRows.length > 0 && deRows[0].CustomerKey) {
+    deRow = deRows[0];
+    break;
+   }
+  }
+  if (!deRow || !deRow.CustomerKey) {
+   return 0;
+  }
+  var fieldResp = prox.retrieve("DataExtensionField", ["Name"], {
+   Property: "DataExtension.CustomerKey",
+   SimpleOperator: "equals",
+   Value: String(deRow.CustomerKey)
+  });
+  return ctFcCollectResults(fieldResp ? fieldResp.Results : null).length;
+ } catch (countEx) {
+  return 0;
+ }
+}
+
+var fcPageStatus = ctFcTrim(Platform.Variable.GetValue("@pageStatus") || "");
+var fcSourceDeKey = ctFcTrim(Platform.Variable.GetValue("@sourceDeKey") || "");
+var fcDispDeName = ctFcTrim(Platform.Variable.GetValue("@dispDeName") || "");
+var fcJsonMode = Platform.Variable.GetValue("@contactsQueryJsonMode") == "1";
+var fcBatchFieldCount = parseInt(String(Platform.Variable.GetValue("@entryDeBatchFieldCount") || "13"), 10);
+if (isNaN(fcBatchFieldCount) || fcBatchFieldCount < 1) {
+ fcBatchFieldCount = 13;
+}
+var fcFieldCount = 0;
+if (fcPageStatus === "ready" && fcSourceDeKey && !fcJsonMode) {
+ fcFieldCount = ctFcEntryDeFieldCount(fcSourceDeKey);
+ if (fcFieldCount < 1 && fcDispDeName && fcDispDeName !== fcSourceDeKey && fcDispDeName.toUpperCase() !== "N/A") {
+  fcFieldCount = ctFcEntryDeFieldCount(fcDispDeName);
+ }
+}
+Platform.Variable.SetValue("@entryDeFieldCount", String(fcFieldCount));
+Platform.Variable.SetValue("@entryDeUseAmpBatch", fcFieldCount === fcBatchFieldCount ? "true" : "false");
+</script>
 %%[
 IF @pageStatus == "ready" AND @contactsQueryJsonMode != "1" AND NOT Empty(@sourceDeKey) THEN
+ IF @entryDeUseAmpBatch == "true" THEN
  TRY
  SET @entryDeLookupKey = @sourceDeKey
  SET @contactDePageKey = Concat("", @contactUiPage)
@@ -296,6 +391,9 @@ IF @pageStatus == "ready" AND @contactsQueryJsonMode != "1" AND NOT Empty(@sourc
   SET @contactsUseSsProxyFallback = "true"
   SET @contactsAmpTableReady = "false"
  ENDTRY
+ ELSE
+  SET @contactsUseSsProxyFallback = "true"
+ ENDIF
 ENDIF
 ]%%
 <script runat="server">
