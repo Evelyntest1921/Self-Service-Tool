@@ -10,9 +10,7 @@ VAR @confirmRunQuery, @runQueryBanner, @runQueryOk
 VAR @confirmClearDe, @clearDeBanner, @clearDeOk
 VAR @confirmUpdateQuery, @updateQueryBanner, @updateQueryOk
 VAR @contactsQueryJson, @contactsQueryJsonMode
-VAR @entryDeData, @contactBatchRowCount, @contactMaxPageRows, @contactMaxPageNum, @contactTotalPagesFromField, @contactDePageKey, @contactRem
-VAR @contactsUseWsProxy, @contactsAmpLoaded, @entryDeLookupKey, @row, @i, @cellContactId, @cellEmail, @cellOwnerName, @cellOwnerEmail
-VAR @postedClearJid, @postedUpdateJid, @contactsEmptyPageRow, @contactsEmptyDeRow
+VAR @postedClearJid, @postedUpdateJid
 
 SET @STACK_JOURNEY_TYPE = "Journey + Automation"
 SET @HOME_URL = ""
@@ -68,14 +66,6 @@ SET @updateQueryBanner = ""
 SET @updateQueryOk = ""
 SET @contactsQueryJson = ""
 SET @contactsQueryJsonMode = IIF(RequestParameter("contactsQueryData") == "1", "1", "0")
-SET @contactBatchRowCount = 0
-SET @contactMaxPageNum = 0
-SET @contactTotalPagesFromField = 0
-SET @contactDePageKey = ""
-SET @contactRem = 0
-SET @contactsUseWsProxy = "false"
-SET @contactsAmpLoaded = "false"
-SET @entryDeLookupKey = ""
 IF @contactsQueryJsonMode != "1" AND QueryParameter("contactsQueryData") == "1" THEN
  SET @contactsQueryJsonMode = "1"
 ENDIF
@@ -174,141 +164,6 @@ ENDIF
 
 IF NOT Empty(@CONTACTS_PAGE_SELF) AND NOT Empty(@jid) THEN
  SET @contactNavBase = Concat(@CONTACTS_PAGE_SELF,"?journeyId=",@jid,"&contactPage=")
-ENDIF
-
-SET @contactsEmptyPageRow = "<tr><td colspan='4' style='text-align:center;padding:24px;color:#6b7280;'>No rows on this page. Confirm PageNumber is populated on the entry data extension.</td></tr>"
-SET @contactsEmptyDeRow = "<tr><td colspan='4' style='text-align:center;padding:24px;color:#6b7280;'>No rows in the entry data extension.</td></tr>"
-
-IF @pageStatus == "ready" AND @contactsQueryJsonMode != "1" AND NOT Empty(@sourceDeKey) THEN
- TRY
- SET @entryDeLookupKey = @sourceDeKey
- SET @contactMaxPageRows = LookupOrderedRows(@sourceDeKey, 1, "PageNumber DESC")
- IF RowCount(@contactMaxPageRows) == 0 AND NOT Empty(@dispDeName) AND @dispDeName != "N/A" AND @dispDeName != @sourceDeKey THEN
-  SET @entryDeLookupKey = @dispDeName
-  SET @contactMaxPageRows = LookupOrderedRows(@dispDeName, 1, "PageNumber DESC")
- ENDIF
- IF RowCount(@contactMaxPageRows) > 0 THEN
-  SET @contactMaxPageNum = Field(Row(@contactMaxPageRows, 1), "PageNumber")
-  IF NOT Empty(@contactMaxPageNum) THEN
-   SET @contactMaxPageNum = Add(0, @contactMaxPageNum)
-   IF @contactMaxPageNum > 0 THEN
-    SET @contactTotalPages = @contactMaxPageNum
-   ENDIF
-  ENDIF
-  SET @contactTotalPagesFromField = Field(Row(@contactMaxPageRows, 1), "TotalPages")
-  IF NOT Empty(@contactTotalPagesFromField) THEN
-   SET @contactTotalPagesFromField = Add(0, @contactTotalPagesFromField)
-   IF @contactTotalPagesFromField > 0 THEN
-    SET @contactTotalPages = @contactTotalPagesFromField
-   ENDIF
-  ENDIF
- ENDIF
- IF @contactTotalPages < 1 THEN
-  SET @contactTotalPages = 1
- ENDIF
- IF @contactUiPage > @contactTotalPages THEN
-  SET @contactUiPage = @contactTotalPages
- ENDIF
- SET @contactDePageKey = Concat("", @contactUiPage)
- SET @entryDeData = LookupRows(@entryDeLookupKey, "PageNumber", @contactDePageKey)
- SET @contactBatchRowCount = RowCount(@entryDeData)
- IF @contactBatchRowCount == 0 THEN
-  SET @entryDeData = LookupRows(@entryDeLookupKey, "PageNumber", @contactUiPage)
-  SET @contactBatchRowCount = RowCount(@entryDeData)
- ENDIF
- IF @contactBatchRowCount == 0 AND @sourceDeKey != @entryDeLookupKey THEN
-  SET @entryDeData = LookupRows(@sourceDeKey, "PageNumber", @contactDePageKey)
-  SET @contactBatchRowCount = RowCount(@entryDeData)
-  IF @contactBatchRowCount == 0 THEN
-   SET @entryDeData = LookupRows(@sourceDeKey, "PageNumber", @contactUiPage)
-   SET @contactBatchRowCount = RowCount(@entryDeData)
-  ENDIF
- ENDIF
- IF @contactBatchRowCount == 0 AND @contactUiPage == 1 AND RowCount(@contactMaxPageRows) == 0 THEN
-  SET @entryDeData = LookupOrderedRows(@entryDeLookupKey, @contactPageSize, "Email ASC")
-  SET @contactBatchRowCount = RowCount(@entryDeData)
-  IF @contactBatchRowCount == 0 THEN
-   SET @entryDeData = LookupOrderedRows(@entryDeLookupKey, @contactPageSize, "ContactId ASC")
-   SET @contactBatchRowCount = RowCount(@entryDeData)
-  ENDIF
-  IF @contactBatchRowCount == 0 AND @sourceDeKey != @entryDeLookupKey THEN
-   SET @entryDeData = LookupOrderedRows(@sourceDeKey, @contactPageSize, "Email ASC")
-   SET @contactBatchRowCount = RowCount(@entryDeData)
-   IF @contactBatchRowCount == 0 THEN
-    SET @entryDeData = LookupOrderedRows(@sourceDeKey, @contactPageSize, "ContactId ASC")
-    SET @contactBatchRowCount = RowCount(@entryDeData)
-   ENDIF
-  ENDIF
-  IF @contactBatchRowCount > 0 THEN
-   SET @contactsUseWsProxy = "true"
-  ENDIF
- ENDIF
- IF @contactsUseWsProxy != "true" THEN
-  IF @contactBatchRowCount > 0 THEN
-   FOR @i = 1 TO @contactBatchRowCount DO
-    SET @row = Row(@entryDeData, @i)
-    SET @cellContactId = Field(@row, "ContactId")
-    IF Empty(@cellContactId) THEN
-     SET @cellContactId = Field(@row, "contactId")
-    ENDIF
-    IF Empty(@cellContactId) THEN
-     SET @cellContactId = Field(@row, "SubscriberKey")
-    ENDIF
-    IF Empty(@cellContactId) THEN
-     SET @cellContactId = "-"
-    ENDIF
-    SET @cellEmail = Field(@row, "Email")
-    IF Empty(@cellEmail) THEN
-     SET @cellEmail = Field(@row, "email")
-    ENDIF
-    IF Empty(@cellEmail) THEN
-     SET @cellEmail = "-"
-    ENDIF
-    SET @cellOwnerName = Field(@row, "Account_Owner_Name")
-    IF Empty(@cellOwnerName) THEN
-     SET @cellOwnerName = Field(@row, "Account_owner_name")
-    ENDIF
-    IF Empty(@cellOwnerName) THEN
-     SET @cellOwnerName = "-"
-    ENDIF
-    SET @cellOwnerEmail = Field(@row, "Account_Owner_Email")
-    IF Empty(@cellOwnerEmail) THEN
-     SET @cellOwnerEmail = Field(@row, "Account_owner_email")
-    ENDIF
-    IF Empty(@cellOwnerEmail) THEN
-     SET @cellOwnerEmail = "-"
-    ENDIF
-    SET @contactsTableHtml = Concat(@contactsTableHtml, "<tr><td>", @cellContactId, "</td><td>", @cellEmail, "</td><td>", @cellOwnerName, "</td><td>", @cellOwnerEmail, "</td></tr>")
-   NEXT @i
-  ELSEIF @contactTotalPages > 1 OR RowCount(@contactMaxPageRows) > 0 THEN
-   SET @contactsTableHtml = Concat(@contactsTableHtml, @contactsEmptyPageRow)
-  ELSE
-   SET @contactsTableHtml = Concat(@contactsTableHtml, @contactsEmptyDeRow)
-  ENDIF
-  SET @contactsAmpLoaded = "true"
-  IF @totalRecords == 0 AND @contactTotalPages > 1 THEN
-   SET @totalRecords = Multiply(@contactTotalPages, @contactPageSize)
-  ENDIF
-  IF @totalRecords == 0 AND @contactTotalPages > 0 AND @contactBatchRowCount > 0 THEN
-   SET @totalRecords = Multiply(@contactTotalPages, @contactPageSize)
-  ENDIF
-  IF @totalRecords == 0 AND @contactBatchRowCount > 0 THEN
-   SET @totalRecords = @contactBatchRowCount
-  ENDIF
-  IF @contactUiPage > 0 THEN
-   SET @contactStartRow = Add(Multiply(Subtract(@contactUiPage, 1), @contactPageSize), 1)
-   IF @contactBatchRowCount > 0 THEN
-    SET @contactEndRow = Add(@contactStartRow, Subtract(@contactBatchRowCount, 1))
-   ELSE
-    SET @contactEndRow = Add(@contactStartRow, Subtract(@contactPageSize, 1))
-   ENDIF
-  ENDIF
- ENDIF
- CATCH
-  SET @contactsUseWsProxy = "true"
-  SET @contactsAmpLoaded = "false"
-  SET @contactsTableHtml = ""
- ENDTRY
 ENDIF
 ]%%
 <script runat="server">
@@ -472,6 +327,169 @@ function ctRetrieveDeRows(deKey) {
   } catch (wsEx) {}
  }
  return [];
+}
+
+function ctAmpRowCount(rs) {
+ try {
+  if (rs === null || typeof rs === "undefined") {
+   return 0;
+  }
+  return Platform.Function.RowCount(rs);
+ } catch (ampRcEx) {
+  return 0;
+ }
+}
+
+function ctSafeLookupOrderedRows(deKey, count, order) {
+ try {
+  return Platform.Function.LookupOrderedRows(deKey, count, order);
+ } catch (ampOrdEx) {
+  return null;
+ }
+}
+
+function ctSafeLookupRows(deKey, col, val) {
+ try {
+  return Platform.Function.LookupRows(deKey, col, val);
+ } catch (ampLrEx) {
+  return null;
+ }
+}
+
+function ctAmpRowToPlainObject(r) {
+ var out = {};
+ var names = [
+  "ContactId",
+  "contactId",
+  "SubscriberKey",
+  "Email",
+  "email",
+  "Account_Owner_Name",
+  "Account_owner_name",
+  "account_owner_name",
+  "Account_Owner_Email",
+  "Account_owner_email",
+  "account_owner_email"
+ ];
+ var i;
+ for (i = 0; i < names.length; i++) {
+  try {
+   var v = Platform.Function.Field(r, names[i]);
+   if (v !== null && typeof v !== "undefined" && ctTrim(v)) {
+    out[names[i]] = v;
+   }
+  } catch (fieldEx) {}
+ }
+ return out;
+}
+
+function ctAmpRowsToObjects(rs) {
+ var out = [];
+ var cnt = ctAmpRowCount(rs);
+ var ri;
+ for (ri = 1; ri <= cnt; ri++) {
+  try {
+   out.push(ctAmpRowToPlainObject(Platform.Function.Row(rs, ri)));
+  } catch (rowEx) {}
+ }
+ return out;
+}
+
+function ctEntryDeLookupKeys(deKey) {
+ var keys = [];
+ var seen = {};
+ var sk = ctTrim(deKey);
+ var dn = ctTrim(Platform.Variable.GetValue("@dispDeName") || "");
+ if (sk) {
+  keys.push(sk);
+  seen[sk] = true;
+ }
+ if (dn && dn.toUpperCase() != "N/A" && !seen[dn]) {
+  keys.push(dn);
+ }
+ return keys;
+}
+
+function ctLoadContactsTableBatch(deKey, pageNum, pageSize) {
+ var keys = ctEntryDeLookupKeys(deKey);
+ if (!keys.length) {
+  return null;
+ }
+ var lookupKey = keys[0];
+ var hasBatchMeta = false;
+ var totalPages = 1;
+ var maxRs = null;
+ var ki;
+ for (ki = 0; ki < keys.length; ki++) {
+  maxRs = ctSafeLookupOrderedRows(keys[ki], 1, "PageNumber DESC");
+  if (ctAmpRowCount(maxRs) > 0) {
+   lookupKey = keys[ki];
+   hasBatchMeta = true;
+   break;
+  }
+ }
+ if (hasBatchMeta) {
+  try {
+   var metaRow = Platform.Function.Row(maxRs, 1);
+   var maxPage = parseInt(ctStr(Platform.Function.Field(metaRow, "PageNumber")), 10);
+   if (!isNaN(maxPage) && maxPage > 0) {
+    totalPages = maxPage;
+   }
+   try {
+    var tp = parseInt(ctStr(Platform.Function.Field(metaRow, "TotalPages")), 10);
+    if (!isNaN(tp) && tp > 0) {
+     totalPages = tp;
+    }
+   } catch (tpEx) {}
+  } catch (metaEx) {}
+ }
+ if (totalPages < 1) {
+  totalPages = 1;
+ }
+ if (pageNum > totalPages) {
+  pageNum = totalPages;
+ }
+ if (pageNum < 1) {
+  pageNum = 1;
+ }
+ var batchRs = ctSafeLookupRows(lookupKey, "PageNumber", String(pageNum));
+ if (ctAmpRowCount(batchRs) === 0) {
+  batchRs = ctSafeLookupRows(lookupKey, "PageNumber", pageNum);
+ }
+ if (ctAmpRowCount(batchRs) === 0) {
+  for (ki = 0; ki < keys.length; ki++) {
+   if (keys[ki] === lookupKey) {
+    continue;
+   }
+   batchRs = ctSafeLookupRows(keys[ki], "PageNumber", String(pageNum));
+   if (ctAmpRowCount(batchRs) === 0) {
+    batchRs = ctSafeLookupRows(keys[ki], "PageNumber", pageNum);
+   }
+   if (ctAmpRowCount(batchRs) > 0) {
+    lookupKey = keys[ki];
+    break;
+   }
+  }
+ }
+ var batchRows = ctAmpRowsToObjects(batchRs);
+ var batchCount = batchRows.length;
+ if (!hasBatchMeta && batchCount === 0) {
+  return null;
+ }
+ var totalRecords = totalPages * pageSize;
+ if (totalRecords < 1 && batchCount > 0) {
+  totalRecords = batchCount;
+ }
+ return ctBuildTableHtmlPaged(batchRows, pageNum, pageSize, totalRecords, totalPages);
+}
+
+function ctLoadContactsTable(deKey, pageNum, pageSize) {
+ var batchBuilt = ctLoadContactsTableBatch(deKey, pageNum, pageSize);
+ if (batchBuilt) {
+  return batchBuilt;
+ }
+ var allRows = ctRetrieveDeRows(deKey);
+ return ctBuildTableHtml(allRows, pageNum, pageSize);
 }
 
 function ctParseJson(text) {
@@ -1353,6 +1371,52 @@ function ctBuildTableHtml(rows, page, pageSize) {
  };
 }
 
+function ctBuildTableHtmlPaged(rows, page, pageSize, totalRecords, totalPages) {
+ var batchCount = rows ? rows.length : 0;
+ var html = "";
+ var i;
+ if (batchCount == 0) {
+  if (totalPages > 1 || totalRecords > 0) {
+   html =
+    '<tr><td colspan="4" style="text-align:center;padding:24px;color:#6b7280;">No rows on this page. Confirm PageNumber is populated on the entry data extension.</td></tr>';
+  } else {
+   html =
+    '<tr><td colspan="4" style="text-align:center;padding:24px;color:#6b7280;">No rows in the entry data extension.</td></tr>';
+  }
+ } else {
+  for (i = 0; i < batchCount; i++) {
+   var row = rows[i];
+   var contactId = ctField(row, ["ContactId", "contactId", "contactid", "SubscriberKey"]);
+   var email = ctField(row, ["Email", "email"]);
+   var ownerName = ctField(row, ["Account_Owner_Name", "Account_owner_name", "account_owner_name"]);
+   var ownerEmail = ctField(row, ["Account_Owner_Email", "Account_owner_email", "account_owner_email"]);
+   html += "<tr>";
+   html += "<td>" + ctHtml(contactId || "-") + "</td>";
+   html += "<td>" + ctHtml(email || "-") + "</td>";
+   html += "<td>" + ctHtml(ownerName || "-") + "</td>";
+   html += "<td>" + ctHtml(ownerEmail || "-") + "</td>";
+   html += "</tr>";
+  }
+ }
+ if (page > totalPages) {
+  page = totalPages;
+ }
+ if (page < 1) {
+  page = 1;
+ }
+ var startRow = batchCount > 0 ? (page - 1) * pageSize + 1 : 0;
+ var endRow = batchCount > 0 ? startRow + batchCount - 1 : 0;
+ var total = totalRecords > 0 ? totalRecords : batchCount;
+ return {
+  html: html,
+  total: total,
+  totalPages: totalPages > 0 ? totalPages : 1,
+  page: page,
+  startRow: startRow,
+  endRow: endRow
+ };
+}
+
 var pageStatus = ctTrim(Platform.Variable.GetValue("@pageStatus") || "ready");
 var loadError = ctTrim(Platform.Variable.GetValue("@loadError") || "");
 var sourceDeKey = ctTrim(Platform.Variable.GetValue("@sourceDeKey") || "");
@@ -1416,12 +1480,9 @@ if (!contactsQueryJsonMode && confirmRunQuery && isStackBuild) {
  }
 }
 
-var contactsUseWsProxy = Platform.Variable.GetValue("@contactsUseWsProxy") == "true";
-var contactsAmpLoaded = Platform.Variable.GetValue("@contactsAmpLoaded") == "true";
-if (!contactsQueryJsonMode && pageStatus == "ready" && sourceDeKey && contactsUseWsProxy && !contactsAmpLoaded) {
+if (!contactsQueryJsonMode && pageStatus == "ready" && sourceDeKey) {
  try {
-  var allRows = ctRetrieveDeRows(sourceDeKey);
-  var built = ctBuildTableHtml(allRows, pageNum, pageSize);
+  var built = ctLoadContactsTable(sourceDeKey, pageNum, pageSize);
   ctSet("contactsTableHtml", built.html);
   ctSet("totalRecords", String(built.total));
   ctSet("contactTotalPages", String(built.totalPages));
