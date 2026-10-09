@@ -341,6 +341,7 @@
   var BROWSE_PAGE_SIZE = 50;
   var BUILD_PAGE_SIZE = 20;
   var MAX_DE_FETCH = 500;
+  var SEARCH_MAX_ROWS = 3000;
   var BUILD_DETAIL_URL = Platform.Variable.GetValue("@buildDetailUrl") || "";
   function esc(s) {
     if (s == null || s === undefined) return "";
@@ -723,51 +724,24 @@
   }
   function retrieveAllAnalyticsRows() {
     var rows = [];
-    var keys = [DE_EXTERNAL_KEY, String(DE_EXTERNAL_KEY).toLowerCase()];
-    var i;
-    for (i = 0; i < keys.length; i++) {
+    var total = getDeRowCount();
+    var limit = SEARCH_MAX_ROWS;
+    if (total > 0 && total < limit) {
+      limit = total;
+    }
+    var orders = ["updateDate DESC", "UpdateDate DESC", "journeyName ASC", "JourneyName ASC"];
+    var oi;
+    for (oi = 0; oi < orders.length; oi++) {
       try {
-        rows = coerceDeRows(DataExtension.Init(keys[i]).Rows.Retrieve());
+        rows = coerceDeRows(
+          Platform.Function.LookupOrderedRows(DE_EXTERNAL_KEY, limit, orders[oi])
+        );
         if (rows.length) {
           return rows;
         }
       }
-      catch (retrieveEx) {
+      catch (orderedEx) {
       }
-    }
-    try {
-      rows = coerceDeRows(
-        (new Script.Util.WSProxy()).retrieve(
-          "DataExtensionObject[" + DE_EXTERNAL_KEY + "]",
-          [
-            "journeyId",
-            "JourneyId",
-            "journeyName",
-            "JourneyName",
-            "buildName",
-            "BuildName",
-            "journeyType",
-            "JourneyType",
-            "updateDate",
-            "UpdateDate",
-            "JourneyStatus",
-            "journeyStatus",
-            "emailName",
-            "EmailName",
-            "sentCount",
-            "SentCount"
-          ],
-          {
-            Property: "journeyId",
-            SimpleOperator: "isNotNull"
-          }
-        )
-      );
-      if (rows.length) {
-        return rows;
-      }
-    }
-    catch (wsEx) {
     }
     return retrieveAnalyticsRows();
   }
