@@ -1,0 +1,584 @@
+<script runat="server">
+Platform.Load('Core','1');
+var PAGE_SIZE = 25;
+var Sync_DE = "Builder_Master_Sync";
+var BUILDER_API_KEY = "secret_variable_hidden";
+var SyncReady = true;
+try
+{
+var now = new Date();
+var siteAvailabilityDE = DataExtension.Init("Site_Availability");
+var builderSpecialityDE = DataExtension.Init("Builder_Speciality");
+var specialityRows = builderSpecialityDE.Rows.Retrieve();
+if (specialityRows.length == 0)
+{
+  var newRow = {
+      "SpecialityID" : "Speciality",
+      "Speciality": "Speciality",
+      "UpdatedDate": now
+  };
+  deInsert("Builder_Speciality", newRow);
+  specialityRows.push(newRow);
+}
+var builderStatesDE = DataExtension.Init("Builder_States");
+var stateRows = builderStatesDE.Rows.Retrieve();
+var contentTypeDE = DataExtension.Init("Content_Type");
+var contentTypeRows = contentTypeDE.Rows.Retrieve();
+var builderIOData;
+var isoTime = Platform.Function.TreatAsContent("\%\%=FormatDate(Now(),'iso')=\%\%");
+var pageModels = {
+"1": "template-article",
+"2": "template-claims-lesson",
+"3": "template-course",
+"4": "template-podcast",
+"5": "template-risk-assessment",
+"6": "template-risk-report",
+"7": "template-toolkit",
+"8": "template-video"
+};
+runBuilderSync();
+}
+catch(err){
+Write("<br><br>Error:"+err);
+}
+function deInsert(deName, payload)
+{
+if (deName && payload)
+{
+try {
+var de = DataExtension.Init(deName);
+var result = de.Rows.Add(payload);
+} catch(e)
+{
+Write("Could not insert. Error -" + Stringify(e));
+}
+}
+}
+function removeAllHTMLTags(str) {
+if ((str === null) || (str === ''))
+return "";
+else
+str = str.toString();
+return str.replace(/<\/?[^>]+(>|$)/g, "");
+}
+function getLatestRecordID(speciality) {
+var foundID = null;
+// Convert the input speciality to lowercase
+var lowerCaseSpeciality = speciality.toLowerCase();
+for (var x = 0; x < specialityRows.length; x++) {
+  // Convert the current speciality to lowercase for comparison
+  var currentSpeciality = specialityRows[x].Speciality.toLowerCase();
+  if (currentSpeciality === lowerCaseSpeciality) {
+      foundID = specialityRows[x].SpecialityID;
+      break;
+  }
+}
+Write("Found ID - " + foundID + "<br><br>");
+if (foundID == null) {
+  Write("Nothing Found");
+}
+return foundID;
+}
+////////////////////////////////////////////
+function getLatestState(state) {
+var foundID = null;
+// Convert the input speciality to lowercase
+var lowerCaseState = state.toLowerCase();
+for (var x = 0; x < stateRows.length; x++) {
+  // Convert the current speciality to lowercase for comparison
+  var currentState = stateRows[x].State.toLowerCase();
+  if (currentState === lowerCaseState) {
+      foundID = stateRows[x].StateID;
+      break;
+  }
+}
+Write("Found ID - " + foundID + "<br><br>");
+if (foundID == null) {
+  Write("Nothing Found");
+}
+return foundID;
+}
+//////////////////////////////////////////////////////
+function getModelID(id) {
+var foundID = null;
+for (var x = 0; x < contentTypeRows.length; x++) {
+  var currentID = contentTypeRows[x].Type;
+  if (currentID == id) {
+      foundID = contentTypeRows[x].Type;
+      break;
+  }
+}
+Write("Found ID - " + foundID + "<br><br>");
+if (foundID == null) {
+  Write("Nothing Found");
+}
+return foundID;
+}
+function SyncField(row, name) {
+if (!row) {
+  return "";
+}
+if (row[name] != null && String(row[name]) !== "") {
+  return row[name];
+}
+var target = String(name).toLowerCase();
+var key;
+for (key in row) {
+  if (Object.prototype.hasOwnProperty.call(row, key) && String(key).toLowerCase() === target) {
+    if (row[key] != null && String(row[key]) !== "") {
+      return row[key];
+    }
+  }
+}
+return "";
+}
+function readSync(pageModel) {
+if (!SyncReady) {
+  return { offset: 0, done: "0" };
+}
+try {
+  var rows = Platform.Function.LookupRows(Sync_DE, "Model", pageModel);
+  if (rows && rows.length > 0) {
+    var offset = parseInt(SyncField(rows[0], "Offset"), 10);
+    var done = String(SyncField(rows[0], "Done") || "0");
+    if (isNaN(offset) || offset < 0) {
+      offset = 0;
+    }
+    return { offset: offset, done: done };
+  }
+} catch (SyncEx) {
+  SyncReady = false;
+  Write("Builder_Master_Sync is missing or unreadable. This run will page every model once. Create a DE named Builder_Master_Sync with Model (Text, primary key), Offset (Number), Done (Text 1), UpdatedDate (Date). " + SyncEx + "<br><br>");
+}
+return { offset: 0, done: "0" };
+}
+function saveSync(pageModel, offset, done) {
+if (!SyncReady) {
+  return;
+}
+try {
+  Platform.Function.UpsertDE(
+    Sync_DE,
+    ["Model"],
+    [pageModel],
+    ["Offset", "Done", "UpdatedDate"],
+    [offset, done, new Date()]
+  );
+} catch (saveEx) {
+  SyncReady = false;
+  Write("Could not save sync Sync for " + pageModel + ". " + saveEx + "<br><br>");
+}
+}
+function orderedPageModels() {
+return [
+  pageModels["1"],
+  pageModels["2"],
+  pageModels["3"],
+  pageModels["4"],
+  pageModels["5"],
+  pageModels["6"],
+  pageModels["7"],
+  pageModels["8"]
+];
+}
+function stripSandboxId(value) {
+var id = value ? String(value) : "";
+var prefix = BUILDER_API_KEY + "_";
+if (id.indexOf(prefix) === 0) {
+  return id.substring(prefix.length);
+}
+return id;
+}
+function listOrEmpty(value) {
+if (value && typeof value.length === "number" && typeof value !== "string") {
+  return value;
+}
+if (typeof value === "string" && value) {
+  return [value];
+}
+return [];
+}
+function textOrUrl(value) {
+if (value == null || value === "") {
+  return "";
+}
+if (typeof value === "string") {
+  return value;
+}
+if (value.url) {
+  return String(value.url);
+}
+if (value.src) {
+  return String(value.src);
+}
+return "";
+}
+function entryImageUrl(entry, templateInfo) {
+var featured = textOrUrl(templateInfo.featuredImage);
+if (featured) {
+  return featured;
+}
+return textOrUrl(entry.screenshot);
+}
+function specialtyLabel(item) {
+if (item == null || item === "") {
+  return "";
+}
+if (typeof item === "string") {
+  return item;
+}
+if (item.name) {
+  return String(item.name);
+}
+if (item.Speciality) {
+  return String(item.Speciality);
+}
+if (item.value) {
+  return String(item.value);
+}
+return "";
+}
+function entrySpecialtyLabels(entry) {
+var templateInfo = entry && entry.data && entry.data.templateInfo ? entry.data.templateInfo : {};
+var filters = templateInfo.filters ? templateInfo.filters : {};
+var raw = listOrEmpty(filters.specialty);
+if (!raw.length) {
+  raw = listOrEmpty(filters.specialties);
+}
+var labels = [];
+var i;
+var label;
+for (i = 0; i < raw.length; i++) {
+  label = specialtyLabel(raw[i]);
+  if (label) {
+    labels.push(label);
+  }
+}
+return labels;
+}
+function storeBuilderEntry(entry, pageModel, now) {
+var templateInfo = entry && entry.data && entry.data.templateInfo ? entry.data.templateInfo : {};
+var filters = templateInfo.filters ? templateInfo.filters : {};
+var related = templateInfo.relatedContent ? templateInfo.relatedContent : {};
+var specialities = [];
+var states = [];
+var siteAvailability = templateInfo.siteAvailability;
+if (siteAvailability) {
+  try {
+    Platform.Function.UpsertDE(
+      "Site_Availability",
+      ["SiteID"],
+      [siteAvailability],
+      ["Site", "UpdatedDate"],
+      [siteAvailability, now]
+    );
+  } catch (error) {
+    Write("Error updating Site_Availability: " + error + "<br><br>");
+  }
+}
+var originalId = entry.id;
+var id = stripSandboxId(entry.id);
+var name = entry.name;
+var getUrl = entry.data ? entry.data.url : "";
+if (!getUrl && entry.query && entry.query.length > 0) {
+  getUrl = entry.query[0].value;
+}
+var fixedUrl = "https://learning.uat.magmutual.com" + (getUrl || "");
+var summary = templateInfo.summary == null ? "" : templateInfo.summary;
+var profession = filters.profession;
+var allProfessions = "";
+if (profession && profession.join) {
+  Write("Professions - " + Stringify(profession) + "<br>");
+  allProfessions = profession.join(", ");
+} else if (profession) {
+  allProfessions = String(profession);
+}
+var firstPublished = entry.firstPublished;
+var publishedDate = firstPublished ? new Date(firstPublished) : now;
+var modelId = entry.modelId ? String(entry.modelId) : "";
+var modelIdIndex = modelId.indexOf("_");
+modelId = (modelIdIndex >= 0) ? modelId.substring(modelIdIndex + 1) : modelId;
+var foundID = getModelID(modelId);
+if (foundID == null && modelId) {
+  var newModel = {
+    TypeID: modelId,
+    Name: pageModel,
+    UpdatedDate: now
+  };
+  contentTypeRows.push(newModel);
+  try {
+    Platform.Function.UpsertDE(
+      "Content_Type",
+      ["TypeID"],
+      [modelId],
+      ["Name", "UpdatedDate"],
+      [pageModel, now]
+    );
+  } catch (error) {
+    Write("Errored - Content_Type: " + modelId + "<br><br>");
+  }
+}
+var featuredImage = entryImageUrl(entry, templateInfo);
+Write("featuredImage: " + featuredImage + "<br>");
+var published = entry.published == null ? "" : entry.published;
+var pbrType = filters.pbrType == null ? "" : filters.pbrType;
+var topic = filters.topic == null ? "" : filters.topic;
+if (topic && topic.join) {
+  topic = topic.join(", ");
+}
+var relatedItems = listOrEmpty(related.relatedContent);
+var j;
+for (j = 0; j < relatedItems.length; j++) {
+  var relatedItem = relatedItems[j];
+  if (relatedItem && relatedItem.content) {
+    var relatedId = stripSandboxId(relatedItem.content.id);
+    Write("RelatedID - " + relatedId);
+    Write("ContentID - " + id);
+    if (relatedId) {
+      try {
+        Platform.Function.UpsertDE("Related_Content", ["ContentID", "RelatedContentID"], [id, relatedId], ["UpdatedDate"], [now]);
+      } catch (error) {
+        Write("Errored - Related Content: " + error + "<br><br>");
+      }
+    }
+  }
+}
+var relatedTopics = listOrEmpty(related.relatedTopics);
+var topicIndex;
+for (topicIndex = 0; topicIndex < relatedTopics.length; topicIndex++) {
+  var topicItem = relatedTopics[topicIndex];
+  if (topicItem) {
+    try {
+      Platform.Function.UpsertDE("Related_Topics", ["ContentID", "TopicTitle"], [id, topicItem], ["UpdatedDate"], [now]);
+    } catch (error) {
+      Write("Errored - Related Topics: " + name + "<br><br>");
+    }
+  }
+}
+var specialtyList = listOrEmpty(filters.specialty);
+if (!specialtyList.length) {
+  specialtyList = listOrEmpty(filters.specialties);
+}
+var specialtyIndex;
+for (specialtyIndex = 0; specialtyIndex < specialtyList.length; specialtyIndex++) {
+  var specialtyItem = specialtyLabel(specialtyList[specialtyIndex]);
+  if (!specialtyItem) {
+    continue;
+  }
+  var specialityID = getLatestRecordID(specialtyItem);
+  specialities.push(specialtyItem);
+  if (specialityID === null) {
+    specialityID = specialityRows.length + 1;
+    specialityRows.push({
+      SpecialityID: specialityID,
+      Speciality: specialtyItem
+    });
+    try {
+      Platform.Function.UpsertDE(
+        "Builder_Speciality",
+        ["SpecialityID"],
+        [specialityID],
+        ["Speciality", "UpdatedDate"],
+        [specialtyItem, now]
+      );
+    } catch (error) {
+      Write("Errored - Builder Speciality: " + specialityID + "<br><br>");
+    }
+  }
+  try {
+    Platform.Function.UpsertDE("Content_Speciality", ["ContentID", "SpecialityID"], [id, specialityID], ["UpdatedDate"], [now]);
+  } catch (error) {
+    Write("Errored: " + specialityID + "<br><br>");
+  }
+}
+var relatedStates = listOrEmpty(related.relatedStates);
+var stateIndex;
+for (stateIndex = 0; stateIndex < relatedStates.length; stateIndex++) {
+  var stateItem = relatedStates[stateIndex];
+  if (!stateItem) {
+    continue;
+  }
+  var stateID = getLatestState(stateItem);
+  states.push(stateItem);
+  if (stateID === null) {
+    stateRows.push({
+      StateID: stateItem,
+      State: stateItem
+    });
+    stateID = stateItem;
+    try {
+      Platform.Function.UpsertDE(
+        "Builder_States",
+        ["StateID"],
+        [stateID],
+        ["State", "UpdatedDate"],
+        [stateItem, now]
+      );
+    } catch (error) {
+      Write("Errored - Builder States: " + stateID + "<br><br>");
+    }
+  }
+}
+var specialityValue = published === "draft" ? "Draft" : (specialities.length > 15 ? "General" : specialities.join("|"));
+var builderConfig = {
+  attributes: {
+    Names: [
+      "Name",
+      "Summary",
+      "Profession",
+      "PreviewURL",
+      "UpdatedDate",
+      "PublishedDate",
+      "TypeID",
+      "ImageURL",
+      "PbrType",
+      "Topic",
+      "Specialities",
+      "RelatedStates",
+      "SiteAvailability",
+      "Published"
+    ],
+    Values: [
+      name,
+      removeAllHTMLTags(summary),
+      allProfessions,
+      fixedUrl,
+      now,
+      publishedDate,
+      modelId,
+      featuredImage,
+      pbrType,
+      topic,
+      specialityValue,
+      states.join("|"),
+      siteAvailability || "",
+      published
+    ]
+  }
+};
+Write("builderConfig: " + Stringify(builderConfig) + "<br><br>");
+Platform.Function.UpsertDE("BUILDER_MASTER", ["ContentID"], [originalId], builderConfig.attributes.Names, builderConfig.attributes.Values);
+}
+function fetchBuilderPage(pageModel, offset) {
+var url = "https://cdn.builder.io/api/v3/content/" + pageModel + "?apiKey=" + BUILDER_API_KEY + "&offset=" + offset + "&limit=" + PAGE_SIZE + "&omit=data.blocks&includeUnpublished=false&cachebust=true";
+var response = HTTP.Get(url);
+var body = response && (response.Content || response.content);
+if (!body) {
+  return { error: "Empty response for " + pageModel + " at offset " + offset, results: [] };
+}
+var parsed = Platform.Function.ParseJSON(body);
+if (!parsed || !parsed.results || typeof parsed.results.length !== "number") {
+  return { error: "Builder response had no results array for " + pageModel + " at offset " + offset, results: [] };
+}
+return { error: "", results: parsed.results };
+}
+function storeBuilderPage(pageModel, offset) {
+var now = new Date();
+var page = fetchBuilderPage(pageModel, offset);
+if (page.error) {
+  Write(page.error + "<br><br>");
+  return { error: page.error, count: 0, hasMore: false };
+}
+var saved = 0;
+var skipped = 0;
+var noSpecialty = 0;
+var i;
+for (i = 0; i < page.results.length; i++) {
+  var entry = page.results[i];
+  var contentId = entry && entry.id ? entry.id : ("index " + i);
+  if (!entrySpecialtyLabels(entry).length) {
+    noSpecialty++;
+    continue;
+  }
+  try {
+    storeBuilderEntry(entry, pageModel, now);
+    saved++;
+  } catch (itemErr) {
+    skipped++;
+    Write("Skipped " + pageModel + " ContentID " + contentId + ": " + itemErr + "<br><br>");
+  }
+}
+Write(pageModel + " offset " + offset + " returned " + page.results.length + ", saved " + saved + ", no specialty " + noSpecialty + ", skipped " + skipped + ".<br><br>");
+return {
+  error: "",
+  count: page.results.length,
+  hasMore: page.results.length >= PAGE_SIZE
+};
+}
+function runBuilderSync() {
+var models = orderedPageModels();
+readSync(models[0]);
+var m;
+if (!SyncReady) {
+  Write("Without Builder_Master_Sync this run keeps paging until it finishes or the script stops. It cannot resume later.<br><br>");
+  for (m = 0; m < models.length; m++) {
+    var fallbackOffset = 0;
+    var fallbackGuard = 0;
+    while (fallbackGuard < 200) {
+      fallbackGuard++;
+      var fallbackPage = storeBuilderPage(models[m], fallbackOffset);
+      if (fallbackPage.error || !fallbackPage.hasMore) {
+        break;
+      }
+      fallbackOffset = fallbackOffset + fallbackPage.count;
+    }
+  }
+  return;
+}
+var selected = "";
+for (m = 0; m < models.length; m++) {
+  var state = readSync(models[m]);
+  if (!SyncReady) {
+    runBuilderSync();
+    return;
+  }
+  if (state.done !== "1") {
+    selected = models[m];
+    break;
+  }
+}
+if (!selected) {
+  for (m = 0; m < models.length; m++) {
+    saveSync(models[m], 0, "0");
+  }
+  Write("Sync cycle complete. Syncs reset. Starting template-article at offset 0.<br><br>");
+  selected = models[0];
+}
+var startIndex = 0;
+for (m = 0; m < models.length; m++) {
+  if (models[m] === selected) {
+    startIndex = m;
+    break;
+  }
+}
+for (m = startIndex; m < models.length; m++) {
+  var modelName = models[m];
+  var current = readSync(modelName);
+  if (!SyncReady) {
+    return;
+  }
+  if (current.done === "1") {
+    continue;
+  }
+  var offset = current.offset;
+  var pageGuard = 0;
+  while (pageGuard < 200) {
+    pageGuard++;
+    var stored = storeBuilderPage(modelName, offset);
+    if (stored.error) {
+      Write("Sync left at offset " + offset + " for " + modelName + " so the next run retries this page.<br><br>");
+      return;
+    }
+    if (!stored.hasMore) {
+      saveSync(modelName, 0, "1");
+      Write(modelName + " finished this cycle.<br><br>");
+      break;
+    }
+    offset = offset + stored.count;
+    saveSync(modelName, offset, "0");
+    Write("Continuing " + modelName + " at offset " + offset + ".<br><br>");
+  }
+}
+Write("Sync pass stopped because the models are finished or the page guard was hit. Run again if a model is still open.<br><br>");
+}
+</script>
