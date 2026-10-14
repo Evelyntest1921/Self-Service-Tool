@@ -1,20 +1,40 @@
 SELECT
-    con.Id AS MemberId,
-    '003WL00000w7kHdYAI' AS ContactId,
-    'zcharles+uat@magmutual.com' AS Email,
-    '' AS CampaignId,
+    cm.Id AS MemberId,
+    cm.ContactId AS ContactId,
+    COALESCE(
+        NULLIF(RTRIM(ISNULL(cm.Email, '')), ''),
+        NULLIF(RTRIM(ISNULL(con.Email, '')), '')
+    ) AS Email,
+    cm.CampaignId AS CampaignId,
     con.AccountId AS AccountId,
     u.Name AS Account_Owner_Name,
     u.Email AS Account_Owner_Email,
-    '' AS Status,
+    cm.Status AS Status,
     con.MailingState AS State,
     a.OwnerId AS AccountOwnerId,
-    CAST(((ROW_NUMBER() OVER (ORDER BY con.Id) - 1) / 20) + 1 AS INT) AS [PageNumber],
-    CAST(((COUNT(1) OVER () - 1) / 20) + 1 AS INT) AS [TotalPages],
+    pol.Policy_Type_txt__c AS PolicyType,
+    pol.Account_Name__c AS AccountName,
+    pol.Policy_Effective_Date__c AS PolEffectiveDate,
+    pol.Policy_Expiration_Date__c AS PolExpDate,
     'SST' AS type
-FROM ENT.Contact_Salesforce_1 con
-LEFT JOIN ENT.Account_Salesforce_1 a 
+
+FROM ent.CampaignMember_Salesforce_2 cm
+
+INNER JOIN ent.Contact_Salesforce_1 con
+    ON cm.ContactId = con.Id
+
+INNER JOIN ent.Account_Salesforce_1 a
     ON con.AccountId = a.Id
-LEFT JOIN ENT.User_Salesforce_1 u 
-    ON a.OwnerId = u.Id
-WHERE con.Id IS NOT NULL
+
+INNER JOIN ent.User_Salesforce_1 u
+    ON u.Id = a.OwnerId
+
+INNER JOIN ent.PolicyAccountAssociation__c_Salesforce_1 pol
+    ON pol.Account__c = a.Id
+
+WHERE cm.CampaignId = '701WL00001Kw0wZYAR'
+    AND cm.ContactId IS NOT NULL
+    AND u.Name IS NOT NULL
+    AND u.Email IS NOT NULL
+    AND pol.Policy_Type_txt__c = 'PSL'
+    AND CAST(pol.Policy_Expiration_Date__c AS DATE) >= CAST(GETDATE() AS DATE)
