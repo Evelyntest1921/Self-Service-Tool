@@ -1168,16 +1168,16 @@ function stackEventSchemaFields(includeSbu) {
     { name: "Status", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "State", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "AccountOwnerId", dataType: "Text", maxLength: "50", isNullable: true },
-    { name: "type", dataType: "Text", maxLength: "50", isNullable: true, defaultValue: "SST" }
+    { name: "type", dataType: "Text", maxLength: "50", isNullable: true, defaultValue: "SST" },
+    { name: "PageNumber", dataType: "Number", isNullable: true },
+    { name: "TotalPages", dataType: "Number", isNullable: true }
   ];
   if (includeSbu) {
     fields.push(
       { name: "PolicyType", dataType: "Text", maxLength: "255", isNullable: true },
       { name: "AccountName", dataType: "Text", maxLength: "255", isNullable: true },
       { name: "PolEffectiveDate", dataType: "Date", isNullable: true },
-      { name: "PolExpDate", dataType: "Date", isNullable: true },
-      { name: "PageNumber", dataType: "Number", isNullable: true },
-      { name: "TotalPages", dataType: "Number", isNullable: true }
+      { name: "PolExpDate", dataType: "Date", isNullable: true }
     );
   }
   return fields;
@@ -1846,6 +1846,21 @@ function postIsAscSenderProfile(profileId) {
   }
 }
 
+function postQueryPagingSelect(orderByExpr, moreColumnsAfter) {
+  var totalPagesLine =
+    "  CAST(((COUNT(1) OVER () - 1) / 20) + 1 AS INT) AS TotalPages";
+  if (moreColumnsAfter) {
+    totalPagesLine += ",";
+  }
+  totalPagesLine += "\n";
+  return (
+    "  CAST(((ROW_NUMBER() OVER (ORDER BY " +
+    orderByExpr +
+    ") - 1) / 20) + 1 AS INT) AS PageNumber,\n" +
+    totalPagesLine
+  );
+}
+
 function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environment, senderProfileId) {
   var camp = postEscapeSql(campaignId);
   var userFilter = postEscapeSql(sfUserId);
@@ -1882,7 +1897,8 @@ function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environme
     "  cm.Status AS Status,\n" +
     "  con.MailingState AS State,\n" +
     "  " + accountOwnerExpr + " AS AccountOwnerId,\n" +
-    "  'SST' AS type\n" +
+    "  'SST' AS type,\n" +
+    postQueryPagingSelect("con.Id") +
     "FROM " + cmTable + " cm\n" +
     "LEFT JOIN " + contactTable + " con ON cm.ContactId = con.id\n" +
     "LEFT JOIN " + accountTable + " a ON con.AccountId = a.id\n" +
@@ -1936,13 +1952,12 @@ function postBuildSbuCampaignMemberQuery(campaignId, sfUserId, environment, send
     "    cm.Status AS Status,\n" +
     "    con.MailingState AS State,\n" +
     "    a.OwnerId AS AccountOwnerId,\n" +
+    "    'SST' AS type,\n" +
+    postQueryPagingSelect("con.Id", true) +
     "    pol.Policy_Type_txt__c AS PolicyType,\n" +
     "    pol.Account_Name__c AS AccountName,\n" +
     "    pol.Policy_Effective_Date__c AS PolEffectiveDate,\n" +
-    "    pol.Policy_Expiration_Date__c AS PolExpDate,\n" +
-    "    'SST' AS type,\n" +
-    "    CAST(((ROW_NUMBER() OVER (ORDER BY con.Id) - 1) / 20) + 1 AS INT) AS PageNumber,\n" +
-    "    CAST(((COUNT(1) OVER () - 1) / 20) + 1 AS INT) AS TotalPages\n" +
+    "    pol.Policy_Expiration_Date__c AS PolExpDate\n" +
     "FROM " +
     cmTable +
     " cm\n" +
@@ -2099,7 +2114,8 @@ function postBuildDataExtensionQuery(prox, sourceDeName, sfUserId, environment, 
     "  " +
     accountOwnerExpr +
     " AS AccountOwnerId,\n" +
-    "  'SST' AS type\n" +
+    "  'SST' AS type,\n" +
+    postQueryPagingSelect(contactKeyExpr) +
     "FROM [" +
     deName +
     "] cm\n" +
