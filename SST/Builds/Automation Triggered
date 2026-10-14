@@ -2141,6 +2141,101 @@ function postBuildDataExtensionQuery(prox, sourceDeName, sfUserId, environment, 
   return sql;
 }
 
+function postBuildSbuDataExtensionQuery(prox, sourceDeName, sfUserId, environment, senderProfileId) {
+  var deName = postSanitizeDeName(sourceDeName);
+  if (!deName) {
+    return "";
+  }
+  var schema = postRetrieveSourceDeFields(prox, deName);
+  if (!schema.ok) {
+    return "";
+  }
+  var fields = schema.fields || {};
+  if (!fields.subscriberkey) {
+    return "";
+  }
+  var userFilter = postEscapeSql(sfUserId);
+  var env = String(environment || "").toLowerCase();
+  var useAscJoin = postIsAscSenderProfile(senderProfileId);
+  var contactTable = "Contact_Salesforce";
+  var accountTable = "Account_Salesforce";
+  var userTable = "User_Salesforce";
+  var polTable = "PolicyAccountAssociation__c_Salesforce_1";
+  var userJoinExpr = "u.Id = a.OwnerId";
+  if (env === "uat") {
+    contactTable = "ENT.Contact_Salesforce_1";
+    accountTable = "ENT.Account_Salesforce_1";
+    userTable = "ENT.User_Salesforce_1";
+    polTable = "ENT.PolicyAccountAssociation__c_Salesforce_1";
+  }
+  if (useAscJoin) {
+    userTable = env === "uat" ? "ENT.User_Salesforce_1" : "User_Salesforce_1";
+    userJoinExpr = "u.Id = a.ASC__c";
+  }
+  var contactKeyExpr = fields.contactid ? "cm." + fields.contactid : "cm." + fields.subscriberkey;
+  var emailExpr = "NULLIF(RTRIM(ISNULL(con.Email, '')), '')";
+  if (fields.email) {
+    emailExpr =
+      "COALESCE(NULLIF(RTRIM(ISNULL(cm." +
+      fields.email +
+      ", '')), ''), NULLIF(RTRIM(ISNULL(con.Email, '')), ''))";
+  }
+  var sql =
+    "SELECT\n" +
+    "  cm." +
+    fields.subscriberkey +
+    " AS MemberId,\n" +
+    "  " +
+    contactKeyExpr +
+    " AS ContactId,\n" +
+    "  " +
+    emailExpr +
+    " AS Email,\n" +
+    "  '' AS CampaignId,\n" +
+    "  con.AccountId AS AccountId,\n" +
+    "  u.Name AS Account_Owner_Name,\n" +
+    "  u.Email AS Account_Owner_Email,\n" +
+    "  '' AS Status,\n" +
+    "  con.MailingState AS State,\n" +
+    "  a.OwnerId AS AccountOwnerId,\n" +
+    "  'SST' AS type,\n" +
+    postQueryPagingSelect("con.Id", true) +
+    "  pol.Policy_Type_txt__c AS PolicyType,\n" +
+    "  pol.Account_Name__c AS AccountName,\n" +
+    "  pol.Policy_Effective_Date__c AS PolEffectiveDate,\n" +
+    "  pol.Policy_Expiration_Date__c AS PolExpDate\n" +
+    "FROM [" +
+    deName +
+    "] cm\n" +
+    "INNER JOIN " +
+    contactTable +
+    " con ON " +
+    contactKeyExpr +
+    " = con.Id\n" +
+    "INNER JOIN " +
+    accountTable +
+    " a ON con.AccountId = a.Id\n" +
+    "INNER JOIN " +
+    userTable +
+    " u ON " +
+    userJoinExpr +
+    "\n" +
+    "INNER JOIN " +
+    polTable +
+    " pol ON pol.Account__c = a.Id\n" +
+    "WHERE cm." +
+    fields.subscriberkey +
+    " IS NOT NULL\n" +
+    "  AND u.Name IS NOT NULL\n" +
+    "  AND u.Email IS NOT NULL\n" +
+    "  AND pol.Policy_Type_txt__c = 'PSL'\n" +
+    "  AND CAST(pol.Policy_Expiration_Date__c AS DATE) >= CAST(GETDATE() AS DATE)";
+  if (userFilter) {
+    sql += "\n  AND u.Id = '" + userFilter + "'";
+  }
+  return sql;
+}
+
 function postBuildAudienceQuery(
   audienceSource,
   campaignId,
@@ -2153,6 +2248,15 @@ function postBuildAudienceQuery(
   addSBU
 ) {
   if (String(audienceSource || "").toLowerCase() === "dataextension") {
+    if (String(addSBU || "") === "1") {
+      return postBuildSbuDataExtensionQuery(
+        prox,
+        sourceDeName,
+        sfUserId,
+        environment,
+        senderProfileId
+      );
+    }
     return postBuildDataExtensionQuery(
       prox,
       sourceDeName,
@@ -2769,9 +2873,6 @@ if (postDeleteRequested != "1") {
         " Step 6 FAILED - missing campaign id for query/automation. campaignId=" +
         (postCampaignId || "none") +
         ".";
-    } else if (postAddSBUActivity === "1" && postAudienceSource === "dataextension") {
-      postSuffix =
-        " Step 6 FAILED - Add SBU is only supported for Salesforce campaign audience.";
     } else if (!postQueryKey || !postAutomationKey || !postStackName) {
       postSuffix =
         " Step 6 FAILED - missing naming variables. queryKey=" +
@@ -2803,12 +2904,22 @@ if (postDeleteRequested != "1") {
           postAddSBUActivity
         );
         if (!queryText) {
-          postSuffix =
-            postAudienceSource === "dataextension"
-              ? " Step 6 FAILED - source Data Extension not found or missing SubscriberKey field."
-              : postAddSBUActivity === "1"
-              ? " Step 6 FAILED - SBU query could not be built. Check campaign id and environment."
-              : " Step 6 FAILED - query text could not be built for the selected audience source.";
+          if (
+            postAudienceSource === "dataextension" &&
+            postAddSBUActivity === "1"
+          ) {
+            postSuffix =
+              " Step 6 FAILED - SBU source DE query could not be built. Check DE name, SubscriberKey, and environment.";
+          } else if (postAudienceSource === "dataextension") {
+            postSuffix =
+              " Step 6 FAILED - source Data Extension not found or missing SubscriberKey field.";
+          } else if (postAddSBUActivity === "1") {
+            postSuffix =
+              " Step 6 FAILED - SBU query could not be built. Check campaign id and environment.";
+          } else {
+            postSuffix =
+              " Step 6 FAILED - query text could not be built for the selected audience source.";
+          }
         } else {
         var queryResult = postCreateQueryDefinition(
           postProx,
@@ -4533,7 +4644,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
            <input type="checkbox" name="addSTOActivity" value="1" %%[ IF @addSTOActivity == "1" THEN ]%%checked%%[ ENDIF ]%%>
            <span>Add STO activity</span>
          </label>
-         <label style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;margin-top:12px;">SBU audience (PSL policy join, paged entry DE)</label>
+         <label style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;margin-top:12px;">SBU (PSL policy join on account — campaign or source DE audience)</label>
          <label class="check-box">
            <input type="checkbox" name="addSBUActivity" value="1" %%[ IF @addSBUActivity == "1" THEN ]%%checked%%[ ENDIF ]%%>
            <span>Add SBU</span>
