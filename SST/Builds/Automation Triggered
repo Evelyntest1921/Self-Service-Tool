@@ -44,10 +44,40 @@ ENDIF
 SET @builderPageLabel = "Journey + Automation"
 SET @stackCampaignName = Trim(RequestParameter("stackCampaignName"))
 SET @sfUserId = Trim(RequestParameter("sfUserId"))
-SET @frequency = Lowercase(Trim(RequestParameter("frequency")))
-SET @timezoneId = Trim(RequestParameter("timezoneId"))
-SET @startDate = Trim(RequestParameter("startDate"))
-SET @startOffset = Trim(RequestParameter("startOffset"))
+SET @automationFrequency = Lowercase(Trim(RequestParameter("automationFrequency")))
+IF Empty(@automationFrequency) THEN
+ SET @automationFrequency = Lowercase(Trim(RequestParameter("frequency")))
+ENDIF
+IF Empty(@automationFrequency) THEN
+ SET @automationFrequency = "hourly"
+ENDIF
+SET @automationStartDate = Trim(RequestParameter("automationStartDate"))
+IF Empty(@automationStartDate) THEN
+ SET @automationStartDate = Trim(RequestParameter("startDate"))
+ENDIF
+SET @automationScheduleInterval = Trim(RequestParameter("automationScheduleInterval"))
+IF Empty(@automationScheduleInterval) THEN
+ SET @automationScheduleInterval = "1"
+ENDIF
+SET @automationMinuteInterval = Trim(RequestParameter("automationMinuteInterval"))
+IF Empty(@automationMinuteInterval) THEN
+ SET @automationMinuteInterval = "15"
+ENDIF
+SET @automationScheduleWeekdays = Trim(RequestParameter("automationScheduleWeekdays"))
+IF Empty(@automationScheduleWeekdays) THEN
+ SET @automationScheduleWeekdays = "mon"
+ENDIF
+SET @automationScheduleEnd = Lowercase(Trim(RequestParameter("automationScheduleEnd")))
+IF Empty(@automationScheduleEnd) THEN
+ SET @automationScheduleEnd = "never"
+ENDIF
+SET @automationScheduleEndDate = Trim(RequestParameter("automationScheduleEndDate"))
+SET @automationScheduleOccurrences = Trim(RequestParameter("automationScheduleOccurrences"))
+IF Empty(@automationScheduleOccurrences) THEN
+ SET @automationScheduleOccurrences = "2"
+ENDIF
+SET @frequency = @automationFrequency
+SET @startDate = @automationStartDate
 SET @automationId = ""
 SET @deCustomerKey = ""
 SET @entryDeObjectId = ""
@@ -56,15 +86,6 @@ SET @stackDeReady = "0"
 SET @assetKey = ""
 SET @queryKey = ""
 SET @automationKey = ""
-IF Empty(@timezoneId) THEN
- SET @timezoneId = "1"
-ENDIF
-IF Empty(@frequency) THEN
- SET @frequency = "hourly"
-ENDIF
-IF Empty(@startOffset) THEN
- SET @startOffset = "-05:00"
-ENDIF
 SET @emailSubjectLine = Trim(RequestParameter("emailSubjectLine"))
 SET @journeyDescription = Trim(RequestParameter("journeyDescription"))
 SET @bccEmail = Trim(RequestParameter("bccEmail"))
@@ -1615,10 +1636,14 @@ var postSubdomain = postVar("subdomain");
 var postQueryKey = postVar("queryKey");
 var postAutomationKey = postVar("automationKey");
 var postStackName = postVar("journeyName");
-var postFrequency = postVar("frequency");
-var postTimezoneId = postVar("timezoneId");
-var postStartDate = postVar("startDate");
-var postStartOffset = postVar("startOffset");
+var postAutomationFrequency = postVar("automationFrequency") || postVar("frequency");
+var postAutomationStartDate = postVar("automationStartDate") || postVar("startDate");
+var postAutomationScheduleInterval = postVar("automationScheduleInterval") || "1";
+var postAutomationMinuteInterval = postVar("automationMinuteInterval") || "15";
+var postAutomationScheduleWeekdays = postVar("automationScheduleWeekdays") || "mon";
+var postAutomationScheduleEnd = postVar("automationScheduleEnd") || "never";
+var postAutomationScheduleEndDate = postVar("automationScheduleEndDate");
+var postAutomationScheduleOccurrences = postVar("automationScheduleOccurrences") || "2";
 var postAssetKey = postVar("assetKey");
 var postStackDeReady = postVar("stackDeReady");
 var postEntryDeObjectId = postVar("entryDeObjectId");
@@ -2289,17 +2314,332 @@ function postStripTimezoneFromIso(s) {
   return str;
 }
 
-function postBuildScheduleWrite(recur, startLocal, endLocal, tzId) {
+var POST_SCHEDULE_NEVER_END_EASTERN = "2099-12-31T23:59:00";
+
+function postStrTrim(v) {
+  return String(v || "").replace(/^\s+|\s+$/g, "");
+}
+
+function postSchedPad2(n) {
+  var v = parseInt(n, 10);
+  if (isNaN(v)) {
+    v = 0;
+  }
+  return (v < 10 ? "0" : "") + v;
+}
+
+function postParseScheduleStartParts(startRaw) {
+  var norm = postStripTimezoneFromIso(postStrTrim(startRaw));
+  var match = norm.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!match) {
+    return null;
+  }
   return {
+    y: parseInt(match[1], 10),
+    mo: parseInt(match[2], 10),
+    d: parseInt(match[3], 10),
+    h: parseInt(match[4], 10),
+    mi: parseInt(match[5], 10)
+  };
+}
+
+function postNthSundayDay(year, monthOneBased, n) {
+  var first = new Date(Date.UTC(year, monthOneBased - 1, 1));
+  var firstDay = first.getUTCDay();
+  return 1 + ((7 - firstDay) % 7) + (n - 1) * 7;
+}
+
+function postIsUsEasternDST(y, mo, d, hour, minute) {
+  var springDay = postNthSundayDay(y, 3, 2);
+  var fallDay = postNthSundayDay(y, 11, 1);
+  if (mo < 3 || (mo === 3 && d < springDay)) {
+    return false;
+  }
+  if (mo > 11 || (mo === 11 && d > fallDay)) {
+    return false;
+  }
+  if (mo > 3 && mo < 11) {
+    return true;
+  }
+  if (mo === 3 && d > springDay) {
+    return true;
+  }
+  if (mo === 11 && d < fallDay) {
+    return true;
+  }
+  if (mo === 3 && d === springDay) {
+    return (hour || 0) >= 2;
+  }
+  if (mo === 11 && d === fallDay) {
+    return (hour || 0) < 2;
+  }
+  return false;
+}
+
+function postEasternOffsetHoursForParts(y, mo, d, hour, minute) {
+  return postIsUsEasternDST(y, mo, d, hour, minute) ? 4 : 5;
+}
+
+function postCentralOffsetHoursForParts(y, mo, d, hour, minute) {
+  return postIsUsEasternDST(y, mo, d, hour, minute) ? 5 : 6;
+}
+
+function postEasternWallPartsToUtcMs(parts) {
+  var off = postEasternOffsetHoursForParts(parts.y, parts.mo, parts.d, parts.h, parts.mi);
+  return Date.UTC(parts.y, parts.mo - 1, parts.d, parts.h + off, parts.mi, 0);
+}
+
+function postUtcMsToCentralWallParts(utcMs) {
+  var offHours;
+  for (offHours = 5; offHours <= 6; offHours++) {
+    var shifted = utcMs - offHours * 3600000;
+    var d = new Date(shifted);
+    var y = d.getUTCFullYear();
+    var mo = d.getUTCMonth() + 1;
+    var day = d.getUTCDate();
+    var h = d.getUTCHours();
+    var mi = d.getUTCMinutes();
+    if (postCentralOffsetHoursForParts(y, mo, day, h, mi) === offHours) {
+      return { y: y, mo: mo, d: day, h: h, mi: mi };
+    }
+  }
+  var fallback = new Date(utcMs - 6 * 3600000);
+  return {
+    y: fallback.getUTCFullYear(),
+    mo: fallback.getUTCMonth() + 1,
+    d: fallback.getUTCDate(),
+    h: fallback.getUTCHours(),
+    mi: fallback.getUTCMinutes()
+  };
+}
+
+function postFormatNaiveDateTimeSeconds(parts) {
+  return (
+    parts.y +
+    "-" +
+    postSchedPad2(parts.mo) +
+    "-" +
+    postSchedPad2(parts.d) +
+    "T" +
+    postSchedPad2(parts.h) +
+    ":" +
+    postSchedPad2(parts.mi) +
+    ":00"
+  );
+}
+
+function postEasternFormToSoapStartDateTime(easternNaive) {
+  var parts = postParseScheduleStartParts(easternNaive);
+  if (!parts) {
+    return postStripTimezoneFromIso(easternNaive);
+  }
+  return postFormatNaiveDateTimeSeconds(
+    postUtcMsToCentralWallParts(postEasternWallPartsToUtcMs(parts))
+  );
+}
+
+function postDefaultEasternStartDateTime() {
+  var utcMs = new Date().getTime() + 10 * 60 * 1000;
+  var offHours;
+  for (offHours = 4; offHours <= 5; offHours++) {
+    var shifted = utcMs - offHours * 3600000;
+    var d = new Date(shifted);
+    var y = d.getUTCFullYear();
+    var mo = d.getUTCMonth() + 1;
+    var day = d.getUTCDate();
+    var h = d.getUTCHours();
+    var mi = d.getUTCMinutes();
+    if (postEasternOffsetHoursForParts(y, mo, day, h, mi) === offHours) {
+      return (
+        y +
+        "-" +
+        postSchedPad2(mo) +
+        "-" +
+        postSchedPad2(day) +
+        "T" +
+        postSchedPad2(h) +
+        ":" +
+        postSchedPad2(mi) +
+        ":00"
+      );
+    }
+  }
+  return postDefaultEasternStartDateTimeFallbackUtc();
+}
+
+function postDefaultEasternStartDateTimeFallbackUtc() {
+  var fallback = new Date(Date.now() + 10 * 60 * 1000);
+  return (
+    fallback.getFullYear() +
+    "-" +
+    postSchedPad2(fallback.getMonth() + 1) +
+    "-" +
+    postSchedPad2(fallback.getDate()) +
+    "T" +
+    postSchedPad2(fallback.getHours()) +
+    ":" +
+    postSchedPad2(fallback.getMinutes()) +
+    ":00"
+  );
+}
+
+function postLocalEasternDateTime(startDate) {
+  var s = postStrTrim(startDate);
+  if (!s) {
+    return postDefaultEasternStartDateTime();
+  }
+  return postStripTimezoneFromIso(s);
+}
+
+function postUntilCompactFromDateKey(dateKey) {
+  var match = postStrTrim(dateKey).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) {
+    return "";
+  }
+  return match[1] + match[2] + match[3];
+}
+
+function postDateKeyFromIsoValue(value) {
+  var match = postStrTrim(value).match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : "";
+}
+
+function postIcalByDayFromWeekdays(weekdaysRaw) {
+  var map = { sun: "SU", mon: "MO", tue: "TU", wed: "WE", thu: "TH", fri: "FR", sat: "SA" };
+  var tokens = postStrTrim(weekdaysRaw || "mon")
+    .toLowerCase()
+    .split(/[,;\s]+/);
+  var out = [];
+  var i;
+  for (i = 0; i < tokens.length; i++) {
+    if (map[tokens[i]]) {
+      out.push(map[tokens[i]]);
+    }
+  }
+  return out.length ? out.join(",") : "MO";
+}
+
+function postBuildSchedulePayload(
+  freq,
+  startDate,
+  scheduleInterval,
+  minuteInterval,
+  weekdaysRaw,
+  endMode,
+  endDateKey,
+  occurrences
+) {
+  var frequency = postStrTrim(freq).toLowerCase() || "hourly";
+  var intervalVal = parseInt(postStrTrim(scheduleInterval) || "1", 10);
+  if (isNaN(intervalVal) || intervalVal < 1) {
+    intervalVal = 1;
+  }
+  var minuteVal = parseInt(postStrTrim(minuteInterval) || postStrTrim(scheduleInterval) || "15", 10);
+  if (minuteVal != 15 && minuteVal != 30 && minuteVal != 45) {
+    minuteVal = 15;
+  }
+  var easternNaive = postLocalEasternDateTime(startDate);
+  var startDateForApi = postEasternFormToSoapStartDateTime(easternNaive);
+  var dateMatch = easternNaive.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+  var mode = postStrTrim(endMode).toLowerCase();
+  var occurVal = parseInt(postStrTrim(occurrences) || "2", 10);
+  if (isNaN(occurVal) || occurVal < 1) {
+    occurVal = 2;
+  }
+  var endRangeType = "EndOn";
+  var endSuffix = "";
+  var endDateForSoap = startDateForApi;
+  if (frequency === "once") {
+    mode = "occurrences";
+    occurVal = 1;
+  }
+  if (mode === "never") {
+    endDateForSoap = postEasternFormToSoapStartDateTime(POST_SCHEDULE_NEVER_END_EASTERN);
+    endSuffix = ";UNTIL=20991231";
+    endRangeType = "EndOn";
+  } else if (mode === "enddate") {
+    var endKey = postDateKeyFromIsoValue(endDateKey);
+    if (!endKey && dateMatch) {
+      endKey =
+        String(parseInt(dateMatch[1], 10) + 1) + "-" + dateMatch[2] + "-" + dateMatch[3];
+    }
+    var endEastern = (endKey || "2099-12-31") + "T23:59:00";
+    endDateForSoap = postEasternFormToSoapStartDateTime(endEastern);
+    var untilCompactEnd = postUntilCompactFromDateKey(endKey);
+    if (untilCompactEnd) {
+      endSuffix = ";UNTIL=" + untilCompactEnd;
+    }
+  } else {
+    endRangeType = "EndAfter";
+    endSuffix = ";COUNT=" + occurVal;
+    endDateForSoap = startDateForApi;
+  }
+  var freqBody = "FREQ=HOURLY;INTERVAL=" + intervalVal;
+  if (frequency === "once") {
+    freqBody = "FREQ=HOURLY;INTERVAL=1;COUNT=1";
+  } else if (frequency === "minute") {
+    freqBody = "FREQ=MINUTELY;INTERVAL=" + minuteVal;
+  } else if (frequency === "hourly") {
+    freqBody = "FREQ=HOURLY;INTERVAL=" + intervalVal;
+  } else if (frequency === "daily") {
+    freqBody = "FREQ=DAILY;INTERVAL=" + intervalVal;
+  } else if (frequency === "weekdays") {
+    freqBody = "FREQ=DAILY;INTERVAL=1;BYDAY=MO,TU,WE,TH,FR";
+  } else if (frequency === "weekly") {
+    freqBody =
+      "FREQ=WEEKLY;INTERVAL=" + intervalVal + ";BYDAY=" + postIcalByDayFromWeekdays(weekdaysRaw);
+  } else if (frequency === "monthly") {
+    freqBody = "FREQ=MONTHLY;INTERVAL=" + intervalVal;
+  } else if (frequency === "yearly") {
+    freqBody = "FREQ=YEARLY;INTERVAL=" + intervalVal;
+  }
+  var recurRule = frequency === "once" ? freqBody : freqBody + endSuffix;
+  return {
+    ok: true,
+    icalRecur: recurRule,
+    startDate: startDateForApi,
+    endDate: endDateForSoap,
+    timezoneId: "76",
+    minuteInterval: minuteVal,
+    repeatInterval: intervalVal,
+    repeatType: frequency,
+    weekdaysRaw: weekdaysRaw || "mon",
+    endRangeType: endRangeType,
+    occurrences: occurVal
+  };
+}
+
+function postBuildScheduleWriteFromPayload(payload) {
+  if (!payload || !payload.ok) {
+    return null;
+  }
+  var sched = {
     scheduleTypeId: 2,
-    startDate: startLocal,
-    endDate: endLocal,
-    rangeTypeId: 0,
-    occurrences: 9999,
-    icalRecur: recur,
-    timezoneId: tzId,
+    startDate: payload.startDate,
+    endDate: payload.endDate,
+    icalRecur: payload.icalRecur,
+    timezoneId: parseInt(String(payload.timezoneId || "76"), 10),
     statusId: 0
   };
+  if (payload.endRangeType === "EndAfter") {
+    sched.rangeTypeId = 1;
+    sched.occurrences = payload.occurrences || 2;
+  } else {
+    sched.rangeTypeId = 0;
+    sched.occurrences = 9999;
+  }
+  return sched;
+}
+
+function postBuildScheduleWrite(recur, startLocal, endLocal, tzId) {
+  return postBuildScheduleWriteFromPayload({
+    ok: true,
+    icalRecur: recur,
+    startDate: startLocal,
+    endDate: endLocal,
+    timezoneId: String(tzId || "76"),
+    endRangeType: "EndOn"
+  });
 }
 
 function postNormalizeStepsForWrite(steps) {
@@ -2600,85 +2940,25 @@ function postCreateAutomation(opts) {
   var automationName = opts.automationName;
   var automationKey = opts.automationKey;
   var queryObjectId = opts.queryObjectId;
-  var frequency = opts.frequency;
-  var timezoneId = opts.timezoneId;
-  var startDate = opts.startDate;
-  var startOffset = opts.startOffset;
-
-  if (!startDate) {
-    var nowVal = new Date();
-    nowVal.setMinutes(0, 0, 0);
-    nowVal.setHours(nowVal.getHours() + 1);
-    function pad(n) {
-      return (n < 10 ? "0" : "") + n;
-    }
-    startDate =
-      nowVal.getFullYear() +
-      "-" +
-      pad(nowVal.getMonth() + 1) +
-      "-" +
-      pad(nowVal.getDate()) +
-      "T" +
-      pad(nowVal.getHours()) +
-      ":" +
-      pad(nowVal.getMinutes());
-    Platform.Variable.SetValue("@startDate", startDate);
+  var schedulePayload = postBuildSchedulePayload(
+    opts.frequency,
+    opts.startDate,
+    opts.scheduleInterval,
+    opts.minuteInterval,
+    opts.weekdaysRaw,
+    opts.endMode,
+    opts.endDateKey,
+    opts.occurrences
+  );
+  if (!schedulePayload || !schedulePayload.ok) {
+    return { ok: false, message: "Step 7 FAILED - invalid schedule configuration." };
   }
-
-  var off = String(startOffset || "-05:00");
-  if (off.charAt(0) != "-" && off.charAt(0) != "+") {
-    off = "-" + off;
+  var scheduleWrite = postBuildScheduleWriteFromPayload(schedulePayload);
+  if (!scheduleWrite) {
+    return { ok: false, message: "Step 7 FAILED - could not build schedule payload." };
   }
-  var startDateForApi = String(startDate);
-  if (startDateForApi.length == 16) {
-    startDateForApi += ":00" + off;
-  } else if (
-    startDateForApi.indexOf("T") > 0 &&
-    startDateForApi.indexOf("+") < 0 &&
-    startDateForApi.indexOf("-", 11) < 0 &&
-    startDateForApi.length == 19
-  ) {
-    startDateForApi += off;
-  }
-  var startDateLocal = postStripTimezoneFromIso(startDateForApi);
-  var endDateLocal = startDateLocal;
-
-  function pad2(n) {
-    return (n < 10 ? "0" : "") + n;
-  }
-  var untilCompact = "";
-  var dmatch = startDateForApi.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (dmatch) {
-    var y0 = parseInt(dmatch[1], 10);
-    var m0 = parseInt(dmatch[2], 10) - 1;
-    var d0 = parseInt(dmatch[3], 10);
-    var dUntil = new Date(y0, m0, d0);
-    dUntil.setDate(dUntil.getDate() + 365);
-    untilCompact =
-      String(dUntil.getFullYear()) +
-      pad2(dUntil.getMonth() + 1) +
-      pad2(dUntil.getDate());
-  } else {
-    var fallback = new Date();
-    fallback.setDate(fallback.getDate() + 365);
-    untilCompact =
-      String(fallback.getFullYear()) +
-      pad2(fallback.getMonth() + 1) +
-      pad2(fallback.getDate());
-  }
-
+  var recurRule = schedulePayload.icalRecur;
   var endpoint = "https://" + subdomain + ".rest.marketingcloudapis.com/automation/v1/automations";
-  var tzId = parseInt(String(timezoneId), 10);
-  var recurRule = "";
-  if (frequency == "hourly") {
-    recurRule = "FREQ=HOURLY;INTERVAL=1;UNTIL=" + untilCompact;
-  } else if (frequency == "daily") {
-    recurRule = "FREQ=DAILY;INTERVAL=1;UNTIL=" + untilCompact;
-  } else if (frequency == "weekly") {
-    recurRule = "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO;UNTIL=" + untilCompact;
-  } else {
-    return { ok: false, message: "Step 7 FAILED - invalid frequency." };
-  }
 
   var byKeyEndpoint = endpoint + "/key:" + encodeURIComponent(String(automationKey));
   var keyLookup = postHttpJson(token, subdomain, "GET", byKeyEndpoint, null);
@@ -2693,54 +2973,43 @@ function postCreateAutomation(opts) {
     if (listMatch && listMatch.id) {
       automationId = String(listMatch.id);
     } else {
-      var recurAttempts = [recurRule];
-      if (frequency == "hourly") {
-        recurAttempts.push("FREQ=HOURLY;COUNT=1;INTERVAL=1");
-        recurAttempts.push("FREQ=MINUTELY;INTERVAL=60;UNTIL=" + untilCompact);
-      }
       var createStatus = 0;
       var createBody = "";
-      var usedRecur = recurRule;
-      for (var ri = 0; ri < recurAttempts.length; ri++) {
-        usedRecur = recurAttempts[ri];
-        var payloadObj = {
-          name: String(automationName),
-          description: "Created via Journey Maker stack page",
-          key: String(automationKey),
-          steps: [
-            {
-              annotation: "",
-              stepNumber: 0,
-              activities: [
-                {
-                  name: "Query Activity",
-                  description: "",
-                  objectTypeId: 300,
-                  displayOrder: 0,
-                  activityObjectId: queryObjectId,
-                  serializedObject: ""
-                }
-              ]
-            }
-          ],
-          startSource: {
-            typeId: 1,
-            schedule: postBuildScheduleWrite(usedRecur, startDateLocal, endDateLocal, tzId)
+      var payloadObj = {
+        name: String(automationName),
+        description: "Created via Journey Maker stack page",
+        key: String(automationKey),
+        steps: [
+          {
+            annotation: "",
+            stepNumber: 0,
+            activities: [
+              {
+                name: "Query Activity",
+                description: "",
+                objectTypeId: 300,
+                displayOrder: 0,
+                activityObjectId: queryObjectId,
+                serializedObject: ""
+              }
+            ]
           }
-        };
-        var cr = postHttpJson(
-          token,
-          subdomain,
-          "POST",
-          endpoint,
-          Platform.Function.Stringify(payloadObj)
-        );
-        createStatus = cr.status;
-        createBody = cr.body;
-        if (createStatus == 200 || createStatus == 201 || createStatus == 202) {
-          recurRule = usedRecur;
-          break;
+        ],
+        startSource: {
+          typeId: 1,
+          schedule: scheduleWrite
         }
+      };
+      var cr = postHttpJson(
+        token,
+        subdomain,
+        "POST",
+        endpoint,
+        Platform.Function.Stringify(payloadObj)
+      );
+      createStatus = cr.status;
+      createBody = cr.body;
+      if (!(createStatus == 200 || createStatus == 201 || createStatus == 202)) {
         var dupName =
           createBody.indexOf("Name already exists") >= 0 ||
           createBody.indexOf("already exists") >= 0;
@@ -2755,7 +3024,6 @@ function postCreateAutomation(opts) {
           if (recovered && recovered.id) {
             automationId = String(recovered.id);
             createdNow = false;
-            break;
           }
         }
       }
@@ -2768,8 +3036,8 @@ function postCreateAutomation(opts) {
             createStatus +
             " - " +
             createBody +
-            " (icalRecur tried: " +
-            usedRecur +
+            " (icalRecur=" +
+            recurRule +
             ")."
         };
       }
@@ -2805,7 +3073,7 @@ function postCreateAutomation(opts) {
         steps: normalizedSteps,
         startSource: {
           typeId: 1,
-          schedule: postBuildScheduleWrite(recurRule, startDateLocal, endDateLocal, tzId)
+          schedule: scheduleWrite
         }
       })
     );
@@ -2818,7 +3086,7 @@ function postCreateAutomation(opts) {
       Platform.Function.Stringify({
         startSource: {
           typeId: 1,
-          schedule: postBuildScheduleWrite(recurRule, startDateLocal, endDateLocal, tzId)
+          schedule: scheduleWrite
         }
       })
     );
@@ -2960,10 +3228,14 @@ if (postDeleteRequested != "1") {
               automationName: postStackName,
               automationKey: postAutomationKey,
               queryObjectId: queryObjectId,
-              frequency: postFrequency,
-              timezoneId: postTimezoneId,
-              startDate: postStartDate,
-              startOffset: postStartOffset
+              frequency: postAutomationFrequency,
+              startDate: postAutomationStartDate,
+              scheduleInterval: postAutomationScheduleInterval,
+              minuteInterval: postAutomationMinuteInterval,
+              weekdaysRaw: postAutomationScheduleWeekdays,
+              endMode: postAutomationScheduleEnd,
+              endDateKey: postAutomationScheduleEndDate,
+              occurrences: postAutomationScheduleOccurrences
             });
             postSuffix = postSuffix + " " + autoResult.message;
             if (autoResult.ok && autoResult.automationId) {
@@ -4448,6 +4720,15 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 .campaign-verify-list li { margin: 4px 0; }
 .campaign-verify-list a { color: inherit; font-weight: 600; }
 .select-control, .textarea-control { width: 100%; padding: 12px 16px; border: 1px solid var(--border-color); border-radius: 0px); font-size: 1rem; background: var(--bg-primary); transition: all 0.2s ease; font-family: inherit; }
+.stack-schedule-inline { display: flex; align-items: center; gap: 10px; }
+.stack-schedule-interval { max-width: 120px; }
+.stack-schedule-unit { font-size: 0.875rem; color: #6b7280; }
+.stack-schedule-note { font-size: 0.8125rem; color: #6b7280; margin: 8px 0 0; line-height: 1.4; }
+.stack-schedule-weekday-panel { display: none; }
+.stack-schedule-weekday-panel.is-visible { display: block; }
+.stack-schedule-weekday-row { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.stack-schedule-end-option { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.stack-schedule-end-inline { width: auto; max-width: 160px; display: inline-block; }
 .select-control:focus, .textarea-control:focus { outline: none; border-color: var(--primary-color); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1); }
 .submit-section { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border-color); }
 .submit-button { background: #0e0e1d; color: white; border: none; padding: 16px 32px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease; }
@@ -4717,28 +4998,66 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
          <div class="question-number">10</div>
          <div class="question-text">Automation schedule</div>
        </div>
+       <input type="hidden" name="automationScheduleWeekdays" id="automationScheduleWeekdays" value="%%=v(@automationScheduleWeekdays)=%%">
+       <input type="hidden" name="automationMinuteInterval" id="automationMinuteInterval" value="%%=v(@automationMinuteInterval)=%%">
        <div class="form-group">
-         <label for="frequency" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Frequency</label>
-         <select id="frequency" name="frequency" class="select-control">
-           <option value="hourly" %%[ IF @frequency == "hourly" THEN ]%%selected%%[ ENDIF ]%%>Hourly</option>
-           <option value="daily" %%[ IF @frequency == "daily" THEN ]%%selected%%[ ENDIF ]%%>Daily</option>
-           <option value="weekly" %%[ IF @frequency == "weekly" THEN ]%%selected%%[ ENDIF ]%%>Weekly (Monday)</option>
+         <label for="automationFrequency" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Repeat</label>
+         <select id="automationFrequency" name="automationFrequency" class="select-control">
+           <option value="minute" %%[ IF @automationFrequency == "minute" THEN ]%%selected%%[ ENDIF ]%%>Minutes</option>
+           <option value="hourly" %%[ IF @automationFrequency == "hourly" THEN ]%%selected%%[ ENDIF ]%%>Hourly</option>
+           <option value="daily" %%[ IF @automationFrequency == "daily" THEN ]%%selected%%[ ENDIF ]%%>Daily</option>
+           <option value="weekdays" %%[ IF @automationFrequency == "weekdays" THEN ]%%selected%%[ ENDIF ]%%>Weekdays</option>
+           <option value="weekly" %%[ IF @automationFrequency == "weekly" THEN ]%%selected%%[ ENDIF ]%%>Weekly</option>
+           <option value="monthly" %%[ IF @automationFrequency == "monthly" THEN ]%%selected%%[ ENDIF ]%%>Monthly</option>
+           <option value="yearly" %%[ IF @automationFrequency == "yearly" THEN ]%%selected%%[ ENDIF ]%%>Yearly</option>
+           <option value="once" %%[ IF @automationFrequency == "once" THEN ]%%selected%%[ ENDIF ]%%>Once</option>
          </select>
        </div>
-       <div class="form-group">
-         <label for="startDate" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Start date (local)</label>
-         <input id="startDate" type="datetime-local" class="textarea-control" name="startDate" value="%%=v(@startDate)=%%">
+       <div class="form-group stack-schedule-every-row" id="automationEveryWrap"%%[ IF @automationFrequency == "once" THEN ]%% hidden%%[ ENDIF ]%%>
+         <label for="automationScheduleInterval" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Every</label>
+         <div class="stack-schedule-inline">
+           <input type="number" min="1" max="9999" class="textarea-control stack-schedule-interval" name="automationScheduleInterval" id="automationScheduleInterval" value="%%=v(@automationScheduleInterval)=%%">
+           <span id="automationEveryUnitLabel" class="stack-schedule-unit">hours</span>
+         </div>
+       </div>
+       <div class="form-group stack-schedule-weekday-panel%%[ IF @automationFrequency == "weekly" THEN ]%% is-visible%%[ ENDIF ]%%" id="automationWeeklyDayPanel">
+         <label style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">On the selected days</label>
+         <div class="stack-schedule-weekday-row">
+           <label class="check-box"><input type="checkbox" class="schedule-weekday-cb" value="sun"%%[ IF IndexOf(@automationScheduleWeekdays,"sun") > 0 THEN ]%% checked%%[ ENDIF ]%%> Sun</label>
+           <label class="check-box"><input type="checkbox" class="schedule-weekday-cb" value="mon"%%[ IF IndexOf(@automationScheduleWeekdays,"mon") > 0 OR Empty(@automationScheduleWeekdays) THEN ]%% checked%%[ ENDIF ]%%> Mon</label>
+           <label class="check-box"><input type="checkbox" class="schedule-weekday-cb" value="tue"%%[ IF IndexOf(@automationScheduleWeekdays,"tue") > 0 THEN ]%% checked%%[ ENDIF ]%%> Tue</label>
+           <label class="check-box"><input type="checkbox" class="schedule-weekday-cb" value="wed"%%[ IF IndexOf(@automationScheduleWeekdays,"wed") > 0 THEN ]%% checked%%[ ENDIF ]%%> Wed</label>
+           <label class="check-box"><input type="checkbox" class="schedule-weekday-cb" value="thu"%%[ IF IndexOf(@automationScheduleWeekdays,"thu") > 0 THEN ]%% checked%%[ ENDIF ]%%> Thu</label>
+           <label class="check-box"><input type="checkbox" class="schedule-weekday-cb" value="fri"%%[ IF IndexOf(@automationScheduleWeekdays,"fri") > 0 THEN ]%% checked%%[ ENDIF ]%%> Fri</label>
+           <label class="check-box"><input type="checkbox" class="schedule-weekday-cb" value="sat"%%[ IF IndexOf(@automationScheduleWeekdays,"sat") > 0 THEN ]%% checked%%[ ENDIF ]%%> Sat</label>
+         </div>
        </div>
        <div class="form-group">
-         <label for="startOffset" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">UTC offset (e.g. -05:00)</label>
-         <input id="startOffset" type="text" class="textarea-control" name="startOffset" value="%%=v(@startOffset)=%%" placeholder="-05:00">
+         <label for="automationStartDate" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Start (Eastern)</label>
+         <input id="automationStartDate" type="datetime-local" class="textarea-control" name="automationStartDate" value="%%=v(@automationStartDate)=%%">
+         <p class="stack-schedule-note">Start time is Eastern Time (US &amp; Canada), including daylight saving.</p>
        </div>
-       <div class="form-group">
-         <label for="timezoneId" style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">Timezone ID</label>
-         <input id="timezoneId" type="text" class="textarea-control" name="timezoneId" value="%%=v(@timezoneId)=%%" placeholder="1">
+       <div class="form-group" id="automationScheduleEndWrap"%%[ IF @automationFrequency == "once" THEN ]%% hidden%%[ ENDIF ]%%>
+         <span style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;">End</span>
+         <label class="check-box stack-schedule-end-option">
+           <input type="radio" name="automationScheduleEnd" value="occurrences"%%[ IF @automationScheduleEnd == "occurrences" THEN ]%% checked%%[ ENDIF ]%%>
+           <span>After</span>
+           <input type="number" min="1" max="9999" class="textarea-control stack-schedule-end-inline" name="automationScheduleOccurrences" id="automationScheduleOccurrences" value="%%=v(@automationScheduleOccurrences)=%%">
+           <span>occurrence(s)</span>
+         </label>
+         <label class="check-box stack-schedule-end-option">
+           <input type="radio" name="automationScheduleEnd" value="endDate"%%[ IF @automationScheduleEnd == "enddate" THEN ]%% checked%%[ ENDIF ]%%>
+           <span>On date</span>
+           <input type="date" class="textarea-control stack-schedule-end-inline" name="automationScheduleEndDate" id="automationScheduleEndDate" value="%%=v(@automationScheduleEndDate)=%%">
+         </label>
+         <label class="check-box stack-schedule-end-option">
+           <input type="radio" name="automationScheduleEnd" value="never"%%[ IF @automationScheduleEnd != "occurrences" AND @automationScheduleEnd != "enddate" THEN ]%% checked%%[ ENDIF ]%%>
+           <span>Never</span>
+         </label>
+         <p class="stack-schedule-note">On date ends at 11:59 PM Eastern. Never uses a far-future end date in Automation Studio.</p>
        </div>
        <div class="question-header" style="margin-top: 24px;">
-         <div class="question-number">10</div>
+         <div class="question-number">11</div>
          <div class="question-text">Journey options</div>
        </div>
        <div class="form-group">
@@ -4759,7 +5078,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
          </label>
        </div>
        <div class="question-header" style="margin-top: 24px;">
-         <div class="question-number">11</div>
+         <div class="question-number">12</div>
          <div class="question-text">Preview</div>
        </div>
        <div class="journey-preview">
@@ -5024,6 +5343,171 @@ Your data extension, query automation, journey, and email are in Marketing Cloud
     audienceSourceSelect.addEventListener('change', syncAudienceSourceUi);
     syncAudienceSourceUi();
    }
+   var startInput = document.getElementById('automationStartDate');
+   if (startInput && !startInput.value) {
+    try {
+     var easternNow = new Date(Date.now() + 10 * 60 * 1000);
+     var parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+     }).formatToParts(easternNow);
+     var map = {};
+     var pi;
+     for (pi = 0; pi < parts.length; pi++) {
+      if (parts[pi].type !== 'literal') {
+       map[parts[pi].type] = parts[pi].value;
+      }
+     }
+     if (map.year && map.month && map.day && map.hour && map.minute) {
+      startInput.value = map.year + '-' + map.month + '-' + map.day + 'T' + map.hour + ':' + map.minute;
+     }
+    } catch (prefillEx) {}
+   }
+   var scheduleFreq = document.getElementById('automationFrequency');
+   var everyWrap = document.getElementById('automationEveryWrap');
+   var intervalInput = document.getElementById('automationScheduleInterval');
+   var unitLabel = document.getElementById('automationEveryUnitLabel');
+   var weeklyPanel = document.getElementById('automationWeeklyDayPanel');
+   var weekdayHidden = document.getElementById('automationScheduleWeekdays');
+   var minuteHidden = document.getElementById('automationMinuteInterval');
+   var weekdayChecks = document.querySelectorAll('.schedule-weekday-cb');
+   function syncWeekdayHidden() {
+    if (!weekdayHidden) {
+     return;
+    }
+    var dayParts = [];
+    var wi;
+    for (wi = 0; wi < weekdayChecks.length; wi++) {
+     if (weekdayChecks[wi].checked) {
+      dayParts.push(weekdayChecks[wi].value);
+     }
+    }
+    weekdayHidden.value = dayParts.length ? dayParts.join(',') : 'mon';
+   }
+   function syncScheduleFrequencyFields() {
+    if (!scheduleFreq) {
+     return;
+    }
+    var repeat = scheduleFreq.value;
+    if (everyWrap) {
+     everyWrap.hidden = repeat === 'once';
+    }
+    if (weeklyPanel) {
+     weeklyPanel.classList.toggle('is-visible', repeat === 'weekly');
+    }
+    if (unitLabel) {
+     var units = {
+      minute: 'minutes',
+      hourly: 'hours',
+      daily: 'days',
+      weekdays: 'days',
+      weekly: 'weeks',
+      monthly: 'months',
+      yearly: 'years'
+     };
+     unitLabel.textContent = units[repeat] || 'hours';
+    }
+    if (intervalInput) {
+     intervalInput.disabled = repeat === 'weekdays';
+     if (repeat === 'weekdays') {
+      intervalInput.value = '1';
+     }
+     if (repeat === 'minute') {
+      intervalInput.min = '15';
+      intervalInput.max = '45';
+      intervalInput.step = '15';
+      if (intervalInput.value !== '15' && intervalInput.value !== '30' && intervalInput.value !== '45') {
+       intervalInput.value = '15';
+      }
+     } else {
+      intervalInput.min = '1';
+      intervalInput.max = '9999';
+      intervalInput.step = '1';
+      if (!intervalInput.value || parseInt(intervalInput.value, 10) < 1) {
+       intervalInput.value = '1';
+      }
+     }
+    }
+    if (minuteHidden && intervalInput && repeat === 'minute') {
+     minuteHidden.value = intervalInput.value;
+    }
+    syncWeekdayHidden();
+    syncAutomationEndWrapVisibility();
+   }
+   var endRadios = document.querySelectorAll('input[name="automationScheduleEnd"]');
+   var endDateInput = document.getElementById('automationScheduleEndDate');
+   var occurInput = document.getElementById('automationScheduleOccurrences');
+   var endWrap = document.getElementById('automationScheduleEndWrap');
+   function padLocal(n) {
+    return n < 10 ? '0' + n : String(n);
+   }
+   function futureDateString(daysAhead) {
+    var d = new Date();
+    d.setDate(d.getDate() + daysAhead);
+    return d.getFullYear() + '-' + padLocal(d.getMonth() + 1) + '-' + padLocal(d.getDate());
+   }
+   function selectedAutomationEndMode() {
+    var e;
+    for (e = 0; e < endRadios.length; e++) {
+     if (endRadios[e].checked) {
+      return endRadios[e].value;
+     }
+    }
+    return 'never';
+   }
+   function addYearsToDateKey(dateKey, years) {
+    if (!dateKey || dateKey.length < 10) {
+     return futureDateString(365);
+    }
+    var dateParts = dateKey.split('-');
+    var y = parseInt(dateParts[0], 10) + years;
+    return y + '-' + dateParts[1] + '-' + dateParts[2];
+   }
+   function syncAutomationEndFields() {
+    var mode = selectedAutomationEndMode();
+    if (occurInput) {
+     occurInput.disabled = mode !== 'occurrences';
+    }
+    if (endDateInput) {
+     endDateInput.disabled = mode !== 'endDate';
+     if (mode === 'endDate' && !endDateInput.value) {
+      var base = startInput && startInput.value ? startInput.value.split('T')[0] : futureDateString(0);
+      endDateInput.value = addYearsToDateKey(base, 1);
+      endDateInput.min = base;
+     }
+    }
+   }
+   function syncAutomationEndWrapVisibility() {
+    if (!endWrap || !scheduleFreq) {
+     return;
+    }
+    endWrap.hidden = scheduleFreq.value === 'once';
+   }
+   var er;
+   for (er = 0; er < endRadios.length; er++) {
+    endRadios[er].addEventListener('change', syncAutomationEndFields);
+   }
+   if (startInput) {
+    startInput.addEventListener('change', syncAutomationEndFields);
+   }
+   if (intervalInput) {
+    intervalInput.addEventListener('change', syncScheduleFrequencyFields);
+    intervalInput.addEventListener('input', syncScheduleFrequencyFields);
+   }
+   var wc;
+   for (wc = 0; wc < weekdayChecks.length; wc++) {
+    weekdayChecks[wc].addEventListener('change', syncWeekdayHidden);
+   }
+   if (scheduleFreq) {
+    scheduleFreq.addEventListener('change', syncScheduleFrequencyFields);
+    syncScheduleFrequencyFields();
+   }
+   syncAutomationEndFields();
   }
  var cards = document.querySelectorAll('.email-card');
  cards.forEach(function(card) {
