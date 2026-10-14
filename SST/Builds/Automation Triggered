@@ -24,9 +24,11 @@ SET @senderProfileId = Trim(RequestParameter("senderProfileId"))
 SET @sendClassificationId = Trim(RequestParameter("sendClassificationId"))
 SET @addTaskActivity = "1"
 SET @addSTOActivity = "0"
-IF NOT Empty(@createRequested) OR @verifyCampaignRequested == "1" OR NOT Empty(RequestParameter("addTaskActivity")) OR NOT Empty(RequestParameter("addSTOActivity")) THEN
+SET @addSBUActivity = "0"
+IF NOT Empty(@createRequested) OR @verifyCampaignRequested == "1" OR NOT Empty(RequestParameter("addTaskActivity")) OR NOT Empty(RequestParameter("addSTOActivity")) OR NOT Empty(RequestParameter("addSBUActivity")) THEN
  SET @addTaskActivity = IIF(RequestParameter("addTaskActivity") == "1","1","0")
  SET @addSTOActivity = IIF(RequestParameter("addSTOActivity") == "1","1","0")
+ SET @addSBUActivity = IIF(RequestParameter("addSBUActivity") == "1","1","0")
 ENDIF
 SET @flow = "stack"
 SET @hubUrl = ""
@@ -1154,8 +1156,8 @@ ENDIF
 <script runat="server">
 Platform.Load("core","1");
 
-function stackEventSchemaFields() {
-  return [
+function stackEventSchemaFields(includeSbu) {
+  var fields = [
     { name: "ContactId", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "Email", dataType: "EmailAddress", maxLength: "254", isNullable: true },
     { name: "CampaignId", dataType: "Text", maxLength: "50", isNullable: true },
@@ -1168,6 +1170,17 @@ function stackEventSchemaFields() {
     { name: "AccountOwnerId", dataType: "Text", maxLength: "50", isNullable: true },
     { name: "type", dataType: "Text", maxLength: "50", isNullable: true, defaultValue: "SST" }
   ];
+  if (includeSbu) {
+    fields.push(
+      { name: "PolicyType", dataType: "Text", maxLength: "255", isNullable: true },
+      { name: "AccountName", dataType: "Text", maxLength: "255", isNullable: true },
+      { name: "PolEffectiveDate", dataType: "Date", isNullable: true },
+      { name: "PolExpDate", dataType: "Date", isNullable: true },
+      { name: "PageNumber", dataType: "Number", isNullable: true },
+      { name: "TotalPages", dataType: "Number", isNullable: true }
+    );
+  }
+  return fields;
 }
 
 function stackRetrieveDeByFilter(prox, filter) {
@@ -1217,6 +1230,8 @@ function stackMapSchemaFieldToSoap(fieldDef) {
    fieldType = "EmailAddress";
   } else if (fieldDef.dataType === "Date") {
    fieldType = "Date";
+  } else if (fieldDef.dataType === "Number") {
+   fieldType = "Number";
   }
   var soapField = {
    Name: name,
@@ -1242,8 +1257,8 @@ function stackMapSchemaFieldToSoap(fieldDef) {
 }
 
 
-function stackBuildSoapDeFields() {
-  var schema = stackEventSchemaFields();
+function stackBuildSoapDeFields(includeSbu) {
+  var schema = stackEventSchemaFields(includeSbu);
   var fields = [];
   var uniqueField = null;
   var i;
@@ -1338,7 +1353,7 @@ function stackResolveDeCategoryId(prox) {
 }
 
 
-function stackCreateEntryDeViaSoap(prox, customerKey, deName) {
+function stackCreateEntryDeViaSoap(prox, customerKey, deName, includeSbu) {
   var ck = String(customerKey || "");
   var name = String(deName || ck || "Entry DE");
   if (!ck) {
@@ -1349,7 +1364,7 @@ function stackCreateEntryDeViaSoap(prox, customerKey, deName) {
    Name: name,
    CustomerKey: ck,
    Description: "Stack entry DE created via Journey Maker",
-   Fields: stackBuildSoapDeFields(),
+   Fields: stackBuildSoapDeFields(includeSbu),
    IsSendable: true,
    IsTestable: true,
    SendableDataExtensionField: {
@@ -1438,7 +1453,7 @@ function stackCreateEntryDeViaSoap(prox, customerKey, deName) {
 }
 
 
-function stackEnsureEntryDe(prox, token, subdomain, customerKey, deName) {
+function stackEnsureEntryDe(prox, token, subdomain, customerKey, deName, includeSbu) {
   var name = String(deName || customerKey || "Entry DE");
   var existing = stackResolveExistingDe(prox, customerKey, name);
   if (existing) {
@@ -1453,7 +1468,7 @@ function stackEnsureEntryDe(prox, token, subdomain, customerKey, deName) {
    };
   }
 
-  var created = stackCreateEntryDeViaSoap(prox, customerKey, name);
+  var created = stackCreateEntryDeViaSoap(prox, customerKey, name, includeSbu);
   if (!created.ok) {
    return created;
   }
@@ -1524,7 +1539,19 @@ if (
     var deCustomerKey = assetKey ? String(assetKey) : String(eventName || "");
     var deName = eventName ? String(eventName) : deCustomerKey;
     var proxDe = new Script.Util.WSProxy();
-    var deResult = stackEnsureEntryDe(proxDe, accessToken, subdomain, deCustomerKey, deName);
+    var addSBUActivityStep3 =
+      Platform.Variable.GetValue("@addSBUActivity") ||
+      Variable.GetValue("addSBUActivity") ||
+      "0";
+    var includeSbuDe = String(addSBUActivityStep3) === "1";
+    var deResult = stackEnsureEntryDe(
+      proxDe,
+      accessToken,
+      subdomain,
+      deCustomerKey,
+      deName,
+      includeSbuDe
+    );
     if (!deResult.ok) {
       resultText = resultText + " Step 3 FAILED: " + deResult.message;
     } else {
@@ -1601,6 +1628,7 @@ var postEnvironment = postVar("environment");
 var postSenderProfileId = postVar("senderProfileId");
 var postAudienceSource = postVar("audienceSource").toLowerCase() || "campaign";
 var postSourceDataExtension = postVar("sourceDataExtension");
+var postAddSBUActivity = postVar("addSBUActivity") || "0";
 var postSuffix = "";
 
 function postParseJson(s) {
@@ -1867,6 +1895,85 @@ function postBuildCampaignMemberQuery(campaignId, sfUserId, journeyId, environme
   return sql;
 }
 
+function postBuildSbuCampaignMemberQuery(campaignId, sfUserId, environment, senderProfileId) {
+  var camp = postEscapeSql(campaignId);
+  if (!camp) {
+    return "";
+  }
+  var userFilter = postEscapeSql(sfUserId);
+  var env = String(environment || "").toLowerCase();
+  var useAscJoin = postIsAscSenderProfile(senderProfileId);
+  var cmTable = "CampaignMember_Salesforce_1";
+  var contactTable = "Contact_Salesforce";
+  var accountTable = "Account_Salesforce";
+  var userTable = "User_Salesforce";
+  var polTable = "PolicyAccountAssociation__c_Salesforce_1";
+  var userJoinExpr = "u.Id = a.OwnerId";
+  if (env === "uat") {
+    cmTable = "ent.CampaignMember_Salesforce_2";
+    contactTable = "ent.Contact_Salesforce_1";
+    accountTable = "ent.Account_Salesforce_1";
+    userTable = "ent.User_Salesforce_1";
+    polTable = "ent.PolicyAccountAssociation__c_Salesforce_1";
+  }
+  if (useAscJoin) {
+    userTable = env === "uat" ? "ent.User_Salesforce_1" : "User_Salesforce_1";
+    userJoinExpr = "u.Id = a.ASC__c";
+  }
+  var emailExpr =
+    "COALESCE(NULLIF(RTRIM(ISNULL(cm.Email, '')), ''), NULLIF(RTRIM(ISNULL(con.Email, '')), ''))";
+  var sql =
+    "SELECT\n" +
+    "    cm.Id AS MemberId,\n" +
+    "    cm.ContactId AS ContactId,\n" +
+    "    " +
+    emailExpr +
+    " AS Email,\n" +
+    "    cm.CampaignId AS CampaignId,\n" +
+    "    con.AccountId AS AccountId,\n" +
+    "    u.Name AS Account_Owner_Name,\n" +
+    "    u.Email AS Account_Owner_Email,\n" +
+    "    cm.Status AS Status,\n" +
+    "    con.MailingState AS State,\n" +
+    "    a.OwnerId AS AccountOwnerId,\n" +
+    "    pol.Policy_Type_txt__c AS PolicyType,\n" +
+    "    pol.Account_Name__c AS AccountName,\n" +
+    "    pol.Policy_Effective_Date__c AS PolEffectiveDate,\n" +
+    "    pol.Policy_Expiration_Date__c AS PolExpDate,\n" +
+    "    'SST' AS type,\n" +
+    "    CAST(((ROW_NUMBER() OVER (ORDER BY con.Id) - 1) / 20) + 1 AS INT) AS PageNumber,\n" +
+    "    CAST(((COUNT(1) OVER () - 1) / 20) + 1 AS INT) AS TotalPages\n" +
+    "FROM " +
+    cmTable +
+    " cm\n" +
+    "INNER JOIN " +
+    contactTable +
+    " con ON cm.ContactId = con.Id\n" +
+    "INNER JOIN " +
+    accountTable +
+    " a ON con.AccountId = a.Id\n" +
+    "INNER JOIN " +
+    userTable +
+    " u ON " +
+    userJoinExpr +
+    "\n" +
+    "INNER JOIN " +
+    polTable +
+    " pol ON pol.Account__c = a.Id\n" +
+    "WHERE cm.CampaignId = '" +
+    camp +
+    "'\n" +
+    "    AND cm.ContactId IS NOT NULL\n" +
+    "    AND u.Name IS NOT NULL\n" +
+    "    AND u.Email IS NOT NULL\n" +
+    "    AND pol.Policy_Type_txt__c = 'PSL'\n" +
+    "    AND CAST(pol.Policy_Expiration_Date__c AS DATE) >= CAST(GETDATE() AS DATE)";
+  if (userFilter) {
+    sql += "\n    AND u.Id = '" + userFilter + "'";
+  }
+  return sql;
+}
+
 function postSanitizeDeName(deName) {
   var name = String(deName || "").replace(/^\s+|\s+$/g, "");
   if (!name || !/^[A-Za-z0-9_ \-]+$/.test(name)) {
@@ -2026,12 +2133,21 @@ function postBuildAudienceQuery(
   journeyId,
   environment,
   senderProfileId,
-  prox
+  prox,
+  addSBU
 ) {
   if (String(audienceSource || "").toLowerCase() === "dataextension") {
     return postBuildDataExtensionQuery(
       prox,
       sourceDeName,
+      sfUserId,
+      environment,
+      senderProfileId
+    );
+  }
+  if (String(addSBU || "") === "1") {
+    return postBuildSbuCampaignMemberQuery(
+      campaignId,
       sfUserId,
       environment,
       senderProfileId
@@ -2637,6 +2753,9 @@ if (postDeleteRequested != "1") {
         " Step 6 FAILED - missing campaign id for query/automation. campaignId=" +
         (postCampaignId || "none") +
         ".";
+    } else if (postAddSBUActivity === "1" && postAudienceSource === "dataextension") {
+      postSuffix =
+        " Step 6 FAILED - Add SBU is only supported for Salesforce campaign audience.";
     } else if (!postQueryKey || !postAutomationKey || !postStackName) {
       postSuffix =
         " Step 6 FAILED - missing naming variables. queryKey=" +
@@ -2664,12 +2783,15 @@ if (postDeleteRequested != "1") {
           postJourneyId,
           postEnvironment,
           postSenderProfileId,
-          postProx
+          postProx,
+          postAddSBUActivity
         );
         if (!queryText) {
           postSuffix =
             postAudienceSource === "dataextension"
               ? " Step 6 FAILED - source Data Extension not found or missing SubscriberKey field."
+              : postAddSBUActivity === "1"
+              ? " Step 6 FAILED - SBU query could not be built. Check campaign id and environment."
               : " Step 6 FAILED - query text could not be built for the selected audience source.";
         } else {
         var queryResult = postCreateQueryDefinition(
@@ -4394,6 +4516,11 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
          <label class="check-box">
            <input type="checkbox" name="addSTOActivity" value="1" %%[ IF @addSTOActivity == "1" THEN ]%%checked%%[ ENDIF ]%%>
            <span>Add STO activity</span>
+         </label>
+         <label style="font-size:0.875rem;color:#6b7280;display:block;margin-bottom:6px;margin-top:12px;">SBU audience (PSL policy join, paged entry DE)</label>
+         <label class="check-box">
+           <input type="checkbox" name="addSBUActivity" value="1" %%[ IF @addSBUActivity == "1" THEN ]%%checked%%[ ENDIF ]%%>
+           <span>Add SBU</span>
          </label>
        </div>
        <div class="question-header" style="margin-top: 24px;">
