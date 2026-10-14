@@ -3016,14 +3016,19 @@ var eventKey = Platform.Variable.GetValue("@eventKey") || "";
 var campaignId = Platform.Variable.GetValue("@campaignId") || "";
 var campaignName = Platform.Variable.GetValue("@campaignName") || "";
 var audienceSource = Platform.Variable.GetValue("@audienceSource") || "campaign";
-var sourceDataExtensionName = String(
-  Platform.Variable.GetValue("@sourceDataExtension") || ""
-).replace(/^\s+|\s+$/g, "");
+var entryDeCustomerKey = String(Platform.Variable.GetValue("@deCustomerKey") || "").replace(
+  /^\s+|\s+$/g,
+  ""
+);
+var entryDeObjectId = String(Platform.Variable.GetValue("@entryDeObjectId") || "").replace(
+  /^\s+|\s+$/g,
+  ""
+);
 var useCampaignMemberUpdate =
   String(audienceSource).toLowerCase() !== "dataextension" && campaignId;
-var useSourceDeStatusUpdate =
-  String(audienceSource).toLowerCase() === "dataextension" && sourceDataExtensionName;
-var usePostSendStatusUpdate = useCampaignMemberUpdate || useSourceDeStatusUpdate;
+var useEntryDeStatusUpdate =
+  String(audienceSource).toLowerCase() === "dataextension";
+var usePostSendStatusUpdate = useCampaignMemberUpdate || useEntryDeStatusUpdate;
 var emailSubjectLine = Platform.Variable.GetValue("@emailSubjectLine") || "Campaign Event";
 var journeyDescription = Platform.Variable.GetValue("@journeyDescription") || "";
 var bccEmail = Platform.Variable.GetValue("@bccEmail") || "";
@@ -3187,70 +3192,44 @@ function buildCampaignSecondaryLookupSbU(campId, campLabel) {
   };
   return Platform.Function.Stringify(lookupObj);
 }
-function lookupSourceDeStatusFieldJpa(prox, rawDeName) {
-  var safeName = String(rawDeName || "").replace(/^\s+|\s+$/g, "");
-  if (!safeName || !/^[A-Za-z0-9_ \-]+$/.test(safeName)) {
+function lookupEntryDeStatusFieldJpa(prox, customerKey, objectIdHint) {
+  var ck = String(customerKey || "").replace(/^\s+|\s+$/g, "");
+  var deObjectId = String(objectIdHint || "").replace(/^\s+|\s+$/g, "");
+  if (!ck && !deObjectId) {
     return null;
   }
-  if (!prox) {
-    return null;
-  }
-  var deFilters = [
-    { Property: "CustomerKey", SimpleOperator: "equals", Value: safeName },
-    { Property: "Name", SimpleOperator: "equals", Value: safeName }
-  ];
-  var deRow = null;
-  var fi;
-  for (fi = 0; fi < deFilters.length; fi++) {
-    var deResp = prox.retrieve("DataExtension", ["ObjectID", "CustomerKey", "Name"], deFilters[fi]);
+  if (prox && ck && !deObjectId) {
+    var deResp = prox.retrieve("DataExtension", ["ObjectID", "CustomerKey"], {
+      Property: "CustomerKey",
+      SimpleOperator: "equals",
+      Value: ck
+    });
     var deRows = normalizeWsResultsJpa(deResp ? deResp.Results : null);
-    if (deRows.length > 0) {
-      deRow = deRows[0];
-      break;
+    if (deRows.length > 0 && deRows[0].ObjectID) {
+      deObjectId = String(deRows[0].ObjectID);
     }
   }
-  if (!deRow || !deRow.ObjectID) {
+  if (!deObjectId) {
     return null;
   }
-  var deKey = String(deRow.CustomerKey || safeName);
-  var fieldResp = prox.retrieve("DataExtensionField", ["Name", "ObjectID"], {
-    Property: "DataExtension.CustomerKey",
-    SimpleOperator: "equals",
-    Value: deKey
-  });
-  var fieldRows = normalizeWsResultsJpa(fieldResp ? fieldResp.Results : null);
-  var statusFieldName = "";
-  var statusFieldKey = "";
-  var ri;
-  for (ri = 0; ri < fieldRows.length; ri++) {
-    var fname = fieldRows[ri].Name ? String(fieldRows[ri].Name) : "";
-    if (fname === "Status") {
-      statusFieldName = fname;
-      statusFieldKey = fieldRows[ri].ObjectID
-        ? String(fieldRows[ri].ObjectID)
-        : fname;
-      break;
-    }
-  }
-  if (!statusFieldKey) {
+  var statusFieldKey = "Status";
+  if (prox && ck) {
+    var fieldResp = prox.retrieve("DataExtensionField", ["Name", "ObjectID"], {
+      Property: "DataExtension.CustomerKey",
+      SimpleOperator: "equals",
+      Value: ck
+    });
+    var fieldRows = normalizeWsResultsJpa(fieldResp ? fieldResp.Results : null);
+    var ri;
     for (ri = 0; ri < fieldRows.length; ri++) {
-      var fnameLower = fieldRows[ri].Name ? String(fieldRows[ri].Name).toLowerCase() : "";
-      if (fnameLower === "status") {
-        statusFieldName = String(fieldRows[ri].Name);
-        statusFieldKey = fieldRows[ri].ObjectID
-          ? String(fieldRows[ri].ObjectID)
-          : statusFieldName;
+      if (String(fieldRows[ri].Name || "") === "Status" && fieldRows[ri].ObjectID) {
+        statusFieldKey = String(fieldRows[ri].ObjectID);
         break;
       }
     }
   }
-  if (!statusFieldKey) {
-    return null;
-  }
   return {
-    deObjectId: String(deRow.ObjectID),
-    deName: String(deRow.Name || safeName),
-    statusFieldName: statusFieldName,
+    deObjectId: deObjectId,
     statusFieldKey: statusFieldKey
   };
 }
@@ -3269,7 +3248,7 @@ function buildDeStatusUpdateActivitySbU(opts) {
   return {
     id: randomGuidSbU(),
     key: "SALESCLOUDACTIVITY-1",
-    name: "Update Source DE Status",
+    name: "Update Entry DE Status",
     description: "",
     type: "DataExtensionUpdate",
     outcomes: [outcome],
@@ -3557,7 +3536,7 @@ if (
      senderProfileIdEsc +
      '","isTrackingClicks":true,"publicationListId":1132}}}';
    var cmActivity = "";
-   var sourceDeStatusActivity = "";
+   var entryDeStatusActivity = "";
    if (useCampaignMemberUpdate) {
      var cmObj = buildCmUpdateActivitySbU({
        eventKey: eventKey,
@@ -3566,28 +3545,23 @@ if (
        taskNext: addTaskActivity == "1" ? "SALESCLOUDACTIVITY-8" : null
      });
      cmActivity = Platform.Function.Stringify(cmObj);
-   } else if (useSourceDeStatusUpdate) {
-     var sourceDeStatusMeta = lookupSourceDeStatusFieldJpa(
+   } else if (useEntryDeStatusUpdate) {
+     var entryDeStatusMeta = lookupEntryDeStatusFieldJpa(
        new Script.Util.WSProxy(),
-       sourceDataExtensionName
+       entryDeCustomerKey,
+       entryDeObjectId
      );
-     if (
-       !sourceDeStatusMeta ||
-       !sourceDeStatusMeta.deObjectId ||
-       !sourceDeStatusMeta.statusFieldKey
-     ) {
+     if (!entryDeStatusMeta || !entryDeStatusMeta.deObjectId) {
        throw new Error(
-         'Source audience DE "' +
-           sourceDataExtensionName +
-           '" must exist and include a Status column (SubscriberKey must match journey contact key).'
+         "Entry DE was not ready for Status update. Step 3 must create the stack entry DE before the journey is built."
        );
      }
      var deStatusObj = buildDeStatusUpdateActivitySbU({
-       deObjectId: sourceDeStatusMeta.deObjectId,
-       statusFieldKey: sourceDeStatusMeta.statusFieldKey,
+       deObjectId: entryDeStatusMeta.deObjectId,
+       statusFieldKey: entryDeStatusMeta.statusFieldKey,
        taskNext: addTaskActivity == "1" ? "SALESCLOUDACTIVITY-8" : null
      });
-     sourceDeStatusActivity = Platform.Function.Stringify(deStatusObj);
+     entryDeStatusActivity = Platform.Function.Stringify(deStatusObj);
    }
    var taskSubject = "Email Sent: " + (emailName || "Email");
    var taskDescription = "Email name: " + (emailName || "Email");
@@ -3852,8 +3826,8 @@ if (
     : emailActivity;
    if (useCampaignMemberUpdate) {
     activitiesJson = activitiesJson + "," + cmActivity;
-   } else if (useSourceDeStatusUpdate) {
-    activitiesJson = activitiesJson + "," + sourceDeStatusActivity;
+   } else if (useEntryDeStatusUpdate) {
+    activitiesJson = activitiesJson + "," + entryDeStatusActivity;
    }
    if (addTaskActivity == "1") {
     activitiesJson = activitiesJson + "," + taskActivity;
@@ -4634,7 +4608,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
            <button type="submit" name="verifyCampaign" value="1" class="submit-button campaign-verify-btn" formnovalidate>Verify</button>
          </div>
          <div class="campaign-id-row" id="deSourceRow"%%[ IF @audienceSource != "dataextension" THEN ]%% style="display:none;"%%[ ENDIF ]%%>
-           <input type="text" class="textarea-control" id="sourceDataExtension" name="sourceDataExtension" value="%%=v(@sourceDataExtension)=%%" placeholder="e.g. Audience_DE — SubscriberKey + Status (set to Sent after send); Email column optional"%%[ IF @audienceSource == "dataextension" THEN ]%% required%%[ ELSE ]%% disabled%%[ ENDIF ]%%>
+           <input type="text" class="textarea-control" id="sourceDataExtension" name="sourceDataExtension" value="%%=v(@sourceDataExtension)=%%" placeholder="e.g. Audience_DE — requires SubscriberKey; Email is used only when that column exists on the DE"%%[ IF @audienceSource == "dataextension" THEN ]%% required%%[ ELSE ]%% disabled%%[ ENDIF ]%%>
          </div>
 %%[ IF @campaignVerifyShow == "1" AND @audienceSource != "dataextension" THEN ]%%
          <div class="campaign-verify-panel campaign-verify-panel--%%=v(@campaignVerifyStatus)=%%" role="status">
@@ -4826,7 +4800,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
                  </svg>
                </div>
              </div>
-             <span class="step-label" id="journeyPreviewStatusUpdateLabel">%%[ IF @audienceSource == "dataextension" THEN ]%%Update source DE Status to Sent%%[ ELSE ]%%Update Campaign Member Status to Sent%%[ ENDIF ]%%</span>
+             <span class="step-label" id="journeyPreviewStatusUpdateLabel">%%[ IF @audienceSource == "dataextension" THEN ]%%Update entry DE Status to Sent%%[ ELSE ]%%Update Campaign Member Status to Sent%%[ ENDIF ]%%</span>
            </div>
            <div class="step journey-preview-step journey-preview-step--task%%[ IF @addTaskActivity == "1" THEN ]%% is-visible%%[ ENDIF ]%%">
              <div class="icon-wrapper">
@@ -5042,7 +5016,7 @@ Your data extension, query automation, journey, and email are in Marketing Cloud
     }
     if (statusUpdatePreviewLabel) {
      statusUpdatePreviewLabel.textContent = isDe
-      ? 'Update source DE Status to Sent'
+      ? 'Update entry DE Status to Sent'
       : 'Update Campaign Member Status to Sent';
     }
    }
