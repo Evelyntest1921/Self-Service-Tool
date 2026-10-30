@@ -1,43 +1,656 @@
-https://docs.google.com/document/d/128gDGH8t7nHgLAvNuh1H9397SgBn-HbvQe4AsePWe-I/edit?usp=sharing
-SELECT
-    cm.Id AS MemberId,
-    cm.ContactId AS ContactId,
-    COALESCE(
-        NULLIF(RTRIM(ISNULL(cm.Email, '')), ''),
-        NULLIF(RTRIM(ISNULL(con.Email, '')), '')
-    ) AS Email,
-    cm.CampaignId AS CampaignId,
-    con.AccountId AS AccountId,
-    u.Name AS Account_Owner_Name,
-    u.Email AS Account_Owner_Email,
-    cm.Status AS Status,
-    con.MailingState AS State,
-    a.OwnerId AS AccountOwnerId,
-    pol.Policy_Type_txt__c AS PolicyType,
-    pol.Account_Name__c AS AccountName,
-    pol.Policy_Effective_Date__c AS PolEffectiveDate,
-    pol.Policy_Expiration_Date__c AS PolExpDate,
-    'SST' AS type,
-    CAST(((ROW_NUMBER() OVER (ORDER BY con.Id) - 1) / 20) + 1 AS INT) AS [PageNumber],
-    CAST(((COUNT(1) OVER () - 1) / 20) + 1 AS INT) AS [TotalPages],
+%%[
+  SET @EventConfigured = QueryParameter('EventConfigured')
+  SET @ShortNotice = QueryParameter('ShortNotice')
+  SET @CurrentDate = FormatDate(Now(), "S", " ", "en-US")
+  
+  VAR @CurrentYear, @CurrentMonth, @CurrentDay
+  
+  IF @ShortNotice == 1 THEN 
+     SET @CurrentYear = DatePart(@CurrentDate, "Y")
+     SET @CurrentMonth = DatePart(@CurrentDate, "M")
+     SET @CurrentDay = DatePart(@CurrentDate, "D")
+  ELSE 
+     SET @DatePartFull = DateAdd(@CurrentDate, 8, "D")  
+     SET @CurrentYear = DatePart(@DatePartFull, "Y")
+     SET @CurrentMonth = DatePart(@DatePartFull, "M")
+     SET @CurrentDay = DatePart(@DatePartFull, "D")  
+  ENDIF
+  
+  SET @NotCreated = QueryParameter('NotCreated')
+  
+  
+  IF EMPTY (@EventConfigured) THEN 
+  SET @SaveURL = CloudPagesURL(3323, "RedirectToID", @RedirectToID, "EventConfigured", "1") 
+]%%
+<style>
+  body {
+    font-family: 'Acumin Pro Semi Condensed', -apple-system, system-ui, SegoeUI, Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif;
+    background-color: white;
+    color: #333;
+  }
+  .form-container {
+    display: flex;
+    flex-direction: column;
+    align-items: left;
+    margin-top: 20px;
+    padding: 15px;
+    background-color: white;
+    border-radius: 8px;
+    width: 100%;
+    box-sizing: border-box;
+    border: 2px solid #efecea;
+  }
+  .row {
+    --bs-gutter-x: 1.5rem;
+    --bs-gutter-y: 0;
+    display: flex;
+    flex-wrap: wrap;
+    margin-top: calc(-1 * var(--bs-gutter-y));
+    margin-right: calc(-0.5 * var(--bs-gutter-x));
+    margin-left: calc(-0.5 * var(--bs-gutter-x));
+    border-radius: 8px;
+  }
+</style>
+%%=ContentBlockById(54740)=%%
+<div >
+  <div >
+  <div class="row justify-content-center">
+    <div >
+      <h4 class="mt-4" style="color:#FFFFFF">Create new Event
+      </h4> 
+      <div style="color:#FFFFFF">
+        In the section below you can define all the details for an event.<br><br>
+        <span style="font-size:12px;">Fields with asterisks(*) are required</span>
+      </div> 
+      <form method="post" action="%%=v(@SaveURL)=%%" id="createEventForm" class="needs-validation" novalidate>
+        <div class="form-container" >
+          <h4 class="mt-4">Event Details:
+          </h4> 
+          <div class="form-group my-3">
+            <input class="form-check-input" type="checkbox" class="form-control" id="ShortNotice" name="ShortNotice" oninput="handleCheckboxChange(this)" %%[IF @ShortNotice == 1 THEN ]%% checked %%[ENDIF]%% value="">
+            <label class="form-check-label" for="ShortNotice">Is the Event within the next 8 days?</label>                       
+          </div>
+          <div class="form-group my-3">
+            <label for="eventName">Name:*</label>
+            <input type="text" class="form-control" id="eventName" name="eventName" data-maxlength="76" maxlength="76" oninput="updateCharCounter1()" required> 
+            <div class="invalid-feedback">This field is required. </div> 
+            <p id="counter1">0/76
+            </p>
+          </div>
+          <div class="form-check my-3">
+            <input type="checkbox" class="form-check-input" id="showAdditionalSales" value="true" name="showAdditionalSales" oninput="displayAdditionalSales()"> 
+            <label class="form-check-label" for="showAdditionalSales">Add additional salespersons to the Event</label>
+          </div>
+          <div class="form-group my-3" id="salesEmailsContainer" style="display: none;">
+            <label for="email1">Salesperson 1 Email Address:</label>
+            <input class="form-control" id="email1" name="email1" placeholder="Email Address 1"> 
+            <br>
+            <label for="email2">Salesperson 2 Email Address:</label>
+            <input class="form-control" id="email2" name="email2" placeholder="Email Address 2" > 
+          </div>
+          <div class="form-group my-3">
+            <label for="location">Location (e.g The Hilton Hotel, Atlanta, Georgia):*</label>
+            <input type="text" class="form-control" id="location" name="location" required> 
+            <div class="invalid-feedback">This field is required. </div> 
+          </div>
+          <div class="form-group my-3">
+            <label for="startdate">Start Date of Event:*</label>
+            <input type="date" class="form-control" id="startdate" name="startdate"  min="%%=v(@CurrentYear)=%%-%%=v(@CurrentMonth)=%%-%%=v(@CurrentDay)=%%" required> 
+            <div class="invalid-feedback">This field is required. </div> 
+          </div>              
+          <div class="form-group my-3">
+            <label for="timePickerStartTime">Start Time:</label>
+            <br>
+            <input id="timePickerStartTime" class="form-control" name="timePickerStartTime" type="text" placeholder="Select time">
+          </div>
+          <div class="form-group my-3">
+            <label for="enddate">End Date of Event:*</label>
+            <input type="date" class="form-control" id="enddate" name="enddate" min="%%=v(@CurrentYear)=%%-%%=v(@CurrentMonth)=%%-%%=v(@CurrentDay)=%%" required> 
+            <div class="invalid-feedback">This field is required. </div> 
+          </div>
+          <div class="form-group my-3">
+            <label for="attendees">Number of Attendees:</label>
+            <input type="number" class="form-control" id="attendees" name="attendees" min="1"> 
+            <div class="invalid-feedback">Please provide a valid number. </div> 
+          </div>
 
-FROM ent.CampaignMember_Salesforce_2 cm
+          <div class="form-group my-3">
+            <label for="eventState">State/Region:</label>
+            <select name="eventState" id="eventState" class="form-control">
+              <option value="">Select a state</option>
+              <option value="AL">Alabama</option>
+              <option value="AK">Alaska</option>
+              <option value="AZ">Arizona</option>
+              <option value="AR">Arkansas</option>
+              <option value="CA">California</option>
+              <option value="CO">Colorado</option>
+              <option value="CT">Connecticut</option>
+              <option value="DE">Delaware</option>
+              <option value="DC">District Of Columbia</option>
+              <option value="FL">Florida</option>
+              <option value="GA">Georgia</option>
+              <option value="HI">Hawaii</option>
+              <option value="ID">Idaho</option>
+              <option value="IL">Illinois</option>
+              <option value="IN">Indiana</option>
+              <option value="IA">Iowa</option>
+              <option value="KS">Kansas</option>
+              <option value="KY">Kentucky</option>
+              <option value="LA">Louisiana</option>
+              <option value="ME">Maine</option>
+              <option value="MD">Maryland</option>
+              <option value="MA">Massachusetts</option>
+              <option value="MI">Michigan</option>
+              <option value="MN">Minnesota</option>
+              <option value="MS">Mississippi</option>
+              <option value="MO">Missouri</option>
+              <option value="MT">Montana</option>
+              <option value="NE">Nebraska</option>
+              <option value="NV">Nevada</option>
+              <option value="NH">New Hampshire</option>
+              <option value="NJ">New Jersey</option>
+              <option value="NM">New Mexico</option>
+              <option value="NY">New York</option>
+              <option value="NC">North Carolina</option>
+              <option value="ND">North Dakota</option>
+              <option value="OH">Ohio</option>
+              <option value="OK">Oklahoma</option>
+              <option value="OR">Oregon</option>
+              <option value="PA">Pennsylvania</option>
+              <option value="RI">Rhode Island</option>
+              <option value="SC">South Carolina</option>
+              <option value="SD">South Dakota</option>
+              <option value="TN">Tennessee</option>
+              <option value="TX">Texas</option>
+              <option value="UT">Utah</option>
+              <option value="VT">Vermont</option>
+              <option value="VA">Virginia</option>
+              <option value="WA">Washington</option>
+              <option value="WV">West Virginia</option>
+              <option value="WI">Wisconsin</option>
+              <option value="WY">Wyoming</option>
+          </select> 
+          </div>
+           
+          <div class="form-group my-3">
+            <label for="cost">Event Cost (numbers only, no symbols):</label>
+            <input type="number" class="form-control" id="cost" name="cost" min="0" step="0.01"> 
+            <div class="invalid-feedback">Please provide a valid number. </div> 
+          </div>
 
-INNER JOIN ent.Contact_Salesforce_1 con
-    ON cm.ContactId = con.Id
+          <div class="form-group my-3">
+            <label for="sponsorship">Sponsorship Information:</label>
+            <input type="text" class="form-control" id="sponsorship" name="sponsorship"> 
+          </div>
 
-INNER JOIN ent.Account_Salesforce_1 a
-    ON con.AccountId = a.Id
+          <div class="form-group my-3">
+            <input class="form-check-input" type="checkbox" value="true" id="socialMedia" name="socialMedia" oninput="displaySocialMedia()" %%[IF @ShortNotice == 1 THEN ]%% disabled %%[ ENDIF ]%%>
+            <label class="form-check-label" for="socialMedia">Does the Event need a Social Media Post?</label>
+          </div>
 
-INNER JOIN ent.User_Salesforce_1 u
-    ON u.Id = a.OwnerId
+          
 
-INNER JOIN ent.PolicyAccountAssociation__c_Salesforce_1 pol
-    ON pol.Account__c = a.Id
+          <div class="form-group my-3" id="socialMediaContainer" style="display: none;">
+            <label for="socialMediaInfo">Social Media Information:*</label>
+            <textarea class="form-control" id="socialMediaInfo" name="socialMediaInfo"></textarea>
+            <div class="invalid-feedback">This field is required when the Social Media Post option is selected. </div> 
+          </div>
 
-WHERE cm.CampaignId = '701WL00001Kw0wZYAR'
-    AND cm.ContactId IS NOT NULL
-    AND u.Name IS NOT NULL
-    AND u.Email IS NOT NULL
-    AND pol.Policy_Type_txt__c = 'PSL'
-    AND CAST(pol.Policy_Expiration_Date__c AS DATE) >= CAST(GETDATE() AS DATE)
+          <div class="form-group my-3">
+            <input class="form-check-input" type="checkbox" value="true" id="speaker" name="speaker">
+            <label class="form-check-label" for="speaker">Does the Event need a speaker?</label>
+          </div>
+
+          <div class="form-group my-3">
+            <input class="form-check-input" type="checkbox" value="true" id="journeyArea" name="journeyArea" oninput="displayJourneyArea()" %%[IF @ShortNotice == 1 THEN ]%% disabled %%[ ENDIF ]%%>
+            <label class="form-check-label" for="journeyArea">Does the Event need Emails?</label>
+          </div>
+          <div class="form-group my-3" id="journeyContainer" style="display: none;">  
+            <label for="daysBefore">How many days before the Event should the invitation be sent?</label>
+            <br>
+            <select class="form-select" id="daysBefore" name="daysBefore" required>
+              <option value="3">3 Days</option>
+              <option value="4">4 Days</option>
+              <option value="5">5 Days</option>
+              <option value="6">6 Days</option>
+              <option value="7" selected>7 Days</option>
+            </select>
+          </div>
+          <div class="form-group my-3">
+            <input class="form-check-input" type="checkbox" value="true" id="raffleArea" name="raffle" oninput="displayRaffleArea()">
+            <label class="form-check-label" for="raffleArea">Does the Event have a Raffle?</label>
+          </div> 
+          <div class="form-group my-3" id="raffleContainer" style="display: none;">
+            <label for="timePickerEndTime">At what time should the raffle winner(s) be chosen:</label>            
+            <br>
+            <input id="timePickerEndTime" class="form-control" name="timePickerEndTime" type="text" placeholder="Select time"> 
+          </div> 
+          <div class="form-check my-3" id="emailRelated" style="display: none;">                                    
+            <input type="checkbox" class="form-check-input" id="showTextArea" value="true" name="showTextArea" oninput="displayTextArea()"> 
+            <label class="form-check-label" for="showTextArea">Add additional Event related information to the Pre-Event/Reminder Email</label>              
+          </div>
+          <div class="form-group my-3" id="textAreaContainer" style="display: none;">
+            <label>
+               Select a Message Template: 
+            </label>
+            <br>
+%%[
+  SET @rows = LookupRows("MM_System_Portal_Events_CustomMessages_EN", "Lookup", "True")
+  SET @rowCount = rowcount(@rows)
+  IF @rowCount > 0 THEN              
+]%%            
+            <select id="customMessageSelect" class="form-control" oninput="updateTextarea()">
+              <option value="">-- Select a Message --</option>
+   %%[
+     FOR @i = 1 to @rowCount DO
+       SET @row = row(@rows, @i)
+       SET @MessageText = field(@row,"MessageText")       
+   ]%%
+              <option value="%%=v(@MessageText)=%%"> %%=v(@MessageText)=%% </option>
+   %%[
+     NEXT @i
+   ]%%               
+            </select>
+%%[ 
+   ENDIF 
+]%%
+            <br>
+           <div id="customMessageArea" style="display: none;">          
+            <label for="message">Custom Email Message:</label>
+            <textarea class="form-control resize-none" id="area" name="area" data-maxlength="2000" maxlength="2000" placeholder="Enter a custom message here" oninput="updateCharCounter2()"></textarea> 
+            <p id="counter2">0/2000
+            </p>
+           </div>
+          </div>
+        </div>
+        <h4 class="mt-4" style="color:#FFFFFF">Attendance Form Fields
+        </h4> 
+        <div style="color:#FFFFFF">In the section below you can define what fields need to be shown on the event form.
+        </div> 
+        <div class="form-container" >
+          <div class="row">
+            <h4 class="mt-4">Attendance Form Fields: 
+            </h4>
+            <div class="col-md-6">
+              
+              <div class="form-check my-2">
+                <input class="form-check-input pe-none" type="checkbox" value="true" id="name" name="name" checked="checked"> 
+                <label class="form-check-label pe-none" for="name">Name (required)</label>
+              </div>
+              <div class="form-check my-2">
+                <input class="form-check-input pe-none" type="checkbox" value="true" id="title" name="title" checked="checked"> 
+                <label class="form-check-label pe-none" for="title">Title (required)</label>
+              </div>
+              <div class="form-check my-2">
+                <input class="form-check-input pe-none" type="checkbox" value="true" id="email" name="email" checked="checked"> 
+                <label class="form-check-label pe-none" for="email">Email address (required)</label>
+              </div>
+              <div class="form-check my-2">
+                <input class="form-check-input pe-none" type="checkbox" value="true" id="company" name="company" checked="checked"> 
+                <label class="form-check-label pe-none" for="company">Company (required)</label>
+              </div>   
+              <div class="form-check my-2">
+                <input class="form-check-input pe-none" type="checkbox" value="true" id="state" name="state" checked="checked"> 
+                <label class="form-check-label pe-none" for="state">Primary State (required)</label>
+              </div>
+            </div>
+            <div class="col-md-6"> 
+              <div class="form-check my-2">
+                <input class="form-check-input" type="checkbox" value="true" id="phone" name="phone">
+                <label class="form-check-label" for="phone">Phone number</label>
+              </div>  
+              <div class="form-check my-2">
+                <input class="form-check-input" type="checkbox" value="true" id="specialty" name="specialty"> 
+                <label class="form-check-label" for="specialty">Primary Specialty</label>
+              </div>
+              <div class="form-check my-2">
+                <input class="form-check-input" type="checkbox" value="true" id="website" name="website"> 
+                <label class="form-check-label" for="website">Website</label>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="d-flex justify-content-between mt-4"> 
+        <button onclick="window.location.href='%%=v(@ViewEventsRedirect)=%%'"  class="btn btn-primary">Back</button> 
+        <input type="submit" id="createBtn" class="btn btn-primary" value="Create">
+      </div>
+      </form>
+                
+    </div>
+  </div>
+</div>
+</div>
+
+%%[ ELSEIF @EventConfigured == 1 THEN  
+   SET @eventName = RequestParameter("eventName")
+   SET @CampaignName = Concat("EP | ", @eventName)
+   SET @email1 = RequestParameter("email1")
+   SET @email2 = RequestParameter("email2")
+   SET @location = RequestParameter("location")
+   SET @startdate = RequestParameter("startdate")
+   SET @enddate = RequestParameter("enddate")
+   SET @starttime = RequestParameter("timePickerStartTime")
+  SET @attendees = RequestParameter("attendees")
+  SET @eventState = RequestParameter("eventState")
+  SET @cost = RequestParameter("cost")
+  SET @sponsorship = RequestParameter("sponsorship")
+  SET @socialMedia = RequestParameter("socialMedia")
+  SET @socialMediaInfo = RequestParameter("socialMediaInfo")
+  SET @speaker = RequestParameter("speaker")
+   SET @raffletime = RequestParameter("timePickerEndTime")
+   SET @daysbefore = RequestParameter("daysBefore")
+   SET @raffle = RequestParameter("raffle")
+   SET @hasmessage = RequestParameter("showTextArea")
+   SET @message = RequestParameter("area")
+   SET @messagelength = Length(@message)
+   SET @name = RequestParameter("name")
+   SET @title = RequestParameter("title")
+   SET @email = RequestParameter("email")
+   SET @EmailsRequired = RequestParameter("journeyArea")
+   SET @company = RequestParameter("company")
+   SET @phone = RequestParameter("phone")
+   SET @specialty = RequestParameter("specialty")
+   SET @state = RequestParameter("state")
+   SET @website = RequestParameter("website")
+   SET @eventID = 1
+   SET @rows = LookupOrderedRows("MM_System_Events_EventDetails_DE_INT", -1, "CreatedDate desc", "Lookup", "True")
+   SET @rowCount = rowcount(@rows)
+   IF @rowCount > 0 THEN     
+      SET @row = row(@rows, "1")
+      SET @largestID = field(@row,"EventID") 
+      SET @eventID = Add(@largestID, 1)
+   ENDIF
+]%%
+<script runat="server">
+  Platform.Load("core", "1.1");
+  try{
+    var eventID = Variable.GetValue("@eventID");
+    var emailAddress = Variable.GetValue("@EmailAddress");
+    var eventName = Variable.GetValue("@eventName");
+    var CampaignName = Variable.GetValue("@CampaignName");
+    var eventLocation = Variable.GetValue("@location");
+    var eventStartDate = Variable.GetValue("@startdate");
+    var eventEndDate = Variable.GetValue("@enddate");
+    var eventTime = Variable.GetValue("@starttime");
+    var requiresJourney = Variable.GetValue("@EmailsRequired");
+    var daysbefore = Variable.GetValue("@daysbefore");    
+    var hasMessage = Variable.GetValue("@hasmessage");
+    var customMessage = Variable.GetValue("@message");
+    var raffleTime = Variable.GetValue("@raffletime");
+    var hasRaffle = Variable.GetValue("@raffle");
+    var cost = Variable.GetValue("@cost");
+    var sponsorship = Variable.GetValue("@sponsorship");
+    var attendees = Variable.GetValue("@attendees");
+    var eventState = Variable.GetValue("@eventState");
+    var socialMedia = Variable.GetValue("@socialMedia");
+    var socialMediaInfo = Variable.GetValue("@socialMediaInfo");
+    var speaker = Variable.GetValue("@speaker");
+
+    var config = {
+      attributes: 
+         {
+           Names: 
+           ["EventName","EventLocation","EventStartDate","EventEndDate","EventTime","HasCustomMessage", "CustomMessage", "HasRaffle", "CampaignName", "SalesPerson_Email", "InviteSendDaysBefore", "RaffleTime", "JourneySetup", "Cost", "Sponsorship", "Attendees", "EventState", "SocialMedia", "SocialMediaInfo", "Speaker"],
+           Values: 
+           [eventName, eventLocation, eventStartDate, eventEndDate, eventTime, hasMessage, customMessage, hasRaffle, CampaignName, emailAddress, daysbefore, raffleTime, requiresJourney, cost, sponsorship, attendees, eventState, socialMedia, socialMediaInfo, speaker]
+         }
+      }
+    
+    var inserted = Platform.Function.UpsertDE("MM_System_Events_EventDetails_DE_INT",["EventID"],[eventID], config.attributes.Names,config.attributes.Values);
+    var qName = Variable.GetValue("@name");
+    var qTitle = Variable.GetValue("@title");
+    var qEmail = Variable.GetValue("@email");
+    var qCompany = Variable.GetValue("@company");
+    var qPhone = Variable.GetValue("@phone");
+    var qState = Variable.GetValue("@state");
+    var qSpeciality = Variable.GetValue("@specialty");
+    var qWebsite = Variable.GetValue("@website");
+    var qID = 1;
+    for(var x = 1; x < 9; x++){
+      var qConfig = null;
+      if(x == 1){
+        if(qName == "true"){
+          qConfig = {
+            attributes: 
+            {
+              Names: 
+              ["InputType","Question","IsMandatory","OptionsJson"],
+              Values: 
+              ["text", "Full Name: ", "true", ""]
+            }
+          }
+        }
+      }
+      if(x == 2){
+        if(qTitle == "true"){
+          qConfig = {
+            attributes: 
+            {
+              Names: 
+              ["InputType","Question","IsMandatory","OptionsJson"],
+              Values: 
+              ["text", "Title: ", "true", ""]
+            }
+          }
+        }
+      }
+      if(x == 3){
+        if(qEmail == "true"){
+          qConfig = {
+            attributes: 
+            {
+              Names: 
+              ["InputType","Question","IsMandatory","OptionsJson"],
+              Values: 
+              ["email", "Email Address: ", "true"," "]
+            }
+          }
+        }
+      }
+     
+      if(x == 4){
+        if(qCompany == "true"){
+          qConfig = {
+            attributes: 
+            {
+              Names: 
+              ["InputType","Question","IsMandatory","OptionsJson"],
+              Values: 
+              ["text", "Company: ", "true", " "]
+            }
+          }
+        }
+      }
+      if(x == 5){
+        if(qState == "true"){
+          qConfig = {
+            attributes: 
+            {
+              Names: 
+              ["InputType","Question","IsMandatory","OptionsJson"],
+              Values: 
+              ["picklist", "Primary State: ", "true", "{Items: [{ name: Alabama, value: AL },{ name: Alaska, value: AK },{ name: Arizona, value: AZ },{ name: Arkansas, value: AR },{ name: California, value: CA },{ name: Colorado, value: CO },{ name: Connecticut, value: CT },{ name: Delaware, value: DE },{ name: Florida, value: FL },{ name: Georgia, value: GA },{ name: Hawaii, value: HI },{ name: Idaho, value: ID },{ name: Illinois, value: IL },{ name: Indiana, value: IN },{ name: Iowa, value: IA },{ name: Kansas, value: KS },{ name: Kentucky, value: KY },{ name: Louisiana, value: LA },{ name: Maine, value: ME },{ name: Maryland, value: MD },{ name: Massachusetts, value: MA },{ name: Michigan, value: MI },{ name: Minnesota, value: MN },{ name: Mississippi, value: MS },{ name: Missouri, value: MO },{ name: Montana, value: MT },{ name: Nebraska, value: NE },{ name: Nevada, value: NV },{ name: New Hampshire, value: NH },{ name: New Jersey, value: NJ },{ name: New Mexico, value: NM },{ name: New York, value: NY },{ name: North Carolina, value: NC },{ name: North Dakota, value: ND },{ name: Ohio, value: OH },{ name: Oklahoma, value: OK },{ name: Oregon, value: OR },{ name: Pennsylvania, value: PA },{ name: Rhode Island, value: RI },{ name: South Carolina, value: SC },{ name: South Dakota, value: SD },{ name: Tennessee, value: TN },{ name: Texas, value: TX },{ name: Utah, value: UT },{ name: Vermont, value: VT },{ name: Virginia, value: VA },{ name: Washington, value: WA },{ name: West Virginia, value: WV },{ name: Wisconsin, value: WI },{ name: Wyoming, value: WY }]}"]
+            }
+          }
+        }
+      }
+      
+       if(x == 6){
+        if(qPhone == "true"){
+          qConfig = {
+            attributes: 
+            {
+              Names: 
+              ["InputType","Question","IsMandatory","OptionsJson"],
+              Values: 
+              ["text", "Phone Number: ", " ", " "]
+            }
+          }
+        }
+      }
+       
+     
+      
+      if(x == 7){
+        if(qSpeciality == "true"){
+          qConfig = {
+            attributes: 
+            {
+              Names: 
+              ["InputType","Question","IsMandatory","OptionsJson"],
+              Values: 
+              ["picklist", "Primary Speciality: ", "", "{Items: [{ name: Addictionology, value: Addictionology },{ name: Administrative Medicine, value: Administrative Medicine },{ name: Advanced Practice Provider, value: Advanced Practice Provider },{ name: Allergy/Immunology, value: Allergy/Immunology },{ name: Anesthesiology, value: Anesthesiology },{ name: Bariatrics, value: Bariatrics },{ name: Cardiology, value: Cardiology },{ name: Chiropractor, value: Chiropractor },{ name: Critical Care, value: Critical Care },{ name: Dentistry, value: Dentistry },{ name: Dermatology, value: Dermatology },{ name: Emergency Medicine, value: Emergency Medicine },{ name: Endocrinology, value: Endocrinology },{ name: Endodontics, value: Endodontics },{ name: Family Practice/General Practice, value: Family Practice/General Practice },{ name: Gastroenterology, value: Gastroenterology },{ name: General, value: General },{ name: Geriatrics, value: Geriatrics },{ name: Gynecology, value: Gynecology },{ name: Hematology, value: Hematology },{ name: Hospital Medicine, value: Hospital Medicine },{ name: Infectious Disease, value: Infectious Disease },{ name: Internal Medicine, value: Internal Medicine },{ name: Legal and Forensic Medicine, value: Legal and Forensic Medicine },{ name: Medical Director Only, value: Medical Director Only },{ name: Multi-Specialty, value: Multi-Specialty },{ name: Neonatology, value: Neonatology },{ name: Nephrology, value: Nephrology },{ name: Neurology, value: Neurology },{ name: Obstetrics/Gynecology, value: Obstetrics/Gynecology },{ name: Occupational Medicine, value: Occupational Medicine },{ name: Oncology, value: Oncology },{ name: Ophthalmology, value: Ophthalmology },{ name: Other, value: Other },{ name: Otolaryngology, value: Otolaryngology },{ name: Pain Management, value: Pain Management },{ name: Pathology, value: Pathology },{ name: Pediatrics, value: Pediatrics },{ name: Pharmacology, value: Pharmacology },{ name: Physiatry, value: Physiatry },{ name: Podiatry, value: Podiatry },{ name: Psychiatry, value: Psychiatry },{ name: Pulmonology, value: Pulmonology },{ name: Radiation Oncology, value: Radiation Oncology },{ name: Radiology - Diagnostic, value: Radiology - Diagnostic },{ name: Radiology - Interventional, value: Radiology - Interventional },{ name: Rheumatology, value: Rheumatology },{ name: Surgery - Abdominal, value: Surgery - Abdominal },{ name: Surgery - Bariatric, value: Surgery - Bariatric },{ name: Surgery - Cardiac, value: Surgery - Cardiac },{ name: Surgery - Colorectal, value: Surgery - Colorectal },{ name: Surgery - General, value: Surgery - General },{ name: Surgery - Neurosurgery, value: Surgery - Neurosurgery },{ name: Surgery - Oral and Maxillofacial, value: Surgery - Oral and Maxillofacial },{ name: Surgery - Orthopedic, value: Surgery - Orthopedic },{ name: Surgery - Plastic, value: Surgery - Plastic },{ name: Surgery - Thoracic, value: Surgery - Thoracic },{ name: Surgery - Trauma, value: Surgery - Trauma },{ name: Surgery - Vascular, value: Surgery - Vascular },{ name: Urology, value: Urology }]}"]
+            }
+          }
+        }
+      }
+      
+       if(x == 8){
+        if(qWebsite == "true"){
+          qConfig = {
+            attributes: 
+            {
+              Names: 
+              ["InputType","Question","IsMandatory","OptionsJson"],
+              Values: 
+              ["text", "Website: ", "", ""]
+            }
+          }
+        }
+      }
+     
+      if(qConfig){
+        var inserted = Platform.Function.UpsertDE("MM_System_Events_EventFormQuestions_DE_INT",["Id", "EventId"],[qID, eventID], qConfig.attributes.Names,qConfig.attributes.Values);
+        qID = qID + 1;
+      }
+    }
+  }
+  catch (e){
+  }
+</script>
+%%[
+   SET @sfUser = RetrieveSalesforceObjects(
+      "User",
+      "Id",
+      "Email", "=", @EmailAddress
+    )
+   IF RowCount(@sfUser) > 0 THEN
+       SET @sfUserRow = Row(@sfUser, 1)
+       SET @sfUserId = Field(@sfUserRow, "Id")
+   ELSE
+       SET @sfUserId = @EmailAddress
+   ENDIF
+   
+   SET @sfCampaign = RetrieveSalesforceObjects(
+      "Campaign",
+      "Id, Name",
+      "Name", "=", @CampaignName
+    )
+    IF RowCount(@sfCampaign) > 0 THEN
+       SET @sfCampaignRow = Row(@sfCampaign, 1)
+       SET @sfCampaignName = Field(@sfCampaignRow, "Name")
+   ENDIF
+
+  
+     
+   IF (IndexOf(@sfUserId, "@") < 1) AND (@sfCampaignName > 0) THEN 
+      Set @id = CreateSalesforceObject(
+      "Campaign", 6, 
+      "Name", @CampaignName, 
+      "Type", "Event", 
+      "Status", "Planned", 
+      "StartDate", @startdate, 
+      "EndDate", @enddate, 
+      "OwnerId", @sfUserId
+      )
+   ELSEIF (IndexOf(@sfUserId, "@") > 0) AND (@sfCampaignName > 0) THEN
+      Set @id = CreateSalesforceObject(
+        "Campaign", 5, 
+        "Name", @CampaignName, 
+        "Type", "Event", 
+        "Status", "Planned", 
+        "StartDate", @startdate, 
+        "EndDate", @enddate
+        )
+   ENDIF 
+   
+    IF NOT Empty(@id) THEN
+     SET @message = Concat(@id, " Campaign created in SF")
+     SET @log = InsertDE("EP_CampaignCreation_logs", "source", "Event Portal", "message", @message, "type", "Log")
+     upsertDE("MM_System_Events_PreEventSalesPersonEmail_DE_INT", 1,"EventID", @eventID, "EmailAddress", @EmailAddress,"SubscriberKey", @sfUserId, "HasJourney", @EmailsRequired, "CampaignCreated", "True") 
+
+      IF NOT EMPTY(@socialMediaInfo) THEN
+        UpdateSingleSalesforceObject("Campaign", @id, "Social_Media_Information__c", @socialMediaInfo, "Social_Media_Post_Needed__c", "True")
+      ENDIF
+
+      IF NOT EMPTY(@speaker) THEN
+        UpdateSingleSalesforceObject("Campaign", @id, "Speaker_Needed__c", "True")
+      ENDIF 
+
+       IF NOT EMPTY(@cost) THEN
+        UpdateSingleSalesforceObject("Campaign", @id, "Event_Cost__c", @cost)
+      ENDIF   
+
+      IF NOT EMPTY(@sponsorship) THEN
+        UpdateSingleSalesforceObject("Campaign", @id, "Sponsorship_Media_Kit_Info__c", @sponsorship)
+      ENDIF 
+
+       IF NOT EMPTY(@attendees) THEN
+        UpdateSingleSalesforceObject("Campaign", @id, "Number_of_Attendees__c", @attendees)
+      ENDIF 
+
+      IF NOT EMPTY(@eventState) THEN
+        UpdateSingleSalesforceObject("Campaign", @id, "Event_State__c", @eventState)
+      ENDIF 
+
+
+
+   ELSE 
+     SET @message = "There was an error. Campaign was not created"
+     SET @log = InsertDE("EP_CampaignCreation_logs", "source", "Event Portal", "message", @message, "type", "Error")
+    upsertDE("MM_System_Events_PreEventSalesPersonEmail_DE_INT", 1,"EventID", @eventID, "EmailAddress", @EmailAddress,"SubscriberKey", @sfUserId, "HasJourney", @EmailsRequired, "CampaignCreated", "False") 
+    ENDIF
+   
+   UpdateData("MM_System_Events_EventDetails_DE_INT", 1, "EventID", @eventID, "CampaignID", @id)   
+   upsertData("MM_System_Events_EventSPs_DE_INT", 2, "SalesPerson_Email", @EmailAddress, "EventID", @eventID, "SalesPerson_SFID", @sfUserId, "CampaignID", @id)
+   UpdateData("MM_System_Events_EventDetails_DE_INT",1,"EventID", @eventID, "SalesPerson_SFID", @sfUserId)
+      
+    
+   
+   IF @email1 != "" THEN
+      SET @sfUser = RetrieveSalesforceObjects(
+         "User",
+         "Id",
+         "Email", "=", @email1
+       )
+       IF RowCount(@sfUser) > 0 THEN
+           SET @sfUserRow = Row(@sfUser, 1)
+           SET @sfUserId = Field(@sfUserRow, "Id")
+       ELSE
+           SET @sfUserId = @email1
+       ENDIF
+      upsertData("MM_System_Events_EventSPs_DE_INT", 2, "SalesPerson_Email", @email1, "EventID", @eventID, "SalesPerson_SFID", @sfUserId, "CampaignID", @id)
+   ENDIF
+   
+   
+   IF @email2 != "" THEN 
+       SET @sfUser = RetrieveSalesforceObjects(
+         "User",
+         "Id",
+         "Email", "=", @email2
+       )
+       IF RowCount(@sfUser) > 0 THEN
+           SET @sfUserRow = Row(@sfUser, 1)
+           SET @sfUserId = Field(@sfUserRow, "Id")
+       ELSE
+           SET @sfUserId = @email2
+       ENDIF
+      upsertData("MM_System_Events_EventSPs_DE_INT", 2, "SalesPerson_Email", @email2, "EventID", @eventID, "SalesPerson_SFID", @sfUserId, "CampaignID", @id)
+   ENDIF      
+                 
+    
+    Redirect(@ViewEventsRedirect)       
+ 
+       
+ENDIF 
+]%%
