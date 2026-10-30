@@ -1,4 +1,4 @@
-%%[
+new %%[
   SET @EventConfigured = QueryParameter('EventConfigured')
   SET @ShortNotice = QueryParameter('ShortNotice')
   SET @CurrentDate = FormatDate(Now(), "S", " ", "en-US")
@@ -541,39 +541,30 @@
        SET @sfUserId = @EmailAddress
    ENDIF
    
-   SET @sfCampaign = RetrieveSalesforceObjects(
-      "Campaign",
-      "Id, Name",
-      "Name", "=", @CampaignName
-    )
-    IF RowCount(@sfCampaign) > 0 THEN
-       SET @sfCampaignRow = Row(@sfCampaign, 1)
-       SET @sfCampaignName = Field(@sfCampaignRow, "Name")
+   /* Create a new Salesforce Campaign for every event, regardless of name. */
+   SET @id = ""
+
+   IF IndexOf(@sfUserId, "@") < 1 AND NOT Empty(@sfUserId) THEN
+      SET @id = CreateSalesforceObject(
+        "Campaign", 6,
+        "Name", @CampaignName,
+        "Type", "Event",
+        "Status", "Planned",
+        "StartDate", @startdate,
+        "EndDate", @enddate,
+        "OwnerId", @sfUserId
+      )
+   ELSE
+      SET @id = CreateSalesforceObject(
+        "Campaign", 5,
+        "Name", @CampaignName,
+        "Type", "Event",
+        "Status", "Planned",
+        "StartDate", @startdate,
+        "EndDate", @enddate
+      )
    ENDIF
 
-  
-     
-   IF (IndexOf(@sfUserId, "@") < 1) AND (@sfCampaignName > 0) THEN 
-      Set @id = CreateSalesforceObject(
-      "Campaign", 6, 
-      "Name", @CampaignName, 
-      "Type", "Event", 
-      "Status", "Planned", 
-      "StartDate", @startdate, 
-      "EndDate", @enddate, 
-      "OwnerId", @sfUserId
-      )
-   ELSEIF (IndexOf(@sfUserId, "@") > 0) AND (@sfCampaignName > 0) THEN
-      Set @id = CreateSalesforceObject(
-        "Campaign", 5, 
-        "Name", @CampaignName, 
-        "Type", "Event", 
-        "Status", "Planned", 
-        "StartDate", @startdate, 
-        "EndDate", @enddate
-        )
-   ENDIF 
-   
     IF NOT Empty(@id) THEN
      SET @message = Concat(@id, " Campaign created in SF")
      SET @log = InsertDE("EP_CampaignCreation_logs", "source", "Event Portal", "message", @message, "type", "Log")
