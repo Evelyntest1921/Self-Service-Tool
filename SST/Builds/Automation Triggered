@@ -108,6 +108,7 @@ IF @deleteAllRequested == "1" THEN
 ENDIF
 SET @resultText = ""
 SET @journeyName = ""
+SET @journeyDisplayName = ""
 SET @eventName = ""
 SET @eventDefId = ""
 SET @journeyId = ""
@@ -126,6 +127,7 @@ IF Empty(@emailId) THEN
  SET @emailId = @defaultEmailId
 ENDIF
 IF NOT Empty(@stackCampaignName) THEN
+ SET @journeyDisplayName = @stackCampaignName
  SET @journeyName = @stackCampaignName
  SET @eventName = @stackCampaignName
  SET @emailName = @stackCampaignName
@@ -3344,7 +3346,13 @@ if (postSuffix) {
 Platform.Load("core","1");
 var journeyKey = Platform.Variable.GetValue("@journeyKey") || "";
 var journeyUrl = Platform.Variable.GetValue("@journeyUrl") || "";
-var journeyName = Platform.Variable.GetValue("@journeyName") || "";
+var journeyDisplayName = String(
+  Platform.Variable.GetValue("@journeyDisplayName") ||
+    Platform.Variable.GetValue("@stackCampaignName") ||
+    Platform.Variable.GetValue("@journeyName") ||
+    ""
+).replace(/^\s+|\s+$/g, "");
+var journeyName = journeyDisplayName;
 var defaultEmailEscaped = Platform.Variable.GetValue("@defaultEmailEscaped") || "";
 var deAudienceTriggerJson = Platform.Variable.GetValue("@deAudienceTriggerJson") || "";
 var newEmailId = Platform.Variable.GetValue("@newEmailId") || "";
@@ -3830,7 +3838,7 @@ if (
      throw new Error("Send classification is required.");
    }
    var emailSubjectEscaped = jsonEscapeSbU(emailSubjectLine);
-   var journeyNameEscaped = jsonEscapeSbU(journeyName);
+   var journeyNameJson = Platform.Function.Stringify(journeyDisplayName);
    var journeyDescEscaped = jsonEscapeSbU(journeyDescription);
    var bccEsc = jsonEscapeSbU(bccEmail);
    var senderProfileIdEsc = jsonEscapeSbU(senderProfileIdForJourney);
@@ -4188,9 +4196,9 @@ if (
     activitiesJson = activitiesJson + "," + taskActivity;
    }
    var journeyPayload =
-     '{"name":"' +
-     journeyNameEscaped +
-     '","definitionType":"Multistep","channel":"","description":"' +
+     '{"name":' +
+     journeyNameJson +
+     ',"definitionType":"Multistep","channel":"","description":"' +
      journeyDescEscaped +
      '","version":1,"workflowApiVersion":1.0,"executionMode":"Production","entryMode":"MultipleEntries","key":"' +
      journeyKey +
