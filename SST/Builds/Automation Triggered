@@ -94,9 +94,12 @@ SET @entryDeObjectId = ""
 SET @entryDeName = ""
 SET @stackDeReady = "0"
 SET @assetKey = ""
+SET @buildStamp = ""
+SET @entryDeCustomerKey = ""
 SET @queryKey = ""
 SET @automationKey = ""
 SET @automationName = ""
+SET @entryDeDescription = ""
 SET @emailSubjectLine = Trim(RequestParameter("emailSubjectLine"))
 SET @journeyDescription = Trim(RequestParameter("journeyDescription"))
 SET @bccEmail = Trim(RequestParameter("bccEmail"))
@@ -136,16 +139,19 @@ IF NOT Empty(@stackCampaignName) THEN
  SET @assetKey = Replace(@assetKey," ","_")
  SET @assetKey = Replace(@assetKey,".","_")
  SET @assetKey = Replace(@assetKey,"/","_")
- SET @emailName = @assetKey
- SET @eventName = @assetKey
- SET @queryKey = @assetKey
- SET @automationKey = @assetKey
+ SET @buildStamp = Concat(Format(Now(),"MM"),"_",Format(Now(),"dd"),"_",Format(Now(),"yyyy"))
+ SET @entryDeCustomerKey = Concat(@assetKey,"_",@buildStamp)
+ SET @emailName = Concat(@assetKey,"_",@buildStamp)
+ SET @eventName = @entryDeCustomerKey
+ SET @queryKey = @entryDeCustomerKey
+ SET @automationKey = @entryDeCustomerKey
  SET @automationName = Replace(@stackCampaignName,'"','')
  SET @automationName = Replace(@automationName," | "," ")
  SET @automationName = Replace(@automationName,"|"," ")
  SET @automationName = Replace(@automationName,"[","")
  SET @automationName = Replace(@automationName,"]","")
  SET @automationName = Trim(@automationName)
+ SET @entryDeDescription = Concat("Connected to '", @automationName, "'")
 ENDIF
 SET @campaignName = @stackCampaignName
 SET @campaignLookup = RetrieveSalesforceObjects("Campaign","Id,Name","Id","=",@campaignId)
@@ -1273,24 +1279,14 @@ function stackRetrieveDeByFilter(prox, filter) {
   return null;
 }
 function stackResolveExistingDe(prox, customerKey, deName) {
-  var byKey = customerKey
-    ? stackRetrieveDeByFilter(prox, {
-        Property: "CustomerKey",
-        SimpleOperator: "equals",
-        Value: String(customerKey)
-      })
-    : null;
-  if (byKey) {
-    return byKey;
+  if (!customerKey) {
+    return null;
   }
-  if (deName) {
-    return stackRetrieveDeByFilter(prox, {
-      Property: "Name",
-      SimpleOperator: "equals",
-      Value: String(deName)
-    });
-  }
-  return null;
+  return stackRetrieveDeByFilter(prox, {
+    Property: "CustomerKey",
+    SimpleOperator: "equals",
+    Value: String(customerKey)
+  });
 }
 
 function stackParseJsonSafe(text) {
@@ -1459,10 +1455,15 @@ function stackCreateEntryDeViaSoap(prox, customerKey, deName, includeSbu) {
   if (categoryId <= 0) {
    categoryId = stackResolveDeCategoryId(prox);
   }
+  var deDescAmp = Platform.Variable.GetValue("@entryDeDescription") || "";
+  var deDescription = String(deDescAmp).replace(/^\s+|\s+$/g, "");
+  if (!deDescription) {
+   deDescription = "Stack entry DE created via Journey Maker";
+  }
   var deConfig = {
    Name: name,
    CustomerKey: ck,
-   Description: "Stack entry DE created via Journey Maker",
+   Description: deDescription,
    Fields: stackBuildSoapDeFields(includeSbu),
    IsSendable: true,
    IsTestable: true,
@@ -1554,19 +1555,6 @@ function stackCreateEntryDeViaSoap(prox, customerKey, deName, includeSbu) {
 
 function stackEnsureEntryDe(prox, token, subdomain, customerKey, deName, includeSbu) {
   var name = String(deName || customerKey || "Entry DE");
-  var existing = stackResolveExistingDe(prox, customerKey, name);
-  if (existing) {
-   var repairKey = existing.customerKey || String(customerKey || "");
-   return {
-    ok: true,
-    skipped: true,
-    objectId: existing.objectId,
-    customerKey: repairKey,
-    name: existing.name || name,
-    message: ""
-   };
-  }
-
   var created = stackCreateEntryDeViaSoap(prox, customerKey, name, includeSbu);
   if (!created.ok) {
    return created;
@@ -1635,8 +1623,15 @@ if (
   accessToken
 ) {
   try {
-    var deCustomerKey = assetKey ? String(assetKey) : String(eventName || "");
-    var deName = eventName ? String(eventName) : deCustomerKey;
+    var entryDeKeyAmp = Platform.Variable.GetValue("@entryDeCustomerKey") || "";
+    var deCustomerKey = entryDeKeyAmp
+      ? String(entryDeKeyAmp)
+      : eventName
+      ? String(eventName)
+      : assetKey
+      ? String(assetKey)
+      : "";
+    var deName = deCustomerKey;
     var proxDe = new Script.Util.WSProxy();
     var addSBUActivityStep3 =
       Platform.Variable.GetValue("@addSBUActivity") ||
@@ -3233,7 +3228,7 @@ if (postDeleteRequested != "1") {
       var postProx = new Script.Util.WSProxy();
       var entryDe = {
         customerKey: postDeCustomerKeyVal,
-        name: postEventName || postAssetKey
+        name: postDeCustomerKeyVal || postEventName || postAssetKey
       };
       if (!entryDe.customerKey) {
         postSuffix = " Step 5 FAILED - entry DE CustomerKey missing.";
