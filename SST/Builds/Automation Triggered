@@ -41,6 +41,16 @@ IF RowCount(@navRows) > 0 THEN
  SET @buildDetailUrl = Field(@navRow,"ss_edit")
  SET @environment = Trim(Lowercase(Field(@navRow,"environment")))
 ENDIF
+SET @sstEmailCategoryFolderId = ""
+SET @sstDeCategoryFolderId = ""
+SET @sstCatRows = LookupRows("bd_sst_category_id","Folder_Type","email_folder")
+IF RowCount(@sstCatRows) > 0 THEN
+ SET @sstEmailCategoryFolderId = Trim(Field(Row(@sstCatRows,1),"ID"))
+ENDIF
+SET @sstCatRows = LookupRows("bd_sst_category_id","Folder_Type","data_extension_folder")
+IF RowCount(@sstCatRows) > 0 THEN
+ SET @sstDeCategoryFolderId = Trim(Field(Row(@sstCatRows,1),"ID"))
+ENDIF
 SET @builderPageLabel = "Journey + Automation"
 SET @stackCampaignName = Trim(RequestParameter("stackCampaignName"))
 SET @sfUserId = Trim(RequestParameter("sfUserId"))
@@ -725,6 +735,41 @@ function buildTemplateReference(source, fallbackContent, fallbackSlots) {
  ref.slots = (source.slots && typeof source.slots === "object") ? cloneObject(source.slots) : cloneObject(fallbackSlots || {});
  return ref;
 }
+function sstParseConfiguredFolderId(ampVarName) {
+  var v = "";
+  try {
+    v = Platform.Variable.GetValue(ampVarName) || "";
+  } catch (e0) {}
+  if (v === null || v === undefined) {
+    v = "";
+  }
+  v = String(v).replace(/^\s+|\s+$/g, "");
+  if (!v) {
+    return 0;
+  }
+  var n = parseInt(v, 10);
+  if (isNaN(n) || n <= 0) {
+    return 0;
+  }
+  return n;
+}
+function sstConfiguredEmailFolderId() {
+  return sstParseConfiguredFolderId("@sstEmailCategoryFolderId");
+}
+function applySstEmailCategory(payload, sourceCategoryId) {
+  var configured = sstConfiguredEmailFolderId();
+  if (configured > 0) {
+    payload.category = { id: configured };
+    return;
+  }
+  if (
+    sourceCategoryId !== null &&
+    sourceCategoryId !== undefined &&
+    String(sourceCategoryId).replace(/^\s+|\s+$/g, "") !== ""
+  ) {
+    payload.category = { id: sourceCategoryId };
+  }
+}
 function buildBasePayload(sourceAsset, targetName, targetAssetTypeId) {
  var payload = {
    name: targetName,
@@ -737,9 +782,10 @@ function buildBasePayload(sourceAsset, targetName, targetAssetTypeId) {
  } else if (sourceAsset.assetType && sourceAsset.assetType.name) {
    payload.assetType.name = sourceAsset.assetType.name;
  }
- if (sourceAsset.category && sourceAsset.category.id) {
-   payload.category = { id: 59742 };
- }
+ applySstEmailCategory(
+   payload,
+   sourceAsset.category && sourceAsset.category.id ? sourceAsset.category.id : null
+ );
  if (sourceAsset.channels && typeof sourceAsset.channels === "object") {
    payload.channels = cloneObject(sourceAsset.channels);
  }
@@ -812,12 +858,13 @@ function buildCloned207Payload(sourceAsset, targetName, subjectlineContent, preh
    data: {
      email: {
        options: {}
-     }
    }
+  }
  };
- if (sourceAsset.category && sourceAsset.category.id) {
-   payload.category = { id: 59742 };
- }
+ applySstEmailCategory(
+   payload,
+   sourceAsset.category && sourceAsset.category.id ? sourceAsset.category.id : null
+ );
  if (sourceAsset.data && sourceAsset.data.email && sourceAsset.data.email.options && typeof sourceAsset.data.email.options === "object") {
    payload.data.email.options = cloneObject(sourceAsset.data.email.options);
  }
@@ -1052,9 +1099,10 @@ if (deleteAllRequested == "1" && authOk == "true" && accessToken && subdomain) {
          }
        };
        applyTextSettings(payload, textContent);
-       if (template.category && template.category.id) {
-         payload.category = { id: 59742};
-       }
+       applySstEmailCategory(
+         payload,
+         template.category && template.category.id ? template.category.id : null
+       );
      } else if (assetTypeId === 207) {
        if (sourceTemplate) {
          var fetchedTemplate = fetchAssetById(sourceTemplate.id, subdomain, accessToken);
@@ -1373,6 +1421,24 @@ function stackResolveDeCategoryId(prox) {
  return 0;
 }
 
+function sstParseConfiguredFolderIdDe(ampVarName) {
+  var v = "";
+  try {
+    v = Platform.Variable.GetValue(ampVarName) || "";
+  } catch (e0) {}
+  if (v === null || v === undefined) {
+    v = "";
+  }
+  v = String(v).replace(/^\s+|\s+$/g, "");
+  if (!v) {
+    return 0;
+  }
+  var n = parseInt(v, 10);
+  if (isNaN(n) || n <= 0) {
+    return 0;
+  }
+  return n;
+}
 
 function stackCreateEntryDeViaSoap(prox, customerKey, deName, includeSbu) {
   var ck = String(customerKey || "");
@@ -1380,7 +1446,10 @@ function stackCreateEntryDeViaSoap(prox, customerKey, deName, includeSbu) {
   if (!ck) {
    return { ok: false, message: "Entry DE CustomerKey is required." };
   }
-  var categoryId = 59030;
+  var categoryId = sstParseConfiguredFolderIdDe("@sstDeCategoryFolderId");
+  if (categoryId <= 0) {
+   categoryId = stackResolveDeCategoryId(prox);
+  }
   var deConfig = {
    Name: name,
    CustomerKey: ck,
@@ -3783,6 +3852,19 @@ if (
    var emailOutcomeJson = emailOutcomeNext
      ? '{"next":"' + emailOutcomeNext + '","metaData":{"invalid":false}}'
      : '{"next":null,"metaData":{"invalid":false}}';
+   var journeyEmailFolderId = 0;
+   try {
+     var journeyEmailFolderRaw = Platform.Variable.GetValue("@sstEmailCategoryFolderId") || "";
+     journeyEmailFolderRaw = String(journeyEmailFolderRaw).replace(/^\s+|\s+$/g, "");
+     if (journeyEmailFolderRaw) {
+      var journeyEmailFolderParsed = parseInt(journeyEmailFolderRaw, 10);
+      if (!isNaN(journeyEmailFolderParsed) && journeyEmailFolderParsed > 0) {
+       journeyEmailFolderId = journeyEmailFolderParsed;
+      }
+     }
+   } catch (journeyFolderEx) {}
+   var triggeredSendCategoryJson =
+     journeyEmailFolderId > 0 ? '","categoryId":' + journeyEmailFolderId + ',"ccEmail":"' : '","ccEmail":"';
    var emailActivity =
      '{"type":"EMAILV2","key":"EMAILV2-1","name":"' +
      emailNameEscaped +
@@ -3792,7 +3874,8 @@ if (
      emailArgs +
      ',"metaData":{"isConfigured":true,"sections":{}},"configurationArguments":{"applicationExtensionKey":"jb-email-activity","isModified":false,"isSimulation":false,"fuelAgentRequested":true,"googleAnalyticsCampaignName":"","useLLTS":false,"isReconcilable":false,"triggeredSend":{"autoAddSubscribers":true,"autoUpdateSubscribers":true,"bccEmail":"' +
      bccEsc +
-     '","categoryId":58374,"ccEmail":"","created":{"name":"","date":""},"domainExclusions":[],"dynamicEmailSubject":"' +
+     triggeredSendCategoryJson +
+     '","created":{"name":"","date":""},"domainExclusions":[],"dynamicEmailSubject":"' +
      emailSubjectEscaped +
      '","emailId":' +
      emailIdNum +
