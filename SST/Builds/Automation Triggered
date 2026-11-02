@@ -96,6 +96,7 @@ SET @stackDeReady = "0"
 SET @assetKey = ""
 SET @queryKey = ""
 SET @automationKey = ""
+SET @automationName = ""
 SET @emailSubjectLine = Trim(RequestParameter("emailSubjectLine"))
 SET @journeyDescription = Trim(RequestParameter("journeyDescription"))
 SET @bccEmail = Trim(RequestParameter("bccEmail"))
@@ -139,6 +140,12 @@ IF NOT Empty(@stackCampaignName) THEN
  SET @assetKey = Replace(@assetKey,"/","_")
  SET @queryKey = @assetKey
  SET @automationKey = @assetKey
+ SET @automationName = Replace(@stackCampaignName,'"','')
+ SET @automationName = Replace(@automationName," | "," ")
+ SET @automationName = Replace(@automationName,"|"," ")
+ SET @automationName = Replace(@automationName,"[","")
+ SET @automationName = Replace(@automationName,"]","")
+ SET @automationName = Trim(@automationName)
 ENDIF
 SET @campaignName = @stackCampaignName
 SET @campaignLookup = RetrieveSalesforceObjects("Campaign","Id,Name","Id","=",@campaignId)
@@ -1706,6 +1713,7 @@ var postAccessToken = postVar("accessToken");
 var postSubdomain = postVar("subdomain");
 var postQueryKey = postVar("queryKey");
 var postAutomationKey = postVar("automationKey");
+var postAutomationName = postVar("automationName");
 var postStackName = postVar("journeyName");
 var postAutomationFrequency = postVar("automationFrequency") || postVar("frequency");
 var postAutomationStartDate = postVar("automationStartDate") || postVar("startDate");
@@ -3212,14 +3220,14 @@ if (postDeleteRequested != "1") {
         " Step 6 FAILED - missing campaign id for query/automation. campaignId=" +
         (postCampaignId || "none") +
         ".";
-    } else if (!postQueryKey || !postAutomationKey || !postStackName) {
+    } else if (!postQueryKey || !postAutomationKey || !postAutomationName) {
       postSuffix =
         " Step 6 FAILED - missing naming variables. queryKey=" +
         (postQueryKey || "none") +
         " automationKey=" +
         (postAutomationKey || "none") +
-        " name=" +
-        (postStackName || "none") +
+        " automationName=" +
+        (postAutomationName || "none") +
         ".";
     } else {
       var postProx = new Script.Util.WSProxy();
@@ -3263,7 +3271,7 @@ if (postDeleteRequested != "1") {
         var queryResult = postCreateQueryDefinition(
           postProx,
           postQueryKey,
-          postStackName,
+          postAutomationName,
           queryText,
           entryDe.customerKey,
           entryDe.name
@@ -3296,7 +3304,7 @@ if (postDeleteRequested != "1") {
             var autoResult = postCreateAutomation({
               token: postAccessToken,
               subdomain: postSubdomain,
-              automationName: postStackName,
+              automationName: postAutomationName,
               automationKey: postAutomationKey,
               queryObjectId: queryObjectId,
               frequency: postAutomationFrequency,
@@ -3318,7 +3326,7 @@ if (postDeleteRequested != "1") {
                 postSubdomain,
                 postProx,
                 {
-                  name: postStackName || postEventName,
+                  name: postAutomationName || postEventName,
                   eventKey: audienceEventKey,
                   dataExtensionId: deObjId,
                   dataExtensionName: entryDe.name,
@@ -4355,7 +4363,7 @@ IF @showForm == "false" AND @deleteAllRequested != "1" AND IndexOf(@resultText,"
  SET @analyticsJourneyType = @builderPageLabel
  SET @analyticsDeName = IIF(NOT Empty(@entryDeName), @entryDeName, IIF(NOT Empty(@deCustomerKey), @deCustomerKey, "N/A"))
  SET @analyticsDeId = IIF(NOT Empty(@deCustomerKey), @deCustomerKey, "N/A")
- SET @analyticsAutomationName = IIF(NOT Empty(@stackCampaignName), @stackCampaignName, IIF(NOT Empty(@journeyName), @journeyName, ""))
+ SET @analyticsAutomationName = IIF(NOT Empty(@automationName), @automationName, IIF(NOT Empty(@stackCampaignName), @stackCampaignName, ""))
  SET @analyticsAutomationGuid = IIF(NOT Empty(@automationId), @automationId, "")
  SET @analyticsAutomationCustomerKey = IIF(NOT Empty(@automationKey), @automationKey, "")
  SET @analyticsQueryKey = IIF(NOT Empty(@queryKey), @queryKey, "")
