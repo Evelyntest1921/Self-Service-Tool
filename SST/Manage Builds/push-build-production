@@ -1869,20 +1869,54 @@ function buildEmailReview(activities, senderCache) {
   return { count: emails.length, issues: issues, html: parts.join("") };
 }
 
+function lookupDeCustomerKeyByName(name) {
+  var deName = strTrim(name);
+  if (!deName || deName.toUpperCase() === "N/A") {
+    return "";
+  }
+  try {
+    var prox = new Script.Util.WSProxy();
+    var rde = prox.retrieve("DataExtension", ["CustomerKey"], {
+      Property: "Name",
+      SimpleOperator: "equals",
+      Value: deName
+    });
+    if (rde && rde.Results && rde.Results.length > 0 && rde.Results[0].CustomerKey) {
+      return strTrim(String(rde.Results[0].CustomerKey));
+    }
+  } catch (deLookupEx) {}
+  return "";
+}
+
 function countDeRows(customerKey, name) {
   var key = strTrim(customerKey);
   var deName = strTrim(name);
-  if (key && key.toUpperCase() !== "N/A") {
+  if (key.toUpperCase() === "N/A") {
+    key = "";
+  }
+  if (deName.toUpperCase() === "N/A") {
+    deName = "";
+  }
+  if (key) {
     try {
-      return { ok: true, count: toWholeNumber(Platform.Function.DataExtensionRowCount(key)) };
+      return {
+        ok: true,
+        count: toWholeNumber(Platform.Function.DataExtensionRowCount(key)),
+        customerKey: key
+      };
     } catch (keyCountEx) {}
   }
-  if (deName && deName.toUpperCase() !== "N/A") {
+  var lookedUp = lookupDeCustomerKeyByName(deName);
+  if (lookedUp && lookedUp !== key) {
     try {
-      return { ok: true, count: toWholeNumber(Platform.Function.DataExtensionRowCount(deName)) };
-    } catch (nameCountEx) {}
+      return {
+        ok: true,
+        count: toWholeNumber(Platform.Function.DataExtensionRowCount(lookedUp)),
+        customerKey: lookedUp
+      };
+    } catch (lookupCountEx) {}
   }
-  return { ok: false, count: 0 };
+  return { ok: false, count: 0, customerKey: key || lookedUp };
 }
 
 function loadEntryContext(sub, token, jObj) {
@@ -1919,6 +1953,9 @@ function loadEntryContext(sub, token, jObj) {
   var counted = countDeRows(ctx.deKey, ctx.deName);
   ctx.rowCountOk = counted.ok;
   ctx.rowCount = counted.count;
+  if (counted.customerKey) {
+    ctx.deKey = counted.customerKey;
+  }
   return ctx;
 }
 
