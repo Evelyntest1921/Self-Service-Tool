@@ -3814,12 +3814,18 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
   </div>
   <div id="journeyActionsPanel" class="detail-row-expand" hidden>
    <div class="detail-row-actions">
+%%[ IF Lowercase(@journeyBtnLabel) == "stop journey" THEN ]%%
     <form method="post" action="" style="margin:0" onsubmit="return confirm('%%=Replace(v(@journeyActionConfirm),'''','\\''')=%%');">
      <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
      <input type="hidden" name="postedJourneyId" value="%%=v(@jid)=%%">
-     <input type="hidden" name="journeyAction" value="%%=IIF(Lowercase(@journeyBtnLabel) == 'stop journey', 'stop', 'activate')=%%">
+     <input type="hidden" name="journeyAction" value="stop">
      <button type="submit" name="confirmJourneyAction" value="1" class="btn-no-radius btn-sm %%=v(@journeyBtnClass)=%%">%%=v(@journeyBtnLabel)=%%</button>
     </form>
+%%[ ELSEIF NOT Empty(@PUSH_PRODUCTION_URL) THEN ]%%
+    <a class="btn-no-radius btn-sm btn-activate" href="%%=Concat(@PUSH_PRODUCTION_URL,"?journeyId=",@jid)=%%">Activate</a>
+%%[ ELSE ]%%
+    <p class="schedule-note">Activation page URL is not configured. Add ss_push_production on bd_sst_page_navigation.</p>
+%%[ ENDIF ]%%
    </div>
   </div>
  </dd>
@@ -3840,47 +3846,12 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
   <div id="automationActionsPanel" class="detail-row-expand" hidden>
    <div class="detail-row-actions">
 %%[ IF @showAutomationActivate == "true" THEN ]%%
-    <form method="post" action="" class="automation-schedule-form" onsubmit="return confirm('%%=Replace(v(@automationActionConfirm),'''','\\''')=%%');">
-     <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
-     <input type="hidden" name="postedJourneyId" value="%%=v(@jid)=%%">
-     <input type="hidden" name="automationAction" value="activate">
-     <p class="schedule-note">Choose the schedule to activate. These values are sent in the SOAP Schedule request.</p>
-     <div class="schedule-grid">
-      <div class="schedule-field">
-       <label for="automationFrequency">Frequency</label>
-       <select id="automationFrequency" name="automationFrequency" class="schedule-control">
-        <option value="once" %%[ IF @automationFrequency == "once" THEN ]%%selected%%[ ENDIF ]%%>Once</option>
-        <option value="minute" %%[ IF @automationFrequency == "minute" THEN ]%%selected%%[ ENDIF ]%%>Minute</option>
-        <option value="hourly" %%[ IF @automationFrequency == "hourly" THEN ]%%selected%%[ ENDIF ]%%>Hourly</option>
-        <option value="daily" %%[ IF @automationFrequency == "daily" THEN ]%%selected%%[ ENDIF ]%%>Daily</option>
-        <option value="weekly" %%[ IF @automationFrequency == "weekly" THEN ]%%selected%%[ ENDIF ]%%>Weekly (Monday)</option>
-       </select>
-      </div>
-      <div class="schedule-field" id="automationMinuteIntervalWrap"%%[ IF @automationFrequency != "minute" THEN ]%% hidden%%[ ENDIF ]%%>
-       <label for="automationMinuteInterval">Every (minutes)</label>
-       <select id="automationMinuteInterval" name="automationMinuteInterval" class="schedule-control">
-        <option value="15" %%[ IF @automationMinuteInterval == "15" THEN ]%%selected%%[ ENDIF ]%%>15</option>
-        <option value="30" %%[ IF @automationMinuteInterval == "30" THEN ]%%selected%%[ ENDIF ]%%>30</option>
-        <option value="45" %%[ IF @automationMinuteInterval == "45" THEN ]%%selected%%[ ENDIF ]%%>45</option>
-       </select>
-      </div>
-      <div class="schedule-field">
-       <label for="automationStartDate">Start date (local)</label>
-       <input id="automationStartDate" type="datetime-local" class="schedule-control" name="automationStartDate" value="%%=v(@automationStartDate)=%%">
-      </div>
-      <div class="schedule-field">
-       <label for="automationStartOffset">UTC offset</label>
-       <input id="automationStartOffset" type="text" class="schedule-control" name="automationStartOffset" value="%%=v(@automationStartOffset)=%%" placeholder="-05:00">
-      </div>
-      <div class="schedule-field">
-       <label for="automationTimezoneId">Timezone ID</label>
-       <input id="automationTimezoneId" type="text" class="schedule-control" name="automationTimezoneId" value="%%=v(@automationTimezoneId)=%%" placeholder="1">
-      </div>
-     </div>
-     <div class="schedule-submit">
-      <button type="submit" name="confirmAutomationAction" value="1" class="btn-no-radius btn-activate btn-sm">Activate Schedule</button>
-     </div>
-    </form>
+%%[ IF NOT Empty(@PUSH_PRODUCTION_URL) THEN ]%%
+    <p class="schedule-note">The schedule is set and started on the Activate page, together with the journey.</p>
+    <a class="btn-no-radius btn-sm btn-activate" href="%%=Concat(@PUSH_PRODUCTION_URL,"?journeyId=",@jid)=%%">Activate</a>
+%%[ ELSE ]%%
+    <p class="schedule-note">Activation page URL is not configured. Add ss_push_production on bd_sst_page_navigation.</p>
+%%[ ENDIF ]%%
 %%[ ELSEIF @showAutomationPause == "true" THEN ]%%
     <form method="post" action="" class="automation-schedule-form" onsubmit="return confirm('Pause this automation schedule?');">
      <input type="hidden" name="journeyId" value="%%=v(@jid)=%%">
@@ -3936,11 +3907,11 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
 %%[ IF (NOT Empty(@dispDeId) AND @dispDeId != "N/A") OR (NOT Empty(@dispDeName) AND @dispDeName != "N/A") THEN ]%%
    <button type="button" class="btn btn-neutral" id="openEntryDeBtn" data-de-open-url="%%=Replace(Replace(v(@EDIT_DE_OPEN_URL),'"','&quot;'),'&','&amp;')=%%" data-journey-id="%%=Replace(Replace(v(@jid),'"','&quot;'),'&','&amp;')=%%" title="%%=Replace(Replace(IIF(NOT Empty(@dispDeName) AND @dispDeName != "N/A", @dispDeName, @dispDeId),'"','&quot;'),'&','&amp;')=%%">Open data extension</button>
 %%[ ENDIF ]%%
-%%[ IF @isStackBuild == "true" THEN ]%%
+%%[ IF @jidIsJbGuid == "true" THEN ]%%
 %%[ IF NOT Empty(@PUSH_PRODUCTION_URL) THEN ]%%
-   <a class="btn btn-push-prod" href="%%=Concat(@PUSH_PRODUCTION_URL,"?journeyId=",@jid)=%%">Push To Production</a>
+   <a class="btn btn-push-prod" href="%%=Concat(@PUSH_PRODUCTION_URL,"?journeyId=",@jid)=%%">Activate</a>
 %%[ ELSE ]%%
-   <button type="button" class="btn btn-push-prod" id="pushProdConfigBtn">Push To Production</button>
+   <button type="button" class="btn btn-push-prod" id="pushProdConfigBtn">Activate</button>
 %%[ ENDIF ]%%
 %%[ ENDIF ]%%
  </div>
@@ -4003,37 +3974,6 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
    pre.hidden = !show;
    btn.textContent = show ? "Hide query SQL" : "View query SQL";
   });
- }
- var scheduleFreq = document.getElementById("automationFrequency");
- var minuteWrap = document.getElementById("automationMinuteIntervalWrap");
- function syncMinuteIntervalField() {
-  if (!scheduleFreq || !minuteWrap) {
-   return;
-  }
-  minuteWrap.hidden = scheduleFreq.value !== "minute";
- }
- if (scheduleFreq) {
-  scheduleFreq.addEventListener("change", syncMinuteIntervalField);
-  syncMinuteIntervalField();
- }
- var scheduleStart = document.getElementById("automationStartDate");
- if (scheduleStart && !scheduleStart.value) {
-  var nextHour = new Date();
-  nextHour.setMinutes(0, 0, 0);
-  nextHour.setHours(nextHour.getHours() + 1);
-  function two(n) {
-   return n < 10 ? "0" + n : String(n);
-  }
-  scheduleStart.value =
-   nextHour.getFullYear() +
-   "-" +
-   two(nextHour.getMonth() + 1) +
-   "-" +
-   two(nextHour.getDate()) +
-   "T" +
-   two(nextHour.getHours()) +
-   ":" +
-   two(nextHour.getMinutes());
  }
  var expandBtns = document.querySelectorAll(".detail-expand-btn");
  var bi;
@@ -4169,7 +4109,7 @@ Something in the teardown chain blocked full removal — often the HTTP token sc
  }
  pushCfgBtn.addEventListener("click", function () {
   alert(
-   "Push page URL is not configured. Add text field ss_push_production on bd_sst_page_navigation with the published push-build-production Cloud Page URL."
+   "Activation page URL is not configured. Add text field ss_push_production on bd_sst_page_navigation with the published push-build-production Cloud Page URL."
   );
  });
 })();
