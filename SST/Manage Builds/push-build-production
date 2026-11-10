@@ -1888,35 +1888,194 @@ function lookupDeCustomerKeyByName(name) {
   return "";
 }
 
-function countDeRows(customerKey, name) {
-  var key = strTrim(customerKey);
-  var deName = strTrim(name);
-  if (key.toUpperCase() === "N/A") {
-    key = "";
+function usableDeKey(value) {
+  var key = strTrim(value);
+  if (!key || key.toUpperCase() === "N/A") {
+    return "";
   }
-  if (deName.toUpperCase() === "N/A") {
-    deName = "";
+  return key;
+}
+
+function rowCountMessage(err) {
+  var msg = "";
+  try {
+    msg = strTrim(err && (err.message || err.description) || "");
+  } catch (readEx) {}
+  if (!msg) {
+    try {
+      msg = strTrim(String(err));
+    } catch (stringEx) {}
   }
-  if (key) {
+  if (!msg || msg.indexOf("[object") === 0) {
+    return "DataExtensionRowCount failed.";
+  }
+  return clip(msg, 180);
+}
+
+function listFrom(value) {
+  if (!value) {
+    return [];
+  }
+  if (typeof value.length === "number") {
+    return value;
+  }
+  return [value];
+}
+
+function countRowsByProxy(customerKey) {
+  var key = usableDeKey(customerKey);
+  if (!key) {
+    return { ok: false, msg: "" };
+  }
+  try {
+    var prox = new Script.Util.WSProxy();
+    var described = prox.describe("DataExtensionObject[" + key + "]");
+    var fields = listFrom(described && (described.Results || described.results));
+    var fieldName = "";
+    var i;
+    for (i = 0; i < fields.length; i++) {
+      var candidate = strTrim(fields[i].Name || fields[i].name);
+      if (candidate && candidate.charAt(0) !== "_") {
+        fieldName = candidate;
+        break;
+      }
+    }
+    if (!fieldName && fields.length) {
+      fieldName = strTrim(fields[0].Name || fields[0].name);
+    }
+    if (!fieldName) {
+      return { ok: false, msg: "Could not read fields for " + key + "." };
+    }
+    var got = prox.retrieve("DataExtensionObject[" + key + "]", [fieldName]);
+    if (!got) {
+      return { ok: false, msg: "Row retrieve returned nothing for " + key + "." };
+    }
+    var status = strTrim(got.Status || got.status).toUpperCase();
+    if (status && status !== "OK" && status !== "MOREDATA") {
+      var faults = listFrom(got.Results || got.results);
+      var detail = faults.length ? strTrim(faults[0].StatusMessage || faults[0].ErrorMessage) : "";
+      return { ok: false, msg: detail || status };
+    }
+    var rows = listFrom(got.Results || got.results);
+    var more = got.HasMoreRows === true || strTrim(got.HasMoreRows).toLowerCase() === "true" || status === "MOREDATA";
+    return { ok: true, count: rows.length, capped: more, customerKey: key, msg: "" };
+  } catch (proxyCountEx) {
+    return { ok: false, msg: rowCountMessage(proxyCountEx) };
+  }
+}
+
+function countRowsByRest(sub, token, customerKey) {
+  var key = usableDeKey(customerKey);
+  if (!sub || !token || !key) {
+    return { ok: false, msg: "" };
+  }
+  var url =
+    restBase(sub) +
+    "data/v1/customobjectdata/key/" +
+    encodeURIComponent(key) +
+    "/rowset?$page=1&$pageSize=2500";
+  var resp = journeyHttpJson(token, "GET", url, null);
+  if (resp.status != 200 && resp.status != 201) {
+    return {
+      ok: false,
+      msg: "Row count HTTP " + resp.status + (resp.body ? " " + clip(resp.body, 120) : "")
+    };
+  }
+  var obj = parseJsonSafe(resp.body);
+  if (!obj) {
+    return { ok: false, msg: "Row count response was not JSON." };
+  }
+  var items = listFrom(obj.items);
+  var reported = toWholeNumber(obj.count);
+  var count = reported > items.length ? reported : items.length;
+  var capped = count >= 2500 && ((obj.links && obj.links.next) || items.length >= 2500);
+  return { ok: true, count: count, capped: capped, customerKey: key, msg: "" };
+}
+
+function countDeRows(customerKey, name, alternateKey, sub, token) {
+  var lastMsg = "";
+  var tried = [];
+  function alreadyTried(key) {
+    var i;
+    for (i = 0; i < tried.length; i++) {
+      if (tried[i] === key) {
+        return true;
+      }
+    }
+    return false;
+  }
+  function tryPlatform(value) {
+    var key = usableDeKey(value);
+    if (!key || alreadyTried(key)) {
+      return null;
+    }
+    tried.push(key);
     try {
       return {
         ok: true,
-        count: toWholeNumber(Platform.Function.DataExtensionRowCount(key)),
-        customerKey: key
+        count: toWholeNumber(Platform.Function.DataExtensionRowCount(String(key))),
+        customerKey: key,
+        capped: false,
+        msg: ""
       };
-    } catch (keyCountEx) {}
+    } catch (platformCountEx) {
+      lastMsg = rowCountMessage(platformCountEx);
+      return null;
+    }
   }
+  var found = tryPlatform(customerKey);
+  if (found) {
+    return found;
+  }
+  found = tryPlatform(alternateKey);
+  if (found) {
+    return found;
+  }
+  var deName = usableDeKey(name);
   var lookedUp = lookupDeCustomerKeyByName(deName);
-  if (lookedUp && lookedUp !== key) {
+  found = tryPlatform(lookedUp);
+  if (found) {
+    return found;
+  }
+  if (deName && deName !== usableDeKey(customerKey) && deName !== usableDeKey(alternateKey) && deName !== lookedUp) {
     try {
       return {
         ok: true,
-        count: toWholeNumber(Platform.Function.DataExtensionRowCount(lookedUp)),
-        customerKey: lookedUp
+        count: toWholeNumber(Platform.Function.DataExtensionRowCount(String(deName))),
+        customerKey: lookedUp || usableDeKey(customerKey) || usableDeKey(alternateKey),
+        capped: false,
+        msg: ""
       };
-    } catch (lookupCountEx) {}
+    } catch (nameCountEx) {
+      lastMsg = rowCountMessage(nameCountEx);
+    }
   }
-  return { ok: false, count: 0, customerKey: key || lookedUp };
+  var i;
+  for (i = 0; i < tried.length; i++) {
+    var proxied = countRowsByProxy(tried[i]);
+    if (proxied.ok) {
+      return proxied;
+    }
+    if (proxied.msg) {
+      lastMsg = proxied.msg;
+    }
+  }
+  for (i = 0; i < tried.length; i++) {
+    var rested = countRowsByRest(sub, token, tried[i]);
+    if (rested.ok) {
+      return rested;
+    }
+    if (rested.msg) {
+      lastMsg = rested.msg;
+    }
+  }
+  return {
+    ok: false,
+    count: 0,
+    customerKey: usableDeKey(customerKey) || lookedUp || usableDeKey(alternateKey),
+    capped: false,
+    msg: lastMsg
+  };
 }
 
 function loadEntryContext(sub, token, jObj) {
@@ -1927,7 +2086,9 @@ function loadEntryContext(sub, token, jObj) {
     deName: "",
     deKey: "",
     rowCountOk: false,
-    rowCount: 0
+    rowCount: 0,
+    rowCountCapped: false,
+    countError: ""
   };
   var ref = findEntryEventRef(jObj);
   if (!ref || !ref.eventDefId) {
@@ -1948,11 +2109,19 @@ function loadEntryContext(sub, token, jObj) {
     return ctx;
   }
   var live = resolveLiveEntryDeFromEvent(evObj);
-  ctx.deName = live.name;
-  ctx.deKey = live.customerKey;
-  var counted = countDeRows(ctx.deKey, ctx.deName);
+  ctx.deName = live.name || pageVar("logDeName");
+  if (ctx.deName.toUpperCase() === "N/A") {
+    ctx.deName = live.name;
+  }
+  ctx.deKey = live.customerKey || pageVar("logDeId");
+  if (ctx.deKey.toUpperCase() === "N/A") {
+    ctx.deKey = live.customerKey;
+  }
+  var counted = countDeRows(live.customerKey, ctx.deName, pageVar("logDeId"), sub, token);
   ctx.rowCountOk = counted.ok;
   ctx.rowCount = counted.count;
+  ctx.rowCountCapped = !!counted.capped;
+  ctx.countError = counted.msg || "";
   if (counted.customerKey) {
     ctx.deKey = counted.customerKey;
   }
@@ -2355,11 +2524,13 @@ function actionAudience(sub, token, jid, clearRequested) {
       return { ok: false, msg: "Could not clear the data extension. " + cleared.msg };
     }
   }
-  var counted = countDeRows(entry.deKey, entry.deName);
+  var counted = countDeRows(entry.deKey, entry.deName, pageVar("logDeId"), sub, token);
   return {
     ok: true,
     rowCountOk: counted.ok,
     rowCount: counted.count,
+    rowCountCapped: !!counted.capped,
+    countError: counted.msg || "",
     msg: clearRequested ? "Data extension cleared." : ""
   };
 }
@@ -2435,6 +2606,8 @@ function buildPageView(sub, token, jid) {
       deName: entry.deName || entry.deKey,
       rowCountOk: entry.rowCountOk,
       rowCount: entry.rowCount,
+      rowCountCapped: entry.rowCountCapped,
+      countError: entry.countError,
       canClear: isStack && entry.isDe && entry.deKey !== ""
     },
     automation: automation,
@@ -2890,6 +3063,10 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
   function plural(n, one, many) {
     return n + " " + (n === 1 ? one : many);
   }
+  function contactPhrase(a, one, many) {
+    var text = plural(a.rowCount, one, many);
+    return a.rowCountCapped ? "At least " + text : text;
+  }
   function stepName(index) {
     return panels[index] ? panels[index].getAttribute("data-step") : "";
   }
@@ -2974,7 +3151,7 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
       return "Not a data extension audience";
     }
     var text = (a.deName || "Entry data extension") + ", ";
-    text += a.rowCountOk ? plural(a.rowCount, "contact", "contacts") + " in it now" : "contact count unknown";
+    text += a.rowCountOk ? contactPhrase(a, "contact", "contacts") + " in it now" : "contact count unknown";
     if (a.mode === "all") {
       return text + ". All contacts are evaluated every run.";
     }
@@ -2992,7 +3169,7 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
     var showClear = false;
     var ackText = "";
     byId("audDeName").textContent = !a.found ? "Unknown" : a.isDe ? a.deName || "Unknown" : "Not a data extension audience";
-    byId("audRowCount").textContent = !a.found ? "Unknown" : !a.isDe ? "Not applicable" : a.rowCountOk ? String(a.rowCount) : "Could not count";
+    byId("audRowCount").textContent = !a.found ? "Unknown" : !a.isDe ? "Not applicable" : a.rowCountOk ? (a.rowCountCapped ? "At least " + a.rowCount : String(a.rowCount)) : "Could not count";
     byId("audMode").textContent = !a.found ? "Unknown" : a.mode === "all" ? "All contacts, every run" : "New contacts only";
     if (!a.found) {
       kind = "warn";
@@ -3011,16 +3188,16 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
       showClear = a.canClear;
       html =
         "<strong>" +
-        plural(a.rowCount, "contact is", "contacts are") +
+        contactPhrase(a, "contact is", "contacts are") +
         " already in this data extension and will not be sent.</strong> This journey only admits contacts added after it is activated. ";
       html += a.canClear
         ? "If they have not received these emails yet, clear the data extension: the automation adds them back on its next run and they enter as new contacts. If they already went through this journey, continue without clearing so they are not sent again."
         : "To send to them, remove them from the data extension and add them again after the journey is active. Clearing is not offered here because nothing would add them back automatically.";
-      ackText = "Continue without clearing. I understand the " + plural(a.rowCount, "contact", "contacts") + " already in the data extension will not be sent.";
+      ackText = "Continue without clearing. I understand the " + contactPhrase(a, "contact", "contacts") + " already in the data extension will not be sent.";
     } else {
       kind = "warn";
       showActions = true;
-      html = "The contacts in this data extension could not be counted. This journey only admits contacts added after it is activated, so anything already in the data extension will not be sent.";
+      html = "The contacts in this data extension could not be counted" + (a.countError ? " (" + esc(a.countError) + ")" : "") + ". This journey only admits contacts added after it is activated, so anything already in the data extension will not be sent.";
       ackText = "I have checked the data extension and want to continue.";
     }
     status.className = "banner " + kind;
@@ -3051,6 +3228,8 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
       }
       D.audience.rowCountOk = !!res.rowCountOk;
       D.audience.rowCount = res.rowCount || 0;
+      D.audience.rowCountCapped = !!res.rowCountCapped;
+      D.audience.countError = res.countError || "";
       byId("audAck").checked = false;
       renderAudience();
       msg = byId("audActionMsg");
