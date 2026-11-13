@@ -80,7 +80,7 @@ ELSE
  ELSE
   SET @detailRow = Row(@detailRows,1)
   SET @dispName = Trim(Field(@detailRow,"journeyName"))
-  IF Empty(@postedAlertEmail) THEN
+  IF Empty(@postedAlertEmail) AND Empty(@actAction) THEN
    SET @alertEmail = Trim(Field(@detailRow,"alertEmail"))
   ENDIF
   SET @dispType = Trim(Field(@detailRow,"journeyType"))
@@ -2501,7 +2501,7 @@ function actionStartAutomation(sub, token, jid) {
 
 function actionSaveAlertEmail(jid) {
   var email = strTrim(Platform.Variable.GetValue("@alertEmail") || "");
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return { ok: false, msg: "Enter a valid alert email address." };
   }
   try {
@@ -3033,8 +3033,12 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 
 <section class="panel act-panel" data-step="alert-email" data-title="Alert email" hidden>
  <h2 class="panel-title">Alert email</h2>
- <p class="flow-hint">We’ll use this address to notify you if a journey fails and when it succeeds.</p>
- <div class="schedule-field" style="max-width:520px; margin-bottom: 10px;">
+ <p class="flow-hint">Would you like to be alerted if a journey fails or succeeds?</p>
+ <div class="act-callout-actions" style="margin-top:0; margin-bottom:16px">
+  <button type="button" class="btn-sst-outline" id="actAlertYes">Yes</button>
+  <button type="button" class="btn-sst-outline" id="actAlertNo">No</button>
+ </div>
+ <div class="schedule-field" id="actAlertEmailWrap" style="max-width:520px; margin-bottom: 10px;" hidden>
   <label for="actAlertEmail">Email address</label>
   <input id="actAlertEmail" type="email" class="schedule-control" autocomplete="email" placeholder="you@magmutual.com">
  </div>
@@ -3105,6 +3109,7 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
   var busy = false;
   var run = { queue: null, index: 0, statusId: "", done: false };
   var lastScheduleText = "";
+  var alertChoice = D.alertEmail ? "yes" : "";
 
   function byId(id) {
     return document.getElementById(id);
@@ -3375,8 +3380,20 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
     return String(byId("actAlertEmail").value || "").trim();
   }
   function alertEmailGate() {
+    if (!alertChoice) {
+      return "Choose Yes or No to continue.";
+    }
+    if (alertChoice === "no") {
+      return "";
+    }
     var email = alertEmailValue();
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? "" : "Enter a valid alert email address.";
+  }
+  function syncAlertChoice() {
+    byId("actAlertEmailWrap").hidden = alertChoice !== "yes";
+    byId("actAlertYes").className = alertChoice === "yes" ? "btn-sst-black" : "btn-sst-outline";
+    byId("actAlertNo").className = alertChoice === "no" ? "btn-sst-black" : "btn-sst-outline";
+    updateNav();
   }
   function describeSchedule() {
     if (D.automation.active) {
@@ -3587,7 +3604,7 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
     if (D.isStack) {
       rows.push(["Schedule", describeSchedule()]);
     }
-    rows.push(["Alert email", alertEmailValue()]);
+    rows.push(["Alerts", alertChoice === "yes" ? alertEmailValue() : "No alert email"]);
     var html = "";
     var i;
     for (i = 0; i < rows.length; i++) {
@@ -3863,6 +3880,16 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
   });
   byId("actAlertEmail").value = D.alertEmail || "";
   byId("actAlertEmail").addEventListener("input", updateNav);
+  byId("actAlertYes").addEventListener("click", function () {
+    alertChoice = "yes";
+    syncAlertChoice();
+  });
+  byId("actAlertNo").addEventListener("click", function () {
+    alertChoice = "no";
+    byId("actAlertEmail").value = "";
+    syncAlertChoice();
+  });
+  syncAlertChoice();
   byId("actScheduleBtn").addEventListener("click", function () {
     if (!busy) {
       show(stepIndex("schedule"));
