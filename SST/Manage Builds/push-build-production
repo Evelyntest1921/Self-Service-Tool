@@ -1818,7 +1818,37 @@ function soapFaultText(body) {
   return clip(text, 200);
 }
 
-function buildEmailReview(activities, senderCache) {
+function contentBuilderSubject(assetId, sub, token) {
+  var id = parseInt(strTrim(assetId), 10);
+  if (isNaN(id) || !sub || !token) {
+    return "";
+  }
+  try {
+    var req = new Script.Util.HttpRequest(
+      "https://" + sub + ".rest.marketingcloudapis.com/asset/v1/content/assets/" + id
+    );
+    req.emptyContentHandling = 0;
+    req.retries = 1;
+    req.continueOnError = true;
+    req.setHeader("Authorization", "Bearer " + token);
+    req.method = "GET";
+    req.contentType = "application/json";
+    var resp = req.send();
+    if (resp.statusCode != 200 || !resp.content) {
+      return "";
+    }
+    var asset = Platform.Function.ParseJSON(String(resp.content));
+    return strTrim(
+      asset && asset.views && asset.views.subjectline
+        ? asset.views.subjectline.content
+        : ""
+    );
+  } catch (subjectEx) {
+    return "";
+  }
+}
+
+function buildEmailReview(activities, senderCache, sub, token) {
   var list = coerceActivityList(activities);
   var emails = [];
   var i;
@@ -1844,7 +1874,10 @@ function buildEmailReview(activities, senderCache) {
     var email = emails[i];
     var ts =
       (email.configurationArguments && email.configurationArguments.triggeredSend) || {};
-    var subject = strTrim(ts.emailSubject || ts.dynamicEmailSubject || "");
+    var subject = contentBuilderSubject(ts.emailId, sub, token);
+    if (!subject) {
+      subject = strTrim(ts.emailSubject || ts.dynamicEmailSubject || "");
+    }
     var profileId = strTrim(ts.senderProfileId);
     var classificationId = strTrim(ts.sendClassificationId);
     var sender = "";
@@ -2616,7 +2649,12 @@ function buildPageView(sub, token, jid) {
   var journeyVersion =
     jObj.version !== undefined && jObj.version !== null ? String(jObj.version) : "";
   var activities = coerceActivityList(jObj.activities);
-  var emailReview = buildEmailReview(activities, buildSenderProfileLookupCache(activities));
+  var emailReview = buildEmailReview(
+    activities,
+    buildSenderProfileLookupCache(activities),
+    sub,
+    token
+  );
   var flowHtml = buildFlowGraphHtml(findFlowStartActivity(activities, jObj), activities);
   var entry = loadEntryContext(sub, token, jObj);
   var automation = { found: false, msg: "", name: "", statusLabel: "", active: false, running: false };
