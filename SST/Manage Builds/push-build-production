@@ -2,7 +2,7 @@
 VAR @HOME_URL, @BUILD_PAGE_SELF, @JOURNEY_VIEW_URL, @AUTOMATION_VIEW_URL, @PERFORMANCE_URL
 VAR @navRows, @navRow, @detailRows, @detailRow
 VAR @jid, @dispName, @dispType, @dispSurveyId, @isSurveyBuild, @isStackBuild, @STACK_JOURNEY_TYPE
-VAR @automationGuid, @automationCustomerKey, @automationName, @journeyAutomationId, @logDeName, @logDeId
+VAR @automationGuid, @automationCustomerKey, @automationName, @journeyAutomationId, @logDeName, @logDeId, @campaignId, @campaignName, @campaignLookup
 VAR @pageStatus, @loadError, @buildNavContext, @buildNavActive, @editSidebarHtml
 VAR @authRow, @authR, @clientId, @clientSecret, @accountId, @subdomain, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader, @authPending
 VAR @actAction, @actJson, @actStatusId, @alertEmail, @postedAlertEmail
@@ -57,6 +57,8 @@ SET @flowHtml = ""
 SET @pageDataJson = "null"
 SET @logJourneyStatus = ""
 SET @logAutomationStatus = ""
+SET @campaignId = ""
+SET @campaignName = ""
 SET @editSidebarHtml = ""
 
 SET @navRows = LookupRows("bd_sst_page_navigation","type","cloudpage")
@@ -100,6 +102,16 @@ ELSE
   ENDIF
   SET @logDeName = Trim(Field(@detailRow,"deName"))
   SET @logDeId = Trim(Field(@detailRow,"deId"))
+  SET @campaignId = Trim(Field(@detailRow,"campaignId"))
+  IF NOT Empty(@campaignId) THEN
+   SET @campaignLookup = RetrieveSalesforceObjects("Campaign","Name","Id","=",@campaignId)
+   IF RowCount(@campaignLookup) > 0 THEN
+    SET @campaignName = Trim(Field(Row(@campaignLookup,1),"Name"))
+   ENDIF
+   IF Empty(@campaignName) THEN
+    SET @campaignName = Concat("Campaign ",@campaignId)
+   ENDIF
+  ENDIF
   SET @authRow = LookupRows("SFMC_AUTH","User","Admin")
   IF RowCount(@authRow) > 0 THEN
    SET @authR = Row(@authRow,1)
@@ -2639,7 +2651,11 @@ function buildPageView(sub, token, jid) {
       rowCount: entry.rowCount,
       rowCountCapped: entry.rowCountCapped,
       countError: entry.countError,
-      canClear: isStack && entry.isDe && entry.deKey !== ""
+      canClear: isStack && entry.isDe && entry.deKey !== "",
+      campaignSource: pageVar("campaignId") ? {
+        id: pageVar("campaignId"),
+        name: pageVar("campaignName")
+      } : null
     },
     automation: automation,
     schedule: schedule,
@@ -2928,6 +2944,8 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
  <p class="flow-hint">Contacts enter this journey from the data extension below.</p>
  <dl class="act-facts">
   <dt>Entry data extension</dt><dd id="audDeName"></dd>
+  <dt id="audCampaignNameLabel" hidden>Campaign</dt><dd id="audCampaignName" hidden></dd>
+  <dt id="audCampaignIdLabel" hidden>Campaign ID</dt><dd id="audCampaignId" hidden></dd>
   <dt>Contacts in it now</dt><dd id="audRowCount"></dd>
   <dt>Who enters the journey</dt><dd id="audMode"></dd>
  </dl>
@@ -3230,6 +3248,14 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
     var showClear = false;
     var ackText = "";
     byId("audDeName").textContent = !a.found ? "Unknown" : a.isDe ? a.deName || "Unknown" : "Not a data extension audience";
+    var campaign = a.campaignSource;
+    var showCampaign = !!(campaign && campaign.id);
+    byId("audCampaignNameLabel").hidden = !showCampaign;
+    byId("audCampaignName").hidden = !showCampaign;
+    byId("audCampaignIdLabel").hidden = !showCampaign;
+    byId("audCampaignId").hidden = !showCampaign;
+    byId("audCampaignName").textContent = showCampaign ? campaign.name || "Unknown" : "";
+    byId("audCampaignId").textContent = showCampaign ? campaign.id : "";
     byId("audRowCount").textContent = !a.found ? "Unknown" : !a.isDe ? "Not applicable" : a.rowCountOk ? (a.rowCountCapped ? "At least " + a.rowCount : String(a.rowCount)) : "Could not count";
     byId("audMode").textContent = !a.found ? "Unknown" : a.mode === "all" ? "All contacts, every run" : "New contacts only";
     if (!a.found) {
