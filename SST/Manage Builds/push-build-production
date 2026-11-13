@@ -5,7 +5,7 @@ VAR @jid, @dispName, @dispType, @dispSurveyId, @isSurveyBuild, @isStackBuild, @S
 VAR @automationGuid, @automationCustomerKey, @automationName, @journeyAutomationId, @logDeName, @logDeId
 VAR @pageStatus, @loadError, @buildNavContext, @buildNavActive, @editSidebarHtml
 VAR @authRow, @authR, @clientId, @clientSecret, @accountId, @subdomain, @authUrl, @authPayload, @authStatus, @authResponse, @authResponseHeader, @authPending
-VAR @actAction, @actJson, @actStatusId
+VAR @actAction, @actJson, @actStatusId, @alertEmail, @postedAlertEmail
 VAR @schedFreq, @schedStart, @schedMinute, @schedInterval, @schedWeekdays, @schedEnd, @schedEndDate, @schedOccurrences
 VAR @emailsHtml, @flowHtml, @pageDataJson
 VAR @logJourneyStatus, @logAutomationStatus
@@ -23,6 +23,8 @@ IF Empty(@jid) THEN
 ENDIF
 SET @actAction = Lowercase(Trim(RequestParameter("activationAction")))
 SET @actStatusId = Trim(RequestParameter("publishStatusId"))
+SET @postedAlertEmail = Trim(RequestParameter("alertEmail"))
+SET @alertEmail = @postedAlertEmail
 SET @actJson = ""
 SET @schedFreq = Trim(RequestParameter("automationFrequency"))
 SET @schedStart = Trim(RequestParameter("automationStartDate"))
@@ -78,6 +80,9 @@ ELSE
  ELSE
   SET @detailRow = Row(@detailRows,1)
   SET @dispName = Trim(Field(@detailRow,"journeyName"))
+  IF Empty(@postedAlertEmail) THEN
+   SET @alertEmail = Trim(Field(@detailRow,"alertEmail"))
+  ENDIF
   SET @dispType = Trim(Field(@detailRow,"journeyType"))
   SET @dispSurveyId = Trim(Field(@detailRow,"surveyId"))
   IF IndexOf(@dispType,"Survey") > 0 THEN
@@ -2494,6 +2499,25 @@ function actionStartAutomation(sub, token, jid) {
   return { ok: true, msg: "Automation schedule is active." };
 }
 
+function actionSaveAlertEmail(jid) {
+  var email = strTrim(Platform.Variable.GetValue("@alertEmail") || "");
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { ok: false, msg: "Enter a valid alert email address." };
+  }
+  try {
+    Platform.Function.UpsertData(
+      "Bd_journey_analytics",
+      ["journeyId"],
+      [strTrim(jid)],
+      ["alertEmail", "updateDate"],
+      [email.substring(0, 254), new Date()]
+    );
+    return { ok: true, msg: "Alert email saved." };
+  } catch (emailEx) {
+    return { ok: false, msg: "Could not save the alert email: " + (emailEx.message || String(emailEx)) };
+  }
+}
+
 function actionAudience(sub, token, jid, clearRequested) {
   var got = getJourneyObject(sub, token, jid);
   if (!got.ok) {
@@ -2541,6 +2565,12 @@ function runAction(action, sub, token, jid) {
   }
   if (action === "recount") {
     return actionAudience(sub, token, jid, false);
+  }
+  if (action === "savealertemail") {
+    if (!requestMethodIsPost()) {
+      return { ok: false, msg: "This action must be sent as a POST request." };
+    }
+    return actionSaveAlertEmail(jid);
   }
   if (!requestMethodIsPost()) {
     return { ok: false, msg: "This action must be sent as a POST request." };
@@ -2598,6 +2628,7 @@ function buildPageView(sub, token, jid) {
     journeyRunning: journeyStatusIsRunning(journeyStatus),
     journeyStopped: journeyStatus.toLowerCase() === "stopped",
     isStack: isStack,
+    alertEmail: pageVar("alertEmail"),
     emails: { count: emailReview.count, issues: emailReview.issues },
     audience: {
       found: entry.found,
@@ -3000,6 +3031,21 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
 </section>
 %%[ ENDIF ]%%
 
+<section class="panel act-panel" data-step="alert-email" data-title="Alert email" hidden>
+ <h2 class="panel-title">Alert email</h2>
+ <p class="flow-hint">We’ll use this address to notify you if activation fails or when the build succeeds.</p>
+ <div class="schedule-field" style="max-width:520px">
+  <label for="actAlertEmail">Email address</label>
+  <input id="actAlertEmail" type="email" class="schedule-control" autocomplete="email" placeholder="you@example.com">
+ </div>
+ <div class="banner bad act-gate-msg" hidden></div>
+ <div class="act-nav">
+  <button type="button" class="btn-sst-outline" data-act-back>Back</button>
+  <span class="act-nav-spacer"></span>
+  <button type="button" class="btn-sst-black" data-act-next>Email is correct</button>
+ </div>
+</section>
+
 <section class="panel act-panel" data-step="activate" data-title="Activate" hidden>
  <h2 class="panel-title">Activate</h2>
  <p class="flow-hint">Review what you confirmed.</p>
@@ -3045,6 +3091,7 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
   var DAY_NAMES = { sun: "Sun", mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat" };
   var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   var STEP_LABELS = {
+    saveAlertEmail: "Save the alert email",
     saveSchedule: "Save the automation schedule",
     publish: "Publish the journey",
     wait: "Wait until the journey is running",
@@ -3324,6 +3371,13 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
     }
     return "";
   }
+  function alertEmailValue() {
+    return String(byId("actAlertEmail").value || "").trim();
+  }
+  function alertEmailGate() {
+    var email = alertEmailValue();
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? "" : "Enter a valid alert email address.";
+  }
   function describeSchedule() {
     if (D.automation.active) {
       return "Automation schedule is already active.";
@@ -3437,6 +3491,9 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
     if (name === "schedule") {
       return scheduleGate();
     }
+    if (name === "alert-email") {
+      return alertEmailGate();
+    }
     return "";
   }
   function firstBlockedStep() {
@@ -3510,6 +3567,7 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
   function buildQueue() {
     var queue = [];
     var needsAutomation = D.isStack && !D.automation.active;
+    queue.push("saveAlertEmail");
     if (needsAutomation && !D.journeyRunning) {
       queue.push("saveSchedule");
     }
@@ -3529,6 +3587,7 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
     if (D.isStack) {
       rows.push(["Schedule", describeSchedule()]);
     }
+    rows.push(["Alert email", alertEmailValue()]);
     var html = "";
     var i;
     for (i = 0; i < rows.length; i++) {
@@ -3635,6 +3694,9 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
     });
   }
   function runStep(id) {
+    if (id === "saveAlertEmail") {
+      return api("saveAlertEmail", { alertEmail: alertEmailValue() });
+    }
     if (id === "saveSchedule") {
       return api("saveSchedule", scheduleParams());
     }
@@ -3799,6 +3861,8 @@ h1{font-size:1.65rem;margin-bottom:8px;font-weight:700}
       startRun();
     }
   });
+  byId("actAlertEmail").value = D.alertEmail || "";
+  byId("actAlertEmail").addEventListener("input", updateNav);
   byId("actScheduleBtn").addEventListener("click", function () {
     if (!busy) {
       show(stepIndex("schedule"));
