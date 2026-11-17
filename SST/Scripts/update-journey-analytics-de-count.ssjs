@@ -153,9 +153,12 @@ function processRow(row) {
         throw new Error("Cannot resolve entry DE in this business unit");
     }
     var source = deResult.Results[0];
-    // DataExtensionRowCount accepts the source DE name directly in SSJS.
+    // Use the external key first. Names can resolve through a different
+    // security context and trigger the "security descriptor" runtime error.
     currentStage = "entry DE row count";
-    var count = Number(Platform.Function.DataExtensionRowCount(source.Name));
+    var count = Number(Platform.Function.DataExtensionRowCount(
+        source.CustomerKey || source.Name
+    ));
     if (isNaN(count) || count < 0 || Math.floor(count) !== count) {
         throw new Error("Invalid source DE row count");
     }
