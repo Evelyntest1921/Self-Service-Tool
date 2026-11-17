@@ -102,6 +102,23 @@ function getDataExtensionRowCount(customerKey) {
     return Number(result.count);
 }
 
+function getJourney(value, version) {
+    var encoded = encodeURIComponent(String(value));
+    var isGuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value));
+    var direct = "/interaction/v1/interactions/" +
+        (isGuid ? encoded : "key:" + encoded);
+    if (version) direct += "?versionNumber=" + encodeURIComponent(version);
+    try {
+        return getRest(direct);
+    } catch (directErr) {
+        // Some analytics tables store DefinitionID rather than the version ID.
+        var collection = getRest("/interaction/v1/interactions?definitionId=" + encoded);
+        var items = collection.items || collection.Results || collection.results || [];
+        if (!items.length) throw directErr;
+        return items[0].definition || items[0];
+    }
+}
+
 function logError(row, err) {
     try {
         var logRow = {};
@@ -133,16 +150,7 @@ function processRow(row) {
     // Capture refresh start, so modifications during processing remain eligible.
     var refreshStarted = Platform.Function.Now();
     currentStage = "journey API";
-    var journeyValue = String(row[CFG.journeyId]);
-    // Journey API accepts a version GUID as an ID, or a journey key only when
-    // prefixed with key:. This supports either value stored in the analytics DE.
-    var isGuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(journeyValue);
-    var path = "/interaction/v1/interactions/" +
-        (isGuid ? encodeURIComponent(journeyValue) : "key:" + encodeURIComponent(journeyValue));
-    if (CFG.version && !empty(row[CFG.version])) {
-        path += "?versionNumber=" + encodeURIComponent(row[CFG.version]);
-    }
-    var journey = getRest(path);
+    var journey = getJourney(row[CFG.journeyId], CFG.version && row[CFG.version]);
     var triggers = journey.triggers || [];
     if (triggers.length !== 1) throw new Error("Expected one entry trigger");
     var trigger = triggers[0];
