@@ -119,6 +119,19 @@ function getJourney(value, version) {
     }
 }
 
+function findEventDefinition(node) {
+    if (!node || typeof node !== "object") return null;
+    var id = node.eventDefinitionId || node.EventDefinitionId || node.definitionId;
+    var key = node.eventDefinitionKey || node.EventDefinitionKey;
+    if (id || key) return { id: id || "", key: key || "" };
+    for (var name in node) {
+        if (!node.hasOwnProperty(name)) continue;
+        var found = findEventDefinition(node[name]);
+        if (found) return found;
+    }
+    return null;
+}
+
 function logError(row, err) {
     try {
         var logRow = {};
@@ -151,23 +164,9 @@ function processRow(row) {
     var refreshStarted = Platform.Function.Now();
     currentStage = "journey API";
     var journey = getJourney(row[CFG.journeyId], CFG.version && row[CFG.version]);
-    var triggers = journey.triggers || [];
-    var trigger = null;
-    var eventId = "";
-    var eventKey = "";
-    for (var t = 0; t < triggers.length; t++) {
-        var candidate = triggers[t] || {};
-        var candidateMeta = candidate.metaData || {};
-        var candidateArgs = candidate.arguments || {};
-        var candidateId = candidateMeta.eventDefinitionId || candidateArgs.eventDefinitionId;
-        var candidateKey = candidateMeta.eventDefinitionKey || candidateArgs.eventDefinitionKey;
-        if (candidateId || candidateKey) {
-            trigger = candidate;
-            eventId = candidateId || "";
-            eventKey = candidateKey || "";
-            break;
-        }
-    }
+    var event = findEventDefinition(journey);
+    var eventId = event ? event.id : "";
+    var eventKey = event ? event.key : "";
     if (!eventId && !eventKey) throw new Error("Entry trigger has no event definition");
 
     var eventPath = "/interaction/v1/eventDefinitions/" +
