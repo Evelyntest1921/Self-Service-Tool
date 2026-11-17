@@ -2,17 +2,15 @@
 Platform.Load("Core", "1");
 
 /* Automation Studio Script Activity. Run in the DE's business unit.
- * Replace placeholders below. Store credentials securely for production.
+ * Credentials are read from SFMC_AUTH, User = Admin, matching stack-de-test.
  * Required package scopes: Journeys Read and Data Extensions Read/Write.
  * deModifiedDate means LAST SUCCESSFUL COUNT REFRESH in this script.
  * It does NOT mean the source DE's metadata ModifiedDate.
  */
 var CFG = {
     analyticsKey: "REPLACE_WITH_BD_JOURNEY_ANALYTICS_EXTERNAL_KEY",
-    authBase: "https://YOUR_SUBDOMAIN.auth.marketingcloudapis.com",
-    clientId: "REPLACE_WITH_CLIENT_ID",
-    clientSecret: "REPLACE_WITH_CLIENT_SECRET",
-    mid: "REPLACE_WITH_BUSINESS_UNIT_MID",
+    authDEKey: "SFMC_AUTH",
+    authUser: "Admin",
     journeyId: "journeyId",
     journeyModified: "journeyModifiedDate",
     refreshed: "deModifiedDate",
@@ -53,12 +51,24 @@ function jsonRequest(method, url, payload, bearer) {
 
 function getRest(path) {
     if (!token || new Date().getTime() >= tokenUntil) {
-        var auth = jsonRequest("POST", CFG.authBase + "/v2/token", {
+        var authRows = DataExtension.Init(CFG.authDEKey).Rows.Lookup(["User"], [CFG.authUser]);
+        if (!authRows || authRows.length < 1) throw new Error("No SFMC_AUTH Admin row");
+        var authRow = authRows[0];
+        var clientId = String(authRow.clientId || "");
+        var clientSecret = String(authRow.clientSecret || "");
+        var subdomain = String(authRow.subdomain || "");
+        var mid = String(authRow.accountId || "");
+        if (!clientId || !clientSecret || !subdomain) {
+            throw new Error("Missing SFMC_AUTH credentials");
+        }
+        var authBase = "https://" + subdomain + ".auth.marketingcloudapis.com";
+        var authPayload = {
             grant_type: "client_credentials",
-            client_id: CFG.clientId,
-            client_secret: CFG.clientSecret,
-            account_id: CFG.mid
-        }, null);
+            client_id: clientId,
+            client_secret: clientSecret
+        };
+        if (mid) authPayload.account_id = mid;
+        var auth = jsonRequest("POST", authBase + "/v2/token", authPayload, null);
         if (!auth.access_token || !auth.rest_instance_url) {
             throw new Error("Authentication response missing token or REST URL");
         }
