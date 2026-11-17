@@ -93,12 +93,12 @@ function dateMillis(value) {
 
 function logError(row, err) {
     try {
-        errorLog.Rows.Add({
-            LogDate: Platform.Function.Now(),
-            JourneyId: String(row[CFG.journeyId] || ""),
-            ErrorMessage: String(err),
-            Context: "update-journey-analytics-de-count"
-        });
+        var logRow = {};
+        logRow[CFG.errorLogDate] = Platform.Function.Now();
+        logRow[CFG.errorLogJourney] = String(row[CFG.journeyId] || "");
+        logRow[CFG.errorLogMessage] = String(err);
+        logRow[CFG.errorLogContext] = "update-journey-analytics-de-count";
+        errorLog.Rows.Add(logRow);
     } catch (logErr) {
         // Logging must never hide the original processing error.
         Write("Error log write failed: " + String(logErr) + "\n");
