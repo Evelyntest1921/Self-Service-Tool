@@ -152,12 +152,22 @@ function processRow(row) {
     currentStage = "journey API";
     var journey = getJourney(row[CFG.journeyId], CFG.version && row[CFG.version]);
     var triggers = journey.triggers || [];
-    if (triggers.length !== 1) throw new Error("Expected one entry trigger");
-    var trigger = triggers[0];
-    var meta = trigger.metaData || {};
-    var args = trigger.arguments || {};
-    var eventId = meta.eventDefinitionId || args.eventDefinitionId;
-    var eventKey = meta.eventDefinitionKey || args.eventDefinitionKey;
+    var trigger = null;
+    var eventId = "";
+    var eventKey = "";
+    for (var t = 0; t < triggers.length; t++) {
+        var candidate = triggers[t] || {};
+        var candidateMeta = candidate.metaData || {};
+        var candidateArgs = candidate.arguments || {};
+        var candidateId = candidateMeta.eventDefinitionId || candidateArgs.eventDefinitionId;
+        var candidateKey = candidateMeta.eventDefinitionKey || candidateArgs.eventDefinitionKey;
+        if (candidateId || candidateKey) {
+            trigger = candidate;
+            eventId = candidateId || "";
+            eventKey = candidateKey || "";
+            break;
+        }
+    }
     if (!eventId && !eventKey) throw new Error("Entry trigger has no event definition");
 
     var eventPath = "/interaction/v1/eventDefinitions/" +
