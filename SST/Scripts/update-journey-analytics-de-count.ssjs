@@ -27,6 +27,7 @@ var analytics = DataExtension.Init(CFG.analyticsKey);
 var token = null;
 var tokenUntil = 0;
 var restBase = "";
+var currentStage = "startup";
 var summary = { scanned: 0, eligible: 0, updated: 0, failed: 0 };
 var errorLog = DataExtension.Init(CFG.errorLogKey);
 
@@ -97,6 +98,7 @@ function logError(row, err) {
         logRow.log = Stringify({
             journeyId: String(row[CFG.journeyId] || ""),
             error: String(err),
+            stage: currentStage,
             context: "update-journey-analytics-de-count"
         }).substring(0, 3450);
         logRow.updateDate = Platform.Function.Now();
@@ -120,6 +122,7 @@ function processRow(row) {
 
     // Capture refresh start, so modifications during processing remain eligible.
     var refreshStarted = Platform.Function.Now();
+    currentStage = "journey API";
     var path = "/interaction/v1/interactions/" + encodeURIComponent(row[CFG.journeyId]);
     if (CFG.version && !empty(row[CFG.version])) {
         path += "?versionNumber=" + encodeURIComponent(row[CFG.version]);
@@ -136,10 +139,12 @@ function processRow(row) {
 
     var eventPath = "/interaction/v1/eventDefinitions/" +
         (eventId ? encodeURIComponent(eventId) : "key:" + encodeURIComponent(eventKey));
+    currentStage = "event definition API";
     var event = getRest(eventPath);
     var objectId = event.dataExtensionId || event.dataExtensionID;
     if (!objectId) throw new Error("Entry source has no associated data extension");
 
+    currentStage = "entry DE SOAP lookup";
     var deResult = api.retrieve("DataExtension", ["ObjectID", "Name", "CustomerKey"], {
         Property: "ObjectID", SimpleOperator: "equals", Value: objectId
     });
@@ -149,6 +154,7 @@ function processRow(row) {
     }
     var source = deResult.Results[0];
     // DataExtensionRowCount accepts the source DE name directly in SSJS.
+    currentStage = "entry DE row count";
     var count = Number(Platform.Function.DataExtensionRowCount(source.Name));
     if (isNaN(count) || count < 0 || Math.floor(count) !== count) {
         throw new Error("Invalid source DE row count");
@@ -164,6 +170,7 @@ function processRow(row) {
         if (empty(row[CFG.primaryKeys[k]])) throw new Error("Missing primary key");
         keys.push(row[CFG.primaryKeys[k]]);
     }
+    currentStage = "analytics DE update";
     if (Number(analytics.Rows.Update(values, CFG.primaryKeys, keys)) !== 1) {
         throw new Error("Update did not affect exactly one analytics row");
     }
