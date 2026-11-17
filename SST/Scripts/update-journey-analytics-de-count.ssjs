@@ -11,6 +11,11 @@ var CFG = {
     analyticsKey: "REPLACE_WITH_BD_JOURNEY_ANALYTICS_EXTERNAL_KEY",
     authDEKey: "SFMC_AUTH",
     authUser: "Admin",
+    errorLogKey: "sst_de_automation_purge_log",
+    errorLogDate: "LogDate",
+    errorLogJourney: "JourneyId",
+    errorLogMessage: "ErrorMessage",
+    errorLogContext: "Context",
     journeyId: "journeyId",
     journeyModified: "journeyModifiedDate",
     refreshed: "deModifiedDate",
@@ -27,6 +32,7 @@ var token = null;
 var tokenUntil = 0;
 var restBase = "";
 var summary = { scanned: 0, eligible: 0, updated: 0, failed: 0 };
+var errorLog = DataExtension.Init(CFG.errorLogKey);
 
 function empty(v) {
     return v === null || typeof v === "undefined" || String(v) === "";
@@ -83,6 +89,20 @@ function dateMillis(value) {
     var ms = new Date(value).getTime();
     if (isNaN(ms)) throw new Error("Invalid date: " + value);
     return ms;
+}
+
+function logError(row, err) {
+    try {
+        errorLog.Rows.Add({
+            LogDate: Platform.Function.Now(),
+            JourneyId: String(row[CFG.journeyId] || ""),
+            ErrorMessage: String(err),
+            Context: "update-journey-analytics-de-count"
+        });
+    } catch (logErr) {
+        // Logging must never hide the original processing error.
+        Write("Error log write failed: " + String(logErr) + "\n");
+    }
 }
 
 function processRow(row) {
@@ -172,6 +192,7 @@ while (true) {
             processRow(row);
         } catch (err) {
             summary.failed++;
+            logError(row, err);
             Write(Stringify({ journeyId: row[CFG.journeyId], error: String(err) }) + "\n");
         }
     }
