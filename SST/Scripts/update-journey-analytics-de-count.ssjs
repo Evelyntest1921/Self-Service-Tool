@@ -92,6 +92,16 @@ function dateMillis(value) {
     return ms;
 }
 
+function getDataExtensionRowCount(customerKey) {
+    if (!customerKey) throw new Error("Entry DE has no external key");
+    var result = getRest("/data/v1/customobjectdata/key/" +
+        encodeURIComponent(customerKey) + "/rowset?$page=1&$pagesize=1");
+    if (typeof result.count === "undefined") {
+        throw new Error("Entry DE rowset response did not include count");
+    }
+    return Number(result.count);
+}
+
 function logError(row, err) {
     try {
         var logRow = {};
@@ -153,12 +163,11 @@ function processRow(row) {
         throw new Error("Cannot resolve entry DE in this business unit");
     }
     var source = deResult.Results[0];
-    // Use the external key first. Names can resolve through a different
-    // security context and trigger the "security descriptor" runtime error.
+    // DataExtensionRowCount is an AMPscript function and can throw a platform
+    // security-descriptor error from an Automation Studio SSJS activity. Use
+    // the REST rowset count instead; it returns the total without retrieving rows.
     currentStage = "entry DE row count";
-    var count = Number(Platform.Function.DataExtensionRowCount(
-        source.CustomerKey || source.Name
-    ));
+    var count = getDataExtensionRowCount(source.CustomerKey);
     if (isNaN(count) || count < 0 || Math.floor(count) !== count) {
         throw new Error("Invalid source DE row count");
     }
