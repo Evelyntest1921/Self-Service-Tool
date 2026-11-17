@@ -12,10 +12,6 @@ var CFG = {
     authDEKey: "SFMC_AUTH",
     authUser: "Admin",
     errorLogKey: "sst_de_automation_purge_log",
-    errorLogDate: "LogDate",
-    errorLogJourney: "JourneyId",
-    errorLogMessage: "ErrorMessage",
-    errorLogContext: "Context",
     journeyId: "journeyId",
     journeyModified: "journeyModifiedDate",
     refreshed: "deModifiedDate",
@@ -94,10 +90,12 @@ function dateMillis(value) {
 function logError(row, err) {
     try {
         var logRow = {};
-        logRow[CFG.errorLogDate] = Platform.Function.Now();
-        logRow[CFG.errorLogJourney] = String(row[CFG.journeyId] || "");
-        logRow[CFG.errorLogMessage] = String(err);
-        logRow[CFG.errorLogContext] = "update-journey-analytics-de-count";
+        logRow.log = Stringify({
+            journeyId: String(row[CFG.journeyId] || ""),
+            error: String(err),
+            context: "update-journey-analytics-de-count"
+        }).substring(0, 3450);
+        logRow.updateDate = Platform.Function.Now();
         errorLog.Rows.Add(logRow);
     } catch (logErr) {
         // Logging must never hide the original processing error.
