@@ -48,7 +48,11 @@ function jsonRequest(method, url, payload, bearer) {
         // Do not print response bodies: authentication responses can contain secrets.
         throw new Error("HTTP " + res.statusCode + " during " + method);
     }
-    return Platform.Function.ParseJSON(String(res.content));
+    var body = res.content;
+    // SFMC can return HTTP content as a one-item array. Parse the JSON text,
+    // not the array wrapper; parsing the wrapper can raise a security-descriptor error.
+    if (body instanceof Array) body = body[0];
+    return Platform.Function.ParseJSON(String(body));
 }
 
 function getRest(path) {
