@@ -126,12 +126,8 @@ function processRow(row) {
         throw new Error("Cannot resolve entry DE in this business unit");
     }
     var source = deResult.Results[0];
-    // DataExtensionRowCount takes a DE NAME. Pass via a variable to avoid
-    // inserting the DE name into executable AMPscript.
-    Platform.Variable.SetValue("@jaSourceDEName", source.Name);
-    var count = Number(Platform.Function.TreatAsContent(
-        "%%=DataExtensionRowCount(@jaSourceDEName)=%%"
-    ));
+    // DataExtensionRowCount accepts the source DE name directly in SSJS.
+    var count = Number(Platform.Function.DataExtensionRowCount(source.Name));
     if (isNaN(count) || count < 0 || Math.floor(count) !== count) {
         throw new Error("Invalid source DE row count");
     }
