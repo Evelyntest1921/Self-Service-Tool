@@ -133,7 +133,12 @@ function processRow(row) {
     // Capture refresh start, so modifications during processing remain eligible.
     var refreshStarted = Platform.Function.Now();
     currentStage = "journey API";
-    var path = "/interaction/v1/interactions/" + encodeURIComponent(row[CFG.journeyId]);
+    var journeyValue = String(row[CFG.journeyId]);
+    // Journey API accepts a version GUID as an ID, or a journey key only when
+    // prefixed with key:. This supports either value stored in the analytics DE.
+    var isGuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(journeyValue);
+    var path = "/interaction/v1/interactions/" +
+        (isGuid ? encodeURIComponent(journeyValue) : "key:" + encodeURIComponent(journeyValue));
     if (CFG.version && !empty(row[CFG.version])) {
         path += "?versionNumber=" + encodeURIComponent(row[CFG.version]);
     }
